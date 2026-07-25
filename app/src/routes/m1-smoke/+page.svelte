@@ -11,6 +11,7 @@
   let detail = $state("");
 
   async function run() {
+    /** @type {Record<string, any>} */
     const report = { importFolderResult: null, listImagesResult: null, error: null };
     try {
       // Path is injected by the temporary smoke-test harness at build time
@@ -21,7 +22,7 @@
 
       report.importFolderResult = await invoke("import_folder", { path: dir });
       report.listImagesResult = await invoke("list_images");
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       report.error = String(e && e.stack ? e.stack : e);
     }
 

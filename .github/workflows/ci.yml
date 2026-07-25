@@ -35,5 +35,41 @@ jobs:
       - name: cargo build
         run: cargo build --verbose
 
+      # Real-file RAW decode/import tests (raw_decode.rs, import.rs) are
+      # gated behind EMULSION_TEST_RAW_SAMPLE and silently *skip* without
+      # it — not committed to the repo as a fixture, per ADR-0003 (large,
+      # third-party provenance). Without this step, "cargo test" would
+      # only ever exercise the error paths, never a real decode, in CI.
+      # Fetch the same CC0-licensed sample used to validate this locally
+      # (raw.pixls.us requires CC0 for all contributions) so the real
+      # decode path actually runs here too, not just on a dev machine.
+      - name: Download sample RAW file (CC0, raw.pixls.us) for real-file tests
+        shell: bash
+        run: |
+          curl --retry 3 --retry-delay 5 -fL \
+            -o "${{ runner.temp }}/sample.DNG" \
+            "https://raw.pixls.us/data/Adobe%20DNG%20Converter/Canon%20EOS%205D%20Mark%20III/5G4A9395-compressed-lossless.DNG"
+
       - name: cargo test --lib
+        shell: bash
+        env:
+          EMULSION_TEST_RAW_SAMPLE: ${{ runner.temp }}/sample.DNG
         run: cargo test --lib --verbose
+
+  frontend-check:
+    name: Frontend type-check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+      - run: npm run check

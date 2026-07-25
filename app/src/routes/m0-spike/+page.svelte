@@ -38,6 +38,7 @@
   `;
 
   async function runSpike() {
+    /** @type {Record<string, any>} */
     const report = {
       hasNavigatorGpu: false,
       adapter: null,
@@ -123,7 +124,7 @@
         && Math.abs(g - report.expected) <= 1
         && Math.abs(b - report.expected) <= 1
         && a === 255;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       report.error = String(e && e.stack ? e.stack : e);
     }
 

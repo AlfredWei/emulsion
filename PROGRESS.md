@@ -58,5 +58,6 @@ M0's own exit criteria (MILESTONES.md) are effectively met on macOS: RAW decode 
 
 ## Working practices (see also memory)
 
-- Git flow: `main` is the stable branch; non-trivial units of work happen on `feature/*` branches, get logically-grouped commits, then merge to `main`. No force-push, no skipped hooks.
-- This file should be updated at the end of each work session / whenever a task-list milestone completes, not just at the very end of M0.
+- **GitHub flow, as of 2026-07-25**: `main` is the stable branch. Non-trivial work happens on a `feature/*` or `docs/*` branch with logically-grouped commits, gets pushed, and opens a PR (`gh pr create`) — then **stops for review**. Only after explicit approval in chat does the PR get merged (`gh pr merge --merge`, merge-commit style, not squash/rebase), followed by `git checkout main && git pull` before starting the next branch. (Earlier M0/M1 history on `main` predates this — those were merged directly without a PR review step; everything from here on follows the PR flow.)
+- No force-push, no skipped hooks, review `git status`/`git diff` before staging broad changes.
+- This file should be updated at the end of each work session / whenever a task-list milestone completes, not just at the very end of a phase.

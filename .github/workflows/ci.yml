@@ -43,6 +43,11 @@ jobs:
         shell: bash
         run: |
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
+          # The vcpkg *crate* (used by rsraw-sys's build.rs) looks for
+          # VCPKG_ROOT specifically -- the runner only sets
+          # VCPKG_INSTALLATION_ROOT, which is a different variable. Confirmed
+          # via a real CI failure (VcpkgNotFound) before this line existed.
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
 
       - name: cargo build
         run: cargo build --verbose

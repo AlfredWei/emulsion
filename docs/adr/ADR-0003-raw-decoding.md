@@ -33,6 +33,17 @@ Use **LibRaw via Rust FFI bindings** (the `rsraw` crate, which vendors LibRaw as
 
 This is a real, unresolved risk for the "cross-platform desktop, single codebase" requirement ([PRD §5](../../PRD/PRD.md)) and needs to be closed out before this ADR is treated as fully confirmed — not yet done because this environment cannot build/test for Windows. Candidates to evaluate when Windows validation happens: (a) `x86_64-pc-windows-gnu` target end-to-end with Tauri, (b) `libraw-rs` (the other ADR-0003 candidate) in case its build script doesn't share this restriction, (c) patching/forking `rsraw-sys`'s build script, (d) reaching out upstream. Tracked in [PROGRESS.md](../../PROGRESS.md).
 
+## Update — M0 spike finding: real decode confirmed on macOS, with a real gap (2026-07-25)
+
+Tested against real files, not just error paths. Sample: a CC0-licensed Canon EOS 5D Mark III DNG from [raw.pixls.us](https://raw.pixls.us/) (a RAW-sample archive requiring CC0 for all contributions — used by darktable/RawTherapee for exactly this kind of testing), in two variants of the same shot.
+
+- **Lossless-compressed DNG: decodes successfully.** `decode_preview()` returned a 3960×2640 8-bit RGB buffer, byte count exactly matching `width * height * 3` — a full, correct real-file decode through `rsraw` on macOS.
+- **Lossy-compressed DNG (same shot, JPEG-compressed pixel data): fails with `FileUnsupported`.** Root cause, from reading `rsraw-sys`'s build script (see the ADR-0003 MSVC finding above): it compiles LibRaw's own source files directly via the `cc` crate and does **not** link `libjpeg`. Lossy-compressed DNG (and presumably any camera RAW format that leans on baseline/lossless JPEG internally, which is common) needs libjpeg support compiled into LibRaw to decode. `rsraw`'s vendored build doesn't have it.
+
+This is a second concrete gap in `rsraw`, on top of the MSVC one — not disqualifying (lossless-compressed and uncompressed RAW/DNG both work, and that covers a meaningful share of real files), but it means **`rsraw` as currently vendored cannot decode a real, common class of RAW file** (lossy-compressed DNG, and likely any LibRaw-supported format whose decode path depends on libjpeg). Needs resolution before M1 can claim "broad RAW format support" ([PRD §7.2](../../PRD/PRD.md)). Candidates: patch `rsraw-sys`'s build script to link `libjpeg`/`libjpeg-turbo`, or re-evaluate `libraw-rs`.
+
+Test added as `raw_decode::tests::decodes_a_real_raw_file_when_a_sample_is_provided`, gated behind an `EMULSION_TEST_RAW_SAMPLE` env var rather than a fixture committed to the repo (RAW samples are large and of mixed provenance — not appropriate for git history).
+
 ## Alternatives considered and rejected
 
 - **`rawler` (pure Rust)**: rejected for now on coverage grounds — avoiding the C++ FFI dependency is appealing (simpler builds, full memory safety through the decode path) but not worth shipping with meaningfully fewer supported cameras than users expect from a Lightroom-class tool. **Revisit trigger**: if `rawler`'s camera coverage reaches parity with LibRaw for the cameras our actual user base owns, re-evaluate switching to remove the FFI dependency entirely.

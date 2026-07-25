@@ -24,20 +24,22 @@ See [PRD/MILESTONES.md](PRD/MILESTONES.md#m0--foundations--tech-spike) for M0's 
 - **`rsraw` + MSVC**: `rsraw-sys`'s build script contains `panic!("MSVC is not supported")`. Windows Tauri builds default to the MSVC target, so **`rsraw` as published will not build out of the box on standard Windows** — needs the GNU target, `libraw-rs` instead, or a build-script patch. ADR-0003 updated with this finding; unresolved, needs Windows-side follow-up (see risks below).
 - **`rsraw::Error` is not publicly reachable** (kept in a private module, not re-exported) — minor API-maturity gap, worked around in `raw_decode.rs` by converting to `String` via `Display` at each call site instead of using `thiserror`'s `#[from]`.
 
-## In progress / next up
+## M0 status: functionally done on macOS; Windows deferred (user decision, 2026-07-25)
 
-1. **In-webview WebGPU spike — DONE, confirmed on macOS.** `app/src/routes/m0-spike/+page.svelte` ran inside the real Tauri-launched WKWebView (macOS 26.5.2): `navigator.gpu` present, adapter/device acquired, a real WGSL "exposure +1EV" shader rendered to an offscreen texture and read back — output matched the expected math exactly (153 = round(0.6×255)). Confirms the "decode once, edit reactively via in-webview WebGPU" architecture (ADR-0004) is viable on macOS. Full result and detail in ADR-0004's dated finding section. Kept the spike page in the repo as a re-runnable check (harmless, not part of the real app UI); `tauri.conf.json`'s temporary window-`url` override used to load it was reverted after the run.
-2. **Blocked on a sample RAW file**: real end-to-end decode → IPC → WebGPU display for an actual photo hasn't been done — `raw_decode.rs` is only validated against its error paths (nonexistent file, non-RAW file) so far. Need either a sample RAW file from the user or explicit permission to fetch a public-domain one.
-3. **Blocked on Windows access**: this environment is macOS-only, and M0 now has two concrete (not hypothetical) Windows unknowns — see risks below. Both need a real Windows machine/CI runner to resolve, which isn't available here.
+1. **In-webview WebGPU spike — DONE, confirmed on macOS.** `app/src/routes/m0-spike/+page.svelte` ran inside the real Tauri-launched WKWebView (macOS 26.5.2): `navigator.gpu` present, adapter/device acquired, a real WGSL "exposure +1EV" shader rendered to an offscreen texture and read back — output matched the expected math exactly (153 = round(0.6×255)). Confirms the "decode once, edit reactively via in-webview WebGPU" architecture (ADR-0004) is viable on macOS. Kept the spike page in the repo as a re-runnable check; `tauri.conf.json`'s temporary window-`url` override used to load it was reverted after the run.
+2. **Real RAW decode — DONE, confirmed on macOS, with a real gap found.** Downloaded a CC0-licensed Canon EOS 5D Mark III DNG sample from [raw.pixls.us](https://raw.pixls.us/) (not committed to the repo — large, third-party provenance; kept in the local scratchpad only). Lossless-compressed DNG decodes correctly end-to-end (3960×2640, buffer size exactly right). **Lossy-compressed DNG fails** — `rsraw`'s vendored LibRaw build doesn't link `libjpeg`, so it can't decode the common lossy-compressed-DNG / JPEG-in-RAW case. Real-file test added as `EMULSION_TEST_RAW_SAMPLE`-gated (`app/src-tauri/src/raw_decode.rs`), not a committed fixture. Full detail in ADR-0003's dated finding.
+3. **Windows validation — explicitly deferred**, by user decision (not a gap to chase right now). This environment is macOS-only. Two concrete, real Windows unknowns are now on record for whenever Windows work resumes (not hypothetical — both were discovered by actually building things, see risks below): `rsraw` doesn't build under MSVC, and WebView2's WebGPU support is unverified. No CI was set up for this — deferred entirely per user's explicit choice, revisit before any Windows release is planned.
 
-RFC-0001 §8's three open questions have been updated with these results.
+RFC-0001 §8's three open questions have been updated with these results — two confirmed-on-macOS/open-on-Windows, one (working color space) still fully open.
+
+M0's own exit criteria (MILESTONES.md) are effectively met on macOS: RAW decode works, a hardcoded adjustment renders color-correctly via the real render pipeline, catalog schema v0 round-trips. The "on both macOS and Windows" half of that criterion is the one open item, and it's deferred by choice, not by accident.
 
 ## Known constraints / open risks
 
-- **This dev environment is macOS-only** — cannot run or verify anything on Windows directly.
-- **`rsraw` does not build on Windows/MSVC as published** (`rsraw-sys`'s build script panics on `cl.exe`-like compilers) — a concrete blocker for the Windows build, not a hypothetical one. Candidates to resolve: `x86_64-pc-windows-gnu` target, `libraw-rs` instead, or patching `rsraw-sys`'s build script. Needs a Windows environment to actually work on.
+- **This dev environment is macOS-only** — cannot run or verify anything on Windows directly. Windows work is deferred (see above), not blocked-and-forgotten — worth remembering to come back to before a Windows release is ever planned.
+- **`rsraw` does not build on Windows/MSVC as published** (`rsraw-sys`'s build script panics on `cl.exe`-like compilers).
+- **`rsraw`'s vendored LibRaw lacks libjpeg** — cannot decode lossy-compressed DNG or other libjpeg-dependent RAW variants, even on macOS. This is a live gap on the platform we *can* test, not just a Windows concern — worth fixing (patch the build script to link libjpeg, or re-evaluate `libraw-rs`) before M1 claims "broad RAW format support."
 - **WebView2's WebGPU support is unverified** — the same spike that passed on WKWebView needs to run on Windows before ADR-0004 is fully confirmed cross-platform.
-- **No sample RAW file available yet** for real end-to-end decode testing.
 
 ## Working practices (see also memory)
 

@@ -58,6 +58,31 @@ pub fn decode_preview(path: &Path) -> Result<DecodedPreview, DecodeError> {
 mod tests {
     use super::*;
 
+    /// Real-file decode, gated behind an env var rather than a fixture
+    /// checked into the repo: RAW sample files are large (multi-MB) and
+    /// of varying/unclear provenance, so they don't belong in git history.
+    /// Point `EMULSION_TEST_RAW_SAMPLE` at a real RAW/DNG file locally to
+    /// exercise this; CI and default `cargo test` runs skip it cleanly.
+    #[test]
+    fn decodes_a_real_raw_file_when_a_sample_is_provided() {
+        let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else {
+            eprintln!(
+                "skipping: set EMULSION_TEST_RAW_SAMPLE=/path/to/file.DNG to run this test"
+            );
+            return;
+        };
+
+        let preview = decode_preview(Path::new(&sample_path))
+            .expect("a real RAW file should decode successfully");
+
+        assert!(preview.width > 0 && preview.height > 0);
+        assert_eq!(
+            preview.rgb.len(),
+            preview.width as usize * preview.height as usize * 3,
+            "8-bit RGB buffer should be exactly width * height * 3 bytes"
+        );
+    }
+
     /// No sample RAW file is available in this environment yet (see
     /// PROGRESS.md). This test only proves the FFI boundary itself is
     /// sound: LibRaw's own error path for a nonexistent/invalid file

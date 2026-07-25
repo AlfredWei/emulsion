@@ -50,6 +50,11 @@ pub struct ImageSummary {
 }
 
 impl Catalog {
+    /// Test-only: an ephemeral catalog with nothing on disk. Production
+    /// code always persists to a real file via `open()` (ADR-0005) — this
+    /// has no production caller, so it's compiled only for tests rather
+    /// than carried as unused API surface.
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         Self::migrate(&conn)?;
@@ -94,8 +99,10 @@ impl Catalog {
         )
     }
 
-    /// Register a source image reference on disk. Never copies or touches
-    /// the original file — the catalog only ever stores a path (PRD §7.1).
+    /// Test-only convenience over `add_image_with_metadata`: every real
+    /// import always has a content hash and file size available (see
+    /// import.rs), so this metadata-less variant has no production caller.
+    #[cfg(test)]
     pub fn add_image(&self, path: &str) -> Result<i64> {
         self.conn
             .execute("INSERT INTO images (path) VALUES (?1)", params![path])?;
@@ -146,6 +153,10 @@ impl Catalog {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Not yet called from a Tauri command — Slice 3 (the real Develop
+    /// pipeline) is what reads this back to render/populate the edit-stack
+    /// UI. Real production API, just not wired up until then.
+    #[allow(dead_code)]
     pub fn get_edit_stack(&self, version_id: i64) -> Result<EditStack> {
         let json: String = self.conn.query_row(
             "SELECT edit_stack_json FROM image_versions WHERE id = ?1",

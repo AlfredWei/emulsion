@@ -82,6 +82,7 @@
     background: var(--bg-panel);
     border-left: 1px solid var(--border-subtle);
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 14px 12px;
   }
   .section {
@@ -137,6 +138,7 @@
   }
   .row input[type="range"] {
     flex: 1;
+    min-width: 0;
     appearance: none;
     -webkit-appearance: none;
     height: 3px;

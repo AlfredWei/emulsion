@@ -1,6 +1,6 @@
 # ADR-0003: RAW decoding — LibRaw via Rust FFI bindings
 
-- Status: Accepted
+- Status: Accepted — Windows/MSVC build blocker resolved 2026-07-25 (see final update below), confirmed on real CI
 - Date: 2026-07-25
 - Relates to: [PRD §5, §7.2](../../PRD/PRD.md), [PRD risk: RAW library coverage](../../PRD/PRD.md#11-key-risks), [RFC-0001](../rfc/RFC-0001-architecture-and-tech-stack.md)
 
@@ -55,6 +55,20 @@ MSVC is not supported
 ```
 
 Exact match to the predicted failure — `cargo build` fails after ~6.5 minutes on `windows-latest` (Visual Studio 2026 Enterprise, MSVC 14.51.36231), confirming this is a real, current blocker on GitHub's actual Windows toolchain, not a stale or hypothetical concern. macOS job passed cleanly in the same run (regression-confirms the M0 findings above). This is now a **confirmed, CI-enforced fact**, not a documented risk — the Windows job will keep failing on every PR until one of the candidate fixes above (GNU target, `libraw-rs`, or a build-script patch) is actually implemented, which is deliberate: it keeps this from silently regressing into "we forgot Windows was broken."
+
+## Update — Windows/MSVC build fixed: vcpkg-linked LibRaw (2026-07-25, PR #5)
+
+Resolved via option (c) from the previous update's candidate list, chosen over `x86_64-pc-windows-gnu` (untried), `libraw-rs` (untried), and `rawler`/`zenraw` (re-evaluated and rejected this same session — `rawler`'s coverage, while better than originally assumed at ~300+ cameras, is still narrower than LibRaw's, and would mean a second decode implementation to maintain; `zenraw` defaults to AGPL-3.0, an unacceptable licensing constraint to lock in before this project's own license is decided per MILESTONES M7).
+
+**What changed**: vendored `rsraw-sys` 0.1.1 into `app/src-tauri/vendor/rsraw-sys/` (see its `PATCH.md` for the full rationale) and patched `build.rs`: on MSVC, instead of `panic!("MSVC is not supported")`, it links a **prebuilt LibRaw installed via vcpkg** (`vcpkg::find_package("libraw")`) rather than compiling the vendored C++ source. macOS/Linux are unaffected — they still compile from source exactly as before. `rsraw` itself (the safe wrapper the app actually calls) is not forked; `app/src-tauri/Cargo.toml`'s `[patch.crates-io]` resolves its transitive `rsraw-sys` dependency to the local patched copy.
+
+**Two real issues found and fixed via actual CI runs, not guessed**:
+1. First attempt: `cargo build` failed with `VcpkgNotFound("No vcpkg installation found. Set the VCPKG_ROOT environment variable...")` — even though the CI step that ran `vcpkg install libraw:x64-windows-static-md` had already succeeded. Root cause: the `vcpkg` *Rust crate* looks for a `VCPKG_ROOT` env var specifically, but GitHub's `windows-latest` runner only sets `VCPKG_INSTALLATION_ROOT` — two different variable names. Fixed by exporting `VCPKG_ROOT` from the installed value after the vcpkg install step.
+2. Second attempt (with that fix): **fully green**. `cargo build` succeeds, and `cargo test --lib` passes all 12 tests on `windows-latest`, including a real RAW decode (`decodes_a_real_raw_file_when_a_sample_is_provided`) against the same CC0 sample DNG used for macOS validation — not just "it compiles," an actual correct decode.
+
+This is now a **confirmed-working, CI-enforced fact** on both target platforms, matching the pattern this whole investigation followed: read the source, predict the failure, confirm the failure on real CI, fix it, confirm the fix on real CI. Nothing here was assumed correct without a real run proving it.
+
+**Follow-up, not done here**: the `dng-lossy` (libjpeg-turbo) vcpkg feature that might also fix the *other* known gap (lossy-compressed DNG failing even on macOS, from the earlier update above) wasn't enabled or tested this pass — worth a dedicated look later rather than assumed to also be fixed.
 
 ## Alternatives considered and rejected
 

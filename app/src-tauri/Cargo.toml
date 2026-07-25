@@ -29,3 +29,10 @@ thiserror = "2.0.19"
 blake3 = "1.8.5"
 tauri-plugin-dialog = "2.7.2"
 
+# Patched fork of rsraw-sys so RAW decoding builds on Windows/MSVC via a
+# vcpkg-linked LibRaw instead of upstream's from-source compile (which
+# panics on MSVC). macOS/Linux behavior is unchanged. See
+# vendor/rsraw-sys/PATCH.md and docs/adr/ADR-0003-raw-decoding.md.
+[patch.crates-io]
+rsraw-sys = { path = "vendor/rsraw-sys" }
+

@@ -94,4 +94,4 @@ src/
 
 ## `.github/workflows/ci.yml`
 
-Two jobs on every push/PR to `main`: a `macos-latest`/`windows-latest` matrix that builds and tests the Rust core (fetching a real sample RAW file so the gated tests actually run, not just skip), and a `frontend-check` job (`npm run check`). The Windows job is currently failing **on purpose** — see ADR-0003 and PROGRESS.md, it's a real, confirmed, tracked gap, not a broken pipeline.
+Two jobs on every push/PR to `main`: a `macos-latest`/`windows-latest` matrix that builds and tests the Rust core (fetching a real sample RAW file so the gated tests actually run, not just skip), and a `frontend-check` job (`npm run check`). Both platforms pass as of 2026-07-25 — RAW decoding on Windows links a vcpkg-installed prebuilt LibRaw instead of building from source under MSVC; see [ADR-0003](adr/ADR-0003-raw-decoding.md) and `app/src-tauri/vendor/rsraw-sys/PATCH.md` for why.

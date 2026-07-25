@@ -10,7 +10,7 @@ Emulsion is a desktop app for photographers to import, organize, non-destructive
 
 ## Quick start
 
-Prerequisites: [Rust](https://rustup.rs/) (1.77.2+; project developed against 1.97.1), [Node.js](https://nodejs.org/) (18+; developed against v23.5.0), and the platform's native build tools (Xcode Command Line Tools on macOS; see [Tauri's prerequisites guide](https://tauri.app/start/prerequisites/) for Windows/Linux — **note Windows isn't validated yet, see [Platform support](#platform-support)**).
+Prerequisites: [Rust](https://rustup.rs/) (1.77.2+; project developed against 1.97.1), [Node.js](https://nodejs.org/) (18+; developed against v23.5.0), and the platform's native build tools (Xcode Command Line Tools on macOS; [vcpkg](https://vcpkg.io/) + `vcpkg install libraw:x64-windows-static-md` on Windows — see [Tauri's prerequisites guide](https://tauri.app/start/prerequisites/) too, and [Platform support](#platform-support) below).
 
 ```bash
 make install   # npm install
@@ -53,12 +53,9 @@ Permanently out of scope: cloud sync, mobile companion app, video editing beyond
 
 ## Platform support
 
-Developed on macOS; Windows is validated via CI on GitHub's own Windows runners (see [.github/workflows/ci.yml](.github/workflows/ci.yml)), not a local machine. That CI job is currently **failing on purpose** — two concrete, CI-confirmed Windows gaps are tracked in [PROGRESS.md](PROGRESS.md):
+Developed on macOS; Windows is validated via CI on GitHub's own Windows runners (see [.github/workflows/ci.yml](.github/workflows/ci.yml)), not a local machine — this project doesn't have one. **Both platforms are green as of 2026-07-25**: the Rust core builds and its full test suite passes (12/12, including a real RAW decode) on both `macos-latest` and `windows-latest`. RAW decoding (`rsraw`) links a vcpkg-installed prebuilt LibRaw on Windows instead of building from source under MSVC — see [ADR-0003](docs/adr/ADR-0003-raw-decoding.md) for why and [app/src-tauri/vendor/rsraw-sys/PATCH.md](app/src-tauri/vendor/rsraw-sys/PATCH.md) for exactly what was patched.
 
-- `rsraw` (RAW decoding) doesn't build under the MSVC toolchain Windows Tauri builds default to.
-- WebView2's WebGPU support hasn't been tested (CI only builds/tests the Rust core, it doesn't launch the full GUI app).
-
-See [PROGRESS.md](PROGRESS.md) and [ADR-0003](docs/adr/ADR-0003-raw-decoding.md) before starting a Windows build.
+Still genuinely untested on Windows: the in-webview WebGPU rendering path (ADR-0004) — CI only builds/tests the Rust core, it doesn't launch the full GUI app on any platform yet. See [PROGRESS.md](PROGRESS.md) for current status.
 
 ## Working practices
 

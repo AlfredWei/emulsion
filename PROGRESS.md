@@ -4,9 +4,15 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 ## Current phase: M1 — MVP (Import → Library → Basic Develop → Export)
 
-M0 is done on macOS. Windows was deferred by choice on 2026-07-25, then **un-deferred the same day** — see "CI + Windows validation" below. M1 is scoped in MILESTONES.md as "3–6 months," too large for one pass — being built as 5 sequenced slices (see the M1 plan). **Slices 1 and 2 (catalog + import backend; Library UI wired to real data) are done.** Slices 3–5 (real Develop pipeline, Export, crash-safety/dogfood) are next, in that order.
+M0 is done on **both macOS and Windows** (Windows was deferred by choice on 2026-07-25, un-deferred the same day via CI, confirmed failing, then actually fixed — see "Windows RAW-decode build: fixed" below). M1 is scoped in MILESTONES.md as "3–6 months," too large for one pass — being built as 5 sequenced slices (see the M1 plan). **Slices 1 and 2 (catalog + import backend; Library UI wired to real data) are done.** Slices 3–5 (real Develop pipeline, Export, crash-safety/dogfood) are next, in that order.
 
 See [PRD/MILESTONES.md](PRD/MILESTONES.md#m1--mvp-import--library--basic-develop--export) for M1's scope and exit criteria.
+
+## Windows RAW-decode build: fixed (2026-07-25, PR #5)
+
+The Windows CI job that had been failing on purpose since PR #2 is now **fully green** — `cargo build` and `cargo test --lib` (12/12, including a real RAW decode) both pass on `windows-latest`. Full writeup in [ADR-0003](docs/adr/ADR-0003-raw-decoding.md)'s final update. Short version: vendored and patched `rsraw-sys` (`app/src-tauri/vendor/rsraw-sys/`, see its `PATCH.md`) to link a vcpkg-installed prebuilt LibRaw on MSVC instead of upstream's `panic!("MSVC is not supported")`; macOS is untouched. Took two real CI iterations to get right — first attempt found a `VCPKG_ROOT` vs. `VCPKG_INSTALLATION_ROOT` env var mismatch, fixed and confirmed on the second.
+
+**Still open, not addressed by this fix**: WebView2's WebGPU support (ADR-0004) — CI only builds/tests the Rust core, doesn't launch the full GUI app on Windows yet. And the `dng-lossy` vcpkg feature that might fix the separate libjpeg gap (below) wasn't tried.
 
 ## CI + Windows validation (2026-07-25, PR #2)
 
@@ -69,14 +75,13 @@ See [PRD/MILESTONES.md](PRD/MILESTONES.md#m0--foundations--tech-spike) for M0's 
 
 RFC-0001 §8's three open questions have been updated with these results — two confirmed-on-macOS/open-on-Windows, one (working color space) still fully open.
 
-M0's own exit criteria (MILESTONES.md) are effectively met on macOS: RAW decode works, a hardcoded adjustment renders color-correctly via the real render pipeline, catalog schema v0 round-trips. The "on both macOS and Windows" half of that criterion is the one open item, and it's deferred by choice, not by accident.
+M0's own exit criteria (MILESTONES.md) are effectively met on **both macOS and Windows** now: RAW decode works on both (real files, CI-confirmed), a hardcoded adjustment renders color-correctly via the real render pipeline (macOS only — see WebGPU/WebView2 risk below), catalog schema v0 round-trips.
 
 ## Known constraints / open risks
 
-- **This dev environment is still macOS-only** — cannot run a Windows machine directly. No longer a real blocker for getting Windows signal, though: CI (see above) now uses GitHub's own Windows runners for that, which is how the finding below got confirmed.
-- **`rsraw` does not build on Windows/MSVC — now CI-confirmed, not just predicted** (`rsraw-sys`'s build script panics on `cl.exe`-like compilers; exact panic text in the CI section above). The Windows CI job is failing on purpose until this is fixed — see ADR-0003's dated finding for candidate fixes (GNU target, `libraw-rs`, build-script patch).
-- **`rsraw`'s vendored LibRaw lacks libjpeg** — cannot decode lossy-compressed DNG or other libjpeg-dependent RAW variants, even on macOS. This is a live gap on the platform we *can* test, not just a Windows concern — worth fixing (patch the build script to link libjpeg, or re-evaluate `libraw-rs`) before M1 claims "broad RAW format support."
-- **WebView2's WebGPU support is still unverified** — CI only builds/tests the Rust core, it doesn't launch the full GUI app anywhere yet. The macOS WebGPU spike (ADR-0004) has no Windows equivalent run yet, and can't until the `rsraw` MSVC blocker is resolved enough to produce a Windows build to test in the first place.
+- **This dev environment is still macOS-only** — cannot run a Windows machine directly. Not a real blocker for getting Windows signal though: CI uses GitHub's own Windows runners for that, which is how both the original MSVC failure and its fix were confirmed.
+- **`rsraw`'s vendored LibRaw lacks libjpeg** — cannot decode lossy-compressed DNG or other libjpeg-dependent RAW variants, even on macOS. Still open. vcpkg's `libraw` port (used for the Windows fix above) has a `dng-lossy` feature that might fix this too — untried, worth a dedicated look rather than assumed.
+- **WebView2's WebGPU support is still unverified** — CI only builds/tests the Rust core, it doesn't launch the full GUI app anywhere yet. The macOS WebGPU spike (ADR-0004) has no Windows equivalent run yet. This was blocked on the MSVC fix before; now that Windows actually builds, this is the next real Windows unknown.
 
 ## Working practices (see also memory)
 

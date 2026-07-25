@@ -62,7 +62,7 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - Keywording (hierarchical), full IPTC metadata editing.
 - Collections (manual) and Smart Collections (rule-based).
 - Improved noise reduction (luma/chroma split), sharpening quality pass.
-- Catalog backup on a schedule.
+- Catalog backup, Lightroom-style: prompt-on-close with a configurable frequency (every time / daily / weekly / monthly / never), optional integrity check, timestamped copy written to a user-chosen backup folder separate from the working catalog — catalog file only, not the photos (see [PRD §7.6](PRD.md#76-performance--data-integrity-cross-cutting-not-a-feature-but-a-requirement)).
 
 ### Explicitly deferred
 - Modern highlights/shadows tone *model* overhaul is already in M1 (pulled forward vs. Lightroom's actual timeline since it's foundational, not optional) — no change needed here.
@@ -73,6 +73,7 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - A photographer can fully locally-adjust an image (e.g., dodge/burn a face, darken a sky, selectively desaturate) without leaving the app.
 - Presets can be created, applied across a batch, and reused across sessions.
 - Keyword-based search and smart collections work over a multi-thousand-image catalog without noticeable lag.
+- A deliberately corrupted or deleted catalog file can be recovered from a scheduled backup with at most one backup-interval's worth of edits lost.
 
 ---
 

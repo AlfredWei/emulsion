@@ -102,7 +102,7 @@ These were confirmed with the project owner and drive every downstream decision 
 ### 7.6 Performance & data integrity (cross-cutting, not a "feature" but a requirement)
 - GPU-accelerated Develop rendering where available, with a correct CPU fallback.
 - Responsive UI at 50k+ image catalogs: virtualized grid, background indexing, cached previews.
-- Catalog backup on a schedule (local backup file rotation, matching Lightroom's "back up catalog on close" habit).
+- **Catalog backup**, modeled directly on Lightroom's own long-standing behavior: prompt on app close with a user-configurable frequency (every time / once a day / once a week / once a month / never), write a timestamped copy of the catalog file to a user-chosen backup location (kept separate from the working catalog — a different folder or drive), with an optional integrity check before backing up and an optional catalog optimization (vacuum/compact) as part of the backup step. Backs up the catalog file only, not the photos — originals are assumed to have their own backup story, since this product never touches them (§7.1).
 - Crash-safe edit persistence (no data loss on crash mid-edit).
 
 ## 8. Milestone summary

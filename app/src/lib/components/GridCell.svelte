@@ -6,12 +6,14 @@
    *   image: import('$lib/api/catalog.js').ImageSummary,
    *   selected: boolean,
    *   onSelect: () => void,
+   *   onOpen: () => void,
    *   onRatingChange: (rating: number) => void,
    *   onFlagChange: (flag: string) => void,
    *   onColorLabelChange: (colorLabel: string) => void,
    * }}
    */
-  let { image, selected, onSelect, onRatingChange, onFlagChange, onColorLabelChange } = $props();
+  let { image, selected, onSelect, onOpen, onRatingChange, onFlagChange, onColorLabelChange } =
+    $props();
 
   const COLOR_CYCLE = ["none", "red", "yellow", "green", "blue", "purple"];
 
@@ -43,6 +45,7 @@
   role="button"
   tabindex="0"
   onclick={onSelect}
+  ondblclick={onOpen}
   onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onSelect()}
 >
   {#if thumbSrc}

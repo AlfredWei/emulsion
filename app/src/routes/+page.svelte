@@ -3,6 +3,8 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import LibraryGrid from "$lib/components/LibraryGrid.svelte";
+  import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
+  import DevelopPanel from "$lib/components/DevelopPanel.svelte";
   import {
     importFolder,
     listImages,
@@ -10,6 +12,7 @@
     setFlag,
     setColorLabel,
   } from "$lib/api/catalog.js";
+  import { getEditStack, setEditStack, opValue, upsertOp } from "$lib/api/develop.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -17,6 +20,28 @@
   let activeModule = $state("library"); // "library" | "develop"
   let importing = $state(false);
   let statusMessage = $state("");
+
+  let developVersionId = $state(/** @type {number | null} */ (null));
+  let developImagePath = $state("");
+  /** @type {import('$lib/api/develop.js').EditStack} */
+  let editStack = $state({ schema_version: 1, ops: [] });
+  let exposure = $derived(opValue(editStack, "exposure", 0));
+  let contrast = $derived(opValue(editStack, "contrast", 0));
+  let saturation = $derived(opValue(editStack, "saturation", 0));
+
+  // Persistence is debounced (not written on every slider tick) so a drag
+  // doesn't flood the catalog with writes -- flushed immediately whenever
+  // navigation could otherwise lose the pending change (UX-DESIGN.md §5's
+  // "coalesced/debounced slider events" rule, applied to catalog writes
+  // rather than the WebGPU frame loop).
+  let persistTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+
+  function flushEditStack() {
+    if (persistTimer === null) return;
+    clearTimeout(persistTimer);
+    persistTimer = null;
+    if (developVersionId !== null) setEditStack(developVersionId, editStack);
+  }
 
   async function refresh() {
     images = await listImages();
@@ -61,6 +86,27 @@
     await setColorLabel(versionId, colorLabel);
   }
 
+  async function openDevelop(/** @type {number} */ versionId) {
+    flushEditStack();
+    const image = images.find((img) => img.version_id === versionId);
+    if (!image) return;
+    developVersionId = versionId;
+    developImagePath = image.path;
+    editStack = await getEditStack(versionId);
+    activeModule = "develop";
+  }
+
+  function switchModule(/** @type {string} */ target) {
+    if (activeModule === "develop" && target !== "develop") flushEditStack();
+    activeModule = target;
+  }
+
+  function handleAdjustmentChange(/** @type {string} */ opName, /** @type {number} */ value) {
+    editStack = upsertOp(editStack, opName, value);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
   onMount(() => {
     refresh();
   });
@@ -69,10 +115,10 @@
 <div class="app">
   <div class="titlebar">
     <div class="module-switch">
-      <button class:active={activeModule === "library"} onclick={() => (activeModule = "library")}>
+      <button class:active={activeModule === "library"} onclick={() => switchModule("library")}>
         Library
       </button>
-      <button class:active={activeModule === "develop"} onclick={() => (activeModule = "develop")}>
+      <button class:active={activeModule === "develop"} onclick={() => switchModule("develop")}>
         Develop
       </button>
     </div>
@@ -106,14 +152,27 @@
           {images}
           {selectedId}
           onSelect={(id) => (selectedId = id)}
+          onOpen={openDevelop}
           onRatingChange={handleRatingChange}
           onFlagChange={handleFlagChange}
           onColorLabelChange={handleColorLabelChange}
         />
       {/if}
     </div>
+  {:else if developImagePath}
+    <div class="develop-body">
+      <DevelopCanvas imagePath={developImagePath} {exposure} {contrast} {saturation} />
+      <DevelopPanel
+        {exposure}
+        {contrast}
+        {saturation}
+        onExposureChange={(v) => handleAdjustmentChange("exposure", v)}
+        onContrastChange={(v) => handleAdjustmentChange("contrast", v)}
+        onSaturationChange={(v) => handleAdjustmentChange("saturation", v)}
+      />
+    </div>
   {:else}
-    <div class="placeholder">Develop — coming in M1 Slice 3</div>
+    <div class="placeholder">Double-click a photo in Library to open it here.</div>
   {/if}
 </div>
 
@@ -181,7 +240,8 @@
     background: var(--bg-panel);
     border-bottom: 1px solid var(--border-subtle);
   }
-  .body {
+  .body,
+  .develop-body {
     flex: 1;
     display: flex;
     min-height: 0;

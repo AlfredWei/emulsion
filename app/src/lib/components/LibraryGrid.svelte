@@ -13,12 +13,14 @@
    *   images: import('$lib/api/catalog.js').ImageSummary[],
    *   selectedId: number | null,
    *   onSelect: (versionId: number) => void,
+   *   onOpen: (versionId: number) => void,
    *   onRatingChange: (versionId: number, rating: number) => void,
    *   onFlagChange: (versionId: number, flag: string) => void,
    *   onColorLabelChange: (versionId: number, colorLabel: string) => void,
    * }}
    */
-  let { images, selectedId, onSelect, onRatingChange, onFlagChange, onColorLabelChange } = $props();
+  let { images, selectedId, onSelect, onOpen, onRatingChange, onFlagChange, onColorLabelChange } =
+    $props();
 
   const CELL_MIN_WIDTH = 140;
   const GAP = 10;
@@ -65,6 +67,7 @@
           {image}
           selected={image.version_id === selectedId}
           onSelect={() => onSelect(image.version_id)}
+          onOpen={() => onOpen(image.version_id)}
           onRatingChange={(rating) => onRatingChange(image.version_id, rating)}
           onFlagChange={(flag) => onFlagChange(image.version_id, flag)}
           onColorLabelChange={(colorLabel) => onColorLabelChange(image.version_id, colorLabel)}

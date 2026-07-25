@@ -1,6 +1,7 @@
 # Rust
+# Cargo.lock is committed deliberately — this is an application (Tauri app),
+# not a library, so a reproducible dependency graph is wanted.
 /target/
-Cargo.lock
 
 # Node / frontend
 node_modules/

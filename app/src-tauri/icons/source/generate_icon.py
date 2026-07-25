@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Emulsion app icon: bold aperture-blade iris, painted with a warm glossy
-amber gradient (matching app/src/lib/styles/tokens.css), on the app's dark
-background. Full-bleed square, no pre-baked corner rounding -- OS icon
-masks (macOS squircle, Windows tile shapes) apply their own shape.
+"""Emulsion app icon: an abstract liquid droplet, not a camera part.
 
-v2: mechanical beveled blade seams (dark groove + bright highlight core,
-mimicking real overlapping aperture blades catching light) and an
-iridescent blue/violet rim near the outer edge -- like anti-reflective
-lens coating -- blending into the warm amber highlight, using the same
-blue/purple already in the app's color-label palette (tokens.css) rather
-than introducing new colors.
+"Emulsion" is literally a light-sensitive chemical coating -- a liquid,
+historically oil/gelatin based. Emulsions and thin liquid films naturally
+show iridescent, oil-slick sheen where they catch light at an angle. That's
+the actual concept here: a warm amber droplet with that iridescent sheen at
+its edge, plus a small satellite droplet for asymmetry. No camera hardware
+imagery (no aperture blades, no lens rings) -- deliberately dropped after
+that direction didn't land.
+
+Full-bleed square, no pre-baked corner rounding -- OS icon masks (macOS
+squircle, Windows tile shapes) apply their own shape.
 
 Regenerate:
     python3 -m venv venv && ./venv/bin/pip install Pillow numpy
@@ -20,7 +21,7 @@ Regenerate:
 import math
 import os
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 SS = 2
 S = 1024 * SS
@@ -38,23 +39,17 @@ def hex_to_rgb(h):
 
 BG_CENTER = hex_to_rgb("#221f1a")
 BG_EDGE = hex_to_rgb("#0f0d0b")
-IRIS_HIGHLIGHT = hex_to_rgb("#fbd08c")
-IRIS_MID = hex_to_rgb("#e0932f")
-IRIS_RIM = hex_to_rgb("#7c4a1c")
-PUPIL = hex_to_rgb("#120f0c")
-GROOVE = (18, 10, 5)
-EDGE_HIGHLIGHT = (255, 224, 168)
+DROP_HIGHLIGHT = hex_to_rgb("#fbd08c")
+DROP_MID = hex_to_rgb("#e0932f")
+DROP_DEEP = hex_to_rgb("#6e3f18")
 
-# lens-coating iridescence, same blue/purple as the app's color-label swatches
-RIM_BLUE = hex_to_rgb("#5b9ee1")
-RIM_PURPLE = hex_to_rgb("#a87ce0")
+# iridescent oil-slick sheen, using the same blue/purple already in the
+# app's color-label palette (tokens.css --label-blue/--label-purple)
+SHEEN_BLUE = hex_to_rgb("#5b9ee1")
+SHEEN_PURPLE = hex_to_rgb("#a87ce0")
+SHEEN_GREEN = hex_to_rgb("#6fcb6b")
 
 yy, xx = np.mgrid[0:S, 0:S].astype(np.float64)
-
-
-def radial_mask(cx, cy, r, softness):
-    d = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
-    return np.clip((r - d) / softness, 0, 1), d
 
 
 def composite(base_img, rgb_field, alpha_field):
@@ -62,110 +57,126 @@ def composite(base_img, rgb_field, alpha_field):
     base_img.alpha_composite(Image.fromarray(layer.astype(np.uint8), "RGBA"))
 
 
+def teardrop_radius(theta_deg, base_r, wobble_seed=0.0):
+    """Radius as a function of angle: a gently asymmetric organic blob
+    (slightly fuller at the bottom, like a drop settling under its own
+    weight), NOT a literal sharp-pointed teardrop -- an earlier version
+    that pinched to a point at the top produced a heart-shaped silhouette
+    instead (two lobes either side of the pinch), which is the wrong
+    read entirely. A smooth single-min/single-max cosine taper plus a
+    little organic wobble avoids that failure mode.
+    """
+    theta = np.radians(theta_deg)
+    taper = (1 - np.cos(theta)) / 2  # 0 at top (theta=0), 1 at bottom (theta=pi)
+    base = 0.86 + 0.16 * taper  # top ~0.86*base_r, bottom ~1.02*base_r -- subtle, no cusp
+    wobble = (
+        1.0
+        + 0.045 * np.sin(theta * 3 + wobble_seed)
+        + 0.025 * np.sin(theta * 5 + wobble_seed * 1.7)
+    )
+    return base_r * base * wobble
+
+
+def blob_mask_array(cx, cy, base_r, wobble_seed=0.0, n_pts=720):
+    pts = []
+    for i in range(n_pts):
+        deg = i * 360.0 / n_pts
+        r = teardrop_radius(deg, base_r, wobble_seed)
+        a = math.radians(deg)
+        pts.append((cx + r * math.sin(a), cy - r * math.cos(a)))
+    mask_img = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(mask_img).polygon(pts, fill=255)
+    return np.array(mask_img, dtype=np.float64) / 255.0, pts
+
+
 # ---- background ----
 d_bg = np.clip(np.sqrt((xx - C) ** 2 + (yy - C) ** 2) / (S * 0.75), 0, 1)
 bg = np.stack([lerp(BG_CENTER[c], BG_EDGE[c], d_bg) for c in range(3)], axis=-1)
 img = Image.fromarray(bg.astype(np.uint8), "RGB").convert("RGBA")
 
-# ---- glossy gradient field (used to paint the blades) ----
-iris_r = S * 0.31
-iris_cx, iris_cy = C, C
-hl_cx, hl_cy = C - iris_r * 0.30, C - iris_r * 0.36
-d_hl = np.clip(np.sqrt((xx - hl_cx) ** 2 + (yy - hl_cy) ** 2) / (iris_r * 1.5), 0, 1)
-iris_rgb = np.zeros((S, S, 3), dtype=np.float64)
+# ---- main droplet ----
+drop_r = S * 0.30
+drop_cx, drop_cy = C - S * 0.01, C + S * 0.02
+mask, boundary_pts = blob_mask_array(drop_cx, drop_cy, drop_r, wobble_seed=0.6)
+
+# soft glow behind the droplet
+d_center = np.sqrt((xx - drop_cx) ** 2 + (yy - drop_cy) ** 2)
+glow_mask = np.clip(1 - (d_center - drop_r) / (drop_r * 0.55), 0, 1) ** 2 * 0.32
+composite(img, np.tile(np.array(DROP_MID, dtype=np.float64), (S, S, 1)), glow_mask)
+
+# glossy fill: off-center highlight like light on a liquid surface
+hl_cx, hl_cy = drop_cx - drop_r * 0.32, drop_cy - drop_r * 0.4
+d_hl = np.clip(np.sqrt((xx - hl_cx) ** 2 + (yy - hl_cy) ** 2) / (drop_r * 1.5), 0, 1)
+fill_rgb = np.zeros((S, S, 3), dtype=np.float64)
 for c in range(3):
-    near = lerp(IRIS_HIGHLIGHT[c], IRIS_MID[c], np.clip(d_hl * 1.7, 0, 1))
-    far = lerp(IRIS_MID[c], IRIS_RIM[c], np.clip((d_hl - 0.5) / 0.5, 0, 1))
-    iris_rgb[..., c] = np.where(d_hl < 0.5, near, far)
+    near = lerp(DROP_HIGHLIGHT[c], DROP_MID[c], np.clip(d_hl * 1.7, 0, 1))
+    far = lerp(DROP_MID[c], DROP_DEEP[c], np.clip((d_hl - 0.5) / 0.5, 0, 1))
+    fill_rgb[..., c] = np.where(d_hl < 0.5, near, far)
+composite(img, fill_rgb, mask)
 
-# ---- soft glow behind the iris ----
-d_center = np.sqrt((xx - iris_cx) ** 2 + (yy - iris_cy) ** 2)
-glow_mask = np.clip(1 - (d_center - iris_r) / (iris_r * 0.5), 0, 1) ** 2 * 0.35
-composite(img, np.tile(np.array(IRIS_MID, dtype=np.float64), (S, S, 1)), glow_mask)
+# ---- iridescent sheen ring near the droplet's own (irregular) edge ----
+inner_mask, _ = blob_mask_array(drop_cx, drop_cy, drop_r * 0.84, wobble_seed=0.6)
+rim_mask = np.clip(mask - inner_mask, 0, 1)
 
-# ---- aperture blades: bold polygons, painted with the gradient field ----
-N_BLADES = 7
-R_OUTER = iris_r * 1.02
-R_INNER = iris_r * 0.14
-HALF_ANGLE_OUTER = 27.0
-SKEW = 24.0
-
-
-def point(radius, angle_deg):
-    a = math.radians(angle_deg)
-    return (iris_cx + radius * math.sin(a), iris_cy - radius * math.cos(a))
-
-
-def blade_pts(i):
-    rot = i * (360.0 / N_BLADES)
-    return [
-        point(R_OUTER, rot - HALF_ANGLE_OUTER),
-        point(R_OUTER, rot + HALF_ANGLE_OUTER),
-        point(R_INNER, rot + HALF_ANGLE_OUTER + SKEW),
-        point(R_INNER, rot - HALF_ANGLE_OUTER + SKEW),
-    ]
-
-
-blade_mask_img = Image.new("L", (S, S), 0)
-bd = ImageDraw.Draw(blade_mask_img)
-for i in range(N_BLADES):
-    bd.polygon(blade_pts(i), fill=255)
-blade_mask = np.array(blade_mask_img, dtype=np.float64) / 255.0
-composite(img, iris_rgb, blade_mask)
-
-# ---- iridescent rim: angular blue -> violet -> warm highlight sweep,
-# masked to a thin band near the outer edge of the actual blade silhouette
-# (not a plain circle -- follows blade_mask so it respects the notches at
-# each blade seam, reading as light catching the true edge, not a decal).
-angle = (np.degrees(np.arctan2(xx - iris_cx, -(yy - iris_cy))) + 360) % 360
-# 0 deg (up, where the highlight already lives) is warm; sweeping away from
-# it the rim cools to blue then violet then warms back up on the other side.
-# two full cool->cool->warm cycles around the ring (like light breaking into
-# a coating's blue/violet sheen at several points, not just one side) plus a
-# narrow warm notch right at the existing highlight so the two effects
-# blend rather than fight.
-cycle_t = (np.sin(np.radians(angle) * 2 + math.radians(40)) + 1) / 2  # 0..1, 2 cycles
-hl_angle_dist = np.abs(((angle - 320 + 180) % 360) - 180) / 180.0  # 0 at highlight
-warm_window = np.clip(1 - hl_angle_dist / 0.22, 0, 1) ** 2
-
-rim_rgb = np.zeros((S, S, 3), dtype=np.float64)
+angle = (np.degrees(np.arctan2(xx - drop_cx, -(yy - drop_cy))) + 360) % 360
+cyc = np.radians(angle)
+sheen_rgb = np.zeros((S, S, 3), dtype=np.float64)
+w_blue = (np.sin(cyc * 2 + 0.3) + 1) / 2
+w_purple = (np.sin(cyc * 2 + 2.3) + 1) / 2
+w_green = (np.sin(cyc * 2 + 4.3) + 1) / 2
+total = w_blue + w_purple + w_green + 1e-6
 for c in range(3):
-    cool = lerp(RIM_BLUE[c], RIM_PURPLE[c], cycle_t)
-    rim_rgb[..., c] = lerp(cool, IRIS_HIGHLIGHT[c], warm_window)
+    sheen_rgb[..., c] = (
+        w_blue * SHEEN_BLUE[c] + w_purple * SHEEN_PURPLE[c] + w_green * SHEEN_GREEN[c]
+    ) / total
 
-d_edge = np.sqrt((xx - iris_cx) ** 2 + (yy - iris_cy) ** 2)
-rim_band = np.clip(1 - np.abs(d_edge - R_OUTER * 0.94) / (R_OUTER * 0.14), 0, 1) ** 1.1
-rim_alpha = rim_band * blade_mask * 0.9
-composite(img, rim_rgb, rim_alpha)
+# blend the sheen toward the warm highlight color near the existing glossy
+# highlight so the two effects read as one coherent light interaction
+hl_angle_dist = np.abs(((angle - 315 + 180) % 360) - 180) / 180.0
+warm_window = np.clip(1 - hl_angle_dist / 0.30, 0, 1) ** 2
+sheen_final = np.zeros((S, S, 3), dtype=np.float64)
+for c in range(3):
+    sheen_final[..., c] = lerp(sheen_rgb[..., c], DROP_HIGHLIGHT[c], warm_window * 0.8)
 
-# ---- blade seams: dark groove first, bright highlight core on top --
-# mimics real overlapping aperture blades catching light at their edges.
-groove_img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-gd = ImageDraw.Draw(groove_img)
-for i in range(N_BLADES):
-    gd.polygon(blade_pts(i), outline=GROOVE + (210,), width=max(2, int(S * 0.0062)))
-img.alpha_composite(groove_img)
+composite(img, sheen_final, rim_mask * 0.8)
 
-highlight_img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-hd = ImageDraw.Draw(highlight_img)
-for i in range(N_BLADES):
-    hd.polygon(blade_pts(i), outline=EDGE_HIGHLIGHT + (150,), width=max(1, int(S * 0.0022)))
-img.alpha_composite(highlight_img)
-
-# ---- pupil (aperture opening) ----
-pupil_r = R_INNER * 1.35
-d_pupil = np.sqrt((xx - iris_cx) ** 2 + (yy - iris_cy) ** 2)
-rim_w = pupil_r * 0.35
-pupil_rim_mask = np.clip((pupil_r + rim_w - d_pupil) / rim_w, 0, 1) * np.clip(
-    (d_pupil - pupil_r + rim_w) / rim_w, 0, 1
+# thin bright edge line right at the boundary for a crisp liquid-surface-
+# tension look (surface tension makes droplet edges catch a bright rim)
+edge_img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+ImageDraw.Draw(edge_img).polygon(
+    boundary_pts, outline=(255, 235, 205, 130), width=max(1, int(S * 0.0022))
 )
-composite(img, np.tile(np.array((5, 3, 2), dtype=np.float64), (S, S, 1)), pupil_rim_mask * 0.63)
+img.alpha_composite(edge_img)
 
-pupil_mask = np.clip((pupil_r - d_pupil) / (S * 0.004), 0, 1)
-composite(img, np.tile(np.array(PUPIL, dtype=np.float64), (S, S, 1)), pupil_mask)
+# small specular highlight dot for glassy realism
+spec_cx, spec_cy = drop_cx - drop_r * 0.38, drop_cy - drop_r * 0.5
+spec_r = drop_r * 0.09
+d_spec = np.sqrt((xx - spec_cx) ** 2 + (yy - spec_cy) ** 2)
+spec_mask = np.clip((spec_r - d_spec) / (spec_r * 0.9), 0, 1) ** 1.5
+composite(img, np.tile(np.array((255, 244, 224), dtype=np.float64), (S, S, 1)), spec_mask * 0.8)
 
-# ---- downsample ----
+# ---- small satellite droplet for asymmetry ----
+sat_r = drop_r * 0.22
+sat_cx, sat_cy = drop_cx + drop_r * 1.05, drop_cy + drop_r * 0.55
+sat_mask, sat_pts = blob_mask_array(sat_cx, sat_cy, sat_r, wobble_seed=2.4)
+
+sat_hl_cx, sat_hl_cy = sat_cx - sat_r * 0.35, sat_cy - sat_r * 0.4
+d_sat_hl = np.clip(np.sqrt((xx - sat_hl_cx) ** 2 + (yy - sat_hl_cy) ** 2) / (sat_r * 1.5), 0, 1)
+sat_rgb = np.zeros((S, S, 3), dtype=np.float64)
+for c in range(3):
+    near = lerp(DROP_HIGHLIGHT[c], DROP_MID[c], np.clip(d_sat_hl * 1.7, 0, 1))
+    far = lerp(DROP_MID[c], DROP_DEEP[c], np.clip((d_sat_hl - 0.5) / 0.5, 0, 1))
+    sat_rgb[..., c] = np.where(d_sat_hl < 0.5, near, far)
+composite(img, sat_rgb, sat_mask)
+
+sat_inner, _ = blob_mask_array(sat_cx, sat_cy, sat_r * 0.8, wobble_seed=2.4)
+sat_rim = np.clip(sat_mask - sat_inner, 0, 1)
+composite(img, sheen_final, sat_rim * 0.7)
+
+# ---- downsample, then a whisper of blur to settle the edges ----
 img = img.convert("RGB").resize((1024, 1024), Image.LANCZOS)
+img = img.filter(ImageFilter.GaussianBlur(radius=0.6))
+
 out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon-1024.png")
 img.save(out_path)
 print("wrote", out_path)

@@ -1,0 +1,539 @@
+<title>Emulsion — Library &amp; Develop design reference</title>
+
+<style>
+  :root{
+    --bg-canvas:#141210;
+    --bg-app:#1a1815;
+    --bg-panel:#1e1c19;
+    --bg-panel-raised:#28251f;
+    --bg-hover:#332f28;
+    --border-subtle:#37332b;
+    --border-strong:#4a453b;
+    --text-primary:#efeae2;
+    --text-secondary:#a39c8e;
+    --text-tertiary:#6e695e;
+    --accent:#e0932f;
+    --accent-strong:#f0a94a;
+    --accent-soft:#4a371f;
+    --accent-on:#1b1310;
+    --label-red:#e1585b;
+    --label-yellow:#e0c13b;
+    --label-green:#6fcb6b;
+    --label-blue:#5b9ee1;
+    --label-purple:#a87ce0;
+    --shadow-soft:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -8px rgba(0,0,0,.6);
+    --radius-s:3px;
+    --radius-m:5px;
+    --font-ui: -apple-system, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, Menlo, monospace;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:var(--bg-canvas);
+    color:var(--text-primary);
+    font-family:var(--font-ui);
+    font-size:13px;
+    line-height:1.4;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:22px;
+    padding:28px 16px 56px;
+  }
+  body::before{
+    content:"";
+    position:fixed; inset:0; pointer-events:none; z-index:0;
+    opacity:.035; mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{ transition-duration:0.001ms !important; animation-duration:0.001ms !important; }
+  }
+
+  /* ---- meta strip ---- */
+  .meta{
+    width:100%; max-width:1180px;
+    display:flex; align-items:baseline; justify-content:space-between;
+    color:var(--text-tertiary);
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    padding:0 4px;
+  }
+  .meta b{ color:var(--text-secondary); font-weight:600; }
+
+  /* ---- window frame ---- */
+  .window{
+    width:100%; max-width:1180px;
+    background:var(--bg-app);
+    border:1px solid var(--border-subtle);
+    border-radius:10px;
+    box-shadow:var(--shadow-soft);
+    overflow:hidden;
+    position:relative; z-index:1;
+  }
+  .titlebar{
+    height:42px;
+    display:flex; align-items:center;
+    gap:14px;
+    padding:0 14px;
+    background:var(--bg-app);
+    border-bottom:1px solid var(--border-subtle);
+  }
+  .traffic{ display:flex; gap:7px; }
+  .traffic span{ width:11px; height:11px; border-radius:50%; display:block; }
+  .traffic span:nth-child(1){ background:#e1585b; }
+  .traffic span:nth-child(2){ background:#e0c13b; }
+  .traffic span:nth-child(3){ background:#6fcb6b; }
+  .app-name{ font-weight:600; font-size:12.5px; color:var(--text-secondary); }
+  .app-name em{ font-style:normal; color:var(--text-primary); }
+
+  .module-switch{
+    display:flex; background:var(--bg-panel); border:1px solid var(--border-subtle);
+    border-radius:6px; padding:2px; gap:2px;
+  }
+  .module-switch button{
+    all:unset; cursor:pointer;
+    padding:5px 14px; font-size:11.5px; font-weight:600;
+    border-radius:4px; color:var(--text-secondary);
+    letter-spacing:.02em;
+  }
+  .module-switch button.active{ background:var(--bg-panel-raised); color:var(--text-primary); }
+  .module-switch button:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; }
+
+  .titlebar .spacer{ flex:1; }
+  .search{
+    display:flex; align-items:center; gap:6px;
+    background:var(--bg-panel); border:1px solid var(--border-subtle); border-radius:6px;
+    padding:5px 10px; color:var(--text-tertiary); font-size:11.5px; width:220px;
+  }
+  .search svg{ width:12px; height:12px; flex:none; opacity:.8; }
+
+  /* ---- layout skeleton shared by both screens ---- */
+  .screen{ display:none; }
+  .screen.active{ display:flex; flex-direction:column; }
+
+  .body-grid{
+    display:grid;
+    grid-template-columns:200px 1fr 240px;
+    height:560px;
+  }
+  .rail, .panel{ background:var(--bg-panel); overflow-y:auto; }
+  .rail{ border-right:1px solid var(--border-subtle); padding:14px 10px; }
+  .panel{ border-left:1px solid var(--border-subtle); padding:14px 12px; }
+  .main{ background:var(--bg-canvas); position:relative; overflow:hidden; display:flex; flex-direction:column; }
+
+  .section-label{
+    font-family:var(--font-mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--text-tertiary); padding:10px 4px 6px; font-weight:600;
+  }
+  .tree-item{
+    display:flex; align-items:center; gap:7px;
+    padding:5px 7px; border-radius:var(--radius-s); color:var(--text-secondary); cursor:default;
+    font-size:12px;
+  }
+  .tree-item.active{ background:var(--accent-soft); color:var(--accent-strong); }
+  .tree-item:hover:not(.active){ background:var(--bg-hover); }
+  .tree-item .count{ margin-left:auto; font-family:var(--font-mono); font-size:10.5px; color:var(--text-tertiary); }
+  .tree-item svg{ width:13px; height:13px; opacity:.75; flex:none; }
+
+  /* ---- Library: toolbar ---- */
+  .lib-toolbar{
+    display:flex; align-items:center; gap:10px;
+    padding:9px 14px; border-bottom:1px solid var(--border-subtle);
+    background:var(--bg-app);
+  }
+  .chip{
+    font-size:11px; padding:4px 9px; border-radius:99px; border:1px solid var(--border-strong);
+    color:var(--text-secondary); display:flex; align-items:center; gap:5px; cursor:default;
+  }
+  .chip.on{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent-strong); }
+  .lib-toolbar .spacer{ flex:1; }
+  .size-ctl{ display:flex; align-items:center; gap:7px; color:var(--text-tertiary); }
+  .size-ctl input[type=range]{ width:80px; }
+
+  /* ---- Library: grid ---- */
+  .grid-scroll{ flex:1; overflow-y:auto; padding:14px; }
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(var(--cell,124px), 1fr));
+    gap:10px;
+  }
+  .cell{
+    position:relative; aspect-ratio:3/2; border-radius:var(--radius-s);
+    overflow:hidden; border:1px solid transparent;
+    box-shadow:0 1px 2px rgba(0,0,0,.5);
+  }
+  .cell.selected{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .cell .ph{ position:absolute; inset:0; }
+  .cell .badge-row{
+    position:absolute; left:5px; right:5px; bottom:5px;
+    display:flex; align-items:center; justify-content:space-between;
+    font-family:var(--font-mono); font-size:9.5px; color:#fff;
+    opacity:0; transition:opacity .12s ease;
+  }
+  .cell:hover .badge-row, .cell.selected .badge-row{ opacity:1; }
+  .cell .stars{ display:flex; gap:1px; text-shadow:0 1px 2px rgba(0,0,0,.7); }
+  .cell .stars span{ opacity:.35; }
+  .cell .stars span.on{ opacity:1; color:var(--accent-strong); }
+  .cell .label-dot{ width:7px; height:7px; border-radius:50%; box-shadow:0 0 0 1px rgba(0,0,0,.4); }
+  .cell .flag{ position:absolute; top:5px; left:5px; font-size:11px; opacity:.9; text-shadow:0 1px 2px rgba(0,0,0,.7); }
+
+  /* photo placeholders — procedural gradients standing in for real frames */
+  .ph.g1{ background:linear-gradient(180deg,#e9c98a 0%,#d99a63 38%,#8a5a45 62%,#2c2420 100%); }
+  .ph.g2{ background:linear-gradient(160deg,#7fa8bd 0%,#3f6c82 45%,#1c2b33 100%); }
+  .ph.g3{ background:linear-gradient(190deg,#3a3a3a 0%,#1a1a1a 55%,#000 100%),radial-gradient(circle at 70% 30%, #f2e6b8 0 4%, transparent 5%); }
+  .ph.g4{ background:linear-gradient(170deg,#c96b52 0%,#7d3f38 50%,#241615 100%); }
+  .ph.g5{ background:linear-gradient(200deg,#9fae86 0%,#54614a 55%,#20241c 100%); }
+  .ph.g6{ background:linear-gradient(175deg,#d7c8a8 0%,#a68f68 40%,#4c3f2c 75%,#1c1712 100%); }
+
+  /* ---- Develop screen ---- */
+  .dev-topbar{
+    display:flex; align-items:center; gap:12px;
+    padding:8px 14px; border-bottom:1px solid var(--border-subtle); background:var(--bg-app);
+  }
+  .segmented{ display:flex; background:var(--bg-panel); border:1px solid var(--border-subtle); border-radius:6px; padding:2px; }
+  .segmented button{ all:unset; padding:4px 10px; font-size:10.5px; border-radius:4px; color:var(--text-secondary); cursor:pointer; }
+  .segmented button.on{ background:var(--bg-panel-raised); color:var(--text-primary); }
+  .dev-topbar .spacer{ flex:1; }
+  .zoom{ font-family:var(--font-mono); font-size:11px; color:var(--text-tertiary); }
+
+  .canvas-wrap{ flex:1; display:flex; align-items:center; justify-content:center; padding:22px; position:relative; }
+  .photo{
+    width:100%; max-width:640px; aspect-ratio:3/2; border-radius:2px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0) 60%, rgba(0,0,0,.25) 100%),
+      radial-gradient(circle at 62% 38%, #ffe4a8 0%, #f2b25c 6%, transparent 7%),
+      linear-gradient(180deg,#f0c98f 0%,#e19a5c 30%,#a86a4c 55%,#4a3327 78%,#1c1512 100%);
+    box-shadow:0 20px 50px -14px rgba(0,0,0,.7);
+    position:relative;
+    filter:saturate(var(--sat,1)) contrast(var(--con,1));
+  }
+  .photo .thirds{
+    position:absolute; inset:0; opacity:0; pointer-events:none;
+    background-image:
+      linear-gradient(90deg, transparent 33%, rgba(255,255,255,.35) 33%, rgba(255,255,255,.35) 33.4%, transparent 33.4%, transparent 66%, rgba(255,255,255,.35) 66%, rgba(255,255,255,.35) 66.4%, transparent 66.4%),
+      linear-gradient(0deg, transparent 33%, rgba(255,255,255,.35) 33%, rgba(255,255,255,.35) 33.4%, transparent 33.4%, transparent 66%, rgba(255,255,255,.35) 66%, rgba(255,255,255,.35) 66.4%, transparent 66.4%);
+  }
+  .photo.compare .thirds{ opacity:1; }
+  .photo.compare{ filter:saturate(.55) contrast(.9) brightness(.85); }
+  .compare-tag{
+    position:absolute; top:10px; left:10px; font-family:var(--font-mono); font-size:9.5px;
+    letter-spacing:.08em; text-transform:uppercase; color:var(--text-tertiary);
+    background:rgba(0,0,0,.4); padding:3px 7px; border-radius:3px; opacity:0;
+  }
+  .photo.compare + .compare-tag, .canvas-wrap.is-compare .compare-tag{ opacity:1; }
+
+  .tool-strip{
+    display:flex; gap:4px; padding:8px 14px; border-top:1px solid var(--border-subtle); background:var(--bg-app);
+  }
+  .tool-strip button{
+    all:unset; width:28px; height:28px; display:flex; align-items:center; justify-content:center;
+    border-radius:var(--radius-s); color:var(--text-secondary); cursor:pointer; font-size:14px;
+  }
+  .tool-strip button.on{ background:var(--accent-soft); color:var(--accent-strong); }
+  .tool-strip button:hover:not(.on){ background:var(--bg-hover); }
+  .tool-strip .sep{ width:1px; background:var(--border-subtle); margin:4px 6px; }
+
+  /* right panel — develop */
+  .hist{ width:100%; height:64px; display:block; margin-bottom:12px; }
+  details.section{ border-bottom:1px solid var(--border-subtle); }
+  details.section:last-child{ border-bottom:none; }
+  details.section summary{
+    list-style:none; cursor:pointer; padding:9px 4px;
+    font-size:11.5px; font-weight:600; letter-spacing:.02em;
+    display:flex; align-items:center; gap:6px; color:var(--text-primary);
+  }
+  details.section summary::-webkit-details-marker{ display:none; }
+  details.section summary::before{
+    content:"›"; display:inline-block; color:var(--text-tertiary); transition:transform .12s ease; width:10px;
+  }
+  details.section[open] summary::before{ transform:rotate(90deg); }
+  .row{ display:flex; align-items:center; gap:8px; padding:5px 4px; }
+  .row label{ width:66px; font-size:11px; color:var(--text-secondary); flex:none; }
+  .row input[type=range]{ flex:1; }
+  .row .val{
+    width:38px; text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+    font-size:10.5px; color:var(--text-tertiary);
+  }
+  .sub-body{ padding-bottom:8px; }
+
+  input[type=range]{
+    -webkit-appearance:none; height:3px; background:var(--border-strong); border-radius:2px; outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:12px; height:12px; border-radius:50%;
+    background:var(--accent-strong); border:2px solid var(--bg-panel); cursor:pointer; margin-top:0;
+  }
+  input[type=range]:focus-visible::-webkit-slider-thumb{ outline:2px solid var(--accent); outline-offset:2px; }
+
+  /* left rail — develop */
+  .rail-tabs{ display:flex; gap:2px; margin-bottom:10px; }
+  .rail-tabs button{
+    all:unset; flex:1; text-align:center; padding:6px 0; font-size:10.5px; font-weight:600;
+    color:var(--text-tertiary); border-radius:var(--radius-s); cursor:pointer;
+  }
+  .rail-tabs button.on{ background:var(--bg-panel-raised); color:var(--text-primary); }
+  .hist-item{ padding:6px 6px; border-radius:var(--radius-s); font-size:11.5px; }
+  .hist-item.current{ background:var(--accent-soft); color:var(--accent-strong); }
+  .hist-item .t{ font-family:var(--font-mono); font-size:9.5px; color:var(--text-tertiary); display:block; margin-top:1px; }
+
+  /* filmstrip */
+  .filmstrip{
+    display:flex; gap:7px; padding:10px 14px; background:var(--bg-app);
+    border-top:1px solid var(--border-subtle); overflow-x:auto;
+  }
+  .filmstrip .cell{ width:76px; flex:none; aspect-ratio:3/2; }
+
+  .footnote{
+    width:100%; max-width:1180px; color:var(--text-tertiary); font-size:11px;
+    padding:0 4px; line-height:1.6;
+  }
+  .footnote code{ font-family:var(--font-mono); font-size:10.5px; color:var(--text-secondary); }
+</style>
+
+<div class="meta">
+  <span>Design reference · not application code</span>
+  <span><b>Emulsion</b> — working title · Library &amp; Develop · dark theme is a permanent product decision</span>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic"><span></span><span></span><span></span></div>
+    <div class="app-name"><em>Emulsion</em> — Untitled Catalog</div>
+    <div class="module-switch" id="switch">
+      <button class="active" data-screen="library">Library</button>
+      <button data-screen="develop">Develop</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="search">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+      Search library…
+    </div>
+  </div>
+
+  <!-- ===================== LIBRARY ===================== -->
+  <div class="screen active" id="screen-library">
+    <div class="lib-toolbar">
+      <span class="chip on">All Photos <span style="font-family:var(--font-mono);opacity:.7">2,481</span></span>
+      <span class="chip">Picks</span>
+      <span class="chip">★★★★+</span>
+      <span class="chip">Untagged</span>
+      <div class="spacer"></div>
+      <div class="size-ctl">
+        <span>Cell size</span>
+        <input type="range" min="90" max="200" value="124" id="cellSize"/>
+      </div>
+    </div>
+
+    <div class="body-grid">
+      <div class="rail">
+        <div class="section-label">Folders</div>
+        <div class="tree-item active"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M1 4a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z"/></svg>2026 · Kyoto<span class="count">318</span></div>
+        <div class="tree-item"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M1 4a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z"/></svg>2026 · Studio<span class="count">96</span></div>
+        <div class="tree-item"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M1 4a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z"/></svg>2025 · Archive<span class="count">2,067</span></div>
+        <div class="section-label">Collections</div>
+        <div class="tree-item"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.8 4.6L15 6.2l-3.6 3.2L12.4 15 8 12.2 3.6 15l1-5.6L1 6.2l5.2-.6z"/></svg>Portfolio<span class="count">42</span></div>
+        <div class="tree-item"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.8 4.6L15 6.2l-3.6 3.2L12.4 15 8 12.2 3.6 15l1-5.6L1 6.2l5.2-.6z"/></svg>Client delivery — Aug<span class="count">28</span></div>
+        <div class="tree-item"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.8 4.6L15 6.2l-3.6 3.2L12.4 15 8 12.2 3.6 15l1-5.6L1 6.2l5.2-.6z"/></svg>Smart: 5★ + Untagged<span class="count">14</span></div>
+      </div>
+
+      <div class="main">
+        <div class="grid-scroll">
+          <div class="grid" id="grid" style="--cell:124px">
+            <!-- cells generated by script -->
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="section-label">Metadata</div>
+        <div class="row"><label>Camera</label><span style="color:var(--text-secondary)">GFX 100S II</span></div>
+        <div class="row"><label>Lens</label><span style="color:var(--text-secondary)">32-64mm f/4</span></div>
+        <div class="row"><label>Exposure</label><span style="font-family:var(--font-mono);color:var(--text-secondary)">1/125 · f/8 · ISO 100</span></div>
+        <div class="row"><label>Captured</label><span style="font-family:var(--font-mono);color:var(--text-secondary)">2026-06-14 07:22</span></div>
+        <div class="section-label">Keywords</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;padding:2px 4px 10px">
+          <span class="chip on">temple</span><span class="chip on">morning light</span><span class="chip">kyoto</span>
+        </div>
+        <div class="section-label">Histogram</div>
+        <svg class="hist" viewBox="0 0 220 64" preserveAspectRatio="none">
+          <polygon points="0,64 0,40 15,30 30,20 45,24 60,15 75,18 90,10 105,14 120,9 135,16 150,12 165,22 180,30 195,26 210,36 220,40 220,64" fill="var(--label-red)" opacity=".45"/>
+          <polygon points="0,64 0,44 15,36 30,26 45,28 60,20 75,22 90,14 105,18 120,13 135,20 150,16 165,26 180,34 195,30 210,40 220,44 220,64" fill="var(--label-green)" opacity=".45"/>
+          <polygon points="0,64 0,50 15,42 30,34 45,34 60,28 75,28 90,22 105,24 120,20 135,26 150,22 165,30 180,38 195,34 210,44 220,48 220,64" fill="var(--label-blue)" opacity=".45"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="filmstrip" id="filmstrip-lib"></div>
+  </div>
+
+  <!-- ===================== DEVELOP ===================== -->
+  <div class="screen" id="screen-develop">
+    <div class="dev-topbar">
+      <div class="segmented">
+        <button class="on">Draft</button><button>Standard</button><button>High</button>
+      </div>
+      <div class="spacer"></div>
+      <span class="zoom">Fit · 47.2 MP</span>
+      <div class="segmented" id="compareToggle">
+        <button class="on" data-c="after">After</button><button data-c="before">Before</button>
+      </div>
+    </div>
+
+    <div class="body-grid">
+      <div class="rail">
+        <div class="rail-tabs">
+          <button>Presets</button><button>Snapshots</button><button class="on">History</button>
+        </div>
+        <div class="hist-item current">Radial filter — sky<span class="t">just now</span></div>
+        <div class="hist-item">Highlights −38<span class="t">2 min ago</span></div>
+        <div class="hist-item">White balance — As Shot<span class="t">3 min ago</span></div>
+        <div class="hist-item">Crop 3:2<span class="t">4 min ago</span></div>
+        <div class="hist-item">Import</div>
+      </div>
+
+      <div class="main">
+        <div class="canvas-wrap" id="canvasWrap">
+          <div class="photo" id="photoEl">
+            <div class="thirds"></div>
+          </div>
+          <span class="compare-tag">Before</span>
+        </div>
+        <div class="tool-strip">
+          <button title="Crop">⬚</button>
+          <button title="Spot removal">◎</button>
+          <button title="Gradient mask">▤</button>
+          <button title="Radial mask" class="on">◐</button>
+          <button title="Brush mask">🖌</button>
+          <div class="sep"></div>
+          <button title="Select subject (AI, M5)">✦</button>
+          <button title="Select sky (AI, M5)">☁</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <svg class="hist" viewBox="0 0 220 64" preserveAspectRatio="none">
+          <polygon points="0,64 0,40 15,30 30,20 45,24 60,15 75,18 90,10 105,14 120,9 135,16 150,12 165,22 180,30 195,26 210,36 220,40 220,64" fill="var(--label-red)" opacity=".45"/>
+          <polygon points="0,64 0,44 15,36 30,26 45,28 60,20 75,22 90,14 105,18 120,13 135,20 150,16 165,26 180,34 195,30 210,40 220,44 220,64" fill="var(--label-green)" opacity=".45"/>
+          <polygon points="0,64 0,50 15,42 30,34 45,34 60,28 75,28 90,22 105,24 120,20 135,26 150,22 165,30 180,38 195,34 210,44 220,48 220,64" fill="var(--label-blue)" opacity=".45"/>
+        </svg>
+
+        <details class="section" open>
+          <summary>Basic</summary>
+          <div class="sub-body">
+            <div class="row"><label>Temp</label><input type="range" min="2000" max="10000" value="5400"/><span class="val">5400</span></div>
+            <div class="row"><label>Tint</label><input type="range" min="-100" max="100" value="4"/><span class="val">+4</span></div>
+            <div class="row"><label>Exposure</label><input type="range" min="-500" max="500" value="18" oninput="document.getElementById('photoEl').style.setProperty('--con', 1 + this.value/1000)"/><span class="val">+0.18</span></div>
+            <div class="row"><label>Contrast</label><input type="range" min="-100" max="100" value="12"/><span class="val">+12</span></div>
+            <div class="row"><label>Highlights</label><input type="range" min="-100" max="100" value="-38"/><span class="val">−38</span></div>
+            <div class="row"><label>Shadows</label><input type="range" min="-100" max="100" value="22"/><span class="val">+22</span></div>
+            <div class="row"><label>Whites</label><input type="range" min="-100" max="100" value="6"/><span class="val">+6</span></div>
+            <div class="row"><label>Blacks</label><input type="range" min="-100" max="100" value="-9"/><span class="val">−9</span></div>
+          </div>
+        </details>
+        <details class="section">
+          <summary>Presence</summary>
+          <div class="sub-body">
+            <div class="row"><label>Texture</label><input type="range" min="-100" max="100" value="0"/><span class="val">0</span></div>
+            <div class="row"><label>Clarity</label><input type="range" min="-100" max="100" value="14"/><span class="val">+14</span></div>
+            <div class="row"><label>Dehaze</label><input type="range" min="-100" max="100" value="0"/><span class="val">0</span></div>
+            <div class="row"><label>Vibrance</label><input type="range" min="-100" max="100" value="20" oninput="document.getElementById('photoEl').style.setProperty('--sat', 1 + this.value/100)"/><span class="val">+20</span></div>
+          </div>
+        </details>
+        <details class="section"><summary>Tone Curve</summary><div class="sub-body" style="color:var(--text-tertiary);font-size:11px;padding:4px">Point curve editor</div></details>
+        <details class="section"><summary>HSL / Color</summary><div class="sub-body" style="color:var(--text-tertiary);font-size:11px;padding:4px">Per-channel hue · sat · lum</div></details>
+        <details class="section"><summary>Detail</summary><div class="sub-body" style="color:var(--text-tertiary);font-size:11px;padding:4px">Sharpening · noise reduction</div></details>
+        <details class="section"><summary>Effects</summary><div class="sub-body" style="color:var(--text-tertiary);font-size:11px;padding:4px">Grain · vignette</div></details>
+        <details class="section"><summary>Lens Corrections</summary><div class="sub-body" style="color:var(--text-tertiary);font-size:11px;padding:4px">Profile · chromatic aberration</div></details>
+      </div>
+    </div>
+
+    <div class="filmstrip" id="filmstrip-dev"></div>
+  </div>
+</div>
+
+<p class="footnote">
+  Reference for <code>docs/ux/UX-DESIGN.md</code> — Library grid uses procedural placeholders in place of real photos; sliders and the compare toggle are wired for feel, everything else is static. Not the production render pipeline (that's <code>docs/adr/ADR-0004</code>).
+</p>
+
+<script>
+  const grads = ['g1','g2','g3','g4','g5','g6'];
+  const dots = ['label-red','label-yellow','label-green','label-blue','label-purple', null, null];
+  function makeCell(i, small){
+    const cell = document.createElement('div');
+    cell.className = 'cell' + (i === 2 ? ' selected' : '');
+    const ph = document.createElement('div');
+    ph.className = 'ph ' + grads[i % grads.length];
+    cell.appendChild(ph);
+    if(!small){
+      const flag = document.createElement('div');
+      flag.className = 'flag';
+      flag.textContent = i % 5 === 0 ? '🚩' : (i % 3 === 0 ? '✓' : '');
+      cell.appendChild(flag);
+      const row = document.createElement('div');
+      row.className = 'badge-row';
+      const stars = document.createElement('div');
+      stars.className = 'stars';
+      const n = (i * 7) % 6;
+      for(let s=0; s<5; s++){
+        const st = document.createElement('span');
+        st.textContent = '★';
+        if(s < n) st.classList.add('on');
+        stars.appendChild(st);
+      }
+      row.appendChild(stars);
+      const dotColor = dots[i % dots.length];
+      if(dotColor){
+        const dot = document.createElement('span');
+        dot.className = 'label-dot';
+        dot.style.background = 'var(--' + dotColor + ')';
+        row.appendChild(dot);
+      } else {
+        row.appendChild(document.createElement('span'));
+      }
+      cell.appendChild(row);
+    }
+    return cell;
+  }
+  const grid = document.getElementById('grid');
+  for(let i=0;i<28;i++) grid.appendChild(makeCell(i,false));
+  ['filmstrip-lib','filmstrip-dev'].forEach(id=>{
+    const strip = document.getElementById(id);
+    for(let i=0;i<18;i++) strip.appendChild(makeCell(i,true));
+  });
+
+  document.getElementById('switch').addEventListener('click', (e)=>{
+    const btn = e.target.closest('button');
+    if(!btn) return;
+    document.querySelectorAll('.module-switch button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    document.getElementById('screen-' + btn.dataset.screen).classList.add('active');
+  });
+
+  document.getElementById('cellSize').addEventListener('input', (e)=>{
+    grid.style.setProperty('--cell', e.target.value + 'px');
+  });
+
+  document.getElementById('compareToggle').addEventListener('click', (e)=>{
+    const btn = e.target.closest('button');
+    if(!btn) return;
+    document.querySelectorAll('#compareToggle button').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');
+    const photo = document.getElementById('photoEl');
+    const wrap = document.getElementById('canvasWrap');
+    if(btn.dataset.c === 'before'){
+      photo.classList.add('compare');
+      wrap.classList.add('is-compare');
+    } else {
+      photo.classList.remove('compare');
+      wrap.classList.remove('is-compare');
+    }
+  });
+</script>

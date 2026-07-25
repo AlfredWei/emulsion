@@ -4,6 +4,13 @@ amber gradient (matching app/src/lib/styles/tokens.css), on the app's dark
 background. Full-bleed square, no pre-baked corner rounding -- OS icon
 masks (macOS squircle, Windows tile shapes) apply their own shape.
 
+v2: mechanical beveled blade seams (dark groove + bright highlight core,
+mimicking real overlapping aperture blades catching light) and an
+iridescent blue/violet rim near the outer edge -- like anti-reflective
+lens coating -- blending into the warm amber highlight, using the same
+blue/purple already in the app's color-label palette (tokens.css) rather
+than introducing new colors.
+
 Regenerate:
     python3 -m venv venv && ./venv/bin/pip install Pillow numpy
     ./venv/bin/python generate_icon.py
@@ -35,10 +42,27 @@ IRIS_HIGHLIGHT = hex_to_rgb("#fbd08c")
 IRIS_MID = hex_to_rgb("#e0932f")
 IRIS_RIM = hex_to_rgb("#7c4a1c")
 PUPIL = hex_to_rgb("#120f0c")
-BLADE_STROKE = (26, 16, 8)
+GROOVE = (18, 10, 5)
+EDGE_HIGHLIGHT = (255, 224, 168)
+
+# lens-coating iridescence, same blue/purple as the app's color-label swatches
+RIM_BLUE = hex_to_rgb("#5b9ee1")
+RIM_PURPLE = hex_to_rgb("#a87ce0")
+
+yy, xx = np.mgrid[0:S, 0:S].astype(np.float64)
+
+
+def radial_mask(cx, cy, r, softness):
+    d = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    return np.clip((r - d) / softness, 0, 1), d
+
+
+def composite(base_img, rgb_field, alpha_field):
+    layer = np.dstack([rgb_field, (alpha_field * 255)[..., None]])
+    base_img.alpha_composite(Image.fromarray(layer.astype(np.uint8), "RGBA"))
+
 
 # ---- background ----
-yy, xx = np.mgrid[0:S, 0:S].astype(np.float64)
 d_bg = np.clip(np.sqrt((xx - C) ** 2 + (yy - C) ** 2) / (S * 0.75), 0, 1)
 bg = np.stack([lerp(BG_CENTER[c], BG_EDGE[c], d_bg) for c in range(3)], axis=-1)
 img = Image.fromarray(bg.astype(np.uint8), "RGB").convert("RGBA")
@@ -57,10 +81,7 @@ for c in range(3):
 # ---- soft glow behind the iris ----
 d_center = np.sqrt((xx - iris_cx) ** 2 + (yy - iris_cy) ** 2)
 glow_mask = np.clip(1 - (d_center - iris_r) / (iris_r * 0.5), 0, 1) ** 2 * 0.35
-glow_layer = np.dstack(
-    [np.tile(np.array(IRIS_MID, dtype=np.float64), (S, S, 1)), (glow_mask * 255)[..., None]]
-)
-img.alpha_composite(Image.fromarray(glow_layer.astype(np.uint8), "RGBA"))
+composite(img, np.tile(np.array(IRIS_MID, dtype=np.float64), (S, S, 1)), glow_mask)
 
 # ---- aperture blades: bold polygons, painted with the gradient field ----
 N_BLADES = 7
@@ -75,53 +96,73 @@ def point(radius, angle_deg):
     return (iris_cx + radius * math.sin(a), iris_cy - radius * math.cos(a))
 
 
+def blade_pts(i):
+    rot = i * (360.0 / N_BLADES)
+    return [
+        point(R_OUTER, rot - HALF_ANGLE_OUTER),
+        point(R_OUTER, rot + HALF_ANGLE_OUTER),
+        point(R_INNER, rot + HALF_ANGLE_OUTER + SKEW),
+        point(R_INNER, rot - HALF_ANGLE_OUTER + SKEW),
+    ]
+
+
 blade_mask_img = Image.new("L", (S, S), 0)
 bd = ImageDraw.Draw(blade_mask_img)
 for i in range(N_BLADES):
-    rot = i * (360.0 / N_BLADES)
-    pts = [
-        point(R_OUTER, rot - HALF_ANGLE_OUTER),
-        point(R_OUTER, rot + HALF_ANGLE_OUTER),
-        point(R_INNER, rot + HALF_ANGLE_OUTER + SKEW),
-        point(R_INNER, rot - HALF_ANGLE_OUTER + SKEW),
-    ]
-    bd.polygon(pts, fill=255)
-
+    bd.polygon(blade_pts(i), fill=255)
 blade_mask = np.array(blade_mask_img, dtype=np.float64) / 255.0
-blade_layer = np.dstack([iris_rgb, (blade_mask * 255)[..., None]])
-img.alpha_composite(Image.fromarray(blade_layer.astype(np.uint8), "RGBA"))
+composite(img, iris_rgb, blade_mask)
 
-# ---- blade outlines for definition ----
-outline_img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-od = ImageDraw.Draw(outline_img)
+# ---- iridescent rim: angular blue -> violet -> warm highlight sweep,
+# masked to a thin band near the outer edge of the actual blade silhouette
+# (not a plain circle -- follows blade_mask so it respects the notches at
+# each blade seam, reading as light catching the true edge, not a decal).
+angle = (np.degrees(np.arctan2(xx - iris_cx, -(yy - iris_cy))) + 360) % 360
+# 0 deg (up, where the highlight already lives) is warm; sweeping away from
+# it the rim cools to blue then violet then warms back up on the other side.
+# two full cool->cool->warm cycles around the ring (like light breaking into
+# a coating's blue/violet sheen at several points, not just one side) plus a
+# narrow warm notch right at the existing highlight so the two effects
+# blend rather than fight.
+cycle_t = (np.sin(np.radians(angle) * 2 + math.radians(40)) + 1) / 2  # 0..1, 2 cycles
+hl_angle_dist = np.abs(((angle - 320 + 180) % 360) - 180) / 180.0  # 0 at highlight
+warm_window = np.clip(1 - hl_angle_dist / 0.22, 0, 1) ** 2
+
+rim_rgb = np.zeros((S, S, 3), dtype=np.float64)
+for c in range(3):
+    cool = lerp(RIM_BLUE[c], RIM_PURPLE[c], cycle_t)
+    rim_rgb[..., c] = lerp(cool, IRIS_HIGHLIGHT[c], warm_window)
+
+d_edge = np.sqrt((xx - iris_cx) ** 2 + (yy - iris_cy) ** 2)
+rim_band = np.clip(1 - np.abs(d_edge - R_OUTER * 0.94) / (R_OUTER * 0.14), 0, 1) ** 1.1
+rim_alpha = rim_band * blade_mask * 0.9
+composite(img, rim_rgb, rim_alpha)
+
+# ---- blade seams: dark groove first, bright highlight core on top --
+# mimics real overlapping aperture blades catching light at their edges.
+groove_img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+gd = ImageDraw.Draw(groove_img)
 for i in range(N_BLADES):
-    rot = i * (360.0 / N_BLADES)
-    pts = [
-        point(R_OUTER, rot - HALF_ANGLE_OUTER),
-        point(R_OUTER, rot + HALF_ANGLE_OUTER),
-        point(R_INNER, rot + HALF_ANGLE_OUTER + SKEW),
-        point(R_INNER, rot - HALF_ANGLE_OUTER + SKEW),
-    ]
-    od.polygon(pts, outline=BLADE_STROKE + (140,), width=max(1, int(S * 0.0035)))
-img.alpha_composite(outline_img)
+    gd.polygon(blade_pts(i), outline=GROOVE + (210,), width=max(2, int(S * 0.0062)))
+img.alpha_composite(groove_img)
+
+highlight_img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+hd = ImageDraw.Draw(highlight_img)
+for i in range(N_BLADES):
+    hd.polygon(blade_pts(i), outline=EDGE_HIGHLIGHT + (150,), width=max(1, int(S * 0.0022)))
+img.alpha_composite(highlight_img)
 
 # ---- pupil (aperture opening) ----
 pupil_r = R_INNER * 1.35
 d_pupil = np.sqrt((xx - iris_cx) ** 2 + (yy - iris_cy) ** 2)
 rim_w = pupil_r * 0.35
-rim_mask = np.clip((pupil_r + rim_w - d_pupil) / rim_w, 0, 1) * np.clip(
+pupil_rim_mask = np.clip((pupil_r + rim_w - d_pupil) / rim_w, 0, 1) * np.clip(
     (d_pupil - pupil_r + rim_w) / rim_w, 0, 1
 )
-rim_layer = np.dstack(
-    [np.tile(np.array((5, 3, 2), dtype=np.float64), (S, S, 1)), (rim_mask * 160)[..., None]]
-)
-img.alpha_composite(Image.fromarray(rim_layer.astype(np.uint8), "RGBA"))
+composite(img, np.tile(np.array((5, 3, 2), dtype=np.float64), (S, S, 1)), pupil_rim_mask * 0.63)
 
 pupil_mask = np.clip((pupil_r - d_pupil) / (S * 0.004), 0, 1)
-pupil_layer = np.dstack(
-    [np.tile(np.array(PUPIL, dtype=np.float64), (S, S, 1)), pupil_mask[..., None] * 255]
-)
-img.alpha_composite(Image.fromarray(pupil_layer.astype(np.uint8), "RGBA"))
+composite(img, np.tile(np.array(PUPIL, dtype=np.float64), (S, S, 1)), pupil_mask)
 
 # ---- downsample ----
 img = img.convert("RGB").resize((1024, 1024), Image.LANCZOS)

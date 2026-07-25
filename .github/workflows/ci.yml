@@ -32,6 +32,18 @@ jobs:
         with:
           workspaces: app/src-tauri
 
+      # RAW decoding (ADR-0003) links a vcpkg-installed prebuilt LibRaw on
+      # Windows instead of compiling it from source under MSVC (see
+      # app/src-tauri/vendor/rsraw-sys/PATCH.md). GitHub's windows-latest
+      # runners ship vcpkg pre-installed with VCPKG_INSTALLATION_ROOT set --
+      # this step assumes that rather than bootstrapping vcpkg fresh; if
+      # this fails, that assumption is what to check first.
+      - name: Install LibRaw via vcpkg (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
+
       - name: cargo build
         run: cargo build --verbose
 

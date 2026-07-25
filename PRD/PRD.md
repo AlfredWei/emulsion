@@ -67,7 +67,7 @@ These were confirmed with the project owner and drive every downstream decision 
 - Copy vs. add-in-place; user-defined destination folder structure/naming templates (date-based, custom tokens).
 - Duplicate detection at import time.
 - Apply metadata (copyright, keywords) and a develop preset at import.
-- Background thumbnail/preview generation that doesn't block the UI.
+- Background thumbnail/preview generation that doesn't block the UI — two distinct tiers, both generated ahead of need rather than on demand: (1) a small Library-grid **thumbnail**, and (2) a **Develop preview cache**, a resized/demosaiced proxy per image that Develop reads from instead of decoding the source RAW fresh on every open. Mirrors Lightroom's own Standard/1:1 Preview cache — this is what makes Develop feel instant on a large catalog; see §7.6.
 - Broad RAW format support via the chosen decode library, plus standard JPEG/TIFF/PNG, plus common HEIC.
 
 ### 7.3 Library / organization
@@ -102,6 +102,7 @@ These were confirmed with the project owner and drive every downstream decision 
 ### 7.6 Performance & data integrity (cross-cutting, not a "feature" but a requirement)
 - GPU-accelerated Develop rendering where available, with a correct CPU fallback.
 - Responsive UI at 50k+ image catalogs: virtualized grid, background indexing, cached previews.
+- **Persistent Develop preview cache is a first-class requirement, not an incidental optimization**: the demosaiced proxy that seeds the Develop canvas is generated once (in the background at/after import, or lazily on first open) and persisted on disk, then reused on every later Develop entry for that image — never re-decoded from the source RAW file just to open the editor. Invalidated and regenerated only when the source file itself changes (moved/re-imported/replaced), not on every edit-stack update. This is the single biggest lever on perceived Develop-open latency.
 - **Catalog backup**, modeled directly on Lightroom's own long-standing behavior: prompt on app close with a user-configurable frequency (every time / once a day / once a week / once a month / never), write a timestamped copy of the catalog file to a user-chosen backup location (kept separate from the working catalog — a different folder or drive), with an optional integrity check before backing up and an optional catalog optimization (vacuum/compact) as part of the backup step. Backs up the catalog file only, not the photos — originals are assumed to have their own backup story, since this product never touches them (§7.1).
 - Crash-safe edit persistence (no data loss on crash mid-edit).
 

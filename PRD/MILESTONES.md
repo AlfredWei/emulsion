@@ -35,6 +35,7 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - **Import**: pick a folder/volume, copy or add-in-place, background thumbnail generation, basic duplicate detection.
 - **Library**: grid + loupe view, flags/star ratings/color labels, filter/sort by those + basic metadata, folder-based browsing, virtual copies, basic stacking.
 - **Develop**: single non-destructive edit stack per image with history/undo and snapshots; global adjustments only — white balance, exposure, contrast, highlights/shadows/whites/blacks, saturation/vibrance, basic sharpening and noise reduction, crop/straighten/rotate.
+- **Develop preview cache**: background/on-demand generation of a persistent, resized proxy per image so opening Develop doesn't require decoding the source RAW file fresh every time (Lightroom's Standard/1:1 Preview cache model — see [PRD §7.6](PRD.md#76-performance--data-integrity-cross-cutting-not-a-feature-but-a-requirement)). Distinct from M3's Smart Previews below: this is about redecode cost on a *locally available* file, not offline/disconnected-volume editing. Identified as a real gap during the Develop-pipeline slice, where every Develop open was measurably slow because it decoded the RAW from scratch — pulled into M1 scope rather than left implicit.
 - **Export**: JPEG/TIFF export with resize, output sharpening, color space, quality, filename template; batch export in the background.
 - Catalog persistence, crash-safe (no edit loss on crash).
 
@@ -85,7 +86,7 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - Perspective/upright correction (manual controls; auto-upright is a stretch goal, not required).
 - Soft proofing against output profiles.
 - Print module: layout templates, page setup, printer color management.
-- Smart Previews: lightweight proxy generation so Develop works smoothly even against files on a disconnected/offline external drive (still valuable with zero cloud — this is about disk I/O, not sync).
+- Smart Previews: lightweight proxy generation so Develop works smoothly even against files on a disconnected/offline external drive (still valuable with zero cloud — this is about disk I/O, not sync). Distinct from M1's Develop preview cache: that one speeds up a *present* file's redecode cost; this one keeps Develop usable when the original isn't reachable at all.
 - Decide and scope: Map/geotagging view, Book module — both optional based on user demand signal from M1/M2 dogfooding; not required for exit.
 
 ### Explicitly deferred

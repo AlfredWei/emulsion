@@ -20,5 +20,6 @@ Thumbs.db
 .idea/
 *.swp
 
-# Claude Code local settings (machine-specific, not shared)
+# Claude Code local settings/state (machine-specific, not shared)
 .claude/settings.local.json
+.claude/scheduled_tasks.lock

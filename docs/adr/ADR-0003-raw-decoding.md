@@ -44,6 +44,18 @@ This is a second concrete gap in `rsraw`, on top of the MSVC one — not disqual
 
 Test added as `raw_decode::tests::decodes_a_real_raw_file_when_a_sample_is_provided`, gated behind an `EMULSION_TEST_RAW_SAMPLE` env var rather than a fixture committed to the repo (RAW samples are large and of mixed provenance — not appropriate for git history).
 
+## Update — Windows MSVC failure empirically confirmed via CI, not just source-reading (2026-07-25)
+
+The MSVC finding above was originally based on reading `rsraw-sys`'s build script, not on an actual Windows build — this environment is macOS-only. Added `.github/workflows/ci.yml` with a `macos-latest`/`windows-latest` matrix specifically to close that gap using GitHub's own Windows runners. Result, from the real CI run ([PR #2](https://github.com/AlfredWei/emulsion/pull/2)):
+
+```
+thread 'main' panicked at rsraw-sys-0.1.1\build.rs:13:9:
+MSVC is not supported
+##[error]Process completed with exit code 1.
+```
+
+Exact match to the predicted failure — `cargo build` fails after ~6.5 minutes on `windows-latest` (Visual Studio 2026 Enterprise, MSVC 14.51.36231), confirming this is a real, current blocker on GitHub's actual Windows toolchain, not a stale or hypothetical concern. macOS job passed cleanly in the same run (regression-confirms the M0 findings above). This is now a **confirmed, CI-enforced fact**, not a documented risk — the Windows job will keep failing on every PR until one of the candidate fixes above (GNU target, `libraw-rs`, or a build-script patch) is actually implemented, which is deliberate: it keeps this from silently regressing into "we forgot Windows was broken."
+
 ## Alternatives considered and rejected
 
 - **`rawler` (pure Rust)**: rejected for now on coverage grounds — avoiding the C++ FFI dependency is appealing (simpler builds, full memory safety through the decode path) but not worth shipping with meaningfully fewer supported cameras than users expect from a Lightroom-class tool. **Revisit trigger**: if `rawler`'s camera coverage reaches parity with LibRaw for the cameras our actual user base owns, re-evaluate switching to remove the FFI dependency entirely.

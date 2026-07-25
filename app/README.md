@@ -5,7 +5,9 @@ The Tauri + SvelteKit application. See the [root README](../README.md) for the p
 ## Layout
 
 - `src/` — Svelte(Kit) frontend (Library/Develop UI, in-webview WebGPU rendering per [ADR-0004](../docs/adr/ADR-0004-rendering-and-color-management.md)).
-- `src-tauri/` — Rust core: `catalog.rs` (SQLite catalog, [ADR-0005](../docs/adr/ADR-0005-catalog-storage.md)), `raw_decode.rs` (LibRaw via `rsraw`, [ADR-0003](../docs/adr/ADR-0003-raw-decoding.md)), `lib.rs` (Tauri commands).
+- `src-tauri/` — Rust core: `catalog.rs` (SQLite catalog, [ADR-0005](../docs/adr/ADR-0005-catalog-storage.md)), `raw_decode.rs` (LibRaw via `rsraw`, [ADR-0003](../docs/adr/ADR-0003-raw-decoding.md)), `import.rs` (import pipeline), `lib.rs` (Tauri commands).
+
+For a full file-by-file breakdown of everything under `app/` (and the rest of the repo), see [docs/PROJECT_STRUCTURE.md](../docs/PROJECT_STRUCTURE.md).
 
 ## Recommended IDE setup
 

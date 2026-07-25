@@ -1,156 +1,253 @@
 <script>
-  import { invoke } from "@tauri-apps/api/core";
+  import "$lib/styles/tokens.css";
+  import { open } from "@tauri-apps/plugin-dialog";
+  import { onMount } from "svelte";
+  import LibraryGrid from "$lib/components/LibraryGrid.svelte";
+  import {
+    importFolder,
+    listImages,
+    setRating,
+    setFlag,
+    setColorLabel,
+  } from "$lib/api/catalog.js";
 
-  let name = $state("");
-  let greetMsg = $state("");
+  /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
+  let images = $state([]);
+  let selectedId = $state(/** @type {number | null} */ (null));
+  let activeModule = $state("library"); // "library" | "develop"
+  let importing = $state(false);
+  let statusMessage = $state("");
 
-  async function greet(/** @type {SubmitEvent} */ event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
+  async function refresh() {
+    images = await listImages();
   }
+
+  async function handleImport() {
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir) return;
+
+    importing = true;
+    statusMessage = "";
+    try {
+      const summary = await importFolder(/** @type {string} */ (dir));
+      statusMessage = `Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`;
+      await refresh();
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Import failed: ${e}`;
+    } finally {
+      importing = false;
+    }
+  }
+
+  // Optimistic local update (UX-DESIGN.md §5) so culling feels instant --
+  // the write still goes to the real catalog, this just avoids waiting on
+  // a round trip + full refetch before the UI reflects the change.
+  function patchLocal(/** @type {number} */ versionId, /** @type {Partial<import('$lib/api/catalog.js').ImageSummary>} */ patch) {
+    images = images.map((img) => (img.version_id === versionId ? { ...img, ...patch } : img));
+  }
+
+  async function handleRatingChange(/** @type {number} */ versionId, /** @type {number} */ rating) {
+    patchLocal(versionId, { rating });
+    await setRating(versionId, rating);
+  }
+
+  async function handleFlagChange(/** @type {number} */ versionId, /** @type {string} */ flag) {
+    patchLocal(versionId, { flag });
+    await setFlag(versionId, flag);
+  }
+
+  async function handleColorLabelChange(/** @type {number} */ versionId, /** @type {string} */ colorLabel) {
+    patchLocal(versionId, { color_label: colorLabel });
+    await setColorLabel(versionId, colorLabel);
+  }
+
+  onMount(() => {
+    refresh();
+  });
 </script>
 
-<main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
-
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
+<div class="app">
+  <div class="titlebar">
+    <div class="module-switch">
+      <button class:active={activeModule === "library"} onclick={() => (activeModule = "library")}>
+        Library
+      </button>
+      <button class:active={activeModule === "develop"} onclick={() => (activeModule = "develop")}>
+        Develop
+      </button>
+    </div>
+    <div class="spacer"></div>
+    <button class="import-btn" onclick={handleImport} disabled={importing}>
+      {importing ? "Importing…" : "Import…"}
+    </button>
   </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
 
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
-</main>
+  {#if statusMessage}
+    <div class="status">{statusMessage}</div>
+  {/if}
+
+  {#if activeModule === "library"}
+    <div class="body">
+      <div class="rail">
+        <div class="section-label">Folders</div>
+        <div class="tree-item active">
+          All Photos
+          <span class="count">{images.length}</span>
+        </div>
+      </div>
+
+      {#if images.length === 0}
+        <div class="empty">
+          <p>No photos yet.</p>
+          <button onclick={handleImport} disabled={importing}>Import a folder…</button>
+        </div>
+      {:else}
+        <LibraryGrid
+          {images}
+          {selectedId}
+          onSelect={(id) => (selectedId = id)}
+          onRatingChange={handleRatingChange}
+          onFlagChange={handleFlagChange}
+          onColorLabelChange={handleColorLabelChange}
+        />
+      {/if}
+    </div>
+  {:else}
+    <div class="placeholder">Develop — coming in M1 Slice 3</div>
+  {/if}
+</div>
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
   }
-
-  a:hover {
-    color: #24c8db;
+  .titlebar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 42px;
+    flex: none;
+    padding: 0 14px;
+    background: var(--bg-app);
+    border-bottom: 1px solid var(--border-subtle);
   }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
+  .module-switch {
+    display: flex;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
   }
-  button:active {
-    background-color: #0f0f0f69;
+  .module-switch button {
+    all: unset;
+    cursor: pointer;
+    padding: 5px 14px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 4px;
+    color: var(--text-secondary);
   }
-}
-
+  .module-switch button.active {
+    background: var(--bg-panel-raised);
+    color: var(--text-primary);
+  }
+  .spacer {
+    flex: 1;
+  }
+  .import-btn {
+    all: unset;
+    cursor: pointer;
+    padding: 6px 14px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    border: 1px solid var(--accent);
+  }
+  .import-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .status {
+    flex: none;
+    padding: 6px 14px;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+  .rail {
+    width: 200px;
+    flex: none;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border-subtle);
+    padding: 14px 10px;
+  }
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    padding: 4px;
+    font-weight: 600;
+  }
+  .tree-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 7px;
+    border-radius: var(--radius-s);
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .tree-item.active {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+  }
+  .tree-item .count {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+  .empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-secondary);
+  }
+  .empty button {
+    all: unset;
+    cursor: pointer;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    border: 1px solid var(--accent);
+  }
+  .placeholder {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
 </style>

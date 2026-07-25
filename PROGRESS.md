@@ -4,7 +4,7 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 ## Current phase: M1 — MVP (Import → Library → Basic Develop → Export)
 
-M0 is done on macOS. Windows was deferred by choice on 2026-07-25, then **un-deferred the same day** — see "CI + Windows validation" below. M1 is scoped in MILESTONES.md as "3–6 months," too large for one pass — being built as 5 sequenced slices (see the M1 plan). **Slice 1 (catalog schema v1 + import backend) is done.** Slices 2–5 (Library UI, real Develop pipeline, Export, crash-safety/dogfood) are next, in that order.
+M0 is done on macOS. Windows was deferred by choice on 2026-07-25, then **un-deferred the same day** — see "CI + Windows validation" below. M1 is scoped in MILESTONES.md as "3–6 months," too large for one pass — being built as 5 sequenced slices (see the M1 plan). **Slices 1 and 2 (catalog + import backend; Library UI wired to real data) are done.** Slices 3–5 (real Develop pipeline, Export, crash-safety/dogfood) are next, in that order.
 
 See [PRD/MILESTONES.md](PRD/MILESTONES.md#m1--mvp-import--library--basic-develop--export) for M1's scope and exit criteria.
 
@@ -27,6 +27,17 @@ PR: [github.com/AlfredWei/emulsion/pull/2](https://github.com/AlfredWei/emulsion
 - **Real end-to-end smoke test through the actual app** (not just `cargo test`): a throwaway `/m1-smoke` route (same pattern as `/m0-spike`) invoked `import_folder` against the scratchpad's two sample DNGs inside the real Tauri window, then `list_images`. Result: `imported: 1, failed: 1` (the lossless DNG imported correctly; the lossy one failed exactly as predicted by the known libjpeg gap — a nice confirmation the earlier finding is real and consistent), thumbnail confirmed on disk as a real 3960×2640 JPEG, catalog confirmed at `~/Library/Application Support/dev.alfredwei.emulsion/catalog.sqlite`. `tauri.conf.json`'s temporary window-`url` override was reverted after the run.
 
 All 12 Rust tests passing (`cargo test --lib`).
+
+## M1 Slice 2 — Library UI wired to real data: DONE (2026-07-25)
+
+Scope cut per the plan: import → real thumbnails in a grid → cull with flags/ratings/color labels. Folder tree, metadata/histogram right panel, full filter/sort, loupe view, and EXIF capture are deliberately deferred — not built this slice.
+
+- **Real app shell** (`app/src/routes/+page.svelte`): replaces the scaffold's demo page entirely. Module switcher (Library/Develop, Develop is a placeholder — real in Slice 3), left rail ("All Photos" + count only, no folder tree yet), import button, empty state.
+- **Folder-picker import**: added `@tauri-apps/plugin-dialog` + `tauri-plugin-dialog` (Rust), registered in `lib.rs`, `dialog:default` capability. Native folder picker → `import_folder` → refresh, with a status line reporting imported/duplicate/failed counts.
+- **Thumbnails render via Tauri's asset protocol, not data URLs** — this was the slice's real unknown, and it's now verified, not assumed: `tauri.conf.json`'s `app.security.assetProtocol` (`scope: ["$APPDATA/thumbnails/*"]`) plus the `protocol-asset` Cargo feature on the `tauri` dependency (missing this initially failed the build with a clear, actionable error — feature flag now matches the config). A throwaway `/m1-slice2-smoke` diagnostic (same self-reporting pattern as `/m0-spike`) called `convertFileSrc()` on a real cataloged thumbnail path and `fetch()`'d the resulting `asset://` URL from inside the real running app: **status 200, `image/jpeg`, 569249 bytes — exact match to the real file on disk.** Not a visual check (no tool available to screenshot the native window) but a real, verifiable HTTP-level confirmation.
+- **Hand-rolled virtualized grid** (`src/lib/components/LibraryGrid.svelte`): computes visible row range from scroll position against a uniform grid layout, renders only visible rows + a 3-row buffer — no virtualization library, per UX-DESIGN.md §5's DOM-cost requirement. `GridCell.svelte` shows the thumbnail plus a hover-visible badge row (star rating, pick/reject flags, color-label dot), each wired to `set_rating`/`set_flag`/`set_color_label` with optimistic local UI updates.
+- **Two real bugs caught by `npm run check` before they shipped**: nested `<button>` elements (invalid HTML — cell was a button, badge-row controls inside it were also buttons) fixed by making the cell a `div[role=button]` with keyboard support instead; a non-interactive `<span>` with a click handler (real a11y gap) fixed by making it a real `<button>`. Both required actual restructuring, not suppression.
+- `npm run check`: 0 errors, 0 warnings. `cargo test --lib`: still 12/12 passing (no Rust behavior changed, just new plugin registration + Cargo feature).
 
 ## Older: M0 — Foundations & tech spike
 

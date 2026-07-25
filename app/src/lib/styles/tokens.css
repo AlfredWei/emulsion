@@ -1,0 +1,59 @@
+/* Design tokens ported from the reviewed mockup
+   (docs/ux/mockups/library-develop-mockup.html) — see docs/ux/UX-DESIGN.md
+   §6 "Visual language". Dark-mode-first is a permanent product decision,
+   not a theme toggle (UX-DESIGN.md §1), so there is no light-theme
+   variant here. */
+
+:root {
+  --bg-canvas: #141210;
+  --bg-app: #1a1815;
+  --bg-panel: #1e1c19;
+  --bg-panel-raised: #28251f;
+  --bg-hover: #332f28;
+  --border-subtle: #37332b;
+  --border-strong: #4a453b;
+  --text-primary: #efeae2;
+  --text-secondary: #a39c8e;
+  --text-tertiary: #6e695e;
+  --accent: #e0932f;
+  --accent-strong: #f0a94a;
+  --accent-soft: #4a371f;
+  --accent-on: #1b1310;
+  --label-red: #e1585b;
+  --label-yellow: #e0c13b;
+  --label-green: #6fcb6b;
+  --label-blue: #5b9ee1;
+  --label-purple: #a87ce0;
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+  --radius-s: 3px;
+  --radius-m: 5px;
+  --font-ui: -apple-system, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+  }
+}

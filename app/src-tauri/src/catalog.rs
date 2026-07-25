@@ -153,10 +153,6 @@ impl Catalog {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Not yet called from a Tauri command — Slice 3 (the real Develop
-    /// pipeline) is what reads this back to render/populate the edit-stack
-    /// UI. Real production API, just not wired up until then.
-    #[allow(dead_code)]
     pub fn get_edit_stack(&self, version_id: i64) -> Result<EditStack> {
         let json: String = self.conn.query_row(
             "SELECT edit_stack_json FROM image_versions WHERE id = ?1",
@@ -164,6 +160,18 @@ impl Catalog {
             |row| row.get(0),
         )?;
         Ok(serde_json::from_str(&json).expect("stored edit stacks are always valid JSON"))
+    }
+
+    /// Overwrite a version's edit stack (Slice 3: called whenever a Develop
+    /// slider changes). Complements `add_edit_stack`, which only INSERTs
+    /// the initial stack at import time.
+    pub fn update_edit_stack(&self, version_id: i64, stack: &EditStack) -> Result<()> {
+        let json = serde_json::to_string(stack).expect("EditStack is always serializable");
+        self.conn.execute(
+            "UPDATE image_versions SET edit_stack_json = ?2, updated_at = datetime('now') WHERE id = ?1",
+            params![version_id, json],
+        )?;
+        Ok(())
     }
 
     pub fn set_rating(&self, version_id: i64, rating: u8) -> Result<()> {
@@ -287,6 +295,21 @@ mod tests {
         assert_eq!(summary.rating, 4);
         assert_eq!(summary.flag, "pick");
         assert_eq!(summary.color_label, "green");
+    }
+
+    #[test]
+    fn update_edit_stack_overwrites_the_stored_stack() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog.add_image("/a.CR3").unwrap();
+        let version_id = catalog.add_edit_stack(image_id, &EditStack::empty()).unwrap();
+
+        let updated = EditStack {
+            schema_version: 1,
+            ops: vec![json!({"op": "exposure", "value": 0.4}), json!({"op": "contrast", "value": 12.0})],
+        };
+        catalog.update_edit_stack(version_id, &updated).unwrap();
+
+        assert_eq!(catalog.get_edit_stack(version_id).unwrap(), updated);
     }
 
     #[test]

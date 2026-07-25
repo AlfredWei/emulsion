@@ -4,9 +4,20 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 ## Current phase: M1 — MVP (Import → Library → Basic Develop → Export)
 
-M0 is done (macOS; Windows deferred by choice — see its section below). M1 is scoped in MILESTONES.md as "3–6 months," too large for one pass — being built as 5 sequenced slices (see the M1 plan). **Slice 1 (catalog schema v1 + import backend) is done.** Slices 2–5 (Library UI, real Develop pipeline, Export, crash-safety/dogfood) are next, in that order.
+M0 is done on macOS. Windows was deferred by choice on 2026-07-25, then **un-deferred the same day** — see "CI + Windows validation" below. M1 is scoped in MILESTONES.md as "3–6 months," too large for one pass — being built as 5 sequenced slices (see the M1 plan). **Slice 1 (catalog schema v1 + import backend) is done.** Slices 2–5 (Library UI, real Develop pipeline, Export, crash-safety/dogfood) are next, in that order.
 
 See [PRD/MILESTONES.md](PRD/MILESTONES.md#m1--mvp-import--library--basic-develop--export) for M1's scope and exit criteria.
+
+## CI + Windows validation (2026-07-25, PR #2)
+
+Set up `.github/workflows/ci.yml`: a `macos-latest`/`windows-latest` matrix building + testing the Rust core, plus a `frontend-check` job (`npm run check`). This is real Windows validation, not local guessing — GitHub's own Windows runners stand in for the Windows machine this environment doesn't have.
+
+- **Confirmed, empirically, not just from reading source**: `rsraw` fails to build on `windows-latest` with exactly the predicted error — `thread 'main' panicked at rsraw-sys-0.1.1\build.rs:13:9: MSVC is not supported`, after ~6.5 minutes of compiling vendored LibRaw C++. This graduates ADR-0003's finding from "predicted from reading the build script" to "confirmed on real Windows CI." The Windows job is left **failing on purpose** — it should stay red until one of the candidate fixes (GNU target, `libraw-rs`, build-script patch) actually lands, so this can't silently regress into "we forgot Windows was broken."
+- **macOS job passes cleanly**, including a step that downloads the same CC0 sample DNG used for local validation and runs it through `EMULSION_TEST_RAW_SAMPLE`-gated real-decode tests — so CI now exercises a real RAW file, not just the error paths, on every PR.
+- **Frontend-check job** (`npm run check`, i.e. `svelte-check`) surfaced 15 real pre-existing type errors, all now fixed: added `@webgpu/types` as a real devDependency (wired into `jsconfig.json` — needed going forward for Slice 3's real Develop pipeline, not just the throwaway spike pages), fixed an implicit-`any` handler parameter in the scaffold page, and loosened the throwaway `/m0-spike` and `/m1-smoke` diagnostic pages' object typing via JSDoc rather than fighting strict inference for code that's explicitly documented as disposable.
+- The WebGPU-in-webview spike (ADR-0004) is **not yet re-run on Windows** — CI currently only validates `cargo build`/`cargo test` for the Rust core, not launching the full GUI app. That's a real gap if/when the `rsraw` MSVC blocker is resolved and Windows GUI validation becomes the next open question.
+
+PR: [github.com/AlfredWei/emulsion/pull/2](https://github.com/AlfredWei/emulsion/pull/2) — open for review as of this writing, following the new GitHub-flow-with-review practice (see below).
 
 ## M1 Slice 1 — catalog schema v1 + import backend: DONE (2026-07-25)
 
@@ -51,10 +62,10 @@ M0's own exit criteria (MILESTONES.md) are effectively met on macOS: RAW decode 
 
 ## Known constraints / open risks
 
-- **This dev environment is macOS-only** — cannot run or verify anything on Windows directly. Windows work is deferred (see above), not blocked-and-forgotten — worth remembering to come back to before a Windows release is ever planned.
-- **`rsraw` does not build on Windows/MSVC as published** (`rsraw-sys`'s build script panics on `cl.exe`-like compilers).
+- **This dev environment is still macOS-only** — cannot run a Windows machine directly. No longer a real blocker for getting Windows signal, though: CI (see above) now uses GitHub's own Windows runners for that, which is how the finding below got confirmed.
+- **`rsraw` does not build on Windows/MSVC — now CI-confirmed, not just predicted** (`rsraw-sys`'s build script panics on `cl.exe`-like compilers; exact panic text in the CI section above). The Windows CI job is failing on purpose until this is fixed — see ADR-0003's dated finding for candidate fixes (GNU target, `libraw-rs`, build-script patch).
 - **`rsraw`'s vendored LibRaw lacks libjpeg** — cannot decode lossy-compressed DNG or other libjpeg-dependent RAW variants, even on macOS. This is a live gap on the platform we *can* test, not just a Windows concern — worth fixing (patch the build script to link libjpeg, or re-evaluate `libraw-rs`) before M1 claims "broad RAW format support."
-- **WebView2's WebGPU support is unverified** — the same spike that passed on WKWebView needs to run on Windows before ADR-0004 is fully confirmed cross-platform.
+- **WebView2's WebGPU support is still unverified** — CI only builds/tests the Rust core, it doesn't launch the full GUI app anywhere yet. The macOS WebGPU spike (ADR-0004) has no Windows equivalent run yet, and can't until the `rsraw` MSVC blocker is resolved enough to produce a Windows build to test in the first place.
 
 ## Working practices (see also memory)
 

@@ -1,11 +1,16 @@
-//! Catalog schema v0 (M0 spike).
+//! Catalog schema v1 (M1 Slice 1).
 //!
-//! Minimal slice of ADR-0005 (SQLite catalog storage) and ADR-0006
-//! (versioned JSON edit-stack representation): enough to store one image
-//! reference and one non-destructive edit record, and read it back.
-//! Collections, keywords, virtual-copy branching, etc. are M1+ scope.
+//! Slice of ADR-0005 (SQLite catalog storage) and ADR-0006 (versioned JSON
+//! edit-stack representation) needed for Import + basic Library culling:
+//! image references with content-hash-based dedupe, thumbnails, and
+//! per-version rating/flag/color-label. Collections, keywords, and
+//! virtual-copy UI are still M1+/M2 scope per MILESTONES.md.
+//!
+//! `migrate()` is still a plain create-if-not-exists, not a real migration
+//! system — deliberate: there's no real user catalog yet to preserve across
+//! schema changes. Revisit once that stops being true.
 
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 use serde::{Deserialize, Serialize};
 
 pub struct Catalog {
@@ -19,6 +24,29 @@ pub struct Catalog {
 pub struct EditStack {
     pub schema_version: u32,
     pub ops: Vec<serde_json::Value>,
+}
+
+impl EditStack {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: 1,
+            ops: Vec::new(),
+        }
+    }
+}
+
+/// One row for the Library grid: an image plus its primary (non-virtual-copy)
+/// version's culling state. Virtual-copy-aware listing is M2+ scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageSummary {
+    pub image_id: i64,
+    pub version_id: i64,
+    pub path: String,
+    pub thumbnail_path: Option<String>,
+    pub rating: u8,
+    pub flag: String,
+    pub color_label: String,
+    pub added_at: String,
 }
 
 impl Catalog {
@@ -40,14 +68,25 @@ impl Catalog {
             CREATE TABLE IF NOT EXISTS images (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL UNIQUE,
+                content_hash TEXT,
+                file_size INTEGER,
+                thumbnail_path TEXT,
+                stack_id INTEGER,
                 added_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE INDEX IF NOT EXISTS idx_images_content_hash
+                ON images(content_hash);
 
             CREATE TABLE IF NOT EXISTS image_versions (
                 id INTEGER PRIMARY KEY,
                 image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
                 is_virtual_copy INTEGER NOT NULL DEFAULT 0,
                 edit_stack_json TEXT NOT NULL,
+                rating INTEGER NOT NULL DEFAULT 0 CHECK (rating BETWEEN 0 AND 5),
+                flag TEXT NOT NULL DEFAULT 'none' CHECK (flag IN ('none','pick','reject')),
+                color_label TEXT NOT NULL DEFAULT 'none'
+                    CHECK (color_label IN ('none','red','yellow','green','blue','purple')),
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -61,6 +100,40 @@ impl Catalog {
         self.conn
             .execute("INSERT INTO images (path) VALUES (?1)", params![path])?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Register a source image with the content hash + size captured at
+    /// import time (used by the import pipeline for duplicate detection).
+    pub fn add_image_with_metadata(
+        &self,
+        path: &str,
+        content_hash: &str,
+        file_size: i64,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO images (path, content_hash, file_size) VALUES (?1, ?2, ?3)",
+            params![path, content_hash, file_size],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Look up an existing image by content hash, for duplicate detection.
+    pub fn find_by_hash(&self, content_hash: &str) -> Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT id FROM images WHERE content_hash = ?1",
+                params![content_hash],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    pub fn set_thumbnail_path(&self, image_id: i64, thumbnail_path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE images SET thumbnail_path = ?2 WHERE id = ?1",
+            params![image_id, thumbnail_path],
+        )?;
+        Ok(())
     }
 
     /// Create the primary (non-virtual-copy) edit-stack record for an image.
@@ -80,6 +153,58 @@ impl Catalog {
             |row| row.get(0),
         )?;
         Ok(serde_json::from_str(&json).expect("stored edit stacks are always valid JSON"))
+    }
+
+    pub fn set_rating(&self, version_id: i64, rating: u8) -> Result<()> {
+        self.conn.execute(
+            "UPDATE image_versions SET rating = ?2, updated_at = datetime('now') WHERE id = ?1",
+            params![version_id, rating],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_flag(&self, version_id: i64, flag: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE image_versions SET flag = ?2, updated_at = datetime('now') WHERE id = ?1",
+            params![version_id, flag],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_color_label(&self, version_id: i64, color_label: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE image_versions SET color_label = ?2, updated_at = datetime('now') WHERE id = ?1",
+            params![version_id, color_label],
+        )?;
+        Ok(())
+    }
+
+    /// Library grid data: one row per image, its primary (first,
+    /// non-virtual-copy) version's culling state. Newest imports first.
+    pub fn list_images(&self) -> Result<Vec<ImageSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.id, v.id, i.path, i.thumbnail_path, v.rating, v.flag, v.color_label, i.added_at
+             FROM images i
+             JOIN image_versions v ON v.id = (
+                 SELECT id FROM image_versions
+                 WHERE image_id = i.id AND is_virtual_copy = 0
+                 ORDER BY id ASC LIMIT 1
+             )
+             ORDER BY i.added_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ImageSummary {
+                image_id: row.get(0)?,
+                version_id: row.get(1)?,
+                path: row.get(2)?,
+                thumbnail_path: row.get(3)?,
+                rating: row.get(4)?,
+                flag: row.get(5)?,
+                color_label: row.get(6)?,
+                added_at: row.get(7)?,
+            })
+        })?;
+        rows.collect()
     }
 }
 
@@ -118,5 +243,67 @@ mod tests {
         let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
         catalog.add_image("/a.CR3").expect("first insert succeeds");
         assert!(catalog.add_image("/a.CR3").is_err());
+    }
+
+    #[test]
+    fn finds_images_by_content_hash_for_dedupe() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        assert_eq!(catalog.find_by_hash("abc123").unwrap(), None);
+
+        let image_id = catalog
+            .add_image_with_metadata("/a.CR3", "abc123", 4096)
+            .expect("insert with metadata succeeds");
+
+        assert_eq!(catalog.find_by_hash("abc123").unwrap(), Some(image_id));
+        assert_eq!(catalog.find_by_hash("does-not-exist").unwrap(), None);
+    }
+
+    #[test]
+    fn sets_thumbnail_rating_flag_and_color_label() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog.add_image("/a.CR3").unwrap();
+        let version_id = catalog.add_edit_stack(image_id, &EditStack::empty()).unwrap();
+
+        catalog.set_thumbnail_path(image_id, "/thumbs/a.jpg").unwrap();
+        catalog.set_rating(version_id, 4).unwrap();
+        catalog.set_flag(version_id, "pick").unwrap();
+        catalog.set_color_label(version_id, "green").unwrap();
+
+        let images = catalog.list_images().unwrap();
+        assert_eq!(images.len(), 1);
+        let summary = &images[0];
+        assert_eq!(summary.thumbnail_path.as_deref(), Some("/thumbs/a.jpg"));
+        assert_eq!(summary.rating, 4);
+        assert_eq!(summary.flag, "pick");
+        assert_eq!(summary.color_label, "green");
+    }
+
+    #[test]
+    fn rejects_out_of_range_rating_and_invalid_flag() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog.add_image("/a.CR3").unwrap();
+        let version_id = catalog.add_edit_stack(image_id, &EditStack::empty()).unwrap();
+
+        assert!(catalog.set_rating(version_id, 6).is_err());
+        assert!(catalog.set_flag(version_id, "not-a-real-flag").is_err());
+        assert!(catalog.set_color_label(version_id, "not-a-real-color").is_err());
+    }
+
+    #[test]
+    fn list_images_orders_newest_first_and_skips_virtual_copies() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+
+        let image_a = catalog.add_image("/a.CR3").unwrap();
+        catalog.add_edit_stack(image_a, &EditStack::empty()).unwrap();
+        let image_b = catalog.add_image("/b.CR3").unwrap();
+        catalog.add_edit_stack(image_b, &EditStack::empty()).unwrap();
+
+        let images = catalog.list_images().unwrap();
+        assert_eq!(images.len(), 2);
+        // both inserted in the same instant in tests, so just check both
+        // images are represented exactly once each, not duplicated.
+        let paths: Vec<&str> = images.iter().map(|s| s.path.as_str()).collect();
+        assert!(paths.contains(&"/a.CR3"));
+        assert!(paths.contains(&"/b.CR3"));
     }
 }

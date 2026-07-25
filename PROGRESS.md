@@ -2,7 +2,22 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
-## Current phase: M0 — Foundations & tech spike
+## Current phase: M1 — MVP (Import → Library → Basic Develop → Export)
+
+M0 is done (macOS; Windows deferred by choice — see its section below). M1 is scoped in MILESTONES.md as "3–6 months," too large for one pass — being built as 5 sequenced slices (see the M1 plan). **Slice 1 (catalog schema v1 + import backend) is done.** Slices 2–5 (Library UI, real Develop pipeline, Export, crash-safety/dogfood) are next, in that order.
+
+See [PRD/MILESTONES.md](PRD/MILESTONES.md#m1--mvp-import--library--basic-develop--export) for M1's scope and exit criteria.
+
+## M1 Slice 1 — catalog schema v1 + import backend: DONE (2026-07-25)
+
+- **Catalog schema v1** (`app/src-tauri/src/catalog.rs`): `images` gained `content_hash` (blake3, for dedupe), `file_size`, `thumbnail_path`, `stack_id` (reserved for basic stacking, unused yet). `image_versions` gained `rating` (0–5, CHECK-constrained), `flag` (`none`/`pick`/`reject`, CHECK-constrained), `color_label` (CHECK-constrained enum) — these sit per-version, not per-image, so virtual copies can be rated independently later. New methods: `find_by_hash`, `add_image_with_metadata`, `set_thumbnail_path`, `set_rating`, `set_flag`, `set_color_label`, `list_images`. 6 tests passing, including constraint-rejection tests.
+- **Import backend** (new `app/src-tauri/src/import.rs`): `scan_and_import` walks a directory recursively, filters by a RAW-extension allowlist, hashes each file with `blake3`, skips already-cataloged files by hash, inserts a catalog row + empty edit stack, extracts an embedded JPEG thumbnail via `rsraw`'s cheap `unpack_thumb` path (no full demosaic) and writes it to the OS app-data thumbnails folder. **Reference-only** (stores the original path as-is) — copy-to-managed-folder is real PRD scope but deliberately deferred past Slice 1, first thing to add in a Slice 1.5 if needed sooner. 3 tests passing, including a real end-to-end import + dedupe-on-reimport test (`EMULSION_TEST_RAW_SAMPLE`-gated, same pattern as `raw_decode.rs`).
+- **Tauri commands** (`app/src-tauri/src/lib.rs`): `AppState { catalog: Arc<Mutex<Catalog>> }` managed at startup, opened against a real file at `<app data dir>/catalog.sqlite` (first time the app uses a real persistent catalog, not just in-memory test instances). `import_folder` runs on a blocking thread (`spawn_blocking`) so a large import can't stall the UI. `list_images`, `set_rating`, `set_flag`, `set_color_label` round out the command surface Slice 2's Library UI will call.
+- **Real end-to-end smoke test through the actual app** (not just `cargo test`): a throwaway `/m1-smoke` route (same pattern as `/m0-spike`) invoked `import_folder` against the scratchpad's two sample DNGs inside the real Tauri window, then `list_images`. Result: `imported: 1, failed: 1` (the lossless DNG imported correctly; the lossy one failed exactly as predicted by the known libjpeg gap — a nice confirmation the earlier finding is real and consistent), thumbnail confirmed on disk as a real 3960×2640 JPEG, catalog confirmed at `~/Library/Application Support/dev.alfredwei.emulsion/catalog.sqlite`. `tauri.conf.json`'s temporary window-`url` override was reverted after the run.
+
+All 12 Rust tests passing (`cargo test --lib`).
+
+## Older: M0 — Foundations & tech spike
 
 See [PRD/MILESTONES.md](PRD/MILESTONES.md#m0--foundations--tech-spike) for M0's scope and exit criteria.
 

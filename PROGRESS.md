@@ -8,6 +8,10 @@ M0 is done on **both macOS and Windows** (Windows was deferred by choice on 2026
 
 See [PRD/MILESTONES.md](PRD/MILESTONES.md#m1--mvp-import--library--basic-develop--export) for M1's scope and exit criteria.
 
+## Roadmap update: Develop preview cache added to M1 scope (2026-07-26)
+
+Slice 3 shipped Develop decoding the source RAW fresh on every open (explicitly deferred as "correct, simple; caching is a later optimization not a correctness requirement" — see below). In practice this is slow enough to notice, so a **pre-generated Develop preview cache**, matching Lightroom's own Standard/1:1 Preview cache model, is now explicit M1 scope rather than an implicit someday-optimization: [PRD §7.2](PRD/PRD.md#72-import)/[§7.6](PRD/PRD.md#76-performance--data-integrity-cross-cutting-not-a-feature-but-a-requirement) and [MILESTONES.md's M1 section](PRD/MILESTONES.md#m1--mvp-import--library--basic-develop--export) updated accordingly, with a cross-reference at M3's Smart Previews clarifying the two are distinct (Smart Previews are for offline/disconnected volumes; this is about redecode cost on a file that's right there). Not yet implemented — likely the next slice, before or alongside Export; sequencing is the user's call.
+
 ## M1 Slice 3 — Develop pipeline, for real: DONE (2026-07-25)
 
 Scope cut per the plan: real RAW-to-preview decode, three real global adjustments (Exposure, Contrast, Saturation) rendered via an in-webview WebGPU shader with no re-decode per edit, edit-stack persistence, double-click-to-open navigation from Library. White balance, highlights/shadows/whites/blacks, tone curve, HSL, sharpening, crop, history/undo UI, and preview caching are deliberately deferred — not built this slice.

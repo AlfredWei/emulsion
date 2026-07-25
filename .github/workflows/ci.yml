@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-core:
+    name: Rust core (build + test)
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both target platforms per PRD §5 ("cross-platform desktop, single
+        # codebase"). Windows was deferred during M0 for lack of a local
+        # Windows machine — this matrix is that deferred validation,
+        # exercised for real on GitHub's own Windows runners.
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: cargo build
+        run: cargo build --verbose
+
+      - name: cargo test --lib
+        run: cargo test --lib --verbose

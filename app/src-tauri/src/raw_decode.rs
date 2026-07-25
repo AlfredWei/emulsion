@@ -9,6 +9,10 @@
 use rsraw::{RawImage, BIT_DEPTH_8};
 use std::path::Path;
 
+// Not yet called from a Tauri command -- Slice 3 (the real Develop
+// pipeline) is what wires this up to actually decode an image for
+// editing. Real production API, just not connected until then.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct DecodedPreview {
     pub width: u32,
@@ -19,6 +23,7 @@ pub struct DecodedPreview {
     pub rgb: Vec<u8>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
     #[error("could not read RAW file from disk: {0}")]
@@ -38,6 +43,7 @@ pub enum DecodeError {
 /// This exists to validate the FFI boundary (ADR-0003) for M0, not as the
 /// final decode path — M1's import pipeline needs the linear/high-bit-depth
 /// output and the downsample-to-preview step described in ADR-0004.
+#[allow(dead_code)]
 pub fn decode_preview(path: &Path) -> Result<DecodedPreview, DecodeError> {
     let bytes = std::fs::read(path)?;
 

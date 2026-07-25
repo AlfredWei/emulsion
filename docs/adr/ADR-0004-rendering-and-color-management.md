@@ -1,6 +1,6 @@
 # ADR-0004: Interactive rendering & color-management architecture
 
-- Status: Accepted, highest-risk decision in the roadmap — explicit M0 spike required before treating this as final
+- Status: Accepted, confirmed viable on macOS by M0 spike (2026-07-25) — Windows (WebView2) still unverified, see the M0 spike finding below before treating this as fully confirmed
 - Date: 2026-07-25
 - Relates to: [ADR-0001](ADR-0001-application-shell.md), [ADR-0003](ADR-0003-raw-decoding.md), [PRD §7.4, §7.6, §9](../../PRD/PRD.md), [MILESTONES M0](../../PRD/MILESTONES.md#m0--foundations--tech-spike)
 
@@ -39,3 +39,24 @@ The original research behind this ADR cited `rcms` as "a memory-safe pure-Rust r
 **Corrected decision**: use **`lcms2`** (the well-established Rust binding to the real, mature Little CMS C library, maintained by kornelski) with its `static` feature, so lcms2 is compiled from source rather than depending on a system install. Confirmed on macOS: adds cleanly (`cargo add lcms2 --features static`) and builds/links with no issues in this environment (a system `little-cms2` via Homebrew was present but the `static` feature was used deliberately for build portability, not the system copy). This is the real Little CMS most professional imaging tools already rely on, which is a materially stronger foundation for this ADR's color pipeline than the original `rcms` pick.
 
 This is exactly the kind of thing an M0 spike is for — the lesson going forward is to verify a crate's actual README/source before writing an ADR around it, not just a search-engine summary of it.
+
+## Update — M0 spike finding: in-webview WebGPU confirmed on macOS (2026-07-25)
+
+The core risk this ADR exists to de-risk — does `navigator.gpu` work inside Tauri's actual OS-native webview, not just a generic browser — was tested directly, not assumed. `app/src/routes/m0-spike/+page.svelte` runs inside the real Tauri-launched WKWebView (macOS 26.5.2) and does a full, real WebGPU round trip:
+
+1. Confirms `navigator.gpu` exists.
+2. Acquires a `GPUAdapter` and `GPUDevice`.
+3. Builds a render pipeline from a WGSL fragment shader that applies a hardcoded "exposure +1EV" adjustment (`0.3 * 2^1 = 0.6`) to a stand-in pixel value — the same shape of operation a real Develop slider would perform.
+4. Renders to an offscreen texture, copies it to a readback buffer, and numerically checks the output.
+
+Result, reported via a throwaway Tauri command back to the Rust process's stdout (there's no tool available in this environment to screenshot a native macOS app window, so the page self-reports instead of relying on visual inspection):
+
+```
+M0_SPIKE_RESULT: {"hasNavigatorGpu":true,"adapter":"{}","deviceAcquired":true,
+"renderSubmitted":true,"readback":{"r":153,"g":153,"b":153,"a":255},
+"expected":153,"colorCorrect":true,"error":null}
+```
+
+`153 = round(0.6 * 255)` — the shader's math round-tripped through the GPU and back exactly as expected. **This confirms the "decode once, edit reactively via in-webview WebGPU" architecture is viable on macOS**, not just plausible on paper. The native-GPU-surface-overlay fallback is no longer needed on macOS and can be deprioritized unless a later, more complex shader (real masks, multiple layers) reveals a problem this simple spike didn't exercise.
+
+**Still open**: this only tests WKWebView. WebView2 (Windows) has not been tested — this environment is macOS-only (see PROGRESS.md). Do not treat this ADR as fully confirmed cross-platform until the same spike (or equivalent) runs on Windows.

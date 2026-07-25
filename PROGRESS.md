@@ -26,16 +26,17 @@ See [PRD/MILESTONES.md](PRD/MILESTONES.md#m0--foundations--tech-spike) for M0's 
 
 ## In progress / next up
 
-Working through M0's remaining exit criteria in order:
+1. **In-webview WebGPU spike — DONE, confirmed on macOS.** `app/src/routes/m0-spike/+page.svelte` ran inside the real Tauri-launched WKWebView (macOS 26.5.2): `navigator.gpu` present, adapter/device acquired, a real WGSL "exposure +1EV" shader rendered to an offscreen texture and read back — output matched the expected math exactly (153 = round(0.6×255)). Confirms the "decode once, edit reactively via in-webview WebGPU" architecture (ADR-0004) is viable on macOS. Full result and detail in ADR-0004's dated finding section. Kept the spike page in the repo as a re-runnable check (harmless, not part of the real app UI); `tauri.conf.json`'s temporary window-`url` override used to load it was reverted after the run.
+2. **Blocked on a sample RAW file**: real end-to-end decode → IPC → WebGPU display for an actual photo hasn't been done — `raw_decode.rs` is only validated against its error paths (nonexistent file, non-RAW file) so far. Need either a sample RAW file from the user or explicit permission to fetch a public-domain one.
+3. **Blocked on Windows access**: this environment is macOS-only, and M0 now has two concrete (not hypothetical) Windows unknowns — see risks below. Both need a real Windows machine/CI runner to resolve, which isn't available here.
 
-1. **In-webview WebGPU spike** (the highest-risk item per ADR-0004 / RFC-0001 §8) — currently in progress: a WGSL shader applying a hardcoded exposure/WB-style adjustment to a texture, rendered inside Tauri's webview, checked for color correctness on macOS (WKWebView).
-2. Wire decode → IPC → WebGPU display end-to-end for one image (needs a sample RAW file — see below).
-3. Write up findings against RFC-0001 §8's three open questions and update that section with results.
+RFC-0001 §8's three open questions have been updated with these results.
 
 ## Known constraints / open risks
 
-- **This dev environment is macOS-only.** M0's exit criteria call for validating behavior on both macOS and Windows (WKWebView vs. WebView2) — the WebGPU-in-webview consistency question (ADR-0004) can only be partially answered here. Windows validation needs to happen separately before that ADR is treated as fully confirmed rather than "confirmed on macOS, unverified on Windows."
-- **`rsraw` doesn't build on Windows/MSVC as published** (see finding above) — this is now a concrete blocker for the "cross-platform, single codebase" requirement, not just a hypothetical risk. Needs resolution before M1 can rely on it for the Windows build. Candidates: `x86_64-pc-windows-gnu` target, `libraw-rs`, or patching `rsraw-sys`'s build script.
+- **This dev environment is macOS-only** — cannot run or verify anything on Windows directly.
+- **`rsraw` does not build on Windows/MSVC as published** (`rsraw-sys`'s build script panics on `cl.exe`-like compilers) — a concrete blocker for the Windows build, not a hypothetical one. Candidates to resolve: `x86_64-pc-windows-gnu` target, `libraw-rs` instead, or patching `rsraw-sys`'s build script. Needs a Windows environment to actually work on.
+- **WebView2's WebGPU support is unverified** — the same spike that passed on WKWebView needs to run on Windows before ADR-0004 is fully confirmed cross-platform.
 - **No sample RAW file available yet** for real end-to-end decode testing.
 
 ## Working practices (see also memory)

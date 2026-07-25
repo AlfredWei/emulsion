@@ -27,6 +27,12 @@ Use **LibRaw via Rust FFI bindings** (the `rsraw` crate, which vendors LibRaw as
 - New camera model support depends on upstream LibRaw releases, not on this project's own code — acceptable, matches how virtually every non-Adobe RAW tool (darktable, RawTherapee) sources camera support.
 - This is flagged in the PRD as a standing risk (§11): even LibRaw can lag on brand-new camera models or differ from Adobe's proprietary color science. Mitigation: ship a documented "supported cameras" list per release, and treat gaps as expected/normal rather than bugs.
 
+## Update — M0 spike finding (2026-07-25)
+
+`rsraw` builds and links cleanly on macOS (aarch64-apple-darwin): it vendors LibRaw source directly (not a system/pkg-config dependency) and compiles it via the `cc` crate. However, its `rsraw-sys` build script contains an explicit `panic!("MSVC is not supported")` when the detected C++ compiler behaves like `cl.exe`. Tauri apps on Windows default to the `x86_64-pc-windows-msvc` target, which uses MSVC — meaning **`rsraw` will not build out of the box on a standard Windows Tauri build**. It would require either the less-common `x86_64-pc-windows-gnu` target (MinGW-w64), which has its own compatibility gaps with Tauri's Windows tooling, or a build-time workaround forcing a non-MSVC-like compiler.
+
+This is a real, unresolved risk for the "cross-platform desktop, single codebase" requirement ([PRD §5](../../PRD/PRD.md)) and needs to be closed out before this ADR is treated as fully confirmed — not yet done because this environment cannot build/test for Windows. Candidates to evaluate when Windows validation happens: (a) `x86_64-pc-windows-gnu` target end-to-end with Tauri, (b) `libraw-rs` (the other ADR-0003 candidate) in case its build script doesn't share this restriction, (c) patching/forking `rsraw-sys`'s build script, (d) reaching out upstream. Tracked in [PROGRESS.md](../../PROGRESS.md).
+
 ## Alternatives considered and rejected
 
 - **`rawler` (pure Rust)**: rejected for now on coverage grounds — avoiding the C++ FFI dependency is appealing (simpler builds, full memory safety through the decode path) but not worth shipping with meaningfully fewer supported cameras than users expect from a Lightroom-class tool. **Revisit trigger**: if `rawler`'s camera coverage reaches parity with LibRaw for the cameras our actual user base owns, re-evaluate switching to remove the FFI dependency entirely.

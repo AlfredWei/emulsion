@@ -29,7 +29,7 @@ This RFC describes the technical architecture for the whole application, tying t
 │  │  • Catalog engine (SQLite)  │        │  • Library UI           │  │
 │  │  • Import / RAW decode      │        │  • Develop UI           │  │
 │  │    (LibRaw via FFI)         │        │  • In-webview WebGPU    │  │
-│  │  • Color transforms (rcms)  │  once   │    render engine       │  │
+│  │  • Color transforms (lcms2)  │  once   │    render engine       │  │
 │  │  • Export / print renderer  │  per   │    (interactive edits) │  │
 │  │  • File I/O, backups        │  image │                         │  │
 │  └───────────────────────────┘        └────────────────────────┘  │
@@ -46,7 +46,7 @@ Decision references: shell = [ADR-0001](../adr/ADR-0001-application-shell.md); f
 
 This is the architecture's central idea and its biggest de-risking target for M0 ([ADR-0004](../adr/ADR-0004-rendering-and-color-management.md)):
 
-1. User opens an image in Develop. **Once**, the Rust core: decodes the RAW file (LibRaw), demosaics, downsamples to a working preview resolution, applies the input color profile → linear working space transform (`rcms`), and sends the resulting linear pixel buffer to the frontend over IPC.
+1. User opens an image in Develop. **Once**, the Rust core: decodes the RAW file (LibRaw), demosaics, downsamples to a working preview resolution, applies the input color profile → linear working space transform (`lcms2`), and sends the resulting linear pixel buffer to the frontend over IPC.
 2. The frontend loads that buffer into a WebGPU texture, resident in the webview process.
 3. Every further user action (slider drag, mask paint, curve edit) appends/updates an operation in the in-memory edit stack ([ADR-0006](../adr/ADR-0006-edit-representation.md)) and re-runs the WGSL shader pipeline against the already-resident texture — **no IPC round trip, no re-decode**. Pointer/slider events are coalesced into the shader's frame loop rather than dispatched one GPU pass per raw input event.
 4. On save (automatic, non-destructive), the current edit stack is written back to the catalog DB via IPC — this is small JSON, not pixels, so it's cheap regardless of IPC cost.
@@ -65,13 +65,13 @@ This must not block the UI — background/async processing is a hard requirement
 
 ## 6. Core data flow: export
 
-Batch export runs entirely in the Rust core: for each selected image-version, replay its edit stack (§4 step 5) at full resolution, apply output color space transform (`rcms`) and output sharpening, write the target format, all in a background task queue so Library/Develop remain usable during a large batch export ([PRD §7.5](../../PRD/PRD.md)).
+Batch export runs entirely in the Rust core: for each selected image-version, replay its edit stack (§4 step 5) at full resolution, apply output color space transform (`lcms2`) and output sharpening, write the target format, all in a background task queue so Library/Develop remain usable during a large batch export ([PRD §7.5](../../PRD/PRD.md)).
 
 ## 7. Cross-cutting concerns
 
 - **Performance budget**: ≤100ms Develop feedback is achieved by keeping the entire interactive loop in-process in the webview (§4); the only cross-process trips are the once-per-image decode and cheap JSON edit-stack saves.
 - **Memory budget**: Tauri's baseline (~45MB idle, no bundled browser engine) leaves headroom for image buffers; the render pipeline should bound concurrent full-res textures and evict off-screen ones (detailed in [UX-DESIGN.md](../ux/UX-DESIGN.md) as a user-visible quality/performance mode).
-- **Color management**: `rcms` (Rust) handles all ICC input/output profile transforms; the WebGPU shader pipeline works entirely in a fixed linear working space so it never needs its own ICC engine — the two stages just need to agree on the working space definition, validated in M0 ([ADR-0004](../adr/ADR-0004-rendering-and-color-management.md)).
+- **Color management**: `lcms2` (Rust) handles all ICC input/output profile transforms; the WebGPU shader pipeline works entirely in a fixed linear working space so it never needs its own ICC engine — the two stages just need to agree on the working space definition, validated in M0 ([ADR-0004](../adr/ADR-0004-rendering-and-color-management.md)).
 - **Crash safety**: the edit stack is small, cheap-to-write JSON ([ADR-0006](../adr/ADR-0006-edit-representation.md)) in a SQLite DB ([ADR-0005](../adr/ADR-0005-catalog-storage.md)) — write-ahead logging and periodic autosave of the in-progress stack (not just on module switch) should be an M1 requirement so a crash mid-edit loses at most seconds of work, per [PRD §9](../../PRD/PRD.md).
 - **No cloud dependency anywhere**: every component above runs entirely on the local machine; there is no network call in this architecture, consistent with [PRD §3 and §5](../../PRD/PRD.md).
 

@@ -39,9 +39,13 @@ def hex_to_rgb(h):
 
 BG_CENTER = hex_to_rgb("#221f1a")
 BG_EDGE = hex_to_rgb("#0f0d0b")
-DROP_HIGHLIGHT = hex_to_rgb("#fbd08c")
-DROP_MID = hex_to_rgb("#e0932f")
-DROP_DEEP = hex_to_rgb("#6e3f18")
+# v2: more saturated across the whole gradient -- the pale cream highlight
+# (was #fbd08c, only ~44% saturation) and muddy brown shadow (was #6e3f18)
+# were washing the droplet out and reading as dull. Same hue family, more
+# vivid at every stop.
+DROP_HIGHLIGHT = hex_to_rgb("#ffb238")
+DROP_MID = hex_to_rgb("#f2851a")
+DROP_DEEP = hex_to_rgb("#9c3d10")
 
 # iridescent oil-slick sheen, using the same blue/purple already in the
 # app's color-label palette (tokens.css --label-blue/--label-purple)

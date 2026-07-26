@@ -30,7 +30,7 @@ Use **Tauri**: a Rust core process handling the catalog engine, RAW decode, file
 
 - Introduces a real architectural risk: getting GPU-accelerated, low-latency image rendering to work well *inside a webview* is not solved by picking Tauri — it requires the specific approach documented in [ADR-0004](ADR-0004-rendering-and-color-management.md) (in-webview WebGPU, not IPC-streamed native textures). This is the single biggest open risk in the whole architecture and is explicitly scoped as an M0 spike deliverable.
 - The team needs working Rust proficiency (already implied by the RAW-decode and catalog-engine work either way).
-- Packaging/notarization/code-signing on both OSes is handled by Tauri's bundler — revisited in detail at M7, not decided further here.
+- Packaging/notarization/code-signing on both OSes is handled by Tauri's bundler — revisited in detail at M8, not decided further here.
 
 ## Alternatives considered and rejected
 

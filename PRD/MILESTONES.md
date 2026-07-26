@@ -1,6 +1,6 @@
 # Milestone Plan
 
-Companion to [PRD.md](PRD.md). Sequenced against Lightroom's own build order (see [lightroom-reference.md](lightroom-reference.md)) — cataloging and basic RAW develop first, local adjustments next, modern tone engine and output modules after that, then performance/GPU, then AI-assisted features last. Sizing assumes a solo/small indie team with no fixed deadline: month-ranges are rough relative sizing, not commitments.
+Companion to [PRD.md](PRD.md). Sequenced against Lightroom's own build order (see [lightroom-reference.md](lightroom-reference.md)) where practical, with one deliberate divergence: **M2 deepens photo management and cataloging** (multi-file import, broader format support, full metadata, catalog hygiene) **before the local-adjustment edit pipeline (M3)** — a product decision (2026-07-26) to establish a complete, trustworthy photo-management foundation before expanding editing capability, rather than following Lightroom's own v1→v2 chronology strictly. From M4 onward the sequencing returns to matching Lightroom's own build order: modern tone engine and output modules, then performance/GPU, then AI-assisted features last. Sizing assumes a solo/small indie team with no fixed deadline: month-ranges are rough relative sizing, not commitments.
 
 Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (what "done" means before starting the next one).
 
@@ -35,13 +35,13 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - **Import**: pick a folder/volume, copy or add-in-place, background thumbnail generation, basic duplicate detection.
 - **Library**: grid + loupe view, flags/star ratings/color labels, filter/sort by those + basic metadata, folder-based browsing, virtual copies, basic stacking.
 - **Develop**: single non-destructive edit stack per image with history/undo and snapshots; global adjustments only — white balance, exposure, contrast, highlights/shadows/whites/blacks, saturation/vibrance, basic sharpening and noise reduction, crop/straighten/rotate.
-- **Develop preview cache**: background/on-demand generation of a persistent, resized proxy per image so opening Develop doesn't require decoding the source RAW file fresh every time (Lightroom's Standard/1:1 Preview cache model — see [PRD §7.6](PRD.md#76-performance--data-integrity-cross-cutting-not-a-feature-but-a-requirement)). Distinct from M3's Smart Previews below: this is about redecode cost on a *locally available* file, not offline/disconnected-volume editing. Identified as a real gap during the Develop-pipeline slice, where every Develop open was measurably slow because it decoded the RAW from scratch — pulled into M1 scope rather than left implicit.
+- **Develop preview cache**: background/on-demand generation of a persistent, resized proxy per image so opening Develop doesn't require decoding the source RAW file fresh every time (Lightroom's Standard/1:1 Preview cache model — see [PRD §7.6](PRD.md#76-performance--data-integrity-cross-cutting-not-a-feature-but-a-requirement)). Distinct from M4's Smart Previews below: this is about redecode cost on a *locally available* file, not offline/disconnected-volume editing. Identified as a real gap during the Develop-pipeline slice, where every Develop open was measurably slow because it decoded the RAW from scratch — pulled into M1 scope rather than left implicit.
 - **Export**: JPEG/TIFF export with resize, output sharpening, color space, quality, filename template; batch export in the background.
 - Catalog persistence, crash-safe (no edit loss on crash).
 
 ### Explicitly deferred
-- Local/masked adjustments (brush, gradients) → M2.
-- Keywording, smart collections, publish/print → M2/M3.
+- Local/masked adjustments (brush, gradients) → M3.
+- Keywording, smart collections → M2; publish/print → M4.
 - Any AI feature.
 
 ### Exit criteria
@@ -51,7 +51,32 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 
 ---
 
-## M2 — Local adjustments & non-destructive toolkit
+## M2 — Photo management & catalog depth
+**Rough size:** 2–4 months · **Lightroom analog:** n/a — deliberately resequenced ahead of Lightroom's own chronology (see this document's intro); the closest spirit is Lightroom's own early cataloging/metadata refinements before v2.0's local-adjustment leap, not a literal version mapping.
+
+### Scope
+- **Import**: multi-file selection through a picker dialog (choose specific files, not just an entire folder) as an alternative to M1's whole-folder import.
+- **Format support**: extend the RAW-only decode/import pipeline to also catalog, thumbnail, and display standard JPEG files alongside RAW.
+- **Full metadata handling**: read and apply each file's embedded color profile (the first real consumer of ADR-0004's still-unwired lcms2 color-management step), read full EXIF (camera, lens, exposure settings) into the catalog and Library's metadata panel (deferred from M1 Slice 2's "metadata panel: EXIF read-only" scope-cut), and IPTC read/write (caption, copyright, contact) matching [PRD §7.3](PRD.md#73-library--organization).
+- **Basic photo management, completed**: flags/star ratings (already in M1) plus multi-select in the Library grid (rate/flag/color-label/remove many at once — M1 only supports single selection) and "remove from catalog" (a non-destructive catalog-only removal, confirmed via dialog, that never touches the original file on disk — see [PRD §7.1](PRD.md#71-catalog--library-engine-foundation-not-user-facing-on-its-own)'s "never modify originals").
+- Keywording (hierarchical).
+- Collections (manual) and Smart Collections (rule-based).
+- Catalog backup, Lightroom-style: prompt-on-close with a configurable frequency (every time / daily / weekly / monthly / never), optional integrity check, timestamped copy written to a user-chosen backup folder separate from the working catalog — catalog file only, not the photos (see [PRD §7.6](PRD.md#76-performance--data-integrity-cross-cutting-not-a-feature-but-a-requirement)).
+
+### Explicitly deferred
+- The full local-adjustment edit pipeline (masks, gradients, brush, tone curve, HSL, presets) → M3. Deliberately resequenced ahead of Lightroom's own chronology (see this document's intro) — a complete, trustworthy photo-management foundation before expanding editing capability.
+- Any AI feature.
+
+### Exit criteria
+- Import supports picking specific files (not just a whole folder), and both RAW and JPEG land in the catalog correctly.
+- Every cataloged image shows real EXIF (camera/lens/exposure) in the metadata panel, IPTC caption/copyright/contact are editable, and the Library thumbnail/preview reflects the file's own embedded color profile rather than assuming one.
+- The Library grid supports multi-select for rating/flagging/color-labeling/removing many images at once, and removing an image from the catalog never touches the original file on disk.
+- Keyword-based search and smart collections work over a multi-thousand-image catalog without noticeable lag.
+- A deliberately corrupted or deleted catalog file can be recovered from a scheduled backup with at most one backup-interval's worth of edits lost.
+
+---
+
+## M3 — Local adjustments & non-destructive toolkit
 **Rough size:** 3–5 months · **Lightroom analog:** v2.0–v3.0, 2008–2010
 
 ### Scope
@@ -60,25 +85,20 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - Tone curve, HSL/color mixer, split toning, dehaze, clarity/texture, vignette, grain.
 - Lens corrections (profile-based distortion/vignette/CA).
 - Presets: create/save/apply, import/export as files.
-- Keywording (hierarchical), full IPTC metadata editing.
-- Collections (manual) and Smart Collections (rule-based).
 - Improved noise reduction (luma/chroma split), sharpening quality pass.
-- Catalog backup, Lightroom-style: prompt-on-close with a configurable frequency (every time / daily / weekly / monthly / never), optional integrity check, timestamped copy written to a user-chosen backup folder separate from the working catalog — catalog file only, not the photos (see [PRD §7.6](PRD.md#76-performance--data-integrity-cross-cutting-not-a-feature-but-a-requirement)).
 
 ### Explicitly deferred
 - Modern highlights/shadows tone *model* overhaul is already in M1 (pulled forward vs. Lightroom's actual timeline since it's foundational, not optional) — no change needed here.
-- Healing/clone brush, perspective/upright correction, soft proofing, print/book/web output → M3.
-- Tethered capture: evaluate at M3 planning time; not committed here.
+- Healing/clone brush, perspective/upright correction, soft proofing, print/book/web output → M4.
+- Tethered capture: evaluate at M4 planning time; not committed here.
 
 ### Exit criteria
 - A photographer can fully locally-adjust an image (e.g., dodge/burn a face, darken a sky, selectively desaturate) without leaving the app.
 - Presets can be created, applied across a batch, and reused across sessions.
-- Keyword-based search and smart collections work over a multi-thousand-image catalog without noticeable lag.
-- A deliberately corrupted or deleted catalog file can be recovered from a scheduled backup with at most one backup-interval's worth of edits lost.
 
 ---
 
-## M3 — Modern retouching & output modules
+## M4 — Modern retouching & output modules
 **Rough size:** 3–5 months · **Lightroom analog:** v4.0–v5.0, 2012–2013
 
 ### Scope
@@ -87,11 +107,11 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - Soft proofing against output profiles.
 - Print module: layout templates, page setup, printer color management.
 - Smart Previews: lightweight proxy generation so Develop works smoothly even against files on a disconnected/offline external drive (still valuable with zero cloud — this is about disk I/O, not sync). Distinct from M1's Develop preview cache: that one speeds up a *present* file's redecode cost; this one keeps Develop usable when the original isn't reachable at all.
-- Decide and scope: Map/geotagging view, Book module — both optional based on user demand signal from M1/M2 dogfooding; not required for exit.
+- Decide and scope: Map/geotagging view, Book module — both optional based on user demand signal from M1–M3 dogfooding; not required for exit.
 
 ### Explicitly deferred
-- GPU pipeline rewrite (if not already covered by M0 spike outcomes) → M4.
-- Face recognition, HDR/pano merge → M4.
+- GPU pipeline rewrite (if not already covered by M0 spike outcomes) → M5.
+- Face recognition, HDR/pano merge → M5.
 
 ### Exit criteria
 - Retouching quality is good enough that most images no longer need round-tripping to another tool for spot/object removal.
@@ -100,7 +120,7 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 
 ---
 
-## M4 — Performance, GPU, merges, faces
+## M5 — Performance, GPU, merges, faces
 **Rough size:** 3–6 months · **Lightroom analog:** v6.0/CC, 2015
 
 ### Scope
@@ -109,10 +129,10 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - Panorama merge (multi-shot → stitched composite), including boundary/edge correction.
 - Face detection/recognition for a local "People" browsing view (fully local, no cloud model dependency).
 - Basic video handling: import/organize/trim (explicitly not a video editor — see PRD non-goals).
-- Plugin/extensibility API v0 (even a minimal export-plugin hook is useful here and de-risks M7's extensibility work).
+- Plugin/extensibility API v0 (even a minimal export-plugin hook is useful here and de-risks M8's extensibility work).
 
 ### Explicitly deferred
-- Any AI masking/selection beyond face detection → M5.
+- Any AI masking/selection beyond face detection → M6.
 
 ### Exit criteria
 - Develop-panel slider response stays under the PRD's ~100ms target on a 50k-image catalog with GPU acceleration active.
@@ -121,18 +141,18 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 
 ---
 
-## M5 — AI-assisted selection & enhancement
+## M6 — AI-assisted selection & enhancement
 **Rough size:** 4–8 months · **Lightroom analog:** Classic v8–v11, 2018–2022
 
 ### Scope
-- Select Subject / Select Sky (and similar landscape-element masks: water, architecture, vegetation) as one-click AI-generated masks feeding the existing mask/adjustment system from M2.
+- Select Subject / Select Sky (and similar landscape-element masks: water, architecture, vegetation) as one-click AI-generated masks feeding the existing mask/adjustment system from M3.
 - Composable masking: add/subtract/intersect multiple masks (AI-generated or manual) in one edit.
-- AI-assisted denoise (distinct from and generally higher quality than M1/M2's traditional NR).
+- AI-assisted denoise (distinct from and generally higher quality than M1/M3's traditional NR).
 - AI super-resolution / upscaling.
 - **Architecture decision required before scoping in detail**: on-device model inference only (no cloud calls, consistent with the "local-first, cloud out of scope" constraint) — this determines model size/quality tradeoffs and what hardware (e.g., minimum GPU/NPU) is required. Document the decision before implementation starts.
 
 ### Explicitly deferred
-- Generative fill/remove → M6 (bigger model, bigger architecture question).
+- Generative fill/remove → M7 (bigger model, bigger architecture question).
 
 ### Exit criteria
 - One-click subject/sky selection is accurate enough to be faster than manual brush masking for common compositions.
@@ -140,17 +160,17 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 
 ---
 
-## M6 — Generative & intelligent culling
+## M7 — Generative & intelligent culling
 **Rough size:** 4–8 months, **explicitly speculative** · **Lightroom analog:** Classic v12+, 2023–2026
 
 ### Scope (provisional — confirm feasibility before committing)
-- Generative object removal/fill. Given the "no cloud" constraint, this requires either a bundled on-device generative model (quality/size/license tradeoffs, likely the single biggest open technical question in this whole roadmap) or a deliberate decision to ship a **non-generative** content-aware fill instead (extending M3's healing brush rather than true generative fill).
+- Generative object removal/fill. Given the "no cloud" constraint, this requires either a bundled on-device generative model (quality/size/license tradeoffs, likely the single biggest open technical question in this whole roadmap) or a deliberate decision to ship a **non-generative** content-aware fill instead (extending M4's healing brush rather than true generative fill).
 - Adaptive/context-aware auto-tone presets.
 - Automatic duplicate/near-duplicate detection for culling.
 - AI-assisted culling aids (e.g., blur/focus detection, blink detection) as a "Faces/culling panel."
 
 ### Explicitly deferred
-- Nothing beyond this — M6 is the top of the AI feature set. Anything past this point (further Adobe Firefly-style features) is out of scope by the PRD's non-goals unless revisited.
+- Nothing beyond this — M7 is the top of the AI feature set. Anything past this point (further Adobe Firefly-style features) is out of scope by the PRD's non-goals unless revisited.
 
 ### Exit criteria
 - A concrete decision is made and documented on the generative-fill approach (bundled model vs. non-generative fallback) *before* implementation, since it changes the milestone's shape substantially.
@@ -158,16 +178,16 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 
 ---
 
-## M7 — Polish, extensibility, 1.0 launch
+## M8 — Polish, extensibility, 1.0 launch
 **Rough size:** 2–4 months · **Lightroom analog:** n/a — this is packaging/hardening, not a feature era
 
 ### Scope
-- Harden the plugin/extensibility API from M4 into something documented and stable enough for third parties.
+- Harden the plugin/extensibility API from M5 into something documented and stable enough for third parties.
 - Accessibility pass (keyboard navigation, screen reader labels, contrast).
 - Localization scaffolding (even if only one language ships at 1.0).
 - Licensing/distribution decision (open source? paid? — not decided in this PRD) and packaging for both target OSes (installers, code signing, auto-update mechanism if any).
 - Full documentation: user-facing help, keyboard shortcuts reference.
-- Performance/regression pass across the full feature set built in M1–M6.
+- Performance/regression pass across the full feature set built in M1–M7.
 
 ### Exit criteria
-- 1.0 release: installable on both macOS and Windows, passes a full manual regression pass of the M1–M6 feature set, has user-facing documentation.
+- 1.0 release: installable on both macOS and Windows, passes a full manual regression pass of the M1–M7 feature set, has user-facing documentation.

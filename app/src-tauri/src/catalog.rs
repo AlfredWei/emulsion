@@ -47,6 +47,11 @@ pub struct ImageSummary {
     pub flag: String,
     pub color_label: String,
     pub added_at: String,
+    /// Nullable in Rust to match the nullable `images.content_hash`
+    /// column, even though `add_image_with_metadata` always sets it for
+    /// real imports. Lets `preview_cache::pregenerate_missing` key the
+    /// Develop preview cache without re-reading+re-hashing every file.
+    pub content_hash: Option<String>,
 }
 
 impl Catalog {
@@ -202,7 +207,7 @@ impl Catalog {
     /// non-virtual-copy) version's culling state. Newest imports first.
     pub fn list_images(&self) -> Result<Vec<ImageSummary>> {
         let mut stmt = self.conn.prepare(
-            "SELECT i.id, v.id, i.path, i.thumbnail_path, v.rating, v.flag, v.color_label, i.added_at
+            "SELECT i.id, v.id, i.path, i.thumbnail_path, v.rating, v.flag, v.color_label, i.added_at, i.content_hash
              FROM images i
              JOIN image_versions v ON v.id = (
                  SELECT id FROM image_versions
@@ -221,6 +226,7 @@ impl Catalog {
                 flag: row.get(5)?,
                 color_label: row.get(6)?,
                 added_at: row.get(7)?,
+                content_hash: row.get(8)?,
             })
         })?;
         rows.collect()

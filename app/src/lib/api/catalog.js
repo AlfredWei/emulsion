@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {string} flag
  * @property {string} color_label
  * @property {string} added_at
+ * @property {string | null} content_hash
  */
 
 /**

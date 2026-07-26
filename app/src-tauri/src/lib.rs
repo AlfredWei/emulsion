@@ -1,35 +1,13 @@
 mod catalog;
 mod import;
+mod preview_cache;
 mod raw_decode;
 
 use catalog::{Catalog, EditStack, ImageSummary};
 use import::ImportSummary;
+use preview_cache::DevelopPreviewInfo;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
-
-/// Interactive Develop preview is capped to this on its longest edge,
-/// regardless of what the RAW decode itself produced -- `decode_develop_preview`'s
-/// half_size request is best-effort (see raw_decode.rs), not a guarantee,
-/// so this resize is what actually bounds the preview's size.
-const DEVELOP_PREVIEW_MAX_DIMENSION: u32 = 2048;
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct DevelopPreviewInfo {
-    path: String,
-    width: u32,
-    height: u32,
-}
-
-fn capped_dimensions(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
-    if width <= max_dim && height <= max_dim {
-        return (width, height);
-    }
-    let scale = max_dim as f64 / width.max(height) as f64;
-    (
-        ((width as f64) * scale).round().max(1.0) as u32,
-        ((height as f64) * scale).round().max(1.0) as u32,
-    )
-}
 
 /// App-wide state: the one catalog connection for this run, per ADR-0005
 /// (a single local catalog file, not per-window/per-command connections).
@@ -61,22 +39,33 @@ async fn import_folder(
     path: String,
 ) -> Result<ImportSummary, String> {
     let catalog = state.catalog.clone();
-    let thumbnail_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("thumbnails");
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let thumbnail_dir = app_data_dir.join("thumbnails");
 
+    let summary = {
+        let catalog = catalog.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            Ok::<_, String>(import::scan_and_import(
+                std::path::Path::new(&path),
+                &catalog,
+                &thumbnail_dir,
+            ))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }?;
+
+    // Fire-and-forget: pre-generate Develop previews for the whole catalog
+    // in the background (M1 Slice 4, see preview_cache.rs) rather than
+    // making every Develop open pay for a fresh RAW decode. Not awaited --
+    // doesn't delay this command's response.
+    let previews_dir = app_data_dir.join("previews");
     tauri::async_runtime::spawn_blocking(move || {
-        let catalog = catalog.lock().map_err(|e| e.to_string())?;
-        Ok(import::scan_and_import(
-            std::path::Path::new(&path),
-            &catalog,
-            &thumbnail_dir,
-        ))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        preview_cache::pregenerate_missing(&catalog, &previews_dir);
+    });
+
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -109,52 +98,24 @@ fn set_color_label(
         .map_err(|e| e.to_string())
 }
 
-/// Develop preview (M1 Slice 3, see raw_decode.rs). Decode-only concern --
-/// doesn't touch the catalog, matching how raw_decode.rs/import.rs are
-/// already decoupled from catalog specifics. Runs on a blocking thread
-/// (same pattern as `import_folder`) since RAW decode is CPU-heavy.
+/// Develop preview (M1 Slice 3, cache-aware since M1 Slice 4 — see
+/// preview_cache.rs). Decode-only concern -- doesn't touch the catalog,
+/// matching how raw_decode.rs/import.rs are already decoupled from
+/// catalog specifics. Runs on a blocking thread (same pattern as
+/// `import_folder`) since a cache-miss decode is CPU-heavy (a cache hit
+/// is cheap, but still worth keeping off the async executor's own thread
+/// since it still touches disk).
 #[tauri::command]
 async fn get_develop_preview(app: AppHandle, path: String) -> Result<DevelopPreviewInfo, String> {
-    let preview_dir = app
+    let previews_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("previews");
 
     tauri::async_runtime::spawn_blocking(move || {
-        std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
-
-        let decoded = raw_decode::decode_develop_preview(std::path::Path::new(&path))
-            .map_err(|e| e.to_string())?;
-        let source = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
-            .ok_or_else(|| {
-                "decoded RGB buffer size didn't match its own reported dimensions".to_string()
-            })?;
-
-        let (target_w, target_h) =
-            capped_dimensions(source.width(), source.height(), DEVELOP_PREVIEW_MAX_DIMENSION);
-        let resized = if (target_w, target_h) == (source.width(), source.height()) {
-            source
-        } else {
-            image::imageops::resize(
-                &source,
-                target_w,
-                target_h,
-                image::imageops::FilterType::Triangle,
-            )
-        };
-
-        // Filename keyed off the source path's hash (not the catalog's
-        // version_id) so this command can stay catalog-decoupled.
-        let file_stem = blake3::hash(path.as_bytes()).to_hex();
-        let out_path = preview_dir.join(format!("{file_stem}.png"));
-        resized.save(&out_path).map_err(|e| e.to_string())?;
-
-        Ok(DevelopPreviewInfo {
-            path: out_path.to_string_lossy().to_string(),
-            width: resized.width(),
-            height: resized.height(),
-        })
+        preview_cache::ensure_develop_preview(std::path::Path::new(&path), &previews_dir)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -187,9 +148,21 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
             let catalog = Catalog::open(app_data_dir.join("catalog.sqlite"))?;
-            app.manage(AppState {
-                catalog: Arc::new(Mutex::new(catalog)),
+            let catalog = Arc::new(Mutex::new(catalog));
+
+            // Catch-up pass (M1 Slice 4): pre-generate Develop previews for
+            // any cataloged image that doesn't have one yet -- covers
+            // images cataloged before this feature existed, or left
+            // un-pregenerated by an interrupted previous run. Cheap in
+            // steady state (see preview_cache.rs), fire-and-forget so
+            // startup itself isn't delayed.
+            let previews_dir = app_data_dir.join("previews");
+            let catalog_for_bg = catalog.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                preview_cache::pregenerate_missing(&catalog_for_bg, &previews_dir);
             });
+
+            app.manage(AppState { catalog });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

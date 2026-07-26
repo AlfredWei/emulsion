@@ -5,6 +5,7 @@
   import LibraryGrid from "$lib/components/LibraryGrid.svelte";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
+  import ExportDialog from "$lib/components/ExportDialog.svelte";
   import {
     importFolder,
     listImages,
@@ -28,6 +29,18 @@
   let exposure = $derived(opValue(editStack, "exposure", 0));
   let contrast = $derived(opValue(editStack, "contrast", 0));
   let saturation = $derived(opValue(editStack, "saturation", 0));
+
+  // The image Export would act on right now: the open Develop image, or
+  // the selected Library image -- whichever module is active.
+  let selectedImage = $derived(images.find((img) => img.version_id === selectedId) ?? null);
+  let currentExportItem = $derived(
+    activeModule === "develop" && developVersionId !== null
+      ? { path: developImagePath, version_id: developVersionId }
+      : selectedImage
+        ? { path: selectedImage.path, version_id: selectedImage.version_id }
+        : null,
+  );
+  let exportItem = $state(/** @type {{ path: string, version_id: number } | null} */ (null));
 
   // Persistence is debounced (not written on every slider tick) so a drag
   // doesn't flood the catalog with writes -- flushed immediately whenever
@@ -107,6 +120,14 @@
     persistTimer = setTimeout(flushEditStack, 250);
   }
 
+  function handleExportClick() {
+    // If a slider was just dragged, the debounced save may not have
+    // landed yet -- flush it first so Export reads the value currently
+    // on screen, not the last-persisted one.
+    if (activeModule === "develop") flushEditStack();
+    exportItem = currentExportItem;
+  }
+
   onMount(() => {
     refresh();
   });
@@ -123,10 +144,15 @@
       </button>
     </div>
     <div class="spacer"></div>
+    <button class="export-btn" onclick={handleExportClick} disabled={!currentExportItem}>
+      Export…
+    </button>
     <button class="import-btn" onclick={handleImport} disabled={importing}>
       {importing ? "Importing…" : "Import…"}
     </button>
   </div>
+
+  <ExportDialog item={exportItem} onClose={() => (exportItem = null)} />
 
   {#if statusMessage}
     <div class="status">{statusMessage}</div>
@@ -228,6 +254,20 @@
     border: 1px solid var(--accent);
   }
   .import-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .export-btn {
+    all: unset;
+    cursor: pointer;
+    padding: 6px 14px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+  }
+  .export-btn:disabled {
     opacity: 0.6;
     cursor: default;
   }

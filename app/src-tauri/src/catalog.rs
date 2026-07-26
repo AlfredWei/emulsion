@@ -66,8 +66,35 @@ impl Catalog {
         Ok(Self { conn })
     }
 
+    /// M1 Slice 6 (crash-safety hardening): WAL + `synchronous=NORMAL`.
+    /// Honest framing, not oversold -- the prior default (rollback journal
+    /// + SQLite's own implicit `synchronous=FULL`) was already durable
+    /// against process crashes; this doesn't close an existing hole in
+    /// the "no data loss on crash" exit criterion (the flush-on-close fix
+    /// in +page.svelte and the atomic import insert below are what do
+    /// that). What this buys, today: readers not blocking on a writer --
+    /// though since `AppState.catalog` is one `Arc<Mutex<Catalog>>`
+    /// around a single connection, everything already serializes through
+    /// Rust's own Mutex regardless of journal mode, so this is more
+    /// forward-looking hygiene than a realized fix right now. Cheap and
+    /// standard to add regardless.
+    ///
+    /// `pragma_update` (used for `synchronous`) silently swallows the row
+    /// SQLite returns for `journal_mode` specifically -- it would "succeed"
+    /// even if WAL failed to engage (e.g. an unsupported filesystem/VFS),
+    /// with no way to know. `pragma_update_and_check` reads that row back
+    /// so a failure to actually engage WAL is a real, visible error.
+    fn harden(conn: &Connection) -> Result<()> {
+        let mode: String =
+            conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+        debug_assert_eq!(mode, "wal", "journal_mode WAL did not actually engage");
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        Ok(())
+    }
+
     pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
         let conn = Connection::open(path)?;
+        Self::harden(&conn)?;
         Self::migrate(&conn)?;
         Ok(Self { conn })
     }
@@ -114,8 +141,13 @@ impl Catalog {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Register a source image with the content hash + size captured at
-    /// import time (used by the import pipeline for duplicate detection).
+    /// Lower-level building block, superseded as the import pipeline's
+    /// caller by the atomic `add_image_with_edit_stack` (M1 Slice 6) --
+    /// kept as real pub API since catalog.rs's own tests use it directly,
+    /// and it's the natural insert-only-the-image half for a future M2
+    /// virtual-copy path (a new edit-stack row against an *existing*
+    /// image_id, which `add_image_with_edit_stack` doesn't support).
+    #[allow(dead_code)]
     pub fn add_image_with_metadata(
         &self,
         path: &str,
@@ -127,6 +159,48 @@ impl Catalog {
             params![path, content_hash, file_size],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Atomically inserts an image row and its initial edit-stack row (M1
+    /// Slice 6). The import pipeline used to do this as two separate
+    /// auto-commit statements (`add_image_with_metadata` then
+    /// `add_edit_stack`) -- a crash between them left an `images` row with
+    /// no matching `image_versions` row. `list_images()`'s join silently
+    /// *excludes* such a row rather than erroring, but `find_by_hash`
+    /// still matches it on every future import scan, so the file became
+    /// permanently unimportable through the normal UI. This is the real
+    /// import-time caller; `add_image_with_metadata`/`add_edit_stack`
+    /// stay available as lower-level building blocks (tests, and future
+    /// M2 virtual copies, which need a new edit-stack row against an
+    /// *existing* image_id).
+    ///
+    /// Uses `unchecked_transaction` (rusqlite's `&self`-based transaction
+    /// API) rather than `transaction` (`&mut self`) since `Catalog`'s
+    /// methods are all `&self`, called through `Arc<Mutex<Catalog>>` --
+    /// the Mutex already serializes access, so there's no real nested-
+    /// transaction risk to guard against here.
+    pub fn add_image_with_edit_stack(
+        &self,
+        path: &str,
+        content_hash: &str,
+        file_size: i64,
+        stack: &EditStack,
+    ) -> Result<i64> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO images (path, content_hash, file_size) VALUES (?1, ?2, ?3)",
+            params![path, content_hash, file_size],
+        )?;
+        let image_id = tx.last_insert_rowid();
+
+        let json = serde_json::to_string(stack).expect("EditStack is always serializable");
+        tx.execute(
+            "INSERT INTO image_versions (image_id, edit_stack_json) VALUES (?1, ?2)",
+            params![image_id, json],
+        )?;
+
+        tx.commit()?;
+        Ok(image_id)
     }
 
     /// Look up an existing image by content hash, for duplicate detection.
@@ -148,7 +222,11 @@ impl Catalog {
         Ok(())
     }
 
-    /// Create the primary (non-virtual-copy) edit-stack record for an image.
+    /// Create an edit-stack record for an image. Lower-level building
+    /// block, same status as `add_image_with_metadata` above -- superseded
+    /// as the import pipeline's caller by `add_image_with_edit_stack`,
+    /// kept as real pub API for tests and a future M2 virtual-copy path.
+    #[allow(dead_code)]
     pub fn add_edit_stack(&self, image_id: i64, stack: &EditStack) -> Result<i64> {
         let json = serde_json::to_string(stack).expect("EditStack is always serializable");
         self.conn.execute(
@@ -327,6 +405,25 @@ mod tests {
         assert!(catalog.set_rating(version_id, 6).is_err());
         assert!(catalog.set_flag(version_id, "not-a-real-flag").is_err());
         assert!(catalog.set_color_label(version_id, "not-a-real-color").is_err());
+    }
+
+    #[test]
+    fn add_image_with_edit_stack_inserts_both_rows_atomically() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![json!({"op": "exposure", "value": 0.3})],
+        };
+
+        let image_id = catalog
+            .add_image_with_edit_stack("/a.CR3", "hash-a", 4096, &stack)
+            .expect("atomic insert succeeds");
+
+        assert_eq!(catalog.find_by_hash("hash-a").unwrap(), Some(image_id));
+
+        let images = catalog.list_images().unwrap();
+        assert_eq!(images.len(), 1, "the image row must be visible via list_images (i.e. a matching image_versions row exists)");
+        assert_eq!(catalog.get_edit_stack(images[0].version_id).unwrap(), stack);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 <script>
   import "$lib/styles/tokens.css";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import LibraryGrid from "$lib/components/LibraryGrid.svelte";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
@@ -48,12 +49,32 @@
   // "coalesced/debounced slider events" rule, applied to catalog writes
   // rather than the WebGPU frame loop).
   let persistTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+  // Tracks an in-flight (already-fired, not-yet-resolved) save separately
+  // from the debounce timer -- a flush can be triggered again (e.g. by the
+  // close handler below) while a previous flush's write is still in
+  // flight, and callers need to be able to wait for *that* too, not just
+  // "is a timer currently pending".
+  let pendingSave = /** @type {Promise<void> | null} */ (null);
 
+  // M1 Slice 6: this used to NOT return setEditStack's promise, so every
+  // `await flushEditStack()` call site (switchModule, openDevelop, Export)
+  // resolved on the next microtask regardless of whether the write had
+  // actually reached Rust/SQLite yet -- silently fire-and-forget. Fixed to
+  // return the real promise; this is the fix the window-close flush below
+  // actually depends on to mean anything.
   function flushEditStack() {
-    if (persistTimer === null) return;
-    clearTimeout(persistTimer);
-    persistTimer = null;
-    if (developVersionId !== null) setEditStack(developVersionId, editStack);
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+      if (developVersionId !== null) {
+        const versionId = developVersionId;
+        const stack = editStack;
+        pendingSave = setEditStack(versionId, stack).finally(() => {
+          pendingSave = null;
+        });
+      }
+    }
+    return pendingSave ?? Promise.resolve();
   }
 
   async function refresh() {
@@ -130,6 +151,30 @@
 
   onMount(() => {
     refresh();
+
+    // M1 Slice 6 (crash-safety): flush a pending debounced edit before the
+    // window actually closes, so quitting right after a slider drag can't
+    // lose it. Only intervenes when something is actually pending -- the
+    // common case (nothing to flush) closes immediately, no added latency.
+    // This protects a *graceful* quit only (close-button click, or another
+    // OS "please close" request that routes through the same
+    // closeRequested pipeline `.close()` itself uses, per Tauri's own
+    // docs) -- it cannot help against SIGKILL/a hard crash, which bypasses
+    // every in-process handler. Whether macOS Cmd+Q routes through this
+    // same path is unverified in this environment.
+    let unlistenClose = /** @type {(() => void) | undefined} */ (undefined);
+    getCurrentWindow()
+      .onCloseRequested(async (event) => {
+        if (persistTimer === null && pendingSave === null) return;
+        event.preventDefault();
+        await flushEditStack();
+        await getCurrentWindow().destroy();
+      })
+      .then((fn) => {
+        unlistenClose = fn;
+      });
+
+    return () => unlistenClose?.();
   });
 </script>
 

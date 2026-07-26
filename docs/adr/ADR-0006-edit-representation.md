@@ -16,12 +16,12 @@ Represent each image-version's edits as a **versioned, JSON-serializable "edit s
 
 - **Replay-ability is what makes this non-destructive**: the stack is instructions, never baked pixels, matching the PRD's core non-negotiable (§7.1, §7.4) and Lightroom's own foundational architecture (see lightroom-reference.md, Era 1).
 - **JSON in a DB column, not a bespoke binary format**: keeps the format human-inspectable (useful for debugging and for the XMP export step in ADR-0005), and avoids building/maintaining a custom binary (de)serializer for something that isn't a performance bottleneck (the stack itself is tiny; it's the *rendering* of it that must be fast, which is ADR-0004's job, not this one's).
-- **`schema_version` per stack, not per catalog**: lets old image-versions keep working after the app adds new operation types in M2/M5/M6 — new code just needs to know how to render every `op` type it encounters, and can reject/flag stacks referencing unknown future op types gracefully rather than crashing.
+- **`schema_version` per stack, not per catalog**: lets old image-versions keep working after the app adds new operation types in M3/M6/M7 — new code just needs to know how to render every `op` type it encounters, and can reject/flag stacks referencing unknown future op types gracefully rather than crashing.
 - History/undo and snapshots (PRD §7.4) fall out of this representation almost for free: history is just prior states of the same stack; a snapshot is a named, retained copy of a stack at a point in time.
 
 ## Consequences
 
-- Every new Develop capability (masks in M2, AI masks in M5, generative ops in M6) must be added as a new, additive `op` type with its own schema-versioned shape — this is a real ongoing constraint on how those milestones implement features, not just a data-modeling detail.
+- Every new Develop capability (masks in M3, AI masks in M6, generative ops in M7) must be added as a new, additive `op` type with its own schema-versioned shape — this is a real ongoing constraint on how those milestones implement features, not just a data-modeling detail.
 - The renderer (ADR-0004's shader pipeline) needs to be designed from M1 as "interpret a list of typed ops," not hardcoded to a fixed small set of global sliders — this was already called out as a consequence in ADR-0004 and is reinforced here.
 - Virtual copies (PRD §7.3) are implemented as distinct image-version rows each owning their own independent edit stack, sharing the same underlying source file reference.
 

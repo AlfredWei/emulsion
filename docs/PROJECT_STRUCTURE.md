@@ -21,7 +21,7 @@ lr_replace/
 | File | What it's for |
 |---|---|
 | [PRD.md](../PRD/PRD.md) | The product requirements document: vision, scope, target user, functional/non-functional requirements. |
-| [MILESTONES.md](../PRD/MILESTONES.md) | The 8-milestone roadmap (M0–M7), each with scope, explicitly-deferred items, and exit criteria. |
+| [MILESTONES.md](../PRD/MILESTONES.md) | The 9-milestone roadmap (M0–M8), each with scope, explicitly-deferred items, and exit criteria. |
 | [lightroom-reference.md](../PRD/lightroom-reference.md) | Research on Lightroom's actual v1→now feature timeline, used to sequence the roadmap above. |
 
 ## `docs/` — engineering docs

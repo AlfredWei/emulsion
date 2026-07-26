@@ -41,7 +41,7 @@ Two modules for M1 scope ([MILESTONES.md M1](../../PRD/MILESTONES.md#m1--mvp-imp
 - **Main area**: the canvas (the in-webview WebGPU render target from [RFC-0001 §4](../rfc/RFC-0001-architecture-and-tech-stack.md)), with zoom/pan and a before/after toggle (split or full-swap).
 - **Right panel**: collapsible, tool-grouped adjustment sections matching [PRD §7.4](../../PRD/PRD.md) — Basic (WB, tone), Tone Curve, HSL/Color, Detail (sharpen/NR), Effects (dehaze, grain, vignette), Lens Corrections. Sections default to a sensible collapsed/expanded state (Basic open, others closed) so the panel isn't overwhelming on first open — mirrors how experienced Lightroom users actually work.
 - **Bottom**: filmstrip (shared component with Library) plus a contextual tool strip above it for crop/mask/heal tools when active.
-- **Local-adjustment tools** (M2+, not M1): the tool strip and mask-overlay affordances are designed into this layout now even though the underlying capability ships later, per [RFC-0001's](../rfc/RFC-0001-architecture-and-tech-stack.md) note that the render pipeline must already be architected for masks/layers from the start.
+- **Local-adjustment tools** (M3+, not M1/M2): the tool strip and mask-overlay affordances are designed into this layout now even though the underlying capability ships later, per [RFC-0001's](../rfc/RFC-0001-architecture-and-tech-stack.md) note that the render pipeline must already be architected for masks/layers from the start.
 
 ## 5. Performance/memory-visible UI rules
 
@@ -59,7 +59,7 @@ These are UI-level rules that exist specifically because of the PRD's performanc
 - Icon-first tool strip with text labels on hover/focus, not permanent labels, to keep the tool strip compact.
 - Respect native OS window chrome (macOS traffic-light controls, Windows title bar) rather than a custom-drawn title bar — keeps the app feeling native despite the webview-based UI ([ADR-0001](../adr/ADR-0001-application-shell.md)).
 
-## 7. Baseline accessibility (full pass is M7, this is the floor for M1+)
+## 7. Baseline accessibility (full pass is M8, this is the floor for M1+)
 
 - Full keyboard navigability and visible focus states from the first UI built, not retrofitted later.
 - WCAG AA contrast for all text/icon-on-panel-background combinations in the dark theme.

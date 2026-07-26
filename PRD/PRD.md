@@ -114,12 +114,13 @@ Full detail, exit criteria, and Lightroom-era mapping in [MILESTONES.md](MILESTO
 |---|---|---|
 | M0 | Foundations & tech spike | — (pre-v1 engineering) |
 | M1 | MVP: Import → Library → Basic Develop → Export | v1.0 (2007) |
-| M2 | Local adjustments & non-destructive toolkit | v2.0–v3.0 (2008–2010) |
-| M3 | Modern tone engine, retouching, output modules | v4.0–v5.0 (2012–2013) |
-| M4 | Performance, GPU, merges, faces | v6.0/CC (2015) |
-| M5 | AI-assisted selection & enhancement | Classic v8–v11 (2018–2022) |
-| M6 | Generative & intelligent culling | Classic v12+ (2023–2026) |
-| M7 | Polish, extensibility, 1.0 launch | — |
+| M2 | Photo management & catalog depth | — (deliberately resequenced ahead of Lightroom's own chronology; see MILESTONES.md) |
+| M3 | Local adjustments & non-destructive toolkit | v2.0–v3.0 (2008–2010) |
+| M4 | Modern tone engine, retouching, output modules | v4.0–v5.0 (2012–2013) |
+| M5 | Performance, GPU, merges, faces | v6.0/CC (2015) |
+| M6 | AI-assisted selection & enhancement | Classic v8–v11 (2018–2022) |
+| M7 | Generative & intelligent culling | Classic v12+ (2023–2026) |
+| M8 | Polish, extensibility, 1.0 launch | — |
 
 ## 9. Non-functional requirements
 
@@ -140,4 +141,4 @@ Full detail, exit criteria, and Lightroom-era mapping in [MILESTONES.md](MILESTO
 - **RAW library coverage/quality**: even a mature library like LibRaw may lag on brand-new camera models or have color-science gaps vs. Adobe's proprietary profiles — mitigate with camera-profile support and a documented "supported cameras" list per release.
 - **Scope creep toward Lightroom feature parity**: Lightroom is a 19-year, large-team product (see [lightroom-reference.md](lightroom-reference.md)). This PRD deliberately cuts cloud/mobile/video-editing/social to keep scope achievable for a small team — resist re-adding them.
 - **Cross-platform GPU pipeline**: performant, color-correct GPU rendering that behaves identically on macOS (Metal) and Windows (Direct3D/Vulkan) is genuinely hard; M0's spike must de-risk this before M1 commits to an architecture.
-- **Generative AI features (M6)**: on-device generative fill/remove may require a bundled model or a decision to omit this permanently given "no cloud" constraint — flagged explicitly in M6, decision not pre-made here.
+- **Generative AI features (M7)**: on-device generative fill/remove may require a bundled model or a decision to omit this permanently given "no cloud" constraint — flagged explicitly in M7, decision not pre-made here.

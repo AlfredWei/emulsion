@@ -50,11 +50,11 @@ fn decode(path: &Path, half_size: bool) -> Result<DecodedPreview, DecodeError> {
     })
 }
 
-/// Decode a RAW file to a full-resolution 8-bit RGB buffer. Not used yet —
-/// the Export pipeline slice is the real caller (final-quality output);
-/// Slice 3's interactive Develop preview uses `decode_develop_preview`
-/// instead, which is faster and small enough to move around cheaply.
-#[allow(dead_code)]
+/// Decode a RAW file to a full-resolution 8-bit RGB buffer -- the Export
+/// pipeline's real caller (final-quality output, M1 Slice 5, see
+/// export.rs). Slice 3's interactive Develop preview uses
+/// `decode_develop_preview` instead, which is faster and small enough to
+/// move around cheaply.
 pub fn decode_preview(path: &Path) -> Result<DecodedPreview, DecodeError> {
     decode(path, false)
 }

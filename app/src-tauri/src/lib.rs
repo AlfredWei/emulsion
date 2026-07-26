@@ -1,9 +1,11 @@
 mod catalog;
+mod export;
 mod import;
 mod preview_cache;
 mod raw_decode;
 
 use catalog::{Catalog, EditStack, ImageSummary};
+use export::{ExportOptions, ExportResult};
 use import::ImportSummary;
 use preview_cache::DevelopPreviewInfo;
 use std::sync::{Arc, Mutex};
@@ -139,6 +141,45 @@ fn set_edit_stack(
         .map_err(|e| e.to_string())
 }
 
+#[derive(serde::Deserialize)]
+struct ExportItem {
+    path: String,
+    version_id: i64,
+}
+
+/// Export (M1 Slice 5, see export.rs). Resolves each item's edit stack
+/// under a brief catalog lock, then releases it before the slow
+/// decode+resize+encode work -- matters more here than in the Slice 4
+/// background job: AppState.catalog is one Mutex shared by every command,
+/// and this is a request-response call the user is actively waiting on,
+/// so holding the lock across a multi-second full-res export would
+/// visibly stall unrelated UI actions (rating a photo, switching
+/// selection) elsewhere in the app.
+#[tauri::command]
+async fn export_images(
+    state: State<'_, AppState>,
+    items: Vec<ExportItem>,
+    options: ExportOptions,
+) -> Result<Vec<ExportResult>, String> {
+    let catalog = state.catalog.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            items
+                .into_iter()
+                .map(|item| {
+                    let stack = catalog.get_edit_stack(item.version_id).unwrap_or_else(|_| EditStack::empty());
+                    (std::path::PathBuf::from(item.path), stack)
+                })
+                .collect::<Vec<_>>()
+        };
+        Ok::<_, String>(export::export_batch(resolved, &options))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -176,6 +217,7 @@ pub fn run() {
             get_develop_preview,
             get_edit_stack,
             set_edit_stack,
+            export_images,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

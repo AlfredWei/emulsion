@@ -104,21 +104,18 @@ pub fn scan_and_import(dir: &Path, catalog: &Catalog, thumbnail_dir: &Path) -> I
             continue;
         };
 
+        // Atomic (M1 Slice 6): a catalog row without a matching edit-stack
+        // version is an inconsistent state that used to be reachable by a
+        // crash between two separate statements, not just a Rust-level
+        // error path -- add_image_with_edit_stack wraps both in one
+        // transaction so that's no longer possible.
         let path_str = path.to_string_lossy().to_string();
         let Ok(image_id) =
-            catalog.add_image_with_metadata(&path_str, &hash, bytes.len() as i64)
+            catalog.add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty())
         else {
             summary.failed += 1;
             continue;
         };
-
-        // A catalog row without an edit-stack version is an inconsistent
-        // state we don't want to leave behind — treat failure here as a
-        // hard failure for this file rather than a silently half-imported one.
-        if catalog.add_edit_stack(image_id, &EditStack::empty()).is_err() {
-            summary.failed += 1;
-            continue;
-        }
 
         if let Some(thumb_path) = extract_and_write_thumbnail(&mut raw_image, image_id, thumbnail_dir)
         {

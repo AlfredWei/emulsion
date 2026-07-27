@@ -6,18 +6,9 @@
 //! interactive Develop preview; a real "High quality" export path is later
 //! M1 scope (the Export pipeline slice).
 
+use crate::source_decode::DecodedPreview;
 use rsraw::{RawImage, BIT_DEPTH_8};
 use std::path::Path;
-
-#[derive(Debug)]
-pub struct DecodedPreview {
-    pub width: u32,
-    pub height: u32,
-    /// Interleaved RGB, one byte per channel, straight out of LibRaw's
-    /// 8-bit post-processed output. Not color-managed yet (ADR-0004 owns
-    /// the lcms2 input-profile -> linear-working-space step).
-    pub rgb: Vec<u8>,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {

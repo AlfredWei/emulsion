@@ -16,7 +16,7 @@
 //! regression, just not solved here.
 
 use crate::catalog::Catalog;
-use crate::raw_decode::{self, DecodeError};
+use crate::source_decode::{self, DecodeError};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -39,6 +39,8 @@ pub enum PreviewCacheError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Decode(#[from] DecodeError),
+    #[error("decoded buffer size didn't match its own reported dimensions")]
+    BufferMismatch,
     #[error("image processing failed: {0}")]
     Image(#[from] image::ImageError),
 }
@@ -59,7 +61,7 @@ fn capped_dimensions(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
 /// key. One extra full-file read on a cache hit (negligible: RAW files
 /// are tens of MB, and the OS page cache makes a second read near-free
 /// right after the first) — not worth restructuring
-/// `raw_decode::decode_develop_preview` to accept pre-read bytes just to
+/// `source_decode::decode_develop_preview` to accept pre-read bytes just to
 /// avoid it.
 pub fn ensure_develop_preview(
     source_path: &Path,
@@ -95,12 +97,9 @@ pub fn ensure_develop_preview_for_hash(
 
     std::fs::create_dir_all(previews_dir)?;
 
-    let decoded = raw_decode::decode_develop_preview(source_path)?;
-    let source = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb).ok_or_else(|| {
-        PreviewCacheError::Decode(DecodeError::LibRaw(
-            "decoded RGB buffer size didn't match its own reported dimensions".to_string(),
-        ))
-    })?;
+    let decoded = source_decode::decode_develop_preview(source_path)?;
+    let source = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
+        .ok_or(PreviewCacheError::BufferMismatch)?;
 
     let (target_w, target_h) =
         capped_dimensions(source.width(), source.height(), DEVELOP_PREVIEW_MAX_DIMENSION);

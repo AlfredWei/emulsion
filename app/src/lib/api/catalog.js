@@ -14,6 +14,17 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {string} color_label
  * @property {string} added_at
  * @property {string | null} content_hash
+ * @property {string | null} camera_make
+ * @property {string | null} camera_model
+ * @property {string | null} lens_model
+ * @property {number | null} iso
+ * @property {number | null} aperture
+ * @property {number | null} shutter_speed
+ * @property {number | null} focal_length
+ * @property {string | null} captured_at
+ * @property {string | null} caption
+ * @property {string | null} copyright
+ * @property {string | null} contact
  */
 
 /**
@@ -56,4 +67,18 @@ export function setFlag(/** @type {number} */ versionId, /** @type {string} */ f
 
 export function setColorLabel(/** @type {number} */ versionId, /** @type {string} */ colorLabel) {
   return invoke("set_color_label", { versionId, colorLabel });
+}
+
+/** IPTC (M2 Slice 2). `caption` is per-version; `copyright`/`contact` are
+ * per-image -- see catalog.rs's ImageSummary doc comment for why. */
+export function setCaption(/** @type {number} */ versionId, /** @type {string} */ caption) {
+  return invoke("set_caption", { versionId, caption });
+}
+
+export function setCopyright(/** @type {number} */ imageId, /** @type {string} */ copyright) {
+  return invoke("set_copyright", { imageId, copyright });
+}
+
+export function setContact(/** @type {number} */ imageId, /** @type {string} */ contact) {
+  return invoke("set_contact", { imageId, contact });
 }

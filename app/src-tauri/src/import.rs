@@ -12,6 +12,7 @@
 //! see `generate_missing_thumbnails`.
 
 use crate::catalog::{Catalog, EditStack};
+use crate::metadata;
 use crate::source_decode::{self, ImageFormat};
 use rsraw::RawImage;
 use serde::{Deserialize, Serialize};
@@ -119,13 +120,20 @@ pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) 
                     continue;
                 };
 
-                // Atomic (M1 Slice 6): both rows in one transaction, so a
-                // crash between them can't leave a permanently-orphaned row.
+                // M2 Slice 2: free to call here -- RawImage::open() already
+                // populated the header fields this reads, no unpack()/
+                // process() needed (confirmed against rsraw's own source).
+                let file_metadata = metadata::extract_from_raw(&raw_image);
+
+                // Atomic (M1 Slice 6): both rows (+ metadata, M2 Slice 2)
+                // in one transaction, so a crash partway through can't
+                // leave a permanently-orphaned or inconsistently-tagged row.
                 let Ok(image_id) = catalog.add_image_with_edit_stack(
                     &path_str,
                     &hash,
                     bytes.len() as i64,
                     &EditStack::empty(),
+                    &file_metadata,
                 ) else {
                     summary.failed += 1;
                     continue;
@@ -143,6 +151,12 @@ pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) 
                     continue;
                 }
 
+                // M2 Slice 2: a fresh EXIF read, deliberately not shared
+                // with jpeg_decode.rs's orientation read -- that one only
+                // happens later, during the background thumbnail pass, not
+                // here at import time.
+                let file_metadata = metadata::extract_from_jpeg(&bytes);
+
                 // thumbnail_path stays NULL here -- generate_missing_thumbnails
                 // fills it in on a background pass. A full JPEG decode is
                 // categorically heavier than RAW's cheap embedded-thumb
@@ -150,7 +164,7 @@ pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) 
                 // inside this loop would visibly slow a JPEG-heavy import
                 // with zero progress feedback, unlike RAW's import path today.
                 if catalog
-                    .add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty())
+                    .add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty(), &file_metadata)
                     .is_err()
                 {
                     summary.failed += 1;

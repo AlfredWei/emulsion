@@ -7,6 +7,7 @@
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
   import ExportDialog from "$lib/components/ExportDialog.svelte";
+  import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import {
     importFolder,
     importFiles,
@@ -15,6 +16,9 @@
     setRating,
     setFlag,
     setColorLabel,
+    setCaption,
+    setCopyright,
+    setContact,
   } from "$lib/api/catalog.js";
   import { getEditStack, setEditStack, opValue, upsertOp } from "$lib/api/develop.js";
 
@@ -57,6 +61,12 @@
   // flight, and callers need to be able to wait for *that* too, not just
   // "is a timer currently pending".
   let pendingSave = /** @type {Promise<void> | null} */ (null);
+
+  // M2 Slice 2: same shape as pendingSave above, but for the IPTC fields'
+  // save-on-blur writes -- tracked separately since it's a different
+  // in-flight write than the Develop edit stack's, and the close handler
+  // below needs to wait on whichever (or both) are actually pending.
+  let pendingIptcSave = /** @type {Promise<void> | null} */ (null);
 
   // M1 Slice 6: this used to NOT return setEditStack's promise, so every
   // `await flushEditStack()` call site (switchModule, openDevelop, Export)
@@ -144,6 +154,32 @@
     await setColorLabel(versionId, colorLabel);
   }
 
+  // M2 Slice 2: IPTC fields save on blur (MetadataPanel), not debounced --
+  // each is a single discrete edit rather than a slider drag, so there's no
+  // flood of writes to coalesce. Still tracked via pendingIptcSave so the
+  // close handler can wait for an in-flight write the same way it already
+  // does for the Develop edit stack.
+  function handleCaptionChange(/** @type {number} */ versionId, /** @type {string} */ caption) {
+    patchLocal(versionId, { caption });
+    pendingIptcSave = setCaption(versionId, caption).finally(() => {
+      pendingIptcSave = null;
+    });
+  }
+
+  function handleCopyrightChange(/** @type {number} */ imageId, /** @type {string} */ copyright) {
+    images = images.map((img) => (img.image_id === imageId ? { ...img, copyright } : img));
+    pendingIptcSave = setCopyright(imageId, copyright).finally(() => {
+      pendingIptcSave = null;
+    });
+  }
+
+  function handleContactChange(/** @type {number} */ imageId, /** @type {string} */ contact) {
+    images = images.map((img) => (img.image_id === imageId ? { ...img, contact } : img));
+    pendingIptcSave = setContact(imageId, contact).finally(() => {
+      pendingIptcSave = null;
+    });
+  }
+
   async function openDevelop(/** @type {number} */ versionId) {
     flushEditStack();
     const image = images.find((img) => img.version_id === versionId);
@@ -189,9 +225,15 @@
     let unlistenClose = /** @type {(() => void) | undefined} */ (undefined);
     getCurrentWindow()
       .onCloseRequested(async (event) => {
-        if (persistTimer === null && pendingSave === null) return;
+        // M2 Slice 2: an IPTC field saves on blur, so a value typed but not
+        // yet blurred (e.g. the user clicks the window's close button while
+        // still focused in the Caption textarea) needs to be forced to save
+        // before the pending-work check below -- otherwise it's silently
+        // lost, the same class of bug fixed for the Develop edit stack.
+        /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
+        if (persistTimer === null && pendingSave === null && pendingIptcSave === null) return;
         event.preventDefault();
-        await flushEditStack();
+        await Promise.all([flushEditStack(), pendingIptcSave ?? Promise.resolve()]);
         await getCurrentWindow().destroy();
       })
       .then((fn) => {
@@ -259,6 +301,15 @@
           onColorLabelChange={handleColorLabelChange}
         />
       {/if}
+
+      <MetadataPanel
+        image={selectedImage}
+        onCaptionChange={(caption) => selectedId !== null && handleCaptionChange(selectedId, caption)}
+        onCopyrightChange={(copyright) =>
+          selectedImage && handleCopyrightChange(selectedImage.image_id, copyright)}
+        onContactChange={(contact) =>
+          selectedImage && handleContactChange(selectedImage.image_id, contact)}
+      />
     </div>
   {:else if developImagePath}
     <div class="develop-body">

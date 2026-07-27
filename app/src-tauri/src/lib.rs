@@ -2,6 +2,7 @@ mod catalog;
 mod export;
 mod import;
 mod jpeg_decode;
+mod metadata;
 mod preview_cache;
 mod raw_decode;
 mod source_decode;
@@ -157,6 +158,29 @@ fn set_color_label(
         .map_err(|e| e.to_string())
 }
 
+/// IPTC (M2 Slice 2). Persist directly to the catalog, never touch the
+/// source file -- satisfies PRD's "never modify originals" constraint
+/// with no IPTC-*writing* library needed at all. `caption` is per-version
+/// (image_versions), `copyright`/`contact` are per-image (images) -- see
+/// ImageSummary's doc comment in catalog.rs for why that split exists.
+#[tauri::command]
+fn set_caption(state: State<'_, AppState>, version_id: i64, caption: String) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_caption(version_id, &caption).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_copyright(state: State<'_, AppState>, image_id: i64, copyright: String) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_copyright(image_id, &copyright).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_contact(state: State<'_, AppState>, image_id: i64, contact: String) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_contact(image_id, &contact).map_err(|e| e.to_string())
+}
+
 /// Develop preview (M1 Slice 3, cache-aware since M1 Slice 4 — see
 /// preview_cache.rs). Decode-only concern -- doesn't touch the catalog,
 /// matching how raw_decode.rs/import.rs are already decoupled from
@@ -278,6 +302,9 @@ pub fn run() {
             set_rating,
             set_flag,
             set_color_label,
+            set_caption,
+            set_copyright,
+            set_contact,
             get_develop_preview,
             get_edit_stack,
             set_edit_stack,

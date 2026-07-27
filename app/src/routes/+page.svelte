@@ -93,6 +93,35 @@
     images = await listImages();
   }
 
+  // Thumbnail generation for a freshly-imported JPEG (and the RAW backstop
+  // path) runs as a fire-and-forget background pass on the Rust side (see
+  // import.rs's generate_missing_thumbnails) -- it is NOT part of the
+  // import command's own response, so the one-shot refresh() right after
+  // import can only ever show the pre-generation state (thumbnail_path:
+  // NULL). Nothing else ever tells this component to look again, so
+  // without this, a just-imported photo's grid cell stays a blank
+  // placeholder for the rest of the session, even once the backend has
+  // long since finished. Bounded polling (not an open-ended interval) so a
+  // permanently-stuck thumbnail (a real decode failure) doesn't poll
+  // forever -- it just stops trying and leaves the placeholder, which is
+  // the correct outcome in that case.
+  let pollingThumbnails = false;
+  async function pollUntilThumbnailsReady() {
+    if (pollingThumbnails) return;
+    pollingThumbnails = true;
+    try {
+      const maxAttempts = 10;
+      const intervalMs = 1500;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (!images.some((img) => img.thumbnail_path === null)) return;
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        await refresh();
+      }
+    } finally {
+      pollingThumbnails = false;
+    }
+  }
+
   /** @type {string[] | null} */
   let supportedExtensions = $state(null);
 
@@ -104,6 +133,7 @@
       if (!summary) return; // user cancelled the dialog
       statusMessage = `Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`;
       await refresh();
+      pollUntilThumbnailsReady();
     } catch (/** @type {any} */ e) {
       statusMessage = `Import failed: ${e}`;
     } finally {
@@ -210,7 +240,11 @@
   }
 
   onMount(() => {
-    refresh();
+    // Also covers the startup catch-up pass (preview_cache::pregenerate_missing
+    // / import::generate_missing_thumbnails, both run once in lib.rs's
+    // .setup()): this refresh() races against that pass the same way an
+    // import's own refresh() races against its own background trigger.
+    refresh().then(pollUntilThumbnailsReady);
 
     // M1 Slice 6 (crash-safety): flush a pending debounced edit before the
     // window actually closes, so quitting right after a slider drag can't

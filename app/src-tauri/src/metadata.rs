@@ -46,7 +46,19 @@ pub fn extract_from_raw(image: &RawImage) -> ImageMetadata {
         aperture: (image.aperture() > 0.0).then_some(image.aperture()),
         shutter_speed: (image.shutter() > 0.0).then_some(image.shutter()),
         focal_length: (image.focal_len() > 0.0).then_some(image.focal_len()),
-        captured_at: image.datetime().map(|dt| dt.to_rfc3339()),
+        // Same zero-means-missing guard as the fields above: LibRaw stores
+        // "no timestamp" as 0, and rsraw's datetime() happily converts that
+        // into the Unix epoch rather than None -- without this filter, a
+        // file with no capture timestamp gets cataloged as shot on
+        // 1970-01-01, a real bogus value a user would see. Found via CI:
+        // the vcpkg-LibRaw build on Windows returns 0 for this field on
+        // the test sample (see the test below), which is exactly the
+        // no-timestamp shape any platform could produce for a file that
+        // genuinely lacks EXIF DateTimeOriginal.
+        captured_at: image
+            .datetime()
+            .filter(|dt| dt.timestamp() != 0)
+            .map(|dt| dt.to_rfc3339()),
     }
 }
 
@@ -154,6 +166,15 @@ mod tests {
     /// accepts either the known-missing value or the correct one) rather
     /// than silently skipped, so a regression that also breaks
     /// `camera_make`/`camera_model` on Windows still fails this test.
+    ///
+    /// Bonus real bug this CI failure exposed in *production* code, not
+    /// just the test: the missing timestamp arrives from LibRaw as 0, and
+    /// `rsraw::datetime()` converts 0 into the Unix epoch rather than None
+    /// -- so `extract_from_raw` was returning `Some("1970-01-01T...")` for
+    /// a file with no capture timestamp, a bogus value a real user would
+    /// have seen in the metadata panel. Fixed with the same
+    /// zero-means-missing guard every other `other`-struct field already
+    /// had (see `extract_from_raw`).
     #[test]
     fn extracts_real_metadata_from_a_real_raw_file() {
         let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else {

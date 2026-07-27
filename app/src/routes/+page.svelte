@@ -9,6 +9,8 @@
   import ExportDialog from "$lib/components/ExportDialog.svelte";
   import {
     importFolder,
+    importFiles,
+    getSupportedExtensions,
     listImages,
     setRating,
     setFlag,
@@ -81,14 +83,15 @@
     images = await listImages();
   }
 
-  async function handleImport() {
-    const dir = await open({ directory: true, multiple: false });
-    if (!dir) return;
+  /** @type {string[] | null} */
+  let supportedExtensions = $state(null);
 
+  async function runImport(/** @type {() => Promise<import('$lib/api/catalog.js').ImportSummary | null>} */ doImport) {
     importing = true;
     statusMessage = "";
     try {
-      const summary = await importFolder(/** @type {string} */ (dir));
+      const summary = await doImport();
+      if (!summary) return; // user cancelled the dialog
       statusMessage = `Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`;
       await refresh();
     } catch (/** @type {any} */ e) {
@@ -96,6 +99,27 @@
     } finally {
       importing = false;
     }
+  }
+
+  function handleImportFolder() {
+    return runImport(async () => {
+      const dir = await open({ directory: true, multiple: false });
+      return dir ? importFolder(/** @type {string} */ (dir)) : null;
+    });
+  }
+
+  async function handleImportFiles() {
+    // M2 Slice 1: a separate entry point from folder import -- Tauri's
+    // dialog plugin has independent `directory`/`multiple` flags, no mode
+    // that lets one native dialog pick either files or a folder.
+    if (!supportedExtensions) supportedExtensions = await getSupportedExtensions();
+    return runImport(async () => {
+      const paths = await open({
+        multiple: true,
+        filters: [{ name: "Photos", extensions: /** @type {string[]} */ (supportedExtensions) }],
+      });
+      return paths ? importFiles(/** @type {string[]} */ (paths)) : null;
+    });
   }
 
   // Optimistic local update (UX-DESIGN.md §5) so culling feels instant --
@@ -192,8 +216,11 @@
     <button class="export-btn" onclick={handleExportClick} disabled={!currentExportItem}>
       Export…
     </button>
-    <button class="import-btn" onclick={handleImport} disabled={importing}>
-      {importing ? "Importing…" : "Import…"}
+    <button class="import-btn secondary" onclick={handleImportFiles} disabled={importing}>
+      {importing ? "Importing…" : "Import Files…"}
+    </button>
+    <button class="import-btn" onclick={handleImportFolder} disabled={importing}>
+      {importing ? "Importing…" : "Import Folder…"}
     </button>
   </div>
 
@@ -216,7 +243,10 @@
       {#if images.length === 0}
         <div class="empty">
           <p>No photos yet.</p>
-          <button onclick={handleImport} disabled={importing}>Import a folder…</button>
+          <div class="empty-actions">
+            <button onclick={handleImportFolder} disabled={importing}>Import a folder…</button>
+            <button class="secondary" onclick={handleImportFiles} disabled={importing}>Import files…</button>
+          </div>
         </div>
       {:else}
         <LibraryGrid
@@ -302,6 +332,11 @@
     opacity: 0.6;
     cursor: default;
   }
+  .import-btn.secondary {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+  }
   .export-btn {
     all: unset;
     cursor: pointer;
@@ -375,6 +410,10 @@
     gap: 12px;
     color: var(--text-secondary);
   }
+  .empty-actions {
+    display: flex;
+    gap: 8px;
+  }
   .empty button {
     all: unset;
     cursor: pointer;
@@ -385,6 +424,11 @@
     background: var(--accent-soft);
     color: var(--accent-strong);
     border: 1px solid var(--accent);
+  }
+  .empty button.secondary {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
   }
   .placeholder {
     flex: 1;

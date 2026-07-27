@@ -28,6 +28,19 @@ export function importFolder(/** @type {string} */ path) {
   return invoke("import_folder", { path });
 }
 
+/** Multi-file import (M2 Slice 1) -- the picker-dialog alternative to
+ * importFolder's whole-directory walk. @returns {Promise<ImportSummary>} */
+export function importFiles(/** @type {string[]} */ paths) {
+  return invoke("import_files", { paths });
+}
+
+/** Backs the "Import Files…" dialog's filter list -- read at runtime
+ * instead of hand-duplicating the supported-extension list into JS.
+ * @returns {Promise<string[]>} */
+export function getSupportedExtensions() {
+  return invoke("get_supported_extensions");
+}
+
 /** @returns {Promise<ImageSummary[]>} */
 export function listImages() {
   return invoke("list_images");

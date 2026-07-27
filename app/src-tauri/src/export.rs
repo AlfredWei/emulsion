@@ -11,13 +11,15 @@
 //! against the same hand-derived expected values, same tolerance the
 //! shader's own numeric test already uses.
 //!
-//! Scope cut for this pass (see the plan): JPEG only, single image only
-//! (no multi-select UI in Library yet), long-edge-or-original resize, one
-//! quality setting, no color management (none exists in this pipeline
-//! yet -- see raw_decode.rs), no live progress stream.
+//! Scope cut for this pass (see the plan): JPEG output only, single image
+//! only (no multi-select UI in Library yet), long-edge-or-original resize,
+//! one quality setting, no color management (none exists in this pipeline
+//! yet -- see raw_decode.rs), no live progress stream. Source format is
+//! not restricted -- source_decode.rs dispatches RAW or JPEG sources alike
+//! (M2 Slice 1).
 
 use crate::catalog::EditStack;
-use crate::raw_decode::{self, DecodeError};
+use crate::source_decode::{self, DecodeError};
 use image::codecs::jpeg::JpegEncoder;
 use image::RgbImage;
 use serde::{Deserialize, Serialize};
@@ -121,7 +123,7 @@ pub fn export_one(
     stack: &EditStack,
     options: &ExportOptions,
 ) -> Result<PathBuf, ExportError> {
-    let decoded = raw_decode::decode_preview(source_path)?;
+    let decoded = source_decode::decode_preview(source_path)?;
     let mut image = RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
         .ok_or(ExportError::BufferMismatch)?;
 

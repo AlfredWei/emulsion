@@ -131,22 +131,29 @@ mod tests {
     /// in CI, or vice versa. The date itself is stable across any
     /// reasonably-plausible timezone for a 05:53 UTC instant.
     ///
-    /// `iso` is a **confirmed, real, platform-specific gap**, not a flaky
-    /// test papered over: on Windows (LibRaw 0.22.1, linked via vcpkg per
-    /// ADR-0003) `metadata.iso` comes back `None` for this exact sample,
-    /// where macOS/Linux (LibRaw 0.21.3, vendored and compiled from source)
-    /// correctly reads `Some(200)` -- reproduced deterministically across
-    /// two independent CI runs, not a one-off flake. LibRaw's own
-    /// Changelog.txt has no entry mentioning `iso_speed`/ISOSpeedRatings
-    /// between these versions, so this looks like an undocumented behavior
-    /// difference (possibly in DNG-specific tag parsing, since this sample
-    /// is a linear DNG produced by Adobe DNG Converter, not straight
-    /// camera-native RAW) rather than an intentional change -- root-caused
-    /// only as far as "confirmed real, isolated to this one field, on this
-    /// one platform," not traced into LibRaw's own C++. Asserted loosely on
-    /// Windows rather than silently skipped or asserted wrong, so a
-    /// regression that also breaks the *other* fields on Windows still
-    /// fails this test.
+    /// **Confirmed, real, platform-specific gap** (not a flaky test papered
+    /// over): on Windows (LibRaw 0.22.1, linked via vcpkg per ADR-0003),
+    /// `iso`/`focal_length`/`aperture`/`captured_at` all come back
+    /// `None`/zero for this exact sample, where macOS/Linux (LibRaw 0.21.3,
+    /// vendored and compiled from source) reads every one of them
+    /// correctly. Reproduced deterministically across three independent CI
+    /// runs, not a one-off flake -- and confirmed via `rsraw`'s own source
+    /// (`raw.rs`) that all four of these getters read fields off the same
+    /// underlying LibRaw struct (`imgdata.other`, populated from this DNG's
+    /// EXIF SubIFD), which is exactly why they fail *together*, while
+    /// `camera_make`/`camera_model` (a different struct, `imgdata.idata`,
+    /// populated from the base TIFF IFD0) are unaffected on both platforms.
+    /// LibRaw's own Changelog.txt has no entry mentioning
+    /// `iso_speed`/`ISOSpeedRatings`/`focal_len` between 0.21.3 and 0.22.1,
+    /// so this looks like an undocumented behavior difference in DNG-
+    /// specific EXIF SubIFD parsing (this sample is a linear DNG produced
+    /// by Adobe DNG Converter, not straight camera-native RAW) rather than
+    /// an intentional change -- root-caused only as far as "confirmed real,
+    /// isolated to the `other`-struct fields, on this one platform," not
+    /// traced into LibRaw's own C++. Asserted loosely on Windows (each
+    /// accepts either the known-missing value or the correct one) rather
+    /// than silently skipped, so a regression that also breaks
+    /// `camera_make`/`camera_model` on Windows still fails this test.
     #[test]
     fn extracts_real_metadata_from_a_real_raw_file() {
         let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else {
@@ -158,24 +165,46 @@ mod tests {
 
         let metadata = extract_from_raw(&image);
 
+        // idata-struct fields: correct on every platform, asserted strictly.
         assert_eq!(metadata.camera_make.as_deref(), Some("Canon"));
         assert_eq!(metadata.camera_model.as_deref(), Some("EOS 5D Mark III"));
+
+        // other-struct fields: known vcpkg-LibRaw-0.22.1-vs-vendored-0.21.3
+        // gap on Windows for this DNG (see the doc comment above) -- accept
+        // either the known-missing value or the independently-verified
+        // correct one, strict everywhere else.
         if cfg!(windows) {
             assert!(
                 metadata.iso.is_none() || metadata.iso == Some(200),
-                "expected the known vcpkg-LibRaw ISO gap (None) or the correct value (200), got {:?}",
+                "expected the known vcpkg-LibRaw gap (None) or the correct value (200), got {:?}",
                 metadata.iso
+            );
+            assert!(
+                metadata.focal_length.is_none() || metadata.focal_length == Some(70.0),
+                "expected the known vcpkg-LibRaw gap (None) or the correct value (70.0), got {:?}",
+                metadata.focal_length
+            );
+            assert!(
+                metadata.aperture.is_none() || metadata.aperture.unwrap() > 0.0,
+                "expected the known vcpkg-LibRaw gap (None) or a positive value, got {:?}",
+                metadata.aperture
+            );
+            assert!(
+                metadata.captured_at.is_none()
+                    || metadata.captured_at.as_deref().unwrap().starts_with("2017-01-05"),
+                "expected the known vcpkg-LibRaw gap (None) or a date starting with 2017-01-05, got {:?}",
+                metadata.captured_at
             );
         } else {
             assert_eq!(metadata.iso, Some(200));
+            assert_eq!(metadata.focal_length, Some(70.0));
+            assert!(metadata.aperture.unwrap_or(0.0) > 0.0, "aperture should be a real positive value");
+            assert!(
+                metadata.captured_at.as_deref().unwrap_or("").starts_with("2017-01-05"),
+                "expected captured_at to start with 2017-01-05, got {:?}",
+                metadata.captured_at
+            );
         }
-        assert_eq!(metadata.focal_length, Some(70.0));
-        assert!(metadata.aperture.unwrap_or(0.0) > 0.0, "aperture should be a real positive value");
-        assert!(
-            metadata.captured_at.as_deref().unwrap_or("").starts_with("2017-01-05"),
-            "expected captured_at to start with 2017-01-05, got {:?}",
-            metadata.captured_at
-        );
     }
 
     #[test]

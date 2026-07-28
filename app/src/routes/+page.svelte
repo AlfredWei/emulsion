@@ -184,19 +184,35 @@
     images = images.map((img) => (img.version_id === versionId ? { ...img, ...patch } : img));
   }
 
+  // Batch rate/flag/color-label (MILESTONES.md M2 scope, deferred from
+  // Slice 3's multi-select work): Lightroom-style -- acting on a cell that
+  // is part of an active multi-selection applies to the whole selection,
+  // not just that one cell. Acting on a cell OUTSIDE the current
+  // selection (or when only one image is selected) stays single-target,
+  // unaffected by an unrelated selection elsewhere -- matches the mental
+  // model that the star/flag/color-dot buttons are just this practice's
+  // culling controls, only shown in a bulk light when your selection
+  // literally includes the cell you clicked.
+  function targetVersionIds(/** @type {number} */ versionId) {
+    return selectedIds.size > 1 && selectedIds.has(versionId) ? [...selectedIds] : [versionId];
+  }
+
   async function handleRatingChange(/** @type {number} */ versionId, /** @type {number} */ rating) {
-    patchLocal(versionId, { rating });
-    await setRating(versionId, rating);
+    const targets = targetVersionIds(versionId);
+    for (const id of targets) patchLocal(id, { rating });
+    await Promise.all(targets.map((id) => setRating(id, rating)));
   }
 
   async function handleFlagChange(/** @type {number} */ versionId, /** @type {string} */ flag) {
-    patchLocal(versionId, { flag });
-    await setFlag(versionId, flag);
+    const targets = targetVersionIds(versionId);
+    for (const id of targets) patchLocal(id, { flag });
+    await Promise.all(targets.map((id) => setFlag(id, flag)));
   }
 
   async function handleColorLabelChange(/** @type {number} */ versionId, /** @type {string} */ colorLabel) {
-    patchLocal(versionId, { color_label: colorLabel });
-    await setColorLabel(versionId, colorLabel);
+    const targets = targetVersionIds(versionId);
+    for (const id of targets) patchLocal(id, { color_label: colorLabel });
+    await Promise.all(targets.map((id) => setColorLabel(id, colorLabel)));
   }
 
   // Multi-select click semantics (M2 Slice 3), standard file-manager

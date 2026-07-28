@@ -127,3 +127,82 @@ export function getImageKeywords(/** @type {number} */ imageId) {
 export function listKeywords() {
   return invoke("list_keywords");
 }
+
+/**
+ * @typedef {Object} ImageKeywordAssignment
+ * @property {number} image_id
+ * @property {number} keyword_id
+ */
+
+/** Backs Smart Collections' "has keyword"/"untagged" rules -- fetched
+ * once, flat, independent of listImages(). @returns {Promise<ImageKeywordAssignment[]>} */
+export function listAllImageKeywords() {
+  return invoke("list_all_image_keywords");
+}
+
+/**
+ * A Smart Collection rule, opaque to the backend (M2 Slice 5) -- evaluated
+ * entirely client-side, see collectionRules.js.
+ * @typedef {Object} CollectionRule
+ * @property {"rating" | "flag" | "color_label" | "keyword"} field
+ * @property {">=" | "<=" | "==" | "has" | "empty"} op
+ * @property {number | string} [value] -- omitted for op "empty"
+ */
+
+/**
+ * @typedef {Object} CollectionSummary
+ * @property {number} id
+ * @property {string} name
+ * @property {boolean} is_smart
+ * @property {CollectionRule[] | null} rules
+ * @property {number | null} count -- real count for manual, null for smart
+ *   (the frontend computes a smart collection's real count client-side)
+ */
+
+/** Bare rail "+" with no selection. @returns {Promise<number>} the new collection id */
+export function createCollection(/** @type {string} */ name) {
+  return invoke("create_collection", { name });
+}
+
+/** "Add to Collection… -> New Collection…" from a multi-selection -- one
+ * atomic create-then-populate call, not two, so a failure can't leave an
+ * orphaned empty collection. @returns {Promise<number>} the new collection id */
+export function createCollectionWithImages(/** @type {string} */ name, /** @type {number[]} */ imageIds) {
+  return invoke("create_collection_with_images", { name, imageIds });
+}
+
+/** @returns {Promise<number>} the new collection id */
+export function createSmartCollection(/** @type {string} */ name, /** @type {CollectionRule[]} */ rules) {
+  return invoke("create_smart_collection", { name, rules });
+}
+
+export function updateSmartCollectionRules(
+  /** @type {number} */ collectionId,
+  /** @type {CollectionRule[]} */ rules,
+) {
+  return invoke("update_smart_collection_rules", { collectionId, rules });
+}
+
+export function deleteCollection(/** @type {number} */ collectionId) {
+  return invoke("delete_collection", { collectionId });
+}
+
+export function addImagesToCollection(/** @type {number} */ collectionId, /** @type {number[]} */ imageIds) {
+  return invoke("add_images_to_collection", { collectionId, imageIds });
+}
+
+export function removeImagesFromCollection(/** @type {number} */ collectionId, /** @type {number[]} */ imageIds) {
+  return invoke("remove_images_from_collection", { collectionId, imageIds });
+}
+
+/** @returns {Promise<CollectionSummary[]>} */
+export function listCollections() {
+  return invoke("list_collections");
+}
+
+/** A manual collection's membership -- meaningless for a smart collection
+ * (always empty; smart membership is computed client-side).
+ * @returns {Promise<number[]>} */
+export function listCollectionImageIds(/** @type {number} */ collectionId) {
+  return invoke("list_collection_image_ids", { collectionId });
+}

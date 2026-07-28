@@ -7,7 +7,9 @@ mod preview_cache;
 mod raw_decode;
 mod source_decode;
 
-use catalog::{Catalog, EditStack, ImageSummary, KeywordNode, KeywordRef};
+use catalog::{
+    Catalog, CollectionSummary, EditStack, ImageKeywordAssignment, ImageSummary, KeywordNode, KeywordRef,
+};
 use export::{ExportOptions, ExportResult};
 use import::ImportSummary;
 use preview_cache::DevelopPreviewInfo;
@@ -275,6 +277,96 @@ fn list_keywords(state: State<'_, AppState>) -> Result<Vec<KeywordNode>, String>
     catalog.list_keywords().map_err(|e| e.to_string())
 }
 
+/// Collections (M2 Slice 5). Backs Smart Collections' "has keyword" /
+/// "untagged" rules -- fetched once, flat, independent of `list_images()`.
+#[tauri::command]
+fn list_all_image_keywords(state: State<'_, AppState>) -> Result<Vec<ImageKeywordAssignment>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.list_all_image_keywords().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_collection(state: State<'_, AppState>, name: String) -> Result<i64, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.create_collection(&name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_collection_with_images(
+    state: State<'_, AppState>,
+    name: String,
+    image_ids: Vec<i64>,
+) -> Result<i64, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .create_collection_with_images(&name, &image_ids)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_smart_collection(
+    state: State<'_, AppState>,
+    name: String,
+    rules: Vec<serde_json::Value>,
+) -> Result<i64, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.create_smart_collection(&name, &rules).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_smart_collection_rules(
+    state: State<'_, AppState>,
+    collection_id: i64,
+    rules: Vec<serde_json::Value>,
+) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .update_smart_collection_rules(collection_id, &rules)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_collection(state: State<'_, AppState>, collection_id: i64) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.delete_collection(collection_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_images_to_collection(
+    state: State<'_, AppState>,
+    collection_id: i64,
+    image_ids: Vec<i64>,
+) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .add_images_to_collection(collection_id, &image_ids)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn remove_images_from_collection(
+    state: State<'_, AppState>,
+    collection_id: i64,
+    image_ids: Vec<i64>,
+) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .remove_images_from_collection(collection_id, &image_ids)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_collections(state: State<'_, AppState>) -> Result<Vec<CollectionSummary>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.list_collections().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_collection_image_ids(state: State<'_, AppState>, collection_id: i64) -> Result<Vec<i64>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.list_collection_image_ids(collection_id).map_err(|e| e.to_string())
+}
+
 /// Develop preview (M1 Slice 3, cache-aware since M1 Slice 4 — see
 /// preview_cache.rs). Decode-only concern -- doesn't touch the catalog,
 /// matching how raw_decode.rs/import.rs are already decoupled from
@@ -404,6 +496,16 @@ pub fn run() {
             remove_keyword_from_image,
             get_image_keywords,
             list_keywords,
+            list_all_image_keywords,
+            create_collection,
+            create_collection_with_images,
+            create_smart_collection,
+            update_smart_collection_rules,
+            delete_collection,
+            add_images_to_collection,
+            remove_images_from_collection,
+            list_collections,
+            list_collection_image_ids,
             get_develop_preview,
             get_edit_stack,
             set_edit_stack,

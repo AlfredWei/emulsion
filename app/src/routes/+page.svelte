@@ -11,6 +11,7 @@
   import TextPromptDialog from "$lib/components/TextPromptDialog.svelte";
   import SmartCollectionDialog from "$lib/components/SmartCollectionDialog.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
+  import Filmstrip from "$lib/components/Filmstrip.svelte";
   import {
     importFolder,
     importFiles,
@@ -34,7 +35,7 @@
     listCollections,
     listCollectionImageIds,
   } from "$lib/api/catalog.js";
-  import { getEditStack, setEditStack, opValue, upsertOp } from "$lib/api/develop.js";
+  import { getEditStack, setEditStack, regenerateThumbnail, opValue, upsertOp } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
@@ -94,6 +95,20 @@
   });
 
   let activeCollection = $derived(collections.find((c) => c.id === activeCollectionId) ?? null);
+
+  // The Filmstrip (persistent across both modules, docs/ux/UX-DESIGN.md
+  // §2/§4) shows the same `filteredImages` set in Develop as in Library --
+  // that's the whole point ("context is never lost switching between
+  // culling and editing"). But `filteredImages` is driven purely by the
+  // active collection filter, independent of `developVersionId`: if the
+  // open Develop image falls outside that filter (e.g. a filter was
+  // applied or changed after entering Develop), it would otherwise be
+  // invisible in its own filmstrip -- no highlighted cell, or an empty
+  // strip. Falls back to the unfiltered catalog only in that specific
+  // case, otherwise stays consistent with the active filter.
+  let developFilmstripImages = $derived(
+    filteredImages.some((img) => img.version_id === developVersionId) ? filteredImages : images,
+  );
 
   async function selectCollection(/** @type {number | null} */ collectionId) {
     activeCollectionId = collectionId;
@@ -178,6 +193,27 @@
       }
     }
     return pendingSave ?? Promise.resolve();
+  }
+
+  // Thumbnail refresh after a Develop edit -- entirely separate from
+  // pendingSave/pendingIptcSave on purpose. Chaining this onto the same
+  // promise flushEditStack's callers await would silently reintroduce the
+  // exact "app hangs unable to quit" class of bug M1 Slice 6 already fixed
+  // once for the edit-stack flush itself -- a slow/failed thumbnail regen
+  // must never be able to delay a save or block app quit. Never awaited by
+  // any caller. Only called from real "done editing this image for now"
+  // transitions (leaving Develop, exporting, closing) -- not from the bare
+  // 250ms debounce settle inside flushEditStack, since a cache-hit reuse
+  // of the Develop preview is still a real decode+edit+resize+encode, not
+  // free, and a user still actively dragging a slider would otherwise
+  // trigger a regen immediately superseded by the next tick.
+  function regenerateThumbnailFor(/** @type {number | null} */ versionId) {
+    if (versionId === null) return;
+    regenerateThumbnail(versionId)
+      .then((path) => {
+        if (path) patchLocal(versionId, { thumbnail_path: path });
+      })
+      .catch(() => {}); // best-effort; a stale grid thumbnail isn't worth surfacing an error for
   }
 
   async function refresh() {
@@ -492,7 +528,15 @@
   }
 
   async function openDevelop(/** @type {number} */ versionId) {
+    // Captured before developVersionId is reassigned below -- the same
+    // capture-before-reassignment shape flushEditStack itself already
+    // uses, which is what keeps this race-free even if the user clicks
+    // through several images in quick succession (each flush/regen closes
+    // over the id it actually applies to, not whatever developVersionId
+    // happens to be by the time the async work runs).
+    const previousVersionId = developVersionId;
     flushEditStack();
+    regenerateThumbnailFor(previousVersionId);
     const image = images.find((img) => img.version_id === versionId);
     if (!image) return;
     developVersionId = versionId;
@@ -502,7 +546,10 @@
   }
 
   function switchModule(/** @type {string} */ target) {
-    if (activeModule === "develop" && target !== "develop") flushEditStack();
+    if (activeModule === "develop" && target !== "develop") {
+      flushEditStack();
+      regenerateThumbnailFor(developVersionId);
+    }
     activeModule = target;
   }
 
@@ -516,7 +563,10 @@
     // If a slider was just dragged, the debounced save may not have
     // landed yet -- flush it first so Export reads the value currently
     // on screen, not the last-persisted one.
-    if (activeModule === "develop") flushEditStack();
+    if (activeModule === "develop") {
+      flushEditStack();
+      regenerateThumbnailFor(developVersionId);
+    }
     // null stays the "closed" sentinel -- never open with an empty list.
     exportItems = currentExportItems.length > 0 ? currentExportItems : null;
   }
@@ -551,7 +601,15 @@
         /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
         if (persistTimer === null && pendingSave === null && pendingIptcSave === null) return;
         event.preventDefault();
+        const wasEditPending = persistTimer !== null || pendingSave !== null;
         await Promise.all([flushEditStack(), pendingIptcSave ?? Promise.resolve()]);
+        // Fire-and-forget, deliberately NOT awaited: a thumbnail regen
+        // abandoned by a force-quit mid-encode is a stale-until-next-flush
+        // grid thumbnail, strictly lower stakes than the lost-edit bug M1
+        // Slice 6 actually fixed for the edit-stack flush -- direct
+        // precedent already established for generate_missing_thumbnails.
+        // Blocking app quit on this would be a real regression.
+        if (wasEditPending) regenerateThumbnailFor(developVersionId);
         await getCurrentWindow().destroy();
       })
       .then((fn) => {
@@ -746,6 +804,17 @@
     </div>
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>
+  {/if}
+
+  {#if activeModule === "library"}
+    <Filmstrip images={filteredImages} {selectedIds} onSelect={handleSelect} onOpen={openDevelop} />
+  {:else if activeModule === "develop"}
+    <Filmstrip
+      images={developFilmstripImages}
+      selectedIds={new Set(developVersionId !== null ? [developVersionId] : [])}
+      onSelect={openDevelop}
+      onOpen={openDevelop}
+    />
   {/if}
 </div>
 

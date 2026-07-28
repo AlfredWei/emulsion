@@ -89,3 +89,41 @@ export function setContact(/** @type {number} */ imageId, /** @type {string} */ 
 export function removeImages(/** @type {number[]} */ imageIds) {
   return invoke("remove_images", { imageIds });
 }
+
+/**
+ * @typedef {Object} KeywordRef
+ * @property {number} id
+ * @property {string} name
+ * @property {string} path
+ */
+
+/**
+ * @typedef {Object} KeywordNode
+ * @property {number} id
+ * @property {string} name
+ * @property {number | null} parent_id
+ */
+
+/** Keywording (M2 Slice 4). Resolves (creating any missing level) a
+ * hierarchical keyword path and assigns the leaf to every id in
+ * `imageIds` -- batches across a multi-selection in one call.
+ * @returns {Promise<number>} the leaf keyword id */
+export function assignKeywordPath(/** @type {number[]} */ imageIds, /** @type {string[]} */ path) {
+  return invoke("assign_keyword_path", { imageIds, path });
+}
+
+/** Anchor-only, matching setCaption/setCopyright/setContact's precedent. */
+export function removeKeywordFromImage(/** @type {number} */ imageId, /** @type {number} */ keywordId) {
+  return invoke("remove_keyword_from_image", { imageId, keywordId });
+}
+
+/** @returns {Promise<KeywordRef[]>} */
+export function getImageKeywords(/** @type {number} */ imageId) {
+  return invoke("get_image_keywords", { imageId });
+}
+
+/** Backs the assignment input's autocomplete suggestions.
+ * @returns {Promise<KeywordNode[]>} */
+export function listKeywords() {
+  return invoke("list_keywords");
+}

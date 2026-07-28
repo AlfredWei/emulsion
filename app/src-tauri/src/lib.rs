@@ -181,6 +181,59 @@ fn set_contact(state: State<'_, AppState>, image_id: i64, contact: String) -> Re
     catalog.set_contact(image_id, &contact).map_err(|e| e.to_string())
 }
 
+/// Non-destructive removal (M2 Slice 3): catalog rows plus the app's own
+/// derived files (thumbnail JPEG, content-hash-keyed Develop preview PNG)
+/// -- the user's source file is NEVER touched (hard PRD constraint;
+/// `RemovedImage` doesn't even carry the source path). File cleanup is
+/// best-effort *after* the transaction commits: a failed unlink leaves an
+/// orphaned file (the same accepted-orphan class as preview_cache.rs's
+/// documented non-eviction), never a half-removed catalog row. Preview
+/// deletion by content_hash is safe because import's `find_by_hash` dedupe
+/// guarantees no second row shares a hash. Known, accepted race: a
+/// background thumbnail/preview pass snapshotted before this removal can
+/// re-create a file for a just-removed image -- an orphan on disk, bounded
+/// to the one in-flight pass; rows can't be resurrected (those passes only
+/// UPDATE by image_id, which matches nothing after the DELETE).
+#[tauri::command]
+async fn remove_images(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    image_ids: Vec<i64>,
+) -> Result<(), String> {
+    let catalog = state.catalog.clone();
+    let previews_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("previews");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let removed = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            catalog.remove_images(&image_ids).map_err(|e| e.to_string())?
+        };
+
+        for image in removed {
+            if let Some(thumbnail_path) = image.thumbnail_path {
+                if let Err(e) = std::fs::remove_file(&thumbnail_path) {
+                    eprintln!("thumbnail cleanup failed for {thumbnail_path}: {e}");
+                }
+            }
+            if let Some(content_hash) = image.content_hash {
+                let preview_path = previews_dir.join(format!("{content_hash}.png"));
+                if preview_path.exists() {
+                    if let Err(e) = std::fs::remove_file(&preview_path) {
+                        eprintln!("preview cleanup failed for {}: {e}", preview_path.display());
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Develop preview (M1 Slice 3, cache-aware since M1 Slice 4 — see
 /// preview_cache.rs). Decode-only concern -- doesn't touch the catalog,
 /// matching how raw_decode.rs/import.rs are already decoupled from
@@ -305,6 +358,7 @@ pub fn run() {
             set_caption,
             set_copyright,
             set_contact,
+            remove_images,
             get_develop_preview,
             get_edit_stack,
             set_edit_stack,

@@ -3,12 +3,15 @@
   import { exportImages } from "$lib/api/export.js";
 
   /**
+   * Batch-capable since M2 Slice 3 -- `items` is the whole selection (or
+   * the single Develop image). null = closed; callers guard against
+   * opening with an empty array, so `items` is never [].
    * @type {{
-   *   item: { path: string, version_id: number } | null,
+   *   items: { path: string, version_id: number }[] | null,
    *   onClose: () => void,
    * }}
    */
-  let { item, onClose } = $props();
+  let { items, onClose } = $props();
 
   let destinationDir = $state(/** @type {string | null} */ (null));
   let longEdge = $state("");
@@ -22,21 +25,29 @@
   }
 
   async function handleExport() {
-    if (!item || !destinationDir) return;
+    if (!items || items.length === 0 || !destinationDir) return;
     exporting = true;
     statusMessage = "";
     try {
-      const [result] = await exportImages(
-        [{ path: item.path, version_id: item.version_id }],
+      const results = await exportImages(
+        items.map((item) => ({ path: item.path, version_id: item.version_id })),
         {
           destination_dir: destinationDir,
           long_edge: longEdge.trim() ? Number(longEdge) : null,
           quality,
         },
       );
-      statusMessage = result.error
-        ? `Export failed: ${result.error}`
-        : `Exported to ${result.output_path}`;
+      const failed = results.filter((r) => r.error);
+      if (results.length === 1) {
+        // Keep the single-image message shape people already know.
+        statusMessage = failed.length > 0
+          ? `Export failed: ${failed[0].error}`
+          : `Exported to ${results[0].output_path}`;
+      } else {
+        statusMessage =
+          `Exported ${results.length - failed.length} of ${results.length}` +
+          (failed.length > 0 ? ` — first failure: ${failed[0].error}` : "");
+      }
     } catch (/** @type {any} */ e) {
       statusMessage = `Export failed: ${e}`;
     } finally {
@@ -45,12 +56,12 @@
   }
 </script>
 
-<svelte:window onkeydown={(e) => item && e.key === "Escape" && onClose()} />
+<svelte:window onkeydown={(e) => items && e.key === "Escape" && onClose()} />
 
-{#if item}
+{#if items}
   <div class="overlay">
     <div class="dialog" role="dialog" aria-modal="true" aria-label="Export">
-      <h2>Export</h2>
+      <h2>Export{items.length > 1 ? ` ${items.length} photos` : ""}</h2>
 
       <div class="row">
         <span class="label">Destination</span>

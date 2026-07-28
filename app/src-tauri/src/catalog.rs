@@ -80,6 +80,16 @@ pub struct ImageSummary {
     pub contact: Option<String>,
 }
 
+/// What `remove_images` hands back per deleted row, so the command layer
+/// can clean up the app-owned derived files (thumbnail JPEG, content-hash-
+/// keyed Develop preview PNG) after the transaction commits. Never
+/// includes the source path -- removal must not even be *handed* the means
+/// to touch an original.
+pub struct RemovedImage {
+    pub thumbnail_path: Option<String>,
+    pub content_hash: Option<String>,
+}
+
 impl Catalog {
     /// Test-only: an ephemeral catalog with nothing on disk. Production
     /// code always persists to a real file via `open()` (ADR-0005) — this
@@ -88,8 +98,28 @@ impl Catalog {
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        // Deliberately NOT `harden()`: WAL cannot engage on an in-memory
+        // database (SQLite reports journal_mode "memory"), so harden()'s
+        // debug_assert would panic every debug-build test. The FK pragma
+        // is the part that must match production behavior in tests.
+        Self::enable_foreign_keys(&conn)?;
         Self::migrate(&conn)?;
         Ok(Self { conn })
+    }
+
+    /// M2 Slice 3: SQLite leaves foreign-key enforcement OFF by default,
+    /// per-connection -- so the schema's `ON DELETE CASCADE` on
+    /// `image_versions.image_id` was inert from M1 Slice 1 until this was
+    /// added (a real latent gap found while designing removal, not
+    /// theoretical: a bare `DELETE FROM images` would have silently
+    /// orphaned its `image_versions` rows). `remove_images` below still
+    /// deletes child rows explicitly rather than leaning on CASCADE, so
+    /// removal stays correct even on a connection where this pragma
+    /// somehow didn't take -- this is defense-in-depth, not the load-
+    /// bearing mechanism. Per-connection and validates nothing
+    /// retroactively, so existing catalogs are unaffected by turning it on.
+    fn enable_foreign_keys(conn: &Connection) -> Result<()> {
+        conn.pragma_update(None, "foreign_keys", true)
     }
 
     /// M1 Slice 6 (crash-safety hardening): WAL + `synchronous=NORMAL`.
@@ -121,6 +151,7 @@ impl Catalog {
     pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
         let conn = Connection::open(path)?;
         Self::harden(&conn)?;
+        Self::enable_foreign_keys(&conn)?;
         Self::migrate(&conn)?;
         Ok(Self { conn })
     }
@@ -301,6 +332,56 @@ impl Catalog {
                 |row| row.get(0),
             )
             .optional()
+    }
+
+    /// Non-destructive removal (M2 Slice 3): deletes catalog rows only --
+    /// the user's source file is NEVER touched (hard PRD constraint), and
+    /// the app-owned derived files (thumbnail, cached Develop preview) are
+    /// the *caller's* cleanup concern, which is why each removed image's
+    /// `thumbnail_path`/`content_hash` is returned: file-on-disk concerns
+    /// live in the command layer, not here, matching how thumbnail writes
+    /// already sit outside catalog.rs.
+    ///
+    /// One transaction for the whole batch, child rows deleted explicitly
+    /// before parents -- deliberately NOT relying on `ON DELETE CASCADE`
+    /// even though `enable_foreign_keys` now makes it live (see that
+    /// method's comment). Deleting the `images` row is also what makes the
+    /// file re-importable afterward: `find_by_hash`'s dedupe check stops
+    /// matching -- that's the user-facing meaning of "non-destructive"
+    /// (remove, then change your mind and import again).
+    ///
+    /// Unknown ids are a no-op, not an error: a double-fired removal (or a
+    /// removal racing a refresh) should converge on "row is gone", not
+    /// fail halfway through a batch.
+    pub fn remove_images(&self, image_ids: &[i64]) -> Result<Vec<RemovedImage>> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut removed = Vec::with_capacity(image_ids.len());
+
+        for &image_id in image_ids {
+            let row: Option<RemovedImage> = tx
+                .query_row(
+                    "SELECT thumbnail_path, content_hash FROM images WHERE id = ?1",
+                    params![image_id],
+                    |row| {
+                        Ok(RemovedImage {
+                            thumbnail_path: row.get(0)?,
+                            content_hash: row.get(1)?,
+                        })
+                    },
+                )
+                .optional()?;
+            let Some(row) = row else { continue };
+
+            tx.execute(
+                "DELETE FROM image_versions WHERE image_id = ?1",
+                params![image_id],
+            )?;
+            tx.execute("DELETE FROM images WHERE id = ?1", params![image_id])?;
+            removed.push(row);
+        }
+
+        tx.commit()?;
+        Ok(removed)
     }
 
     pub fn set_thumbnail_path(&self, image_id: i64, thumbnail_path: &str) -> Result<()> {
@@ -618,6 +699,63 @@ mod tests {
         assert_eq!(images[0].caption.as_deref(), Some("A quiet morning in Kyoto"));
         assert_eq!(images[0].copyright.as_deref(), Some("© 2026 Alfred Wei"));
         assert_eq!(images[0].contact.as_deref(), Some("alfred@example.com"));
+    }
+
+    /// The user-facing meaning of "non-destructive removal": both rows are
+    /// gone atomically, and -- the part a user would actually notice --
+    /// the same file becomes importable again because `find_by_hash`'s
+    /// dedupe check no longer matches.
+    #[test]
+    fn remove_images_deletes_both_rows_and_makes_the_file_reimportable() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let keep_id = catalog
+            .add_image_with_edit_stack("/keep.CR3", "hash-keep", 100, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+        let remove_id = catalog
+            .add_image_with_edit_stack("/remove.CR3", "hash-remove", 200, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+        catalog.set_thumbnail_path(remove_id, "/thumbs/2.jpg").unwrap();
+
+        let removed = catalog.remove_images(&[remove_id]).unwrap();
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].thumbnail_path.as_deref(), Some("/thumbs/2.jpg"));
+        assert_eq!(removed[0].content_hash.as_deref(), Some("hash-remove"));
+
+        let images = catalog.list_images().unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].image_id, keep_id);
+
+        // No orphaned child row left behind (the inert-CASCADE trap this
+        // slice's explicit child-delete exists to avoid).
+        let orphans: i64 = catalog
+            .conn
+            .query_row(
+                "SELECT count(*) FROM image_versions WHERE image_id = ?1",
+                params![remove_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0);
+
+        assert_eq!(catalog.find_by_hash("hash-remove").unwrap(), None, "removed file must be re-importable");
+        assert_eq!(catalog.find_by_hash("hash-keep").unwrap(), Some(keep_id));
+    }
+
+    #[test]
+    fn remove_images_ignores_unknown_ids_and_handles_batches() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let a = catalog
+            .add_image_with_edit_stack("/a.CR3", "hash-a", 1, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+        let b = catalog
+            .add_image_with_edit_stack("/b.CR3", "hash-b", 2, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+
+        let removed = catalog.remove_images(&[a, 9999, b]).unwrap();
+
+        assert_eq!(removed.len(), 2, "unknown id is a silent no-op, not an error");
+        assert!(catalog.list_images().unwrap().is_empty());
     }
 
     /// Regression test for a real bug found while dogfooding this slice:

@@ -82,3 +82,10 @@ export function setCopyright(/** @type {number} */ imageId, /** @type {string} *
 export function setContact(/** @type {number} */ imageId, /** @type {string} */ contact) {
   return invoke("set_contact", { imageId, contact });
 }
+
+/** Non-destructive removal (M2 Slice 3): catalog rows + app-owned derived
+ * files only -- source files are never touched. Takes image_ids (whole-
+ * image removal), not version_ids. @returns {Promise<void>} */
+export function removeImages(/** @type {number[]} */ imageIds) {
+  return invoke("remove_images", { imageIds });
+}

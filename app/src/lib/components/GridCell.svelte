@@ -2,10 +2,13 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
 
   /**
+   * The MouseEvent reaches onSelect so multi-select modifiers (Cmd/Ctrl,
+   * Shift) can be read by the page-level selection logic -- the keyboard
+   * Enter/Space path passes no event, which means "plain select" there.
    * @type {{
    *   image: import('$lib/api/catalog.js').ImageSummary,
    *   selected: boolean,
-   *   onSelect: () => void,
+   *   onSelect: (event?: MouseEvent) => void,
    *   onOpen: () => void,
    *   onRatingChange: (rating: number) => void,
    *   onFlagChange: (flag: string) => void,
@@ -44,7 +47,7 @@
   class:selected
   role="button"
   tabindex="0"
-  onclick={onSelect}
+  onclick={(e) => onSelect(e)}
   ondblclick={onOpen}
   onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onSelect()}
 >

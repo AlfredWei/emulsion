@@ -7,6 +7,7 @@
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
   import ExportDialog from "$lib/components/ExportDialog.svelte";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import {
     importFolder,
@@ -19,12 +20,22 @@
     setCaption,
     setCopyright,
     setContact,
+    removeImages,
   } from "$lib/api/catalog.js";
   import { getEditStack, setEditStack, opValue, upsertOp } from "$lib/api/develop.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
+  // Multi-select (M2 Slice 3): `selectedIds` is the full selection,
+  // `selectedId` stays as the anchor/primary -- the last plainly-clicked
+  // image, which drives MetadataPanel, Shift-range endpoints, and any
+  // single-image concern. Reassigned immutably on every change: Svelte 5's
+  // $state doesn't deep-proxy Set, so in-place .add()/.delete() would
+  // silently not react -- and reassignment matches the images-array idiom
+  // used everywhere else in this file anyway.
   let selectedId = $state(/** @type {number | null} */ (null));
+  let selectedIds = $state(/** @type {Set<number>} */ (new Set()));
+  let confirmingRemoval = $state(false);
   let activeModule = $state("library"); // "library" | "develop"
   let importing = $state(false);
   let statusMessage = $state("");
@@ -37,17 +48,21 @@
   let contrast = $derived(opValue(editStack, "contrast", 0));
   let saturation = $derived(opValue(editStack, "saturation", 0));
 
-  // The image Export would act on right now: the open Develop image, or
-  // the selected Library image -- whichever module is active.
+  // What Export would act on right now: the open Develop image, or every
+  // selected Library image (M2 Slice 3 batch export -- the frontend-only
+  // follow-up M1 Slice 5's export_batch was explicitly built to accept).
   let selectedImage = $derived(images.find((img) => img.version_id === selectedId) ?? null);
-  let currentExportItem = $derived(
-    activeModule === "develop" && developVersionId !== null
-      ? { path: developImagePath, version_id: developVersionId }
-      : selectedImage
-        ? { path: selectedImage.path, version_id: selectedImage.version_id }
-        : null,
-  );
-  let exportItem = $state(/** @type {{ path: string, version_id: number } | null} */ (null));
+  let selectedImages = $derived(images.filter((img) => selectedIds.has(img.version_id)));
+  let currentExportItems = $derived.by(() => {
+    if (activeModule === "develop" && developVersionId !== null) {
+      return [{ path: developImagePath, version_id: developVersionId }];
+    }
+    if (selectedImages.length > 0) {
+      return selectedImages.map((img) => ({ path: img.path, version_id: img.version_id }));
+    }
+    return selectedImage ? [{ path: selectedImage.path, version_id: selectedImage.version_id }] : [];
+  });
+  let exportItems = $state(/** @type {{ path: string, version_id: number }[] | null} */ (null));
 
   // Persistence is debounced (not written on every slider tick) so a drag
   // doesn't flood the catalog with writes -- flushed immediately whenever
@@ -184,6 +199,93 @@
     await setColorLabel(versionId, colorLabel);
   }
 
+  // Multi-select click semantics (M2 Slice 3), standard file-manager
+  // behavior: plain click replaces the selection and moves the anchor;
+  // Cmd/Ctrl toggles one image in/out; Shift selects the contiguous range
+  // (in `images` order) from the anchor to the clicked image. The range is
+  // computed over the FULL images array -- LibraryGrid's virtualization
+  // only slices what's rendered, never what's selectable. No event (the
+  // keyboard Enter/Space path in GridCell) means plain select.
+  function handleSelect(/** @type {number} */ versionId, /** @type {MouseEvent=} */ event) {
+    if (event?.shiftKey && selectedId !== null) {
+      const anchorIndex = images.findIndex((img) => img.version_id === selectedId);
+      const clickedIndex = images.findIndex((img) => img.version_id === versionId);
+      if (anchorIndex !== -1 && clickedIndex !== -1) {
+        const [from, to] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
+        selectedIds = new Set(images.slice(from, to + 1).map((img) => img.version_id));
+        return; // anchor stays put, Lightroom/Finder-style
+      }
+      // Stale anchor (e.g. it was just removed): fall through to plain select.
+    }
+    if (event?.metaKey || event?.ctrlKey) {
+      const next = new Set(selectedIds);
+      if (next.has(versionId)) {
+        next.delete(versionId);
+        if (selectedId === versionId) {
+          selectedId = next.size > 0 ? [...next][next.size - 1] : null;
+        }
+      } else {
+        next.add(versionId);
+        selectedId = versionId;
+      }
+      selectedIds = next;
+      return;
+    }
+    selectedId = versionId;
+    selectedIds = new Set([versionId]);
+  }
+
+  // Non-destructive removal (M2 Slice 3): catalog rows + app-owned derived
+  // files only -- the backend never touches source files. `await` the
+  // command BEFORE filtering local state: the other order would let an
+  // in-flight pollUntilThumbnailsReady refresh() momentarily resurrect the
+  // removed rows in the UI.
+  async function handleRemoveConfirmed() {
+    confirmingRemoval = false;
+    // Symmetry with the close handler: force any in-progress IPTC edit's
+    // blur-save to fire before the rows it targets can disappear.
+    /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
+
+    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
+    if (imageIds.length === 0) return;
+    try {
+      await removeImages(imageIds);
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Remove failed: ${e}`;
+      return;
+    }
+    const removedVersionIds = new Set(selectedImages.map((img) => img.version_id));
+    images = images.filter((img) => !removedVersionIds.has(img.version_id));
+    statusMessage = `Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from catalog`;
+    selectedId = null;
+    selectedIds = new Set();
+    // If the image open in Develop was just removed, clear that state too --
+    // otherwise the develop branch keeps rendering a deleted image, and a
+    // pending debounced edit-stack save would fire a pointless IPC call
+    // against the deleted version.
+    if (developVersionId !== null && removedVersionIds.has(developVersionId)) {
+      if (persistTimer !== null) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+      }
+      developVersionId = null;
+      developImagePath = "";
+    }
+  }
+
+  function handleLibraryKeydown(/** @type {KeyboardEvent} */ e) {
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    if (activeModule !== "library") return;
+    if (confirmingRemoval || exportItems !== null) return;
+    if (selectedIds.size === 0) return;
+    // Backspace is a typing key in MetadataPanel's fields -- never treat
+    // it as "remove photos" while an editable element has focus.
+    const target = e.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    e.preventDefault();
+    confirmingRemoval = true;
+  }
+
   // M2 Slice 2: IPTC fields save on blur (MetadataPanel), not debounced --
   // each is a single discrete edit rather than a slider drag, so there's no
   // flood of writes to coalesce. Still tracked via pendingIptcSave so the
@@ -236,7 +338,8 @@
     // landed yet -- flush it first so Export reads the value currently
     // on screen, not the last-persisted one.
     if (activeModule === "develop") flushEditStack();
-    exportItem = currentExportItem;
+    // null stays the "closed" sentinel -- never open with an empty list.
+    exportItems = currentExportItems.length > 0 ? currentExportItems : null;
   }
 
   onMount(() => {
@@ -278,6 +381,8 @@
   });
 </script>
 
+<svelte:window onkeydown={handleLibraryKeydown} />
+
 <div class="app">
   <div class="titlebar">
     <div class="module-switch">
@@ -289,8 +394,15 @@
       </button>
     </div>
     <div class="spacer"></div>
-    <button class="export-btn" onclick={handleExportClick} disabled={!currentExportItem}>
-      Export…
+    <button
+      class="remove-btn"
+      onclick={() => (confirmingRemoval = true)}
+      disabled={activeModule !== "library" || selectedIds.size === 0}
+    >
+      Remove{selectedIds.size > 1 ? ` (${selectedIds.size})` : ""}
+    </button>
+    <button class="export-btn" onclick={handleExportClick} disabled={currentExportItems.length === 0}>
+      Export{currentExportItems.length > 1 ? ` (${currentExportItems.length})` : ""}…
     </button>
     <button class="import-btn secondary" onclick={handleImportFiles} disabled={importing}>
       {importing ? "Importing…" : "Import Files…"}
@@ -300,7 +412,16 @@
     </button>
   </div>
 
-  <ExportDialog item={exportItem} onClose={() => (exportItem = null)} />
+  <ExportDialog items={exportItems} onClose={() => (exportItems = null)} />
+
+  <ConfirmDialog
+    open={confirmingRemoval}
+    title="Remove from catalog"
+    message={`Remove ${selectedIds.size} photo${selectedIds.size === 1 ? "" : "s"} from the catalog? Source files stay on disk; edits, ratings, and metadata stored in the catalog are discarded.`}
+    confirmLabel="Remove"
+    onConfirm={handleRemoveConfirmed}
+    onCancel={() => (confirmingRemoval = false)}
+  />
 
   {#if statusMessage}
     <div class="status">{statusMessage}</div>
@@ -327,8 +448,8 @@
       {:else}
         <LibraryGrid
           {images}
-          {selectedId}
-          onSelect={(id) => (selectedId = id)}
+          {selectedIds}
+          onSelect={handleSelect}
           onOpen={openDevelop}
           onRatingChange={handleRatingChange}
           onFlagChange={handleFlagChange}
@@ -422,7 +543,8 @@
     color: var(--text-secondary);
     border: 1px solid var(--border-strong);
   }
-  .export-btn {
+  .export-btn,
+  .remove-btn {
     all: unset;
     cursor: pointer;
     padding: 6px 14px;
@@ -432,7 +554,12 @@
     color: var(--text-secondary);
     border: 1px solid var(--border-strong);
   }
-  .export-btn:disabled {
+  .remove-btn:not(:disabled):hover {
+    color: var(--label-red);
+    border-color: var(--label-red);
+  }
+  .export-btn:disabled,
+  .remove-btn:disabled {
     opacity: 0.6;
     cursor: default;
   }

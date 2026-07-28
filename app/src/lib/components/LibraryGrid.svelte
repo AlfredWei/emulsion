@@ -9,17 +9,20 @@
   import GridCell from "./GridCell.svelte";
 
   /**
+   * Selection is a Set of version_ids (multi-select, M2 Slice 3); the
+   * MouseEvent is forwarded through onSelect so the page-level logic can
+   * read Shift/Cmd/Ctrl modifiers -- this component stays selection-dumb.
    * @type {{
    *   images: import('$lib/api/catalog.js').ImageSummary[],
-   *   selectedId: number | null,
-   *   onSelect: (versionId: number) => void,
+   *   selectedIds: Set<number>,
+   *   onSelect: (versionId: number, event?: MouseEvent) => void,
    *   onOpen: (versionId: number) => void,
    *   onRatingChange: (versionId: number, rating: number) => void,
    *   onFlagChange: (versionId: number, flag: string) => void,
    *   onColorLabelChange: (versionId: number, colorLabel: string) => void,
    * }}
    */
-  let { images, selectedId, onSelect, onOpen, onRatingChange, onFlagChange, onColorLabelChange } =
+  let { images, selectedIds, onSelect, onOpen, onRatingChange, onFlagChange, onColorLabelChange } =
     $props();
 
   const CELL_MIN_WIDTH = 140;
@@ -65,8 +68,8 @@
       {#each visibleImages as image (image.version_id)}
         <GridCell
           {image}
-          selected={image.version_id === selectedId}
-          onSelect={() => onSelect(image.version_id)}
+          selected={selectedIds.has(image.version_id)}
+          onSelect={(e) => onSelect(image.version_id, e)}
           onOpen={() => onOpen(image.version_id)}
           onRatingChange={(rating) => onRatingChange(image.version_id, rating)}
           onFlagChange={(flag) => onFlagChange(image.version_id, flag)}

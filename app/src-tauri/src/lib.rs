@@ -408,6 +408,54 @@ fn set_edit_stack(
         .map_err(|e| e.to_string())
 }
 
+/// Thumbnail refresh after a Develop edit -- called by the frontend after
+/// `set_edit_stack` has already persisted, never chained onto that same
+/// call/promise (a stale Library thumbnail is a much smaller loss than a
+/// lost edit, so this must never be able to block on/delay the edit save
+/// itself, or app quit, the way M1 Slice 6 already found and fixed for a
+/// similar edit-stack-flush hang). Re-reads the edit stack from the
+/// catalog rather than trusting a client-supplied one, since this always
+/// runs immediately after a real save. Returns `Ok(None)` (not an error)
+/// on any failure -- see `import::regenerate_edited_thumbnail`'s doc
+/// comment for why a stale thumbnail isn't worth surfacing as a hard
+/// error to the frontend.
+#[tauri::command]
+async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, version_id: i64) -> Result<Option<String>, String> {
+    let catalog = state.catalog.clone();
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let previews_dir = app_data_dir.join("previews");
+    let thumbnail_dir = app_data_dir.join("thumbnails");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let (source, stack) = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
+            let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
+            (source, stack)
+        };
+
+        let Some(out_path) = import::regenerate_edited_thumbnail(
+            std::path::Path::new(&source.path),
+            source.content_hash.as_deref().unwrap_or(""),
+            source.image_id,
+            &stack,
+            &previews_dir,
+            &thumbnail_dir,
+        ) else {
+            return Ok(None);
+        };
+        let out_path_str = out_path.to_string_lossy().to_string();
+
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        catalog
+            .set_thumbnail_path(source.image_id, &out_path_str)
+            .map_err(|e| e.to_string())?;
+        Ok(Some(out_path_str))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Deserialize)]
 struct ExportItem {
     path: String,
@@ -509,6 +557,7 @@ pub fn run() {
             get_develop_preview,
             get_edit_stack,
             set_edit_stack,
+            regenerate_thumbnail,
             export_images,
         ])
         .run(tauri::generate_context!())

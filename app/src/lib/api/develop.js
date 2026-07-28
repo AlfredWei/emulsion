@@ -37,6 +37,16 @@ export function setEditStack(/** @type {number} */ versionId, /** @type {EditSta
   return invoke("set_edit_stack", { versionId, stack });
 }
 
+/** Thumbnail refresh after a Develop edit -- call AFTER setEditStack has
+ * already resolved, never chained onto that same call, so a slow/failed
+ * regen can never delay the edit save or app quit. Resolves to `null`
+ * (not an error) if regeneration failed for any reason -- see the Rust
+ * command's doc comment.
+ * @returns {Promise<string | null>} the new thumbnail_path, or null */
+export function regenerateThumbnail(/** @type {number} */ versionId) {
+  return invoke("regenerate_thumbnail", { versionId });
+}
+
 /** Find an op's current value by name, or a fallback if not present yet. */
 export function opValue(/** @type {EditStack} */ stack, /** @type {string} */ opName, /** @type {number} */ fallback) {
   return stack.ops.find((o) => o.op === opName)?.value ?? fallback;

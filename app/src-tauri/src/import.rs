@@ -198,9 +198,12 @@ pub fn scan_and_import(dir: &Path, catalog: &Catalog, thumbnail_dir: &Path) -> I
 /// result. `GridCell.svelte` already renders a placeholder for a NULL
 /// `thumbnail_path`, so no frontend change is needed for the gap between
 /// import and this pass completing.
-pub fn generate_missing_thumbnails(catalog: &Arc<Mutex<Catalog>>, thumbnail_dir: &Path) {
-    const THUMBNAIL_MAX_DIMENSION: u32 = 1024;
+/// Shared with `regenerate_edited_thumbnail` below, so an edited
+/// thumbnail is capped at the same size as an unedited one -- no visible
+/// size/quality mismatch between the two in the same grid.
+const THUMBNAIL_MAX_DIMENSION: u32 = 1024;
 
+pub fn generate_missing_thumbnails(catalog: &Arc<Mutex<Catalog>>, thumbnail_dir: &Path) {
     let images = {
         let Ok(catalog) = catalog.lock() else { return };
         catalog.list_images().unwrap_or_default()
@@ -248,6 +251,64 @@ pub fn generate_missing_thumbnails(catalog: &Arc<Mutex<Catalog>>, thumbnail_dir:
         let Ok(catalog) = catalog.lock() else { return };
         let _ = catalog.set_thumbnail_path(image.image_id, &out_path.to_string_lossy());
     }
+}
+
+/// Thumbnail refresh after a Develop edit: unlike `generate_missing_thumbnails`
+/// above (a fresh, unedited RAW/JPEG decode), this reuses the Develop
+/// preview cache's already-decoded, unedited buffer -- `ensure_develop_preview_for_hash`
+/// returns a path/dimensions only, not pixels, so this loads the PNG
+/// itself before applying `export::apply_edit_stack`'s formula, then
+/// downscales with the same cap/filter as an unedited thumbnail so
+/// there's no visible size/quality mismatch in the grid.
+///
+/// Writes to a NEW, content-hashed filename (`{image_id}-{hash8}.jpg`,
+/// hashing the edit-stack JSON) rather than overwriting `{image_id}.jpg`
+/// in place: this codebase has no cache-busting precedent anywhere (no
+/// query params, nothing), so overwriting the same path risks the
+/// webview's asset-protocol fetch showing stale cached bytes forever --
+/// same content-addressing reasoning `preview_cache.rs` already
+/// established for exactly this class of bug. Old thumbnail files (the
+/// original import-time one, and any prior edited variant) are left as
+/// accepted orphans, matching that module's own already-documented
+/// tradeoff. Not fully dedup-idempotent -- `develop.js`'s `upsertOp`
+/// re-appends the touched op at the end of the array on every change, so
+/// reaching the same final values via a different edit order serializes
+/// differently and hashes differently. Bounded pileup, not none; not
+/// fixed here (would need canonicalizing op order before hashing).
+///
+/// Returns `None` on any failure (decode/IO/etc.) rather than propagating
+/// an error -- the caller's edit-stack save already succeeded
+/// independently, so a stale Library thumbnail is the whole cost of this
+/// failing, not worth surfacing as a hard error.
+pub fn regenerate_edited_thumbnail(
+    source_path: &Path,
+    content_hash: &str,
+    image_id: i64,
+    stack: &EditStack,
+    previews_dir: &Path,
+    thumbnail_dir: &Path,
+) -> Option<PathBuf> {
+    let preview =
+        crate::preview_cache::ensure_develop_preview_for_hash(source_path, content_hash, previews_dir).ok()?;
+    let mut decoded = image::open(&preview.path).ok()?.into_rgb8();
+    crate::export::apply_edit_stack(&mut decoded, stack);
+
+    let (w, h) = (decoded.width(), decoded.height());
+    let resized = if w.max(h) > THUMBNAIL_MAX_DIMENSION {
+        let scale = THUMBNAIL_MAX_DIMENSION as f64 / w.max(h) as f64;
+        let target_w = ((w as f64) * scale).round().max(1.0) as u32;
+        let target_h = ((h as f64) * scale).round().max(1.0) as u32;
+        image::imageops::resize(&decoded, target_w, target_h, image::imageops::FilterType::Triangle)
+    } else {
+        decoded
+    };
+
+    let stack_json = serde_json::to_string(stack).ok()?;
+    let stack_hash = blake3::hash(stack_json.as_bytes()).to_hex().to_string();
+    let out_path = thumbnail_dir.join(format!("{image_id}-{}.jpg", &stack_hash[..8]));
+    let _ = std::fs::create_dir_all(thumbnail_dir);
+    resized.save(&out_path).ok()?;
+    Some(out_path)
 }
 
 #[cfg(test)]
@@ -344,6 +405,55 @@ mod tests {
         let images = catalog.lock().unwrap().list_images().unwrap();
         assert!(images[0].thumbnail_path.is_some(), "background pass should have filled in the thumbnail");
         assert!(Path::new(images[0].thumbnail_path.as_ref().unwrap()).exists());
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// A real (if non-photographic) JPEG, edited, regenerated -- confirms
+    /// the output actually reflects the edit (not just a pass-through
+    /// resize), lands at the expected content-hashed path, and that
+    /// re-regenerating with the SAME edit stack reuses the same filename
+    /// (the "bounded pileup, not none" idempotency this module's doc
+    /// comment describes: identical stacks, not just identical final
+    /// values reached via a different op order).
+    #[test]
+    fn regenerate_edited_thumbnail_reflects_the_edit_and_is_content_addressed() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("regen-thumbnail");
+        let previews_dir = dir.parent().unwrap().join("previews");
+        let source_path = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([120, 90, 60])).save(&source_path).unwrap();
+        let bytes = std::fs::read(&source_path).unwrap();
+        let content_hash = blake3::hash(&bytes).to_hex().to_string();
+
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![
+                serde_json::json!({"op": "exposure", "value": 1.0}),
+                serde_json::json!({"op": "saturation", "value": -100.0}),
+            ],
+        };
+
+        let out_path = regenerate_edited_thumbnail(&source_path, &content_hash, 42, &stack, &previews_dir, &thumb_dir)
+            .expect("regeneration should succeed for a real JPEG");
+
+        assert!(out_path.exists());
+        assert!(
+            out_path.file_name().unwrap().to_string_lossy().starts_with("42-"),
+            "filename must be keyed by image_id, got {out_path:?}"
+        );
+
+        let edited = image::open(&out_path).unwrap().into_rgb8();
+        let edited_pixel = edited.get_pixel(0, 0);
+        // exposure +1 EV should brighten, saturation -100 should desaturate
+        // toward equal channels -- either signal alone confirms the edit
+        // was actually applied, not a clean passthrough of the original
+        // (120, 90, 60).
+        assert_ne!(*edited_pixel, image::Rgb([120, 90, 60]), "output must differ from the unedited source");
+
+        // Re-regenerating the identical stack must resolve to the same path.
+        let out_path_again =
+            regenerate_edited_thumbnail(&source_path, &content_hash, 42, &stack, &previews_dir, &thumb_dir).unwrap();
+        assert_eq!(out_path, out_path_again);
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }

@@ -67,7 +67,11 @@ fn op_value(ops: &[serde_json::Value], name: &str) -> f32 {
 /// Same formula as DevelopCanvas.svelte's WGSL fragment shader, in the
 /// same order, kept in f32 to track the shader's precision. See this
 /// module's doc comment for why exact GPU parity isn't the bar here.
-fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
+///
+/// `pub(crate)`: also reused by thumbnail regeneration (the Library grid
+/// thumbnail reflecting a Develop edit) -- same formula, same reasoning,
+/// no reason to duplicate it.
+pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let exposure_ev = op_value(&stack.ops, "exposure");
     let contrast = op_value(&stack.ops, "contrast");
     let saturation = op_value(&stack.ops, "saturation");

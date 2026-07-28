@@ -136,6 +136,15 @@ pub struct CollectionSummary {
     pub count: Option<i64>,
 }
 
+/// Internal to the Rust command layer only (thumbnail regeneration) --
+/// never returned to the frontend, so no Serialize/Deserialize.
+#[derive(Debug, Clone)]
+pub struct VersionSource {
+    pub image_id: i64,
+    pub path: String,
+    pub content_hash: Option<String>,
+}
+
 impl Catalog {
     /// Test-only: an ephemeral catalog with nothing on disk. Production
     /// code always persists to a real file via `open()` (ADR-0005) — this
@@ -822,6 +831,28 @@ impl Catalog {
         Ok(())
     }
 
+    /// Resolves a version_id to what thumbnail regeneration needs: the
+    /// parent image's id (thumbnails are keyed by image_id, not
+    /// version_id), source path, and content_hash (to reuse the Develop
+    /// preview cache instead of a fresh decode). A real JOIN -- unlike
+    /// `get_edit_stack` above, which is JOIN-free only because
+    /// `edit_stack_json` happens to live directly on `image_versions`.
+    pub fn get_version_source(&self, version_id: i64) -> Result<VersionSource> {
+        self.conn.query_row(
+            "SELECT i.id, i.path, i.content_hash FROM image_versions v
+             JOIN images i ON i.id = v.image_id
+             WHERE v.id = ?1",
+            params![version_id],
+            |row| {
+                Ok(VersionSource {
+                    image_id: row.get(0)?,
+                    path: row.get(1)?,
+                    content_hash: row.get(2)?,
+                })
+            },
+        )
+    }
+
     pub fn set_rating(&self, version_id: i64, rating: u8) -> Result<()> {
         self.conn.execute(
             "UPDATE image_versions SET rating = ?2, updated_at = datetime('now') WHERE id = ?1",
@@ -1014,6 +1045,22 @@ mod tests {
         catalog.update_edit_stack(version_id, &updated).unwrap();
 
         assert_eq!(catalog.get_edit_stack(version_id).unwrap(), updated);
+    }
+
+    #[test]
+    fn get_version_source_resolves_the_parent_images_row() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog
+            .add_image_with_edit_stack("/a.CR3", "hash-a", 100, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+        let images = catalog.list_images().unwrap();
+        let version_id = images[0].version_id;
+
+        let source = catalog.get_version_source(version_id).unwrap();
+
+        assert_eq!(source.image_id, image_id);
+        assert_eq!(source.path, "/a.CR3");
+        assert_eq!(source.content_hash.as_deref(), Some("hash-a"));
     }
 
     #[test]

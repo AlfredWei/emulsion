@@ -8,6 +8,8 @@
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
   import ExportDialog from "$lib/components/ExportDialog.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import TextPromptDialog from "$lib/components/TextPromptDialog.svelte";
+  import SmartCollectionDialog from "$lib/components/SmartCollectionDialog.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import {
     importFolder,
@@ -21,8 +23,19 @@
     setCopyright,
     setContact,
     removeImages,
+    listAllImageKeywords,
+    createCollection,
+    createCollectionWithImages,
+    createSmartCollection,
+    updateSmartCollectionRules,
+    deleteCollection,
+    addImagesToCollection,
+    removeImagesFromCollection,
+    listCollections,
+    listCollectionImageIds,
   } from "$lib/api/catalog.js";
   import { getEditStack, setEditStack, opValue, upsertOp } from "$lib/api/develop.js";
+  import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -39,6 +52,56 @@
   let activeModule = $state("library"); // "library" | "develop"
   let importing = $state(false);
   let statusMessage = $state("");
+
+  // Collections (M2 Slice 5). `activeCollectionId === null` means "All
+  // Photos" (no filter). `manualMembership` caches a manual collection's
+  // image_id membership by collection id, fetched on click -- invalidated
+  // by whichever collection id was actually just mutated (add/remove-from-
+  // collection), never by `activeCollectionId`: those differ exactly when
+  // the toolbar adds a selection to a DIFFERENT collection than the one
+  // currently being viewed, and invalidating the wrong one would silently
+  // leave the mutated collection's cache stale.
+  let collections = $state(/** @type {import('$lib/api/catalog.js').CollectionSummary[]} */ ([]));
+  let activeCollectionId = $state(/** @type {number | null} */ (null));
+  let manualMembership = $state(/** @type {Map<number, Set<number>>} */ (new Map()));
+  let allImageKeywords = $state(/** @type {import('$lib/api/catalog.js').ImageKeywordAssignment[]} */ ([]));
+  let keywordIdsByImage = $derived(buildKeywordIdsByImage(allImageKeywords));
+
+  async function refreshCollections() {
+    collections = await listCollections();
+  }
+
+  async function loadManualMembership(/** @type {number} */ collectionId) {
+    const memberIds = await listCollectionImageIds(collectionId);
+    manualMembership = new Map(manualMembership).set(collectionId, new Set(memberIds));
+  }
+
+  // The image set the Library grid actually shows -- unfiltered `images`
+  // for "All Photos", a manual collection's fetched membership, or a
+  // smart collection's rules evaluated client-side against the
+  // already-loaded catalog.
+  let filteredImages = $derived.by(() => {
+    if (activeCollectionId === null) return images;
+    const collection = collections.find((c) => c.id === activeCollectionId);
+    if (!collection) return images;
+    if (collection.is_smart) {
+      const rules = collection.rules ?? [];
+      return images.filter((img) => matchesRules(img, rules, keywordIdsByImage));
+    }
+    const memberIds = manualMembership.get(activeCollectionId);
+    if (!memberIds) return []; // membership not fetched yet
+    return images.filter((img) => memberIds.has(img.image_id));
+  });
+
+  let activeCollection = $derived(collections.find((c) => c.id === activeCollectionId) ?? null);
+
+  async function selectCollection(/** @type {number | null} */ collectionId) {
+    activeCollectionId = collectionId;
+    if (collectionId !== null && !manualMembership.has(collectionId)) {
+      const collection = collections.find((c) => c.id === collectionId);
+      if (collection && !collection.is_smart) await loadManualMembership(collectionId);
+    }
+  }
 
   let developVersionId = $state(/** @type {number | null} */ (null));
   let developImagePath = $state("");
@@ -231,20 +294,30 @@
   // Multi-select click semantics (M2 Slice 3), standard file-manager
   // behavior: plain click replaces the selection and moves the anchor;
   // Cmd/Ctrl toggles one image in/out; Shift selects the contiguous range
-  // (in `images` order) from the anchor to the clicked image. The range is
-  // computed over the FULL images array -- LibraryGrid's virtualization
-  // only slices what's rendered, never what's selectable. No event (the
-  // keyboard Enter/Space path in GridCell) means plain select.
+  // (in `filteredImages` order) from the anchor to the clicked image.
+  //
+  // The range is computed over `filteredImages`, NOT the full `images`
+  // array (M2 Slice 5 fix): while no collection filter is active the two
+  // are identical, but once a collection filters the grid, indexing into
+  // the unfiltered `images` array would compute a range over catalog-wide
+  // positions that don't correspond to what's on screen -- Shift-click
+  // could silently pull hidden/filtered-out images into the selection,
+  // which then flows into remove/batch-culling/keyword-assignment against
+  // images the user never saw or selected. LibraryGrid's virtualization
+  // is a separate, narrower concern (it only slices what's *rendered*
+  // within the already-filtered set for scroll performance) and doesn't
+  // affect this.
   function handleSelect(/** @type {number} */ versionId, /** @type {MouseEvent=} */ event) {
     if (event?.shiftKey && selectedId !== null) {
-      const anchorIndex = images.findIndex((img) => img.version_id === selectedId);
-      const clickedIndex = images.findIndex((img) => img.version_id === versionId);
+      const anchorIndex = filteredImages.findIndex((img) => img.version_id === selectedId);
+      const clickedIndex = filteredImages.findIndex((img) => img.version_id === versionId);
       if (anchorIndex !== -1 && clickedIndex !== -1) {
         const [from, to] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
-        selectedIds = new Set(images.slice(from, to + 1).map((img) => img.version_id));
+        selectedIds = new Set(filteredImages.slice(from, to + 1).map((img) => img.version_id));
         return; // anchor stays put, Lightroom/Finder-style
       }
-      // Stale anchor (e.g. it was just removed): fall through to plain select.
+      // Stale anchor (e.g. it was just removed, or is outside the current
+      // filter): fall through to plain select.
     }
     if (event?.metaKey || event?.ctrlKey) {
       const next = new Set(selectedIds);
@@ -300,6 +373,83 @@
       developVersionId = null;
       developImagePath = "";
     }
+  }
+
+  // Collections (M2 Slice 5). Rename/edit-existing-smart-collection-rules
+  // UI is deliberately deferred (matching this codebase's precedent for
+  // `add_image_with_metadata`/`add_edit_stack` -- a lower-level building
+  // block kept ready without a UI trigger yet): the rail's "+" only ever
+  // creates fresh collections; changing an existing one means delete and
+  // recreate for now.
+  let creatingCollection = $state(false);
+  let creatingSmartCollection = $state(false);
+  let creatingCollectionWithImages = $state(false);
+  let pendingAddToCollectionImageIds = $state(/** @type {number[]} */ ([]));
+  let manualCollections = $derived(collections.filter((c) => !c.is_smart));
+
+  async function handleCreateCollection(/** @type {string} */ name) {
+    creatingCollection = false;
+    await createCollection(name);
+    await refreshCollections();
+  }
+
+  async function handleCreateSmartCollection(
+    /** @type {string} */ name,
+    /** @type {import('$lib/api/catalog.js').CollectionRule[]} */ rules,
+  ) {
+    creatingSmartCollection = false;
+    await createSmartCollection(name, rules);
+    await refreshCollections();
+  }
+
+  async function handleDeleteCollection(/** @type {number} */ collectionId, /** @type {MouseEvent} */ event) {
+    event.stopPropagation(); // don't also trigger selectCollection
+    await deleteCollection(collectionId);
+    if (activeCollectionId === collectionId) activeCollectionId = null;
+    await refreshCollections();
+  }
+
+  // "Add to Collection…" toolbar picker, from a multi-selection.
+  async function handleAddToCollectionSelect(/** @type {string} */ value) {
+    if (!value) return;
+    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
+    if (imageIds.length === 0) return;
+    if (value === "__new__") {
+      pendingAddToCollectionImageIds = imageIds;
+      creatingCollectionWithImages = true;
+      return;
+    }
+    const collectionId = Number(value);
+    await addImagesToCollection(collectionId, imageIds);
+    // Invalidate by the collection id that was actually just mutated, not
+    // by activeCollectionId -- those differ when adding to a DIFFERENT
+    // collection than the one currently being viewed, and invalidating
+    // the wrong one would silently leave the mutated one's cache stale.
+    if (manualMembership.has(collectionId)) await loadManualMembership(collectionId);
+    await refreshCollections();
+    statusMessage = `Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to collection`;
+  }
+
+  async function handleCreateCollectionWithImages(/** @type {string} */ name) {
+    creatingCollectionWithImages = false;
+    const imageIds = pendingAddToCollectionImageIds;
+    pendingAddToCollectionImageIds = [];
+    await createCollectionWithImages(name, imageIds);
+    await refreshCollections();
+    statusMessage = `Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to "${name}"`;
+  }
+
+  async function handleRemoveFromCollection() {
+    if (activeCollectionId === null) return;
+    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
+    if (imageIds.length === 0) return;
+    await removeImagesFromCollection(activeCollectionId, imageIds);
+    await loadManualMembership(activeCollectionId); // mutated === active here, still the right id
+    await refreshCollections();
+    const removedVersionIds = new Set(selectedImages.map((img) => img.version_id));
+    selectedIds = new Set([...selectedIds].filter((id) => !removedVersionIds.has(id)));
+    if (selectedId !== null && removedVersionIds.has(selectedId)) selectedId = null;
+    statusMessage = `Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from collection`;
   }
 
   function handleLibraryKeydown(/** @type {KeyboardEvent} */ e) {
@@ -377,6 +527,8 @@
     // .setup()): this refresh() races against that pass the same way an
     // import's own refresh() races against its own background trigger.
     refresh().then(pollUntilThumbnailsReady);
+    refreshCollections();
+    listAllImageKeywords().then((assignments) => (allImageKeywords = assignments));
 
     // M1 Slice 6 (crash-safety): flush a pending debounced edit before the
     // window actually closes, so quitting right after a slider drag can't
@@ -423,6 +575,26 @@
       </button>
     </div>
     <div class="spacer"></div>
+    {#if activeModule === "library" && activeCollectionId !== null && activeCollection && !activeCollection.is_smart}
+      <button class="remove-btn" onclick={handleRemoveFromCollection} disabled={selectedIds.size === 0}>
+        Remove from Collection{selectedIds.size > 1 ? ` (${selectedIds.size})` : ""}
+      </button>
+    {/if}
+    <select
+      class="add-to-collection-select"
+      value=""
+      disabled={activeModule !== "library" || selectedIds.size === 0}
+      onchange={(e) => {
+        handleAddToCollectionSelect(e.currentTarget.value);
+        e.currentTarget.value = "";
+      }}
+    >
+      <option value="" disabled>Add to Collection…</option>
+      {#each manualCollections as collection (collection.id)}
+        <option value={collection.id}>{collection.name}</option>
+      {/each}
+      <option value="__new__">New Collection…</option>
+    </select>
     <button
       class="remove-btn"
       onclick={() => (confirmingRemoval = true)}
@@ -452,6 +624,37 @@
     onCancel={() => (confirmingRemoval = false)}
   />
 
+  <TextPromptDialog
+    open={creatingCollection}
+    title="New Collection"
+    label="Name"
+    placeholder="e.g. Portfolio"
+    confirmLabel="Create"
+    onConfirm={handleCreateCollection}
+    onCancel={() => (creatingCollection = false)}
+  />
+
+  <TextPromptDialog
+    open={creatingCollectionWithImages}
+    title="New Collection"
+    label="Name"
+    placeholder="e.g. Portfolio"
+    confirmLabel="Create"
+    onConfirm={handleCreateCollectionWithImages}
+    onCancel={() => {
+      creatingCollectionWithImages = false;
+      pendingAddToCollectionImageIds = [];
+    }}
+  />
+
+  <SmartCollectionDialog
+    open={creatingSmartCollection}
+    title="New Smart Collection"
+    confirmLabel="Create"
+    onConfirm={handleCreateSmartCollection}
+    onCancel={() => (creatingSmartCollection = false)}
+  />
+
   {#if statusMessage}
     <div class="status">{statusMessage}</div>
   {/if}
@@ -460,10 +663,37 @@
     <div class="body">
       <div class="rail">
         <div class="section-label">Folders</div>
-        <div class="tree-item active">
+        <button type="button" class="tree-item" class:active={activeCollectionId === null} onclick={() => selectCollection(null)}>
           All Photos
           <span class="count">{images.length}</span>
+        </button>
+
+        <div class="collections-header">
+          <span class="section-label">Collections</span>
+          <span class="collections-actions">
+            <button type="button" class="rail-action" title="New Collection" onclick={() => (creatingCollection = true)}>+</button>
+            <button type="button" class="rail-action" title="New Smart Collection" onclick={() => (creatingSmartCollection = true)}>⚡+</button>
+          </span>
         </div>
+        {#each collections as collection (collection.id)}
+          <div class="tree-item collection-item" class:active={activeCollectionId === collection.id}>
+            <button type="button" class="tree-item-main" onclick={() => selectCollection(collection.id)}>
+              {#if collection.is_smart}<span class="smart-icon" title="Smart Collection">⚡</span>{/if}
+              <span class="tree-item-name">{collection.name}</span>
+              <span class="count">
+                {collection.is_smart
+                  ? images.filter((img) => matchesRules(img, collection.rules ?? [], keywordIdsByImage)).length
+                  : (collection.count ?? 0)}
+              </span>
+            </button>
+            <button
+              type="button"
+              class="tree-item-delete"
+              aria-label="Delete collection {collection.name}"
+              onclick={(e) => handleDeleteCollection(collection.id, e)}
+            >×</button>
+          </div>
+        {/each}
       </div>
 
       {#if images.length === 0}
@@ -474,9 +704,13 @@
             <button class="secondary" onclick={handleImportFiles} disabled={importing}>Import files…</button>
           </div>
         </div>
+      {:else if filteredImages.length === 0}
+        <div class="empty">
+          <p>No photos in this collection.</p>
+        </div>
       {:else}
         <LibraryGrid
-          {images}
+          images={filteredImages}
           {selectedIds}
           onSelect={handleSelect}
           onOpen={openDevelop}
@@ -616,6 +850,11 @@
     background: var(--bg-panel);
     border-right: 1px solid var(--border-subtle);
     padding: 14px 10px;
+    /* M2 Slice 5: the rail was a fixed 2-line static block until now --
+       a variable-length Collections list needs to scroll instead of
+       spilling past the box's bottom edge. */
+    overflow-y: auto;
+    overflow-x: hidden;
   }
   .section-label {
     font-family: var(--font-mono);
@@ -626,7 +865,13 @@
     padding: 4px;
     font-weight: 600;
   }
+  /* .tree-item is a <button> now (was a plain <div>) so "All Photos" and
+     collections are real click targets -- reset button chrome so it
+     still reads as the same flat row it always has. */
   .tree-item {
+    all: unset;
+    box-sizing: border-box;
+    width: 100%;
     display: flex;
     align-items: center;
     gap: 7px;
@@ -634,6 +879,7 @@
     border-radius: var(--radius-s);
     color: var(--text-secondary);
     font-size: 12px;
+    cursor: pointer;
   }
   .tree-item.active {
     background: var(--accent-soft);
@@ -644,6 +890,92 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     color: var(--text-tertiary);
+  }
+  .collections-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-right: 2px;
+  }
+  .collections-actions {
+    display: flex;
+    gap: 2px;
+  }
+  .rail-action {
+    all: unset;
+    cursor: pointer;
+    padding: 2px 5px;
+    font-size: 11px;
+    border-radius: var(--radius-s);
+    color: var(--text-tertiary);
+  }
+  .rail-action:hover {
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+  }
+  .collection-item {
+    display: flex;
+    align-items: center;
+    border-radius: var(--radius-s);
+  }
+  .collection-item.active {
+    background: var(--accent-soft);
+  }
+  .collection-item .tree-item-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .tree-item-main {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 7px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .collection-item.active .tree-item-main {
+    color: var(--accent-strong);
+  }
+  .tree-item-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .smart-icon {
+    flex: none;
+    font-size: 10px;
+  }
+  .tree-item-delete {
+    all: unset;
+    cursor: pointer;
+    flex: none;
+    padding: 0 7px 0 2px;
+    color: var(--text-tertiary);
+    opacity: 0;
+  }
+  .collection-item:hover .tree-item-delete {
+    opacity: 1;
+  }
+  .tree-item-delete:hover {
+    color: var(--label-red);
+  }
+  .add-to-collection-select {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    padding: 6px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+  }
+  .add-to-collection-select:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
   .empty {
     flex: 1;

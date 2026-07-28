@@ -64,6 +64,19 @@
   });
   let exportItems = $state(/** @type {{ path: string, version_id: number }[] | null} */ (null));
 
+  // Who a newly-typed keyword in MetadataPanel gets assigned to (M2 Slice
+  // 4): the whole current Library selection when there is one, else just
+  // the anchor image -- unconditional on "the acted-on cell is part of
+  // the selection" (unlike targetVersionIds below) since there's no
+  // per-cell click event here, just "apply to whatever's selected".
+  let keywordTargetImageIds = $derived(
+    selectedImages.length > 0
+      ? selectedImages.map((img) => img.image_id)
+      : selectedImage
+        ? [selectedImage.image_id]
+        : [],
+  );
+
   // Persistence is debounced (not written on every slider tick) so a drag
   // doesn't flood the catalog with writes -- flushed immediately whenever
   // navigation could otherwise lose the pending change (UX-DESIGN.md §5's
@@ -475,11 +488,14 @@
 
       <MetadataPanel
         image={selectedImage}
+        targetImageIds={keywordTargetImageIds}
         onCaptionChange={(caption) => selectedId !== null && handleCaptionChange(selectedId, caption)}
         onCopyrightChange={(copyright) =>
           selectedImage && handleCopyrightChange(selectedImage.image_id, copyright)}
         onContactChange={(contact) =>
           selectedImage && handleContactChange(selectedImage.image_id, contact)}
+        onKeywordAssigned={(name, count) =>
+          (statusMessage = `Added "${name}" to ${count} photo${count === 1 ? "" : "s"}`)}
       />
     </div>
   {:else if developImagePath}

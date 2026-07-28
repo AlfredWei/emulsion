@@ -7,7 +7,7 @@ mod preview_cache;
 mod raw_decode;
 mod source_decode;
 
-use catalog::{Catalog, EditStack, ImageSummary};
+use catalog::{Catalog, EditStack, ImageSummary, KeywordNode, KeywordRef};
 use export::{ExportOptions, ExportResult};
 use import::ImportSummary;
 use preview_cache::DevelopPreviewInfo;
@@ -234,6 +234,47 @@ async fn remove_images(
     .map_err(|e| e.to_string())?
 }
 
+/// Keywording (M2 Slice 4). Resolves (creating any missing level) a
+/// hierarchical keyword path and assigns the leaf to every image in
+/// `image_ids` -- batches across a multi-selection in one call. Returns
+/// the leaf keyword id.
+#[tauri::command]
+fn assign_keyword_path(
+    state: State<'_, AppState>,
+    image_ids: Vec<i64>,
+    path: Vec<String>,
+) -> Result<i64, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.assign_keyword_path(&image_ids, &path).map_err(|e| e.to_string())
+}
+
+/// Anchor-only, matching the IPTC caption/copyright/contact precedent --
+/// removing a keyword chip only affects the one image it's shown against.
+#[tauri::command]
+fn remove_keyword_from_image(
+    state: State<'_, AppState>,
+    image_id: i64,
+    keyword_id: i64,
+) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.remove_keyword_from_image(image_id, keyword_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_image_keywords(state: State<'_, AppState>, image_id: i64) -> Result<Vec<KeywordRef>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.get_image_keywords(image_id).map_err(|e| e.to_string())
+}
+
+/// Backs the assignment input's autocomplete suggestions -- the frontend
+/// builds full display paths client-side from this flat, parent_id-linked
+/// list.
+#[tauri::command]
+fn list_keywords(state: State<'_, AppState>) -> Result<Vec<KeywordNode>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.list_keywords().map_err(|e| e.to_string())
+}
+
 /// Develop preview (M1 Slice 3, cache-aware since M1 Slice 4 — see
 /// preview_cache.rs). Decode-only concern -- doesn't touch the catalog,
 /// matching how raw_decode.rs/import.rs are already decoupled from
@@ -359,6 +400,10 @@ pub fn run() {
             set_copyright,
             set_contact,
             remove_images,
+            assign_keyword_path,
+            remove_keyword_from_image,
+            get_image_keywords,
+            list_keywords,
             get_develop_preview,
             get_edit_stack,
             set_edit_stack,

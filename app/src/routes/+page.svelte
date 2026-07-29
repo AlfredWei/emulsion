@@ -12,6 +12,7 @@
   import SmartCollectionDialog from "$lib/components/SmartCollectionDialog.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import Filmstrip from "$lib/components/Filmstrip.svelte";
+  import BackupPromptDialog from "$lib/components/BackupPromptDialog.svelte";
   import {
     importFolder,
     importFiles,
@@ -37,6 +38,7 @@
   } from "$lib/api/catalog.js";
   import { getEditStack, setEditStack, regenerateThumbnail, opValue, upsertOp } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
+  import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -193,6 +195,45 @@
       }
     }
     return pendingSave ?? Promise.resolve();
+  }
+
+  // Catalog backup (PRD §7.6): the close handler needs to actually wait for
+  // the user's dialog interaction before destroying the window -- a
+  // genuinely new pattern here, since every other dialog in this app is
+  // fire-and-forget from its caller's perspective. `resolveBackupPrompt`
+  // always eventually fires: "Skip This Time" is always available even if
+  // "Back Up Now" fails, so this promise is guaranteed to settle.
+  let backupPromptOpen = $state(false);
+  let backupPromptSettings = $state(/** @type {import('$lib/api/backup.js').BackupSettings | null} */ (null));
+  let resolveBackupPrompt = /** @type {(() => void) | null} */ (null);
+
+  function showBackupPromptAndWait(/** @type {import('$lib/api/backup.js').BackupSettings} */ settings) {
+    return new Promise((resolve) => {
+      backupPromptSettings = settings;
+      resolveBackupPrompt = () => resolve(undefined);
+      backupPromptOpen = true;
+    });
+  }
+
+  function closeBackupPrompt() {
+    backupPromptOpen = false;
+    resolveBackupPrompt?.();
+    resolveBackupPrompt = null;
+  }
+
+  /** @param {import('$lib/api/backup.js').BackupSettings} settings */
+  function handleBackupDone(settings) {
+    updateBackupSettings(settings).catch(() => {});
+    closeBackupPrompt();
+  }
+
+  /** @param {import('$lib/api/backup.js').BackupSettings} settings */
+  function handleBackupSkip(settings) {
+    // Resets the due-clock so skipping doesn't re-prompt on literally the
+    // next close -- a deliberate simplification of Lightroom's own more
+    // precise "postpone until the next real interval" semantics.
+    updateBackupSettings({ ...settings, last_backup_at: new Date().toISOString() }).catch(() => {});
+    closeBackupPrompt();
   }
 
   // Thumbnail refresh after a Develop edit -- entirely separate from
@@ -590,6 +631,13 @@
     // docs) -- it cannot help against SIGKILL/a hard crash, which bypasses
     // every in-process handler. Whether macOS Cmd+Q routes through this
     // same path is unverified in this environment.
+    //
+    // Catalog backup (PRD §7.6): settings are re-fetched fresh here, not
+    // snapshotted at startup -- Tauri's own `onCloseRequested` docs show
+    // `event.preventDefault()` being called *after* an `await` as the
+    // canonical pattern (the wrapper awaits the whole handler before ever
+    // checking `isPreventDefault()`), so there's no staleness risk to
+    // engineer around by pre-fetching.
     let unlistenClose = /** @type {(() => void) | undefined} */ (undefined);
     getCurrentWindow()
       .onCloseRequested(async (event) => {
@@ -599,8 +647,20 @@
         // before the pending-work check below -- otherwise it's silently
         // lost, the same class of bug fixed for the Develop edit stack.
         /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
-        if (persistTimer === null && pendingSave === null && pendingIptcSave === null) return;
+
+        const editPending = persistTimer !== null || pendingSave !== null || pendingIptcSave !== null;
+        let backupSettings = /** @type {import('$lib/api/backup.js').BackupSettings | null} */ (null);
+        try {
+          backupSettings = await getBackupSettings();
+        } catch {
+          // Treat an unreadable settings fetch as "not due" -- a backup
+          // check must never block an otherwise-clean quit.
+        }
+        const backupDue = backupSettings !== null && isBackupDue(backupSettings);
+
+        if (!editPending && !backupDue) return;
         event.preventDefault();
+
         const wasEditPending = persistTimer !== null || pendingSave !== null;
         await Promise.all([flushEditStack(), pendingIptcSave ?? Promise.resolve()]);
         // Fire-and-forget, deliberately NOT awaited: a thumbnail regen
@@ -610,6 +670,11 @@
         // precedent already established for generate_missing_thumbnails.
         // Blocking app quit on this would be a real regression.
         if (wasEditPending) regenerateThumbnailFor(developVersionId);
+
+        // Always resolves -- "Skip This Time" is always available even if
+        // "Back Up Now" fails, so this can never trap the user unable to quit.
+        if (backupDue && backupSettings !== null) await showBackupPromptAndWait(backupSettings);
+
         await getCurrentWindow().destroy();
       })
       .then((fn) => {
@@ -712,6 +777,15 @@
     onConfirm={handleCreateSmartCollection}
     onCancel={() => (creatingSmartCollection = false)}
   />
+
+  {#if backupPromptSettings}
+    <BackupPromptDialog
+      open={backupPromptOpen}
+      settings={backupPromptSettings}
+      onDone={handleBackupDone}
+      onSkip={handleBackupSkip}
+    />
+  {/if}
 
   {#if statusMessage}
     <div class="status">{statusMessage}</div>

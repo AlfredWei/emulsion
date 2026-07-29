@@ -80,6 +80,10 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 **Rough size:** 3–5 months · **Lightroom analog:** v2.0–v3.0, 2008–2010
 
 ### Scope
+- **Settings/Preferences dialog** (added 2026-07-29, real gap identified once M2's catalog backup shipped): a general, app-wide settings surface — none exists today; the only precedent is M2's backup dialog, deliberately scoped as "the close-prompt is the only settings surface, a future settings surface can add a manual trigger later." Establishes the pattern going forward: new configurable behavior gets a section in this dialog rather than a bespoke one-off dialog per feature. Backup settings (frequency/folder/integrity/optimize) migrate in as the first real section, on top of their current close-prompt-only editing surface (which stays as the prompt itself, just reads/writes the same settings).
+- **Quick action area, completed** (added 2026-07-29): Library's flag/star/color-label controls are click-only per-cell badge-row buttons today (`GridCell.svelte`) — no keyboard-shortcut layer exists anywhere in this repo, not even as a documented-but-unbuilt spec. Adds the standard shortcut scheme (number keys for star rating, pick/reject/unflag, color-label keys) so culling speed matches the rest of the app's keyboard-first intent.
+- **Basic pan/zoom & view controls** (added 2026-07-29): Develop's canvas is fit-to-window only today — no zoom-level state, no 100%/zoom-to-point, no click-drag pan. Adds the minimum viewing controls any image editor needs; also a practical prerequisite for this milestone's own brush/mask tools, which aren't usable at fit-to-window scale.
+- **Extract the develop engine** (added 2026-07-29): consolidate edit-stack interpretation — today duplicated as two independently hand-synced implementations, `DevelopCanvas.svelte`'s WGSL shader (interactive GPU preview) and `export.rs`'s CPU code (final render) — into a single, focused module boundary. Done at the *start* of this milestone, before its own large batch of new ops (tone curve, HSL, split toning, dehaze, clarity/texture, vignette, grain, lens corrections) doubles the duplication surface; sets up M5's later "GPU pipeline... with correct, seamless CPU fallback" work rather than competing with it.
 - Local adjustments: linear gradient, radial gradient, adjustment brush (with auto-mask), all as composable masks feeding the edit stack.
 - Range masking: color range and luminance range selection.
 - Tone curve, HSL/color mixer, split toning, dehaze, clarity/texture, vignette, grain.
@@ -91,10 +95,15 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 - Modern highlights/shadows tone *model* overhaul is already in M1 (pulled forward vs. Lightroom's actual timeline since it's foundational, not optional) — no change needed here.
 - Healing/clone brush, perspective/upright correction, soft proofing, print/book/web output → M4.
 - Tethered capture: evaluate at M4 planning time; not committed here.
+- Library "Loupe" (single-image, non-Develop) view — a separate, already-deferred gap (see PROGRESS.md), not required for this milestone's pan/zoom scope, which is about the Develop canvas.
 
 ### Exit criteria
 - A photographer can fully locally-adjust an image (e.g., dodge/burn a face, darken a sky, selectively desaturate) without leaving the app.
 - Presets can be created, applied across a batch, and reused across sessions.
+- A Settings dialog exists, holds at least backup settings plus any new preferences this milestone introduces, and is the documented pattern future milestones are expected to extend rather than bypass.
+- Library culling (rate/flag/color-label) is fully keyboard-drivable via the standard shortcut scheme, no mouse required.
+- Develop supports fit/100%/zoom + click-drag pan.
+- The develop engine's edit-stack interpretation lives in one module boundary, not two independently-maintained implementations, before this milestone's op count grows further.
 
 ---
 

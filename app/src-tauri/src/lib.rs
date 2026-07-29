@@ -8,7 +8,8 @@ mod raw_decode;
 mod source_decode;
 
 use catalog::{
-    Catalog, CollectionSummary, EditStack, ImageKeywordAssignment, ImageSummary, KeywordNode, KeywordRef,
+    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, ImageKeywordAssignment, ImageSummary,
+    KeywordNode, KeywordRef,
 };
 use export::{ExportOptions, ExportResult};
 use import::ImportSummary;
@@ -495,6 +496,50 @@ async fn export_images(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+fn get_backup_settings(state: State<'_, AppState>) -> Result<BackupSettings, String> {
+    state.catalog.lock().map_err(|e| e.to_string())?.get_backup_settings().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_backup_settings(state: State<'_, AppState>, settings: BackupSettings) -> Result<(), String> {
+    state
+        .catalog
+        .lock()
+        .map_err(|e| e.to_string())?
+        .update_backup_settings(&settings)
+        .map_err(|e| e.to_string())
+}
+
+/// Catalog backup (PRD §7.6). `spawn_blocking`, matching `export_images` --
+/// a real multi-second operation (optional integrity check + VACUUM + a
+/// full-catalog copy), not something to run on the async executor's own
+/// thread. Deliberately holds the catalog lock for the whole operation,
+/// unlike `export_images`'s lock-briefly pattern -- see the doc comment on
+/// `Catalog::perform_backup` for why that's an accepted, named exception
+/// here rather than the same regression class this file's other commands
+/// take care to avoid.
+#[tauri::command]
+async fn perform_catalog_backup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    folder: String,
+    check_integrity: bool,
+    optimize: bool,
+) -> Result<BackupOutcome, String> {
+    let catalog = state.catalog.clone();
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        catalog
+            .perform_backup(std::path::Path::new(&folder), &app_data_dir, check_integrity, optimize)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -559,6 +604,9 @@ pub fn run() {
             set_edit_stack,
             regenerate_thumbnail,
             export_images,
+            get_backup_settings,
+            update_backup_settings,
+            perform_catalog_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

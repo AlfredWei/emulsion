@@ -533,17 +533,79 @@
     statusMessage = `Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from collection`;
   }
 
+  // M3 Slice 2: standard Lightroom Classic Library shortcuts -- 0-5 directly
+  // SET star rating (0 clears, not a toggle), P/X toggle Pick/Reject on and
+  // off, U always hard-clears to unflagged (a third, distinct key, not a
+  // toggle of P or X), 6/7/8/9 toggle Red/Yellow/Green/Blue on and off.
+  // Purple has no default key in real Lightroom, so none is bound here
+  // either. Reuses handleRatingChange/handleFlagChange/handleColorLabelChange
+  // with `selectedId` (the anchor) directly -- selectedId is always a
+  // member of selectedIds whenever there's a real multi-selection, so their
+  // existing targetVersionIds() batching applies "for free," no new
+  // target-computation needed.
+  const COLOR_KEYS = { 6: "red", 7: "yellow", 8: "green", 9: "blue" };
+
   function handleLibraryKeydown(/** @type {KeyboardEvent} */ e) {
-    if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (activeModule !== "library") return;
-    if (confirmingRemoval || exportItems !== null) return;
-    if (selectedIds.size === 0) return;
-    // Backspace is a typing key in MetadataPanel's fields -- never treat
-    // it as "remove photos" while an editable element has focus.
+    if (
+      confirmingRemoval ||
+      exportItems !== null ||
+      creatingCollection ||
+      creatingSmartCollection ||
+      creatingCollectionWithImages ||
+      settingsOpen ||
+      backupPromptOpen
+    ) {
+      return;
+    }
+    // Backspace/typed digits are typing keys in MetadataPanel's fields and
+    // the toolbar/Settings <select>s -- never treat them as shortcuts while
+    // an editable or form-control element has focus.
     const target = e.target;
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
-    e.preventDefault();
-    confirmingRemoval = true;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement
+    ) {
+      return;
+    }
+
+    if (e.key === "Delete" || e.key === "Backspace") {
+      if (selectedIds.size === 0) return;
+      e.preventDefault();
+      confirmingRemoval = true;
+      return;
+    }
+
+    if (selectedId === null) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const key = e.key.toLowerCase();
+
+    if (key >= "0" && key <= "5") {
+      e.preventDefault();
+      handleRatingChange(selectedId, Number(key));
+      return;
+    }
+    if (key === "p") {
+      e.preventDefault();
+      handleFlagChange(selectedId, selectedImage?.flag === "pick" ? "none" : "pick");
+      return;
+    }
+    if (key === "x") {
+      e.preventDefault();
+      handleFlagChange(selectedId, selectedImage?.flag === "reject" ? "none" : "reject");
+      return;
+    }
+    if (key === "u") {
+      e.preventDefault();
+      handleFlagChange(selectedId, "none");
+      return;
+    }
+    if (key in COLOR_KEYS) {
+      e.preventDefault();
+      const color = COLOR_KEYS[/** @type {"6"|"7"|"8"|"9"} */ (key)];
+      handleColorLabelChange(selectedId, selectedImage?.color_label === color ? "none" : color);
+    }
   }
 
   // M2 Slice 2: IPTC fields save on blur (MetadataPanel), not debounced --

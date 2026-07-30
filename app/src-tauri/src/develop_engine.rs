@@ -45,6 +45,88 @@ fn op_value(ops: &[serde_json::Value], name: &str) -> f32 {
         .unwrap_or(0.0) as f32
 }
 
+/// One global exposure/contrast/saturation application -- factored out so
+/// both the global pass and each mask's local pass (below) share the exact
+/// same formula, mirroring how the WGSL shader factors its own
+/// `apply_adjustments` helper for the same reason (M3 Slice 5).
+fn apply_adjustments(rgb: [f32; 3], exposure_ev: f32, contrast: f32, saturation: f32) -> [f32; 3] {
+    let mut c = rgb;
+    for v in c.iter_mut() {
+        *v *= 2f32.powf(exposure_ev);
+    }
+    for v in c.iter_mut() {
+        *v = (*v - 0.5) * (1.0 + contrast / 100.0) + 0.5;
+    }
+    let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+    for v in c.iter_mut() {
+        *v = luma + (*v - luma) * (1.0 + saturation / 100.0);
+    }
+    c
+}
+
+/// A `linear_gradient_mask` op (M3 Slice 5), parsed from its opaque JSON
+/// shape -- see MaskToolStrip.svelte/develop.js for how the frontend
+/// creates these. Coordinates are normalized (0..1, matching the WGSL
+/// shader's own `in.uv`), so they stay valid across preview resolutions.
+struct LinearGradientMask {
+    start: (f32, f32),
+    end: (f32, f32),
+    feather: f32,
+    invert: bool,
+    exposure: f32,
+    contrast: f32,
+    saturation: f32,
+}
+
+fn parse_linear_gradient_masks(ops: &[serde_json::Value]) -> Vec<LinearGradientMask> {
+    ops.iter()
+        .filter(|op| op.get("op").and_then(|v| v.as_str()) == Some("linear_gradient_mask"))
+        .filter_map(|op| {
+            let start = op.get("start")?;
+            let end = op.get("end")?;
+            Some(LinearGradientMask {
+                start: (
+                    start.get("x")?.as_f64()? as f32,
+                    start.get("y")?.as_f64()? as f32,
+                ),
+                end: (
+                    end.get("x")?.as_f64()? as f32,
+                    end.get("y")?.as_f64()? as f32,
+                ),
+                feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
+                exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                saturation: op
+                    .get("saturation")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32,
+            })
+        })
+        .collect()
+}
+
+/// Same projection-onto-segment parametrization as the WGSL shader: `t` is
+/// 0 at `start`, 1 at `end`, extrapolated linearly beyond both (then
+/// clamped). `feather` widens the transition band symmetrically around the
+/// midpoint -- at `feather=50`, the pins themselves move to weight 0.25/
+/// 0.75 rather than staying at 0/1 -- a deliberate choice matching real
+/// Lightroom's own gradient-feather model (its feather handles are
+/// separate outer lines beyond the pins), not a corner-only softening.
+fn mask_weight(uv: (f32, f32), mask: &LinearGradientMask) -> f32 {
+    let dx = mask.end.0 - mask.start.0;
+    let dy = mask.end.1 - mask.start.1;
+    let len2 = (dx * dx + dy * dy).max(0.000_001);
+    let t = ((uv.0 - mask.start.0) * dx + (uv.1 - mask.start.1) * dy) / len2;
+    let softness = (mask.feather / 100.0).clamp(0.0, 0.999);
+    let mut weight = (t + softness) / (1.0 + 2.0 * softness);
+    weight = weight.clamp(0.0, 1.0);
+    if mask.invert {
+        weight = 1.0 - weight;
+    }
+    weight
+}
+
 /// Same formula as `DevelopCanvas.svelte`'s WGSL fragment shader, in the
 /// same order, kept in `f32` to track the shader's precision. Not required
 /// to be byte-identical to the shader's GPU output (their source
@@ -52,28 +134,48 @@ fn op_value(ops: &[serde_json::Value], name: &str) -> f32 {
 /// Develop preview) -- sourced from the same formula, tested against the
 /// same hand-derived expected values, same tolerance the shader's own
 /// numeric smoke test already uses.
+///
+/// Local adjustments (`linear_gradient_mask` ops) are applied AFTER the
+/// global exposure/contrast/saturation pass, in stack order -- matches
+/// real Lightroom's own layering (local adjustments grade on top of the
+/// globally-graded image) and keeps this in the same order the WGSL
+/// shader applies them.
 pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let exposure_ev = op_value(&stack.ops, "exposure");
     let contrast = op_value(&stack.ops, "contrast");
     let saturation = op_value(&stack.ops, "saturation");
+    let masks = parse_linear_gradient_masks(&stack.ops);
 
-    for pixel in image.pixels_mut() {
-        let mut rgb = [
-            pixel[0] as f32 / 255.0,
-            pixel[1] as f32 / 255.0,
-            pixel[2] as f32 / 255.0,
-        ];
+    let (width, height) = (image.width(), image.height());
 
-        for c in rgb.iter_mut() {
-            *c *= 2f32.powf(exposure_ev);
-        }
-        for c in rgb.iter_mut() {
-            *c = (*c - 0.5) * (1.0 + contrast / 100.0) + 0.5;
-        }
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        let mut rgb = apply_adjustments(
+            [
+                pixel[0] as f32 / 255.0,
+                pixel[1] as f32 / 255.0,
+                pixel[2] as f32 / 255.0,
+            ],
+            exposure_ev,
+            contrast,
+            saturation,
+        );
 
-        let luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
-        for c in rgb.iter_mut() {
-            *c = luma + (*c - luma) * (1.0 + saturation / 100.0);
+        if !masks.is_empty() {
+            // Pixel-center sampling, matching how a texture lookup samples
+            // at the middle of a texel -- not required to be exact, same
+            // "not byte-identical, tested to tolerance" bar as the rest of
+            // this module.
+            let uv = (
+                (x as f32 + 0.5) / width as f32,
+                (y as f32 + 0.5) / height as f32,
+            );
+            for mask in &masks {
+                let weight = mask_weight(uv, mask);
+                let local = apply_adjustments(rgb, mask.exposure, mask.contrast, mask.saturation);
+                for c in 0..3 {
+                    rgb[c] += (local[c] - rgb[c]) * weight;
+                }
+            }
         }
 
         for (channel, value) in pixel.0.iter_mut().zip(rgb.iter()) {
@@ -153,5 +255,71 @@ mod tests {
     #[test]
     fn apply_edit_stack_clamps_past_white_instead_of_wrapping() {
         assert_pixel([250, 250, 250], &[("exposure", 2.0)], [255, 255, 255]);
+    }
+
+    /// A 1x1 test image always samples at uv=(0.5,0.5) (pixel-center
+    /// sampling) -- so these cases vary the MASK's start/end to place that
+    /// fixed point at the desired relative position (before/after/at the
+    /// gradient), rather than varying the image. Each expected value
+    /// hand-computed precisely via script (not eyeballed) before writing
+    /// the assertion.
+    fn mask_stack(
+        start: (f32, f32),
+        end: (f32, f32),
+        feather: f32,
+        exposure: f32,
+    ) -> EditStack {
+        EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({
+                "op": "linear_gradient_mask",
+                "id": "test-mask",
+                "start": { "x": start.0, "y": start.1 },
+                "end": { "x": end.0, "y": end.1 },
+                "feather": feather,
+                "invert": false,
+                "exposure": exposure,
+                "contrast": 0.0,
+                "saturation": 0.0,
+            })],
+        }
+    }
+
+    fn assert_mask_pixel(stack: EditStack, expected: [i32; 3]) {
+        let mut image = RgbImage::from_pixel(1, 1, image::Rgb([100, 100, 100]));
+        apply_edit_stack(&mut image, &stack);
+        let pixel = image.get_pixel(0, 0);
+        for (actual, expected) in pixel.0.iter().zip(expected.iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected ~{expected:?}, got {actual} (full pixel {:?})",
+                pixel.0
+            );
+        }
+    }
+
+    #[test]
+    fn linear_gradient_mask_before_start_gets_no_local_adjustment() {
+        assert_mask_pixel(mask_stack((0.6, 0.5), (0.9, 0.5), 0.0, 1.0), [100, 100, 100]);
+    }
+
+    #[test]
+    fn linear_gradient_mask_after_end_gets_full_local_adjustment() {
+        assert_mask_pixel(mask_stack((0.1, 0.5), (0.4, 0.5), 0.0, 1.0), [200, 200, 200]);
+    }
+
+    #[test]
+    fn linear_gradient_mask_midpoint_blends_halfway() {
+        assert_mask_pixel(mask_stack((0.2, 0.5), (0.8, 0.5), 0.0, 1.0), [150, 150, 150]);
+    }
+
+    /// Feather widens the transition band around the midpoint rather than
+    /// only softening the corners -- at feather=50 the pixel sitting
+    /// exactly AT the start point (t=0) gets weight 0.25, not 0. A
+    /// deliberate choice matching real Lightroom's own feather model (see
+    /// `mask_weight`'s doc comment) -- this test pins that behavior down.
+    #[test]
+    fn linear_gradient_mask_feather_moves_the_anchor_off_zero() {
+        assert_mask_pixel(mask_stack((0.5, 0.5), (0.8, 0.5), 50.0, 1.0), [125, 125, 125]);
     }
 }

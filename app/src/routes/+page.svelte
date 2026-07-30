@@ -6,6 +6,8 @@
   import LibraryGrid from "$lib/components/LibraryGrid.svelte";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
+  import MaskToolStrip from "$lib/components/MaskToolStrip.svelte";
+  import MaskEditorPanel from "$lib/components/MaskEditorPanel.svelte";
   import ExportDialog from "$lib/components/ExportDialog.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import TextPromptDialog from "$lib/components/TextPromptDialog.svelte";
@@ -37,7 +39,18 @@
     listCollections,
     listCollectionImageIds,
   } from "$lib/api/catalog.js";
-  import { getEditStack, setEditStack, regenerateThumbnail, opValue, upsertOp } from "$lib/api/develop.js";
+  import {
+    getEditStack,
+    setEditStack,
+    regenerateThumbnail,
+    opValue,
+    upsertOp,
+    listMasks,
+    addMask,
+    updateMask,
+    removeMask,
+    createLinearGradientMask,
+  } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
 
@@ -131,6 +144,38 @@
   let exposure = $derived(opValue(editStack, "exposure", 0));
   let contrast = $derived(opValue(editStack, "contrast", 0));
   let saturation = $derived(opValue(editStack, "saturation", 0));
+
+  // M3 Slice 5: local adjustment masks. `activeTool` drives DevelopCanvas's
+  // hard-branched pointer routing (mask placement vs. pan/zoom);
+  // `selectedMaskId` drives which mask (if any) MaskEditorPanel shows.
+  // Both are pure view state, not persisted -- reset whenever Develop is
+  // left, matching the same reasoning DevelopCanvas's own zoomMode uses.
+  let masks = $derived(listMasks(editStack));
+  let activeTool = $state(/** @type {string | null} */ (null));
+  let selectedMaskId = $state(/** @type {string | null} */ (null));
+  let selectedMask = $derived(masks.find((m) => m.id === selectedMaskId) ?? null);
+
+  function handleMaskCreated(/** @type {{ start: {x:number,y:number}, end: {x:number,y:number} }} */ placement) {
+    const mask = createLinearGradientMask(placement.start, placement.end);
+    editStack = addMask(editStack, mask);
+    selectedMaskId = mask.id;
+    activeTool = null; // drop back to selection after placing one, matching real Lightroom
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  function handleMaskUpdated(/** @type {string} */ id, /** @type {Record<string, unknown>} */ patch) {
+    editStack = updateMask(editStack, id, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  function handleMaskDeleted() {
+    if (selectedMaskId === null) return;
+    editStack = removeMask(editStack, selectedMaskId);
+    selectedMaskId = null;
+    flushEditStack();
+  }
 
   // What Export would act on right now: the open Develop image, or every
   // selected Library image (M2 Slice 3 batch export -- the frontend-only
@@ -649,6 +694,8 @@
     developVersionId = versionId;
     developImagePath = image.path;
     editStack = await getEditStack(versionId);
+    activeTool = null;
+    selectedMaskId = null;
     activeModule = "develop";
   }
 
@@ -656,6 +703,8 @@
     if (activeModule === "develop" && target !== "develop") {
       flushEditStack();
       regenerateThumbnailFor(developVersionId);
+      activeTool = null;
+      selectedMaskId = null;
     }
     activeModule = target;
   }
@@ -945,7 +994,26 @@
     </div>
   {:else if developImagePath}
     <div class="develop-body">
-      <DevelopCanvas imagePath={developImagePath} {exposure} {contrast} {saturation} />
+      <DevelopCanvas
+        imagePath={developImagePath}
+        {exposure}
+        {contrast}
+        {saturation}
+        {masks}
+        {activeTool}
+        {selectedMaskId}
+        onMaskCreated={handleMaskCreated}
+        onMaskUpdated={handleMaskUpdated}
+        onMaskSelected={(id) => (selectedMaskId = id)}
+      />
+      {#if selectedMask}
+        <MaskEditorPanel
+          mask={selectedMask}
+          onChange={(patch) => handleMaskUpdated(/** @type {string} */ (selectedMaskId), patch)}
+          onDelete={handleMaskDeleted}
+          onClose={() => (selectedMaskId = null)}
+        />
+      {/if}
       <DevelopPanel
         {exposure}
         {contrast}
@@ -955,6 +1023,13 @@
         onSaturationChange={(v) => handleAdjustmentChange("saturation", v)}
       />
     </div>
+    <MaskToolStrip
+      {activeTool}
+      {masks}
+      {selectedMaskId}
+      onToolToggle={(tool) => (activeTool = activeTool === tool ? null : tool)}
+      onMaskSelect={(id) => (selectedMaskId = id)}
+    />
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>
   {/if}
@@ -1081,6 +1156,7 @@
     flex: 1;
     display: flex;
     min-height: 0;
+    position: relative;
   }
   .rail {
     width: 200px;

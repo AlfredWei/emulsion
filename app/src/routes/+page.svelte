@@ -13,6 +13,7 @@
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import Filmstrip from "$lib/components/Filmstrip.svelte";
   import BackupPromptDialog from "$lib/components/BackupPromptDialog.svelte";
+  import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import {
     importFolder,
     importFiles,
@@ -55,6 +56,9 @@
   let activeModule = $state("library"); // "library" | "develop"
   let importing = $state(false);
   let statusMessage = $state("");
+  // M3 Slice 1: general Settings dialog, app-level (not module-scoped, so
+  // it's not gated on activeModule like Export/Remove are).
+  let settingsOpen = $state(false);
 
   // Collections (M2 Slice 5). `activeCollectionId === null` means "All
   // Photos" (no filter). `manualMembership` caches a manual collection's
@@ -641,6 +645,16 @@
     let unlistenClose = /** @type {(() => void) | undefined} */ (undefined);
     getCurrentWindow()
       .onCloseRequested(async (event) => {
+        // M3 Slice 1: force-close Settings unconditionally before any
+        // backup-prompt logic below runs. SettingsDialog and
+        // BackupPromptDialog share the same fixed-inset/z-index overlay
+        // shell -- if both were left open at once, whichever is later in
+        // DOM order would silently swallow all clicks, and the close-prompt
+        // underneath could get stuck uninteractive after event.preventDefault()
+        // already fired. This removes the ambiguity outright rather than
+        // relying on template order as an implicit invariant.
+        settingsOpen = false;
+
         // M2 Slice 2: an IPTC field saves on blur, so a value typed but not
         // yet blurred (e.g. the user clicks the window's close button while
         // still focused in the Caption textarea) needs to be forced to save
@@ -734,7 +748,10 @@
     <button class="import-btn" onclick={handleImportFolder} disabled={importing}>
       {importing ? "Importing…" : "Import Folder…"}
     </button>
+    <button class="settings-btn" title="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
   </div>
+
+  <SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} />
 
   <ExportDialog items={exportItems} onClose={() => (exportItems = null)} />
 
@@ -951,6 +968,22 @@
     background: transparent;
     color: var(--text-secondary);
     border: 1px solid var(--border-strong);
+  }
+  .settings-btn {
+    all: unset;
+    cursor: pointer;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+  }
+  .settings-btn:hover {
+    color: var(--text-primary);
   }
   .export-btn,
   .remove-btn {

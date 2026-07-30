@@ -357,12 +357,14 @@ impl Catalog {
 
         // Defaults inserted once, idempotently -- INSERT OR IGNORE is a
         // no-op on every open() after the first. `backup_frequency`
-        // defaults to "weekly", not "never": this dialog is the *only*
-        // place backup settings can ever be changed (no settings menu
-        // exists), so defaulting to "never" would leave no reachable way
-        // to ever opt in. Matches PRD/MILESTONES' own framing of this
-        // feature as modeled on real Lightroom, which also prompts from
-        // the first session with a default weekly cadence.
+        // defaults to "weekly", not "never": at the time this table was
+        // added (M2), the close-prompt dialog was the *only* place backup
+        // settings could ever be changed (no settings menu existed yet), so
+        // defaulting to "never" would have left no reachable way to ever
+        // opt in. M3's Settings dialog now gives a second editing surface,
+        // but the same default still matches PRD/MILESTONES' own framing of
+        // this feature as modeled on real Lightroom, which also prompts
+        // from the first session with a default weekly cadence.
         conn.execute_batch(
             "
             INSERT OR IGNORE INTO settings (key, value) VALUES

@@ -1,4 +1,5 @@
 mod catalog;
+mod develop_engine;
 mod export;
 mod import;
 mod jpeg_decode;

@@ -1,15 +1,11 @@
 //! Export pipeline (M1 Slice 5) — see docs/PRD/PRD.md §7.5.
 //!
-//! Applies the current edit stack to a full-resolution RAW decode and
-//! writes a real JPEG to disk. CPU-side render, not native wgpu or the
-//! in-webview WebGPU path Develop uses -- per ADR-0004, the export path
-//! has no <100ms latency requirement, so the constraints that shape the
-//! interactive pipeline don't apply here. Not required to be
-//! byte-identical to DevelopCanvas.svelte's WGSL shader output (their
-//! source resolutions differ anyway -- full-res export vs. the
-//! downsampled Develop preview) -- sourced from the same formula, tested
-//! against the same hand-derived expected values, same tolerance the
-//! shader's own numeric test already uses.
+//! Applies the current edit stack (via `develop_engine::apply_edit_stack`
+//! -- see that module for the formula and its parity obligations) to a
+//! full-resolution RAW decode and writes a real JPEG to disk. CPU-side
+//! render, not native wgpu or the in-webview WebGPU path Develop uses --
+//! per ADR-0004, the export path has no <100ms latency requirement, so the
+//! constraints that shape the interactive pipeline don't apply here.
 //!
 //! Scope cut for this pass (see the plan): JPEG output only, single image
 //! only (no multi-select UI in Library yet), long-edge-or-original resize,
@@ -19,6 +15,7 @@
 //! (M2 Slice 1).
 
 use crate::catalog::EditStack;
+use crate::develop_engine::apply_edit_stack;
 use crate::source_decode::{self, DecodeError};
 use image::codecs::jpeg::JpegEncoder;
 use image::RgbImage;
@@ -50,55 +47,6 @@ pub enum ExportError {
     Image(#[from] image::ImageError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-}
-
-/// Edit-stack ops have no meaningful array order (the shader always
-/// applies exposure -> contrast -> saturation regardless of how they're
-/// stored) -- look each one up by name, defaulting to a no-op value so an
-/// image never opened in Develop still exports as a clean passthrough.
-fn op_value(ops: &[serde_json::Value], name: &str) -> f32 {
-    ops.iter()
-        .find(|op| op.get("op").and_then(|v| v.as_str()) == Some(name))
-        .and_then(|op| op.get("value"))
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0) as f32
-}
-
-/// Same formula as DevelopCanvas.svelte's WGSL fragment shader, in the
-/// same order, kept in f32 to track the shader's precision. See this
-/// module's doc comment for why exact GPU parity isn't the bar here.
-///
-/// `pub(crate)`: also reused by thumbnail regeneration (the Library grid
-/// thumbnail reflecting a Develop edit) -- same formula, same reasoning,
-/// no reason to duplicate it.
-pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
-    let exposure_ev = op_value(&stack.ops, "exposure");
-    let contrast = op_value(&stack.ops, "contrast");
-    let saturation = op_value(&stack.ops, "saturation");
-
-    for pixel in image.pixels_mut() {
-        let mut rgb = [
-            pixel[0] as f32 / 255.0,
-            pixel[1] as f32 / 255.0,
-            pixel[2] as f32 / 255.0,
-        ];
-
-        for c in rgb.iter_mut() {
-            *c *= 2f32.powf(exposure_ev);
-        }
-        for c in rgb.iter_mut() {
-            *c = (*c - 0.5) * (1.0 + contrast / 100.0) + 0.5;
-        }
-
-        let luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
-        for c in rgb.iter_mut() {
-            *c = luma + (*c - luma) * (1.0 + saturation / 100.0);
-        }
-
-        for (channel, value) in pixel.0.iter_mut().zip(rgb.iter()) {
-            *channel = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-        }
-    }
 }
 
 /// First `{stem}.{ext}`, `{stem}-1.{ext}`, `{stem}-2.{ext}`, ... that
@@ -194,44 +142,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    fn stack_with(ops: &[(&str, f32)]) -> EditStack {
-        EditStack {
-            schema_version: 1,
-            ops: ops
-                .iter()
-                .map(|(op, value)| serde_json::json!({ "op": op, "value": value }))
-                .collect(),
-        }
-    }
-
-    /// Same hand-derived expected value the WGSL shader's own numeric
-    /// test (m1-slice3-smoke) was validated against: input (153,51,51) +
-    /// exposure +0.5EV/contrast +10/saturation +30 -> (255,56,56). No
-    /// real RAW file needed -- this exercises apply_edit_stack directly.
-    #[test]
-    fn apply_edit_stack_matches_the_shaders_hand_derived_expected_value() {
-        let mut image = RgbImage::from_pixel(1, 1, image::Rgb([153, 51, 51]));
-        let stack = stack_with(&[("exposure", 0.5), ("contrast", 10.0), ("saturation", 30.0)]);
-
-        apply_edit_stack(&mut image, &stack);
-
-        let pixel = image.get_pixel(0, 0);
-        let expected = [255i32, 56, 56];
-        for (actual, expected) in pixel.0.iter().zip(expected.iter()) {
-            assert!(
-                (*actual as i32 - expected).abs() <= 2,
-                "expected ~{expected:?}, got {actual}"
-            );
-        }
-    }
-
-    #[test]
-    fn apply_edit_stack_is_a_passthrough_with_no_ops() {
-        let mut image = RgbImage::from_pixel(1, 1, image::Rgb([100, 120, 140]));
-        apply_edit_stack(&mut image, &EditStack::empty());
-        assert_eq!(image.get_pixel(0, 0).0, [100, 120, 140]);
     }
 
     #[test]

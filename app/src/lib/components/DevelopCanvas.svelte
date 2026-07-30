@@ -101,6 +101,14 @@
 
   // Same three adjustments as ADR-0004/RFC-0001's Slice 3 scope, applied in
   // WGSL entirely inside the webview process -- no IPC round trip per edit.
+  // This formula must be kept in hand-sync with `develop_engine.rs`'s
+  // `apply_edit_stack` (app/src-tauri/src/develop_engine.rs, M3 Slice 4) --
+  // the CPU-side implementation used for full-resolution export and
+  // thumbnail regeneration. They can't be unified into one executable
+  // implementation without native wgpu (deliberately deferred to M5, see
+  // ADR-0004's dated update); until then, `develop_engine.rs`'s own test
+  // table is the parity reference to check this shader's math against
+  // whenever either side changes.
   const WGSL = `
     struct VertexOut {
       @builtin(position) position: vec4<f32>,

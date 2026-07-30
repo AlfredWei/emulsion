@@ -257,7 +257,7 @@ pub fn generate_missing_thumbnails(catalog: &Arc<Mutex<Catalog>>, thumbnail_dir:
 /// above (a fresh, unedited RAW/JPEG decode), this reuses the Develop
 /// preview cache's already-decoded, unedited buffer -- `ensure_develop_preview_for_hash`
 /// returns a path/dimensions only, not pixels, so this loads the PNG
-/// itself before applying `export::apply_edit_stack`'s formula, then
+/// itself before applying `develop_engine::apply_edit_stack`'s formula, then
 /// downscales with the same cap/filter as an unedited thumbnail so
 /// there's no visible size/quality mismatch in the grid.
 ///
@@ -291,7 +291,7 @@ pub fn regenerate_edited_thumbnail(
     let preview =
         crate::preview_cache::ensure_develop_preview_for_hash(source_path, content_hash, previews_dir).ok()?;
     let mut decoded = image::open(&preview.path).ok()?.into_rgb8();
-    crate::export::apply_edit_stack(&mut decoded, stack);
+    crate::develop_engine::apply_edit_stack(&mut decoded, stack);
 
     let (w, h) = (decoded.width(), decoded.height());
     let resized = if w.max(h) > THUMBNAIL_MAX_DIMENSION {

@@ -1,4 +1,5 @@
 <script>
+  import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getDevelopPreview } from "$lib/api/develop.js";
 
@@ -13,8 +14,70 @@
   let { imagePath, exposure, contrast, saturation } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
+  let wrapEl = $state(/** @type {HTMLDivElement | null} */ (null));
   let status = $state("loading"); // "loading" | "ready" | "error"
   let errorMessage = $state("");
+
+  // M3 Slice 3: basic pan/zoom. "fit" is today's existing behavior
+  // (max-width/max-height:100%, never upscales past native size); "100" is
+  // true 1:1 canvas-backing-store pixels, scrollable via the browser's own
+  // native scroll clamping rather than hand-rolled pan math -- no manual
+  // clamping needed, scrollLeft/scrollTop are clamped to
+  // [0, scrollWidth - clientWidth] automatically. Purely a view concern,
+  // not persisted -- reset to "fit" whenever the image changes, in the
+  // existing imagePath-keyed $effect below.
+  let zoomMode = $state("fit"); // "fit" | "100"
+  /** @type {{ startX: number, startY: number, startScrollLeft: number, startScrollTop: number } | null} */
+  let dragState = null;
+  const DRAG_CLICK_THRESHOLD = 4; // px -- below this, pointerup is a click (toggle zoom), not a completed drag
+
+  function handlePointerDown(/** @type {PointerEvent} */ e) {
+    if (!wrapEl) return;
+    e.preventDefault();
+    canvasEl?.setPointerCapture(e.pointerId);
+    dragState = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startScrollLeft: wrapEl.scrollLeft,
+      startScrollTop: wrapEl.scrollTop,
+    };
+  }
+
+  function handlePointerMove(/** @type {PointerEvent} */ e) {
+    if (!dragState || !wrapEl) return;
+    wrapEl.scrollLeft = dragState.startScrollLeft - (e.clientX - dragState.startX);
+    wrapEl.scrollTop = dragState.startScrollTop - (e.clientY - dragState.startY);
+  }
+
+  async function handlePointerUp(/** @type {PointerEvent} */ e) {
+    canvasEl?.releasePointerCapture(e.pointerId);
+    if (!dragState) return;
+    const moved = Math.max(Math.abs(e.clientX - dragState.startX), Math.abs(e.clientY - dragState.startY));
+    const clickPoint = { x: e.clientX, y: e.clientY };
+    dragState = null;
+    if (moved >= DRAG_CLICK_THRESHOLD) return; // a completed drag, not a click -- leave scroll as-is
+
+    if (zoomMode === "100") {
+      zoomMode = "fit";
+      return;
+    }
+    // Zoom-to-point: convert the click's CSS-pixel position to a native
+    // canvas-backing-store pixel coordinate, using per-axis scale factors
+    // (fractional CSS-pixel rounding can differ slightly per axis even
+    // though aspect ratio is preserved), then center the viewport on it.
+    if (!canvasEl) return;
+    const rect = canvasEl.getBoundingClientRect();
+    const scaleX = rect.width / canvasEl.width;
+    const scaleY = rect.height / canvasEl.height;
+    const nativeX = (clickPoint.x - rect.left) / scaleX;
+    const nativeY = (clickPoint.y - rect.top) / scaleY;
+
+    zoomMode = "100";
+    await tick(); // required: $state-triggered DOM patches (the new canvas size) land on a microtask
+    if (!wrapEl) return;
+    wrapEl.scrollLeft = nativeX - wrapEl.clientWidth / 2;
+    wrapEl.scrollTop = nativeY - wrapEl.clientHeight / 2;
+  }
 
   // WebGPU handles -- plain vars, not $state: these drive imperative canvas
   // rendering, not Svelte's own reactivity (RFC-0001 §4 "decode once, edit
@@ -184,6 +247,7 @@
     const path = imagePath;
     const canvas = canvasEl;
     if (!path || !canvas) return;
+    zoomMode = "fit";
 
     (async () => {
       try {
@@ -205,8 +269,22 @@
   });
 </script>
 
-<div class="canvas-wrap">
-  <canvas bind:this={canvasEl}></canvas>
+<div class="canvas-wrap" class:zoomed={zoomMode === "100"} bind:this={wrapEl}>
+  <canvas
+    bind:this={canvasEl}
+    class:zoomed={zoomMode === "100"}
+    onpointerdown={handlePointerDown}
+    onpointermove={handlePointerMove}
+    onpointerup={handlePointerUp}
+  ></canvas>
+  {#if status === "ready"}
+    <button
+      class="zoom-badge"
+      type="button"
+      title={zoomMode === "fit" ? "Click image for 100%" : "Click image to fit"}
+      onclick={() => (zoomMode = zoomMode === "fit" ? "100" : "fit")}
+    >{zoomMode === "fit" ? "Fit" : "100%"}</button>
+  {/if}
   {#if status === "loading"}
     <div class="overlay">Decoding…</div>
   {:else if status === "error"}
@@ -218,18 +296,56 @@
   .canvas-wrap {
     flex: 1;
     display: flex;
-    align-items: center;
-    justify-content: center;
     position: relative;
     padding: 22px;
     min-width: 0;
     min-height: 0;
+    user-select: none;
+  }
+  /* M3 Slice 3: overflow:auto only in "100" mode -- centering the canvas
+     via `margin: auto` below (not align-items/justify-content on this
+     flex container) is what avoids a real "scroll trap": centering an
+     OVERFLOWING flex item via align-items/justify-content computes a
+     negative starting scroll offset that clamps to 0, permanently hiding
+     the "before center" portion of the image. Auto margins on the flex
+     item itself absorb free space when it fits (identical look to today's
+     Fit mode) and resolve to 0 when it overflows (normal, fully
+     scrollable, no trap) -- one rule handles both modes correctly. */
+  .canvas-wrap.zoomed {
+    overflow: auto;
   }
   canvas {
     max-width: 100%;
     max-height: 100%;
+    margin: auto;
     border-radius: 2px;
     box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.7);
+    cursor: zoom-in;
+    touch-action: none;
+  }
+  canvas.zoomed {
+    max-width: none;
+    max-height: none;
+    cursor: grab;
+  }
+  .zoom-badge {
+    all: unset;
+    position: absolute;
+    right: 30px;
+    bottom: 30px;
+    padding: 4px 9px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    color: var(--text-secondary);
+    background: rgba(20, 18, 16, 0.7);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    cursor: pointer;
+    z-index: 1;
+  }
+  .zoom-badge:hover {
+    color: var(--text-primary);
   }
   .overlay {
     position: absolute;

@@ -64,7 +64,7 @@
           class="star"
           class:on={n <= image.rating}
           type="button"
-          title="Rate {n} star{n === 1 ? '' : 's'}"
+          title="Rate {n} star{n === 1 ? '' : 's'} ({n})"
           onclick={(e) => setRating(e, n)}
         >★</button>
       {/each}
@@ -74,21 +74,21 @@
       class:pick={image.flag === "pick"}
       class:reject={image.flag === "reject"}
       type="button"
-      title="Pick"
+      title="Pick (P)"
       onclick={(e) => toggleFlag(e, "pick")}
     >✓</button>
     <button
       class="flag"
       class:reject={image.flag === "reject"}
       type="button"
-      title="Reject"
+      title="Reject (X)"
       onclick={(e) => toggleFlag(e, "reject")}
     >✕</button>
     <button
       class="color-dot"
       style={image.color_label !== "none" ? `background: var(--label-${image.color_label})` : ""}
       type="button"
-      title="Color label"
+      title="Color label (6-9 red/yellow/green/blue)"
       onclick={cycleColorLabel}
     ></button>
   </div>

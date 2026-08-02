@@ -51,6 +51,7 @@
     removeMask,
     createLinearGradientMask,
     createRadialGradientMask,
+    createBrushMask,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -156,19 +157,38 @@
   let selectedMaskId = $state(/** @type {string | null} */ (null));
   let selectedMask = $derived(masks.find((m) => m.id === selectedMaskId) ?? null);
 
+  // M3 Slice 7: brush TOOL options -- unlike a mask's own exposure/
+  // contrast/saturation (edited per-mask via MaskEditorPanel), these are
+  // baked into each dab at the moment it's painted (real Lightroom's own
+  // brush-options model: Size/Feather/Flow apply to whatever gets painted
+  // NEXT), so they live here as plain view state, not per-mask, and are
+  // never persisted or reset on module switch -- a user's preferred brush
+  // size should survive across strokes/masks within one session.
+  let brushSize = $state(0.05);
+  let brushHardness = $state(70);
+  let brushFlow = $state(1);
+  let eraseMode = $state(false);
+
   function handleMaskCreated(
     /** @type {
      *   | { kind: "linear_gradient", start: {x:number,y:number}, end: {x:number,y:number} }
      *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
+     *   | { kind: "brush", id: string }
      * } */ placement,
   ) {
     const mask =
       placement.kind === "radial_gradient"
         ? createRadialGradientMask(placement.center, placement.radiusX, placement.radiusY)
-        : createLinearGradientMask(placement.start, placement.end);
+        : placement.kind === "brush"
+          ? createBrushMask(placement.id)
+          : createLinearGradientMask(placement.start, placement.end);
     editStack = addMask(editStack, mask);
     selectedMaskId = mask.id;
-    activeTool = null; // drop back to selection after placing one, matching real Lightroom
+    // Real Lightroom drops back to selection after placing a gradient, but
+    // a brush stroke should keep the Brush tool active (painting is
+    // inherently multi-stroke -- see DevelopCanvas.svelte's brush-state
+    // doc comment) rather than force a re-click of the tool for every dab.
+    if (placement.kind !== "brush") activeTool = null;
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(flushEditStack, 250);
   }
@@ -1012,6 +1032,10 @@
         {masks}
         {activeTool}
         {selectedMaskId}
+        {brushSize}
+        {brushHardness}
+        {brushFlow}
+        {eraseMode}
         onMaskCreated={handleMaskCreated}
         onMaskUpdated={handleMaskUpdated}
         onMaskSelected={(id) => (selectedMaskId = id)}
@@ -1037,8 +1061,17 @@
       {activeTool}
       {masks}
       {selectedMaskId}
+      {brushSize}
+      {brushHardness}
+      {brushFlow}
+      {eraseMode}
       onToolToggle={(tool) => (activeTool = activeTool === tool ? null : tool)}
       onMaskSelect={(id) => (selectedMaskId = id)}
+      onBrushSizeChange={(v) => (brushSize = v)}
+      onBrushHardnessChange={(v) => (brushHardness = v)}
+      onBrushFlowChange={(v) => (brushFlow = v)}
+      onEraseToggle={() => (eraseMode = !eraseMode)}
+      onNewBrush={() => (selectedMaskId = null)}
     />
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>

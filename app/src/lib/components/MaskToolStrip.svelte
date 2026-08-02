@@ -5,34 +5,59 @@
    * Contextual tool strip above the Filmstrip in Develop, matching
    * UX-DESIGN.md's described layout ("a contextual tool strip above [the
    * filmstrip] for crop/mask/heal tools when active... designed into this
-   * layout now"). M3 Slice 5/6: Linear Gradient and Radial Gradient tools,
-   * plus a simple list of placed masks -- click-to-select is simpler and
-   * more robust here than hit-testing a click near a diagonal line/ellipse
-   * on the canvas.
+   * layout now"). M3 Slice 5/6/7: Linear Gradient, Radial Gradient, and
+   * Brush tools, plus a simple list of placed masks -- click-to-select is
+   * simpler and more robust here than hit-testing a click near a diagonal
+   * line/ellipse/painted region on the canvas.
    * @type {{
    *   activeTool: string | null,
    *   masks: import('$lib/api/develop.js').Mask[],
    *   selectedMaskId: string | null,
+   *   brushSize: number,
+   *   brushHardness: number,
+   *   brushFlow: number,
+   *   eraseMode: boolean,
    *   onToolToggle: (tool: string) => void,
    *   onMaskSelect: (id: string) => void,
+   *   onBrushSizeChange: (value: number) => void,
+   *   onBrushHardnessChange: (value: number) => void,
+   *   onBrushFlowChange: (value: number) => void,
+   *   onEraseToggle: () => void,
+   *   onNewBrush: () => void,
    * }}
    */
-  let { activeTool, masks, selectedMaskId, onToolToggle, onMaskSelect } = $props();
+  let {
+    activeTool,
+    masks,
+    selectedMaskId,
+    brushSize,
+    brushHardness,
+    brushFlow,
+    eraseMode,
+    onToolToggle,
+    onMaskSelect,
+    onBrushSizeChange,
+    onBrushHardnessChange,
+    onBrushFlowChange,
+    onEraseToggle,
+    onNewBrush,
+  } = $props();
 
   let atCap = $derived(masks.length >= MAX_MASKS);
 
-  // Per-kind chip numbering ("Gradient 1", "Radial 1") -- two independent
-  // counters, not one shared index, matching how Lightroom's own mask/
-  // history list names each tool instance by its own type.
+  // Per-kind chip numbering ("Gradient 1", "Radial 1", "Brush 1") -- three
+  // independent counters, not one shared index, matching how Lightroom's
+  // own mask/history list names each tool instance by its own type.
   let chipLabels = $derived.by(() => {
     let gradientCount = 0;
     let radialCount = 0;
+    let brushCount = 0;
     return new Map(
-      masks.map((mask) =>
-        mask.op === "radial_gradient_mask"
-          ? [mask.id, `Radial ${++radialCount}`]
-          : [mask.id, `Gradient ${++gradientCount}`],
-      ),
+      masks.map((mask) => {
+        if (mask.op === "radial_gradient_mask") return [mask.id, `Radial ${++radialCount}`];
+        if (mask.op === "brush_mask") return [mask.id, `Brush ${++brushCount}`];
+        return [mask.id, `Gradient ${++gradientCount}`];
+      }),
     );
   });
 </script>
@@ -54,6 +79,66 @@
     title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Radial Gradient"}
     onclick={() => onToolToggle("radial_gradient")}
   >Radial Gradient</button>
+  <button
+    class="tool"
+    class:active={activeTool === "brush"}
+    type="button"
+    disabled={atCap && activeTool !== "brush"}
+    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Brush"}
+    onclick={() => onToolToggle("brush")}
+  >Brush</button>
+
+  {#if activeTool === "brush"}
+    <div class="divider"></div>
+    <div class="brush-options">
+      <label class="brush-option">
+        <span>Size</span>
+        <input
+          type="range"
+          min="0.01"
+          max="0.3"
+          step="0.005"
+          value={brushSize}
+          oninput={(e) => onBrushSizeChange(Number(e.currentTarget.value))}
+        />
+      </label>
+      <label class="brush-option">
+        <!-- Feather (shown) is the inverse of the stored `hardness` (0
+             feather = a hard edge = hardness 100; 100 feather = fully
+             soft = hardness 0) -- matches this app's existing gradient
+             masks' own "Feather" naming/convention, kept consistent here
+             even though the underlying Dab field is `hardness`. -->
+        <span>Feather</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={100 - brushHardness}
+          oninput={(e) => onBrushHardnessChange(100 - Number(e.currentTarget.value))}
+        />
+      </label>
+      <label class="brush-option">
+        <span>Flow</span>
+        <input
+          type="range"
+          min="0.05"
+          max="1"
+          step="0.05"
+          value={brushFlow}
+          oninput={(e) => onBrushFlowChange(Number(e.currentTarget.value))}
+        />
+      </label>
+      <button
+        class="tool small"
+        class:active={eraseMode}
+        type="button"
+        title="Erase (paint removes coverage instead of adding it)"
+        onclick={onEraseToggle}
+      >Erase</button>
+      <button class="tool small" type="button" title="Start a new brush mask on the next stroke" onclick={onNewBrush}>New Brush</button>
+    </div>
+  {/if}
 
   {#if masks.length > 0}
     <div class="divider"></div>
@@ -105,6 +190,45 @@
     width: 1px;
     height: 16px;
     background: var(--border-subtle);
+  }
+  .brush-options {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+  }
+  .brush-option {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: default;
+  }
+  .brush-option span {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    flex: none;
+  }
+  .brush-option input[type="range"] {
+    width: 60px;
+    appearance: none;
+    -webkit-appearance: none;
+    height: 3px;
+    background: var(--border-strong);
+    border-radius: 2px;
+    outline: none;
+  }
+  .brush-option input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-strong);
+    border: 2px solid var(--bg-panel);
+    cursor: pointer;
+  }
+  .tool.small {
+    padding: 3px 8px;
+    font-size: 10.5px;
   }
   .mask-list {
     display: flex;

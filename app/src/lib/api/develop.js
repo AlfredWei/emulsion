@@ -43,7 +43,34 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} saturation
  */
 
-/** @typedef {LinearGradientMask | RadialGradientMask} Mask */
+/**
+ * @typedef {Object} Dab
+ * @property {number} x
+ * @property {number} y
+ * @property {number} radius - normalized fraction of image WIDTH only (a
+ *   single scalar, not radiusX/radiusY like radial masks) -- rasterization
+ *   happens directly in the offscreen canvas's own native-pixel space
+ *   (DevelopCanvas.svelte), so `radius * nativeWidth` used for both
+ *   dimensions of `ctx.arc()` is inherently a true circle in image-pixel
+ *   space, with no separate axis scaling needed.
+ * @property {number} hardness - 0 (fully soft) .. 100 (harder edge), baked
+ *   into this dab's own radial-gradient falloff at paint time.
+ * @property {number} flow - 0..1, baked in at paint time.
+ * @property {"add" | "erase"} mode
+ */
+
+/**
+ * @typedef {Object} BrushMask
+ * @property {"brush_mask"} op
+ * @property {string} id
+ * @property {Dab[]} dabs
+ * @property {boolean} invert
+ * @property {number} exposure
+ * @property {number} contrast
+ * @property {number} saturation
+ */
+
+/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask} Mask */
 
 /**
  * @typedef {Object} EditStack
@@ -103,8 +130,7 @@ export const MAX_MASKS = 8;
 // An explicit allowlist, not an implicit naming convention (e.g.
 // `endsWith("_mask")`) -- simpler and more robust, since it can't silently
 // misclassify some future non-mask op that happens to share the suffix.
-// Right-sized for two kinds; not a "kind registry" to avoid over-building.
-const MASK_OP_NAMES = ["linear_gradient_mask", "radial_gradient_mask"];
+const MASK_OP_NAMES = ["linear_gradient_mask", "radial_gradient_mask", "brush_mask"];
 
 /** @returns {LinearGradientMask} */
 export function createLinearGradientMask(
@@ -142,6 +168,27 @@ export function createRadialGradientMask(
     radiusX,
     radiusY,
     feather: 50,
+    invert: false,
+    exposure: 0,
+    contrast: 0,
+    saturation: 0,
+  };
+}
+
+/** M3 Slice 7: no mask-level `feather` (unlike linear/radial) -- softness
+ * is baked per-dab at paint time from the current tool setting (real
+ * Lightroom's own brush-options model: Size/Feather/Flow apply to
+ * whatever gets painted NEXT, not editable globally after the fact).
+ * Accepts an optional `id` -- DevelopCanvas.svelte generates the id itself
+ * (needed synchronously, before this creation call round-trips back down
+ * as a prop) and passes it through, rather than discarding a locally-
+ * generated one here.
+ * @returns {BrushMask} */
+export function createBrushMask(/** @type {string=} */ id) {
+  return {
+    op: "brush_mask",
+    id: id ?? crypto.randomUUID(),
+    dabs: [],
     invert: false,
     exposure: 0,
     contrast: 0,

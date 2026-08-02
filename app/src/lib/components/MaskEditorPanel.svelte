@@ -16,10 +16,14 @@
    */
   let { mask, onChange, onDelete, onClose } = $props();
 
-  // Only the title differs by kind -- every field below (exposure/
-  // contrast/saturation/feather/invert/delete) is common to both mask
-  // kinds and never touches geometry, confirmed unchanged from Slice 5.
-  let title = $derived(mask.op === "radial_gradient_mask" ? "Radial Gradient" : "Linear Gradient");
+  // M3 Slice 7: a REAL third branch, not a free ride -- unlike linear vs.
+  // radial (where every field below is common to both kinds), brush masks
+  // have no mask-level `feather` (softness is baked per-dab at paint time
+  // from the tool's own Feather/Size/Flow settings, see MaskToolStrip.svelte),
+  // so the Feather row is hidden entirely for brush, not just relabeled.
+  let title = $derived(
+    mask.op === "radial_gradient_mask" ? "Radial Gradient" : mask.op === "brush_mask" ? "Brush" : "Linear Gradient",
+  );
 </script>
 
 <div class="panel" role="dialog" aria-label="{title} adjustments">
@@ -67,19 +71,21 @@
     />
     <span class="val">{mask.saturation >= 0 ? "+" : ""}{mask.saturation}</span>
   </div>
-  <div class="row">
-    <label for="mask-feather">Feather</label>
-    <input
-      id="mask-feather"
-      type="range"
-      min="0"
-      max="100"
-      step="1"
-      value={mask.feather}
-      oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
-    />
-    <span class="val">{mask.feather}</span>
-  </div>
+  {#if mask.op !== "brush_mask"}
+    <div class="row">
+      <label for="mask-feather">Feather</label>
+      <input
+        id="mask-feather"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={mask.feather}
+        oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.feather}</span>
+    </div>
+  {/if}
 
   <label class="invert-row">
     <input type="checkbox" checked={mask.invert} onchange={(e) => onChange({ invert: e.currentTarget.checked })} />

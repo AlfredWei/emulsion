@@ -14,9 +14,14 @@
    *   masks: import('$lib/api/develop.js').Mask[],
    *   activeTool: string | null,
    *   selectedMaskId: string | null,
+   *   brushSize: number,
+   *   brushHardness: number,
+   *   brushFlow: number,
+   *   eraseMode: boolean,
    *   onMaskCreated: (placement:
    *     | { kind: "linear_gradient", start: {x: number, y: number}, end: {x: number, y: number} }
    *     | { kind: "radial_gradient", center: {x: number, y: number}, radiusX: number, radiusY: number }
+   *     | { kind: "brush", id: string }
    *   ) => void,
    *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onMaskSelected: (id: string) => void,
@@ -30,6 +35,10 @@
     masks,
     activeTool,
     selectedMaskId,
+    brushSize,
+    brushHardness,
+    brushFlow,
+    eraseMode,
     onMaskCreated,
     onMaskUpdated,
     onMaskSelected,
@@ -93,6 +102,28 @@
   /** @type {{ maskId: string, which: "start" | "end" | "center" | "radius", center?: {x:number,y:number} } | null} */
   let handleDragState = null;
 
+  // M3 Slice 7: brush painting. Deliberately transient, per-stroke state --
+  // no persistent "which mask am I painting into" tracking survives past
+  // pointerup. Instead, EVERY pointerdown re-derives the paint target from
+  // `selectedMaskId`: if it currently points at a brush mask, this stroke
+  // APPENDS to it (real Lightroom's own multi-stroke-per-mask model,
+  // matching PROGRESS.md's design note); otherwise this stroke creates a
+  // fresh brush mask and selects it. A "New Brush" tool-strip button
+  // achieves "start fresh" simply by deselecting (selectedMaskId = null)
+  // -- no separate reset signal needs to reach this component at all.
+  /** @type {string | null} */
+  let paintingMaskId = null;
+  /** @type {import('$lib/api/develop.js').Dab[]} */
+  let strokeDabs = [];
+  /** @type {{x: number, y: number} | null} */
+  let lastBrushPoint = null;
+  // Live brush-size cursor preview (SVG ellipse in the mask-overlay, drawn
+  // as a true on-screen circle via the same width/height aspect correction
+  // radiusFromDrag already uses for radial masks) -- shown on hover, not
+  // just while actively painting, so size is visible before committing a
+  // stroke.
+  let brushCursor = $state(/** @type {{x:number,y:number} | null} */ (null));
+
   /** CSS-pixel click position -> native canvas-backing-store pixel
    * coordinate. Reused from the zoom-to-point math (M3 Slice 3) --
    * `getBoundingClientRect()` already reflects the current scroll offset,
@@ -128,6 +159,21 @@
     return { radiusX: radiusPx / canvasEl.width, radiusY: radiusPx / canvasEl.height };
   }
 
+  /** M3 Slice 7: `brushSize` is a fraction of image WIDTH only (see
+   * develop.js's `Dab` typedef), which rasterizes as a true circle
+   * directly (rasterizeDab draws in the offscreen canvas's own native
+   * pixel space, no aspect concern there) -- but the on-screen cursor
+   * preview is an SVG ellipse sized via CSS percentages relative to the
+   * overlay div's width/height separately, so it needs the SAME
+   * width/height aspect correction `radiusFromDrag` already applies for
+   * radial masks: a height-relative ry percentage larger than the
+   * width-relative rx percentage by the canvas's width/height ratio,
+   * exactly compensating so both resolve to the same on-screen pixel size. */
+  function brushCursorRyPercent() {
+    if (!canvasEl || !canvasEl.height) return brushSize * 100;
+    return brushSize * (canvasEl.width / canvasEl.height) * 100;
+  }
+
   // M3 Slice 5/6: a hard branch on `activeTool`, not a case bolted onto the
   // pan/zoom logic -- while a mask tool is active, dragging NEVER pans or
   // toggles zoom, even in 100% mode, and vice versa.
@@ -145,6 +191,48 @@
     }
   }
 
+  /** M3 Slice 7: one dab, baking in the CURRENT brush tool settings (size/
+   * hardness/flow) and erase-mode toggle at paint time -- these never
+   * change retroactively for an already-placed dab, matching real
+   * Lightroom's own brush-options model (Size/Feather/Flow apply to
+   * whatever gets painted NEXT). */
+  function makeDab(/** @type {{x:number,y:number}} */ p) {
+    return {
+      x: p.x,
+      y: p.y,
+      radius: brushSize,
+      hardness: brushHardness,
+      flow: brushFlow,
+      mode: /** @type {"add" | "erase"} */ (eraseMode ? "erase" : "add"),
+    };
+  }
+
+  /** Spaces interpolated dabs along the path from `from` to `to` at ~25%
+   * of the brush radius apart -- without this, a fast drag would produce
+   * a gappy/dotted stroke, since pointermove events don't fire densely
+   * enough relative to brush size at speed. Returns [] (places nothing)
+   * if the move was smaller than one spacing unit, so slow/jittery
+   * movement doesn't flood the dab list with near-duplicate points --
+   * `lastBrushPoint` is only advanced when dabs are actually placed (see
+   * the pointermove handler), so distance keeps accumulating across
+   * sub-threshold moves until it clears the bar. */
+  function interpolatedDabs(/** @type {{x:number,y:number}} */ from, /** @type {{x:number,y:number}} */ to) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dist = Math.hypot(dx, dy);
+    const spacing = Math.max(brushSize * 0.25, 0.0008);
+    if (dist < spacing) return [];
+    // Capped defensively -- guards against a huge single jump (e.g. a
+    // pointer teleport) flooding one update with thousands of dabs.
+    const steps = Math.min(Math.floor(dist / spacing), 200);
+    const dabs = [];
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      dabs.push(makeDab({ x: from.x + dx * t, y: from.y + dy * t }));
+    }
+    return dabs;
+  }
+
   function handlePointerDown(/** @type {PointerEvent} */ e) {
     if (activeTool === "linear_gradient") {
       e.preventDefault();
@@ -157,6 +245,29 @@
       e.preventDefault();
       const center = screenToNormalized(e.clientX, e.clientY);
       placingMask = { kind: "radial_gradient", center, radiusX: 0, radiusY: 0 };
+      tryCapturePointer(e);
+      return;
+    }
+    if (activeTool === "brush") {
+      e.preventDefault();
+      const p = screenToNormalized(e.clientX, e.clientY);
+      // Re-derive the paint target fresh on every stroke, from the
+      // CURRENT selection -- see the brush-state doc comment above for
+      // why this is deliberately transient, not tracked persistently.
+      const existing = masks.find((m) => m.id === selectedMaskId && m.op === "brush_mask");
+      if (existing) {
+        paintingMaskId = selectedMaskId;
+        strokeDabs = [.../** @type {any} */ (existing).dabs];
+      } else {
+        const newId = crypto.randomUUID();
+        paintingMaskId = newId;
+        strokeDabs = [];
+        onMaskCreated({ kind: "brush", id: newId });
+      }
+      strokeDabs.push(makeDab(p));
+      lastBrushPoint = p;
+      brushCursor = p;
+      onMaskUpdated(/** @type {string} */ (paintingMaskId), { dabs: [...strokeDabs] });
       tryCapturePointer(e);
       return;
     }
@@ -178,6 +289,19 @@
     }
     if (placingMask?.kind === "radial_gradient") {
       placingMask = { ...placingMask, ...radiusFromDrag(placingMask.center, e.clientX, e.clientY) };
+      return;
+    }
+    if (activeTool === "brush") {
+      const p = screenToNormalized(e.clientX, e.clientY);
+      brushCursor = p; // shown on hover too, not just while painting
+      if (paintingMaskId && lastBrushPoint) {
+        const newDabs = interpolatedDabs(lastBrushPoint, p);
+        if (newDabs.length > 0) {
+          strokeDabs.push(...newDabs);
+          lastBrushPoint = p;
+          onMaskUpdated(paintingMaskId, { dabs: [...strokeDabs] });
+        }
+      }
       return;
     }
     if (!dragState || !wrapEl) return;
@@ -208,6 +332,16 @@
       // (accidental click) must be rejected, not committed -- it would
       // corrupt the frame with Inf/NaN.
       if (radiusX > 0.01 && radiusY > 0.01) onMaskCreated({ kind: "radial_gradient", center, radiusX, radiusY });
+      return;
+    }
+    if (activeTool === "brush") {
+      // Stroke ends, but deliberately does NOT clear selectedMaskId in the
+      // parent -- a subsequent stroke (new pointerdown, tool still active)
+      // re-derives paintingMaskId from selectedMaskId and continues
+      // appending to the SAME mask, giving multi-stroke-per-mask painting
+      // "for free" with no persistent state here.
+      paintingMaskId = null;
+      lastBrushPoint = null;
       return;
     }
     if (!dragState) return;
@@ -312,6 +446,28 @@
   /** @type {GPUTextureFormat} */
   let presentationFormat = "bgra8unorm";
 
+  // M3 Slice 7: brush masks rasterize into a shared texture ARRAY (one
+  // layer per active brush mask, sized to the same combined MAX_MASKS
+  // budget every mask kind shares) rather than a single texture -- a
+  // single shared texture would silently break true op-order interleaving
+  // and independent per-mask adjustments the moment there's more than one
+  // brush mask, or a brush mask sits between two gradients in the stack.
+  // Recreated per-image (see loadImage) since it must be sized to that
+  // image's native resolution.
+  /** @type {GPUTexture | null} */
+  let brushTextureArray = null;
+  /** Per-mask persistent rasterization state, keyed by mask id. Each
+   * OffscreenCanvas is NEVER cleared once created -- only newly-added dabs
+   * are drawn onto it (see syncBrushRasterization) -- so a long stroke's
+   * per-move cost stays bound by texture resolution/upload cost, not by
+   * re-rendering the whole dab list from scratch every time. Reset
+   * entirely on every image change (loadImage), since a canvas sized for
+   * one image's resolution is meaningless for another.
+   * @type {Map<string, { canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D, layer: number, dabsDrawn: number }>} */
+  let brushRasterState = new Map();
+  /** @type {number[]} */
+  let freeBrushLayers = [];
+
   // Same three global adjustments as ADR-0004/RFC-0001's Slice 3 scope,
   // plus (M3 Slice 5) a bounded array of linear-gradient local-adjustment
   // masks, applied in WGSL entirely inside the webview process -- no IPC
@@ -353,9 +509,13 @@
     // WGSL's vec2/vec3-in-array uniform alignment footguns -- array stride
     // in the uniform address space must be a multiple of 16 bytes, and an
     // all-vec4 struct is trivially aligned with no implicit padding.
+    // M3 Slice 7: params.w, previously unused, now holds the brush mask's
+    // own texture-array layer index (as a float, cast to i32 at sample
+    // time) -- brush is the only kind that needs a fourth scalar; linear
+    // and radial masks leave it at 0.
     struct Mask {
       start_end: vec4<f32>,   // xy = start, zw = end (normalized image space)
-      params: vec4<f32>,      // x = feather 0-100, y = invert 0/1, z = kind (0=linear, reserved), w unused
+      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1, z = kind (0=linear, 1=radial, 2=brush), w = brush texture-array layer
       adjustments: vec4<f32>, // x = exposure_ev, y = contrast, z = saturation, w unused
     };
     const MAX_MASKS = 8;
@@ -364,6 +524,13 @@
     @group(0) @binding(1) var srcTexture: texture_2d<f32>;
     @group(0) @binding(2) var<uniform> adj: Adjustments;
     @group(0) @binding(3) var<uniform> masks: array<Mask, MAX_MASKS>;
+    // Brush masks rasterize CPU-side (OffscreenCanvas, luminance-as-weight)
+    // rather than computing an analytic formula here -- one array layer per
+    // active brush mask. Sampled via textureSampleLevel (not textureSample)
+    // deliberately: this call sits inside a per-mask branch on m.params.z,
+    // and textureSampleLevel has no implicit-derivative uniformity
+    // restriction to worry about, unlike textureSample.
+    @group(0) @binding(4) var brushMasks: texture_2d_array<f32>;
 
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
       var c = rgb * pow(2.0, exposure_ev);
@@ -384,7 +551,16 @@
       for (var i = 0; i < mask_count; i = i + 1) {
         let m = masks[i];
         var weight: f32;
-        if (m.params.z < 0.5) {
+        if (m.params.z > 1.5) {
+          // Brush (M3 Slice 7): rasterized CPU-side into this mask's own
+          // texture-array layer, luminance-as-weight (see
+          // DevelopCanvas.svelte's rasterizeDab/syncBrushRasterization and
+          // develop_engine.rs's dab_falloff/brush_mask_weight for the
+          // exact accumulation formula both renderers agree on).
+          let layer = i32(m.params.w);
+          weight = textureSampleLevel(brushMasks, srcSampler, in.uv, layer, 0.0).r;
+          if (m.params.y > 0.5) { weight = 1.0 - weight; }
+        } else if (m.params.z < 0.5) {
           // Linear: projection-onto-segment parametrization. 0 at start, 1
           // at end, extrapolated linearly beyond both, then clamped.
           let dir = m.start_end.zw - m.start_end.xy;
@@ -481,6 +657,21 @@
       [bitmap.width, bitmap.height],
     );
 
+    // M3 Slice 7: recreated per image -- must be sized to THIS image's
+    // native resolution, an OffscreenCanvas at the wrong resolution would
+    // rasterize dabs at the wrong scale. Existing brush masks' dab lists
+    // (loaded from a previously-saved edit stack) are re-rasterized from
+    // scratch into fresh canvases by syncBrushRasterization, called below
+    // via this function's own writeAdjustmentsAndRender() call at the end.
+    brushTextureArray?.destroy();
+    brushTextureArray = device.createTexture({
+      size: [bitmap.width, bitmap.height, MAX_MASKS],
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    brushRasterState = new Map();
+    freeBrushLayers = Array.from({ length: MAX_MASKS }, (_, i) => i);
+
     const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
     bindGroup = device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
@@ -489,6 +680,7 @@
         { binding: 1, resource: sourceTexture.createView() },
         { binding: 2, resource: { buffer: uniformBuffer } },
         { binding: 3, resource: { buffer: masksBuffer } },
+        { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
       ],
     });
 
@@ -504,8 +696,135 @@
     writeAdjustmentsAndRender();
   }
 
+  /** Draws ONE dab onto a persistent per-mask OffscreenCanvas, white-on-
+   * black (luminance-as-weight), matching develop_engine.rs's
+   * `dab_falloff`/`brush_mask_weight` exactly so the GPU preview and CPU
+   * export agree: "add" dabs use `"lighter"` compositing (additive,
+   * clamped at full white -- matches the CPU side's
+   * `(weight + falloff).min(1.0)`); "erase" dabs use `"multiply"`
+   * compositing with a gradient from `(1-flow)` at the dab's center to
+   * `1.0` at its edge (matches the CPU side's `weight *= 1.0 - falloff`).
+   * `radius`/`hardness`/`flow` are baked into the dab itself at paint time
+   * (the current brush tool settings when it was placed), not read from
+   * live props here. */
+  function rasterizeDab(
+    /** @type {OffscreenCanvasRenderingContext2D} */ ctx,
+    /** @type {number} */ canvasWidth,
+    /** @type {number} */ canvasHeight,
+    /** @type {import('$lib/api/develop.js').Dab} */ dab,
+  ) {
+    const cx = dab.x * canvasWidth;
+    const cy = dab.y * canvasHeight;
+    // radius is a fraction of WIDTH only -- ctx.arc()'s single radius
+    // parameter then produces a true circle in this canvas's own native
+    // pixel space regardless of the image's aspect ratio, unlike the
+    // radial mask's separate radiusX/radiusY (needed there because that
+    // geometry is evaluated analytically in normalized UV space, where
+    // width/height asymmetry genuinely matters).
+    const r = dab.radius * canvasWidth;
+    const hardStop = Math.min(Math.max(dab.hardness / 100, 0), 1);
+    const flow = Math.min(Math.max(dab.flow, 0), 1);
+    // At least a 0.5px gap between the inner (hardness) stop and the outer
+    // edge -- avoids a degenerate r0===r1 radial gradient (unreliable
+    // across Canvas2D implementations) when hardness is at/near 100.
+    const outerR = Math.max(r, 0.5);
+    const innerR = Math.min(hardStop * outerR, outerR - 0.5);
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+    if (dab.mode === "erase") {
+      ctx.globalCompositeOperation = "multiply";
+      const floor = Math.round((1 - flow) * 255);
+      const gradient = ctx.createRadialGradient(cx, cy, innerR, cx, cy, outerR);
+      gradient.addColorStop(0, `rgb(${floor},${floor},${floor})`);
+      gradient.addColorStop(1, "rgb(255,255,255)");
+      ctx.fillStyle = gradient;
+    } else {
+      ctx.globalCompositeOperation = "lighter";
+      const peak = Math.round(flow * 255);
+      const gradient = ctx.createRadialGradient(cx, cy, innerR, cx, cy, outerR);
+      gradient.addColorStop(0, `rgb(${peak},${peak},${peak})`);
+      gradient.addColorStop(1, "rgb(0,0,0)");
+      ctx.fillStyle = gradient;
+    }
+    ctx.fill();
+  }
+
+  /** Ensures every brush mask in `masks` has a rasterized texture-array
+   * layer, drawing only newly-added dabs onto each mask's own persistent
+   * OffscreenCanvas -- never re-rasterizing dabs already drawn, which is
+   * what keeps a long stroke's per-move cost O(1) (bound by texture
+   * resolution/upload cost, not stroke length). Releases layers for brush
+   * masks no longer present (deleted). Called at the top of
+   * writeAdjustmentsAndRender, so it runs both on every mask-list change
+   * and once per freshly loaded image (loadImage's initial call re-
+   * rasterizes any brush masks already in that image's saved edit stack,
+   * since a canvas sized for a DIFFERENT image's resolution is meaningless
+   * here -- loadImage resets brushRasterState/freeBrushLayers before this
+   * runs). */
+  function syncBrushRasterization() {
+    if (!device || !brushTextureArray) return;
+    const presentIds = new Set();
+    for (const mask of masks) {
+      if (mask.op !== "brush_mask") continue;
+      presentIds.add(mask.id);
+      let entry = brushRasterState.get(mask.id);
+      if (!entry) {
+        const layer = freeBrushLayers.shift();
+        // Combined MAX_MASKS budget exhausted -- MaskToolStrip's atCap
+        // check already prevents creating a mask that would hit this, so
+        // this is a defensive no-op, not an expected path.
+        if (layer === undefined) continue;
+        const canvas = new OffscreenCanvas(brushTextureArray.width, brushTextureArray.height);
+        const ctx = /** @type {OffscreenCanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        // Opaque black init (NOT the canvas's default transparent) --
+        // required for "multiply" erase compositing to correctly no-op
+        // over never-painted areas. Against a transparent destination,
+        // Porter-Duff "multiply" lets the erase gradient's own color show
+        // through directly (since there's no destination alpha to
+        // constrain it), which would incorrectly paint weight into
+        // untouched regions. Against opaque black (alpha=1, color=0),
+        // multiply always yields black regardless of the erase color, so
+        // erasing over nothing stays nothing.
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        entry = { canvas, ctx, layer, dabsDrawn: 0 };
+        brushRasterState.set(mask.id, entry);
+      }
+      const dabs = /** @type {any} */ (mask).dabs;
+      if (dabs.length < entry.dabsDrawn) {
+        // Dab list shrank -- not expected in this design (dabs only ever
+        // get appended), but handled defensively rather than leaving
+        // stale strokes visible.
+        entry.ctx.fillStyle = "black";
+        entry.ctx.fillRect(0, 0, entry.canvas.width, entry.canvas.height);
+        entry.dabsDrawn = 0;
+      }
+      for (let i = entry.dabsDrawn; i < dabs.length; i++) {
+        rasterizeDab(entry.ctx, entry.canvas.width, entry.canvas.height, dabs[i]);
+      }
+      if (dabs.length !== entry.dabsDrawn) {
+        entry.dabsDrawn = dabs.length;
+        const imageData = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height);
+        device.queue.writeTexture(
+          { texture: brushTextureArray, origin: { x: 0, y: 0, z: entry.layer } },
+          imageData.data,
+          { bytesPerRow: entry.canvas.width * 4, rowsPerImage: entry.canvas.height },
+          { width: entry.canvas.width, height: entry.canvas.height },
+        );
+      }
+    }
+    for (const [id, entry] of brushRasterState) {
+      if (!presentIds.has(id)) {
+        freeBrushLayers.push(entry.layer);
+        brushRasterState.delete(id);
+      }
+    }
+  }
+
   function writeAdjustmentsAndRender() {
     if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer) return;
+    syncBrushRasterization();
     device.queue.writeBuffer(
       uniformBuffer,
       0,
@@ -520,15 +839,19 @@
         maskData[o + 1] = m.center.y;
         maskData[o + 2] = m.radiusX;
         maskData[o + 3] = m.radiusY;
+        maskData[o + 4] = m.feather;
         maskData[o + 6] = 1; // kind = radial
+      } else if (m.op === "brush_mask") {
+        maskData[o + 6] = 2; // kind = brush
+        maskData[o + 7] = brushRasterState.get(m.id)?.layer ?? 0;
       } else {
         maskData[o + 0] = m.start.x;
         maskData[o + 1] = m.start.y;
         maskData[o + 2] = m.end.x;
         maskData[o + 3] = m.end.y;
+        maskData[o + 4] = m.feather;
         maskData[o + 6] = 0; // kind = linear
       }
-      maskData[o + 4] = m.feather;
       maskData[o + 5] = m.invert ? 1 : 0;
       maskData[o + 8] = m.exposure;
       maskData[o + 9] = m.contrast;
@@ -586,10 +909,11 @@
   <canvas
     bind:this={canvasEl}
     class:zoomed={zoomMode === "100"}
-    class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient"}
+    class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush"}
     onpointerdown={handlePointerDown}
     onpointermove={handlePointerMove}
     onpointerup={handlePointerUp}
+    onpointerleave={() => (brushCursor = null)}
   ></canvas>
   {#if status === "ready"}
     <!-- M3 Slice 5: a sibling of canvas, NOT a child of a sizing wrapper
@@ -624,7 +948,7 @@
             onpointermove={handleMaskHandlePointerMove}
             onpointerup={handleMaskHandlePointerUp}
           ></button>
-        {:else}
+        {:else if mask.op === "radial_gradient_mask"}
           <!-- M3 Slice 6: cx/rx resolve against the SVG viewport's width,
                cy/ry against height -- an <ellipse>-specific percentage
                behavior (unlike <circle>'s r, which resolves against the
@@ -661,6 +985,15 @@
       {:else if placingMask?.kind === "radial_gradient"}
         <svg class="mask-ellipse placing">
           <ellipse cx="{placingMask.center.x * 100}%" cy="{placingMask.center.y * 100}%" rx="{placingMask.radiusX * 100}%" ry="{placingMask.radiusY * 100}%" />
+        </svg>
+      {/if}
+      {#if activeTool === "brush" && brushCursor}
+        <!-- M3 Slice 7: live brush-size cursor, shown on hover (not just
+             while painting) so size is visible before committing a
+             stroke. Red when erasing, matching this app's existing
+             label-red convention for destructive/removal affordances. -->
+        <svg class="brush-cursor" class:erasing={eraseMode}>
+          <ellipse cx="{brushCursor.x * 100}%" cy="{brushCursor.y * 100}%" rx="{brushSize * 100}%" ry="{brushCursorRyPercent()}%" />
         </svg>
       {/if}
     </div>
@@ -760,6 +1093,21 @@
   }
   .mask-ellipse.placing ellipse {
     stroke: var(--accent-strong);
+  }
+  .brush-cursor {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .brush-cursor ellipse {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.75);
+    stroke-width: 1.5;
+  }
+  .brush-cursor.erasing ellipse {
+    stroke: var(--label-red);
   }
   .mask-handle {
     all: unset;

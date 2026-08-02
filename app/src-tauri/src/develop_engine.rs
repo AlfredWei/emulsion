@@ -181,6 +181,126 @@ fn radial_mask_weight(uv: (f32, f32), mask: &RadialGradientMask) -> f32 {
     }
 }
 
+/// A single paint dab within a `brush_mask` op (M3 Slice 7). `radius` is a
+/// normalized fraction of image WIDTH only (a single scalar, unlike
+/// radial's independent `radius_x`/`radius_y`) -- the frontend rasterizes
+/// dabs directly in an offscreen canvas sized to the image's own native
+/// pixel resolution, where `radius * nativeWidth` used for both dimensions
+/// of `ctx.arc()` is inherently a true circle with no separate axis scaling
+/// needed. This CPU path has no offscreen canvas, so it reconstructs the
+/// same true-circle-in-pixel-space behavior via `aspect` (height/width) --
+/// see `dab_falloff`. `hardness`/`flow` are baked in per-dab at paint time
+/// from whatever the brush tool's settings were when that dab was placed
+/// (real Lightroom's own brush-options model), not globally editable after
+/// the fact.
+#[derive(Clone, Copy)]
+enum DabMode {
+    Add,
+    Erase,
+}
+
+struct Dab {
+    x: f32,
+    y: f32,
+    radius: f32,
+    hardness: f32,
+    flow: f32,
+    mode: DabMode,
+}
+
+struct BrushMask {
+    dabs: Vec<Dab>,
+    invert: bool,
+    exposure: f32,
+    contrast: f32,
+    saturation: f32,
+}
+
+fn parse_brush_mask(op: &serde_json::Value) -> Option<BrushMask> {
+    let dabs = op
+        .get("dabs")?
+        .as_array()?
+        .iter()
+        .filter_map(|d| {
+            Some(Dab {
+                x: d.get("x")?.as_f64()? as f32,
+                y: d.get("y")?.as_f64()? as f32,
+                radius: d.get("radius")?.as_f64()? as f32,
+                hardness: d.get("hardness").and_then(|v| v.as_f64()).unwrap_or(50.0) as f32,
+                flow: d.get("flow").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
+                mode: if d.get("mode").and_then(|v| v.as_str()) == Some("erase") {
+                    DabMode::Erase
+                } else {
+                    DabMode::Add
+                },
+            })
+        })
+        .collect();
+    Some(BrushMask {
+        dabs,
+        invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
+        exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        saturation: op
+            .get("saturation")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+    })
+}
+
+/// One dab's own contribution at `uv`: 0 outside its radius, 1 within the
+/// `hardness`-controlled inner stop, linearly fading to 0 at the radius
+/// (matching the frontend's white-center-to-black-edge radial-gradient
+/// rasterization), scaled by `flow`. `aspect` (image height/width)
+/// converts the dab's width-only `radius` into a true circle in pixel
+/// space: a y-distance in normalized uv space covers more actual pixels
+/// than an equal x-distance whenever the image isn't square, so it must be
+/// scaled up by `aspect` before comparing against a radius that's only
+/// ever expressed as a fraction of width.
+fn dab_falloff(uv: (f32, f32), dab: &Dab, aspect: f32) -> f32 {
+    if dab.radius <= 0.0 {
+        return 0.0;
+    }
+    let dx = uv.0 - dab.x;
+    let dy = (uv.1 - dab.y) * aspect;
+    let d = (dx * dx + dy * dy).sqrt();
+    let normalized_d = d / dab.radius;
+    if normalized_d >= 1.0 {
+        return 0.0;
+    }
+    let hard_stop = (dab.hardness / 100.0).clamp(0.0, 1.0);
+    let base = if normalized_d <= hard_stop {
+        1.0
+    } else {
+        let denom = (1.0 - hard_stop).max(0.0001);
+        (1.0 - (normalized_d - hard_stop) / denom).clamp(0.0, 1.0)
+    };
+    base * dab.flow.clamp(0.0, 1.0)
+}
+
+/// Dabs are accumulated in stack (paint) order, not just unioned as a set --
+/// `add` dabs take the max with the running weight (matches the frontend's
+/// `"lighter"` canvas compositing: overlapping add dabs build up coverage
+/// but don't exceed what a single fully-opaque dab would give), `erase`
+/// dabs multiplicatively reduce the running weight toward 0 (matches the
+/// frontend's `"multiply"` compositing for erase) -- the same formula both
+/// renderers agree on, not an approximation of one by the other.
+fn brush_mask_weight(uv: (f32, f32), mask: &BrushMask, aspect: f32) -> f32 {
+    let mut weight = 0.0f32;
+    for dab in &mask.dabs {
+        let falloff = dab_falloff(uv, dab, aspect);
+        match dab.mode {
+            DabMode::Add => weight = weight.max(falloff),
+            DabMode::Erase => weight *= 1.0 - falloff,
+        }
+    }
+    if mask.invert {
+        1.0 - weight
+    } else {
+        weight
+    }
+}
+
 /// Wraps either mask kind so `parse_masks` can preserve the edit stack's
 /// TRUE op order across mixed kinds -- the frontend's `masks` array (built
 /// from one unfiltered pass over `stack.ops`, see `develop.js`'s
@@ -192,13 +312,18 @@ fn radial_mask_weight(uv: (f32, f32), mask: &RadialGradientMask) -> f32 {
 enum Mask {
     Linear(LinearGradientMask),
     Radial(RadialGradientMask),
+    Brush(BrushMask),
 }
 
 impl Mask {
-    fn weight(&self, uv: (f32, f32)) -> f32 {
+    /// `aspect` (image height/width) is only consumed by `Brush` -- linear
+    /// and radial masks already store per-axis geometry (radiusX/radiusY,
+    /// or a direction vector), so they need no separate aspect correction.
+    fn weight(&self, uv: (f32, f32), aspect: f32) -> f32 {
         match self {
             Mask::Linear(m) => mask_weight(uv, m),
             Mask::Radial(m) => radial_mask_weight(uv, m),
+            Mask::Brush(m) => brush_mask_weight(uv, m, aspect),
         }
     }
 
@@ -206,6 +331,7 @@ impl Mask {
         match self {
             Mask::Linear(m) => (m.exposure, m.contrast, m.saturation),
             Mask::Radial(m) => (m.exposure, m.contrast, m.saturation),
+            Mask::Brush(m) => (m.exposure, m.contrast, m.saturation),
         }
     }
 }
@@ -215,6 +341,7 @@ fn parse_masks(ops: &[serde_json::Value]) -> Vec<Mask> {
         .filter_map(|op| match op.get("op").and_then(|v| v.as_str()) {
             Some("linear_gradient_mask") => parse_linear_gradient_mask(op).map(Mask::Linear),
             Some("radial_gradient_mask") => parse_radial_gradient_mask(op).map(Mask::Radial),
+            Some("brush_mask") => parse_brush_mask(op).map(Mask::Brush),
             _ => None,
         })
         .collect()
@@ -242,6 +369,10 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let masks = parse_masks(&stack.ops);
 
     let (width, height) = (image.width(), image.height());
+    // Only consumed by brush masks (see Mask::weight) -- converts a dab's
+    // width-only `radius` into a true circle in pixel space regardless of
+    // the image's own aspect ratio.
+    let aspect = height as f32 / width as f32;
 
     for (x, y, pixel) in image.enumerate_pixels_mut() {
         let mut rgb = apply_adjustments(
@@ -265,7 +396,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
                 (y as f32 + 0.5) / height as f32,
             );
             for mask in &masks {
-                let weight = mask.weight(uv);
+                let weight = mask.weight(uv, aspect);
                 let (m_exposure, m_contrast, m_saturation) = mask.adjustments();
                 let local = apply_adjustments(rgb, m_exposure, m_contrast, m_saturation);
                 for c in 0..3 {
@@ -498,6 +629,101 @@ mod tests {
         assert_mask_pixel(
             radial_mask_stack((0.1, 0.1), 0.05, 0.05, 50.0, true, 1.0),
             [100, 100, 100],
+        );
+    }
+
+    /// Brush masks (M3 Slice 7). A 1x1 test image always samples at
+    /// uv=(0.5,0.5) -- these cases place dabs at hand-computed positions so
+    /// that fixed point lands at the desired distance/falloff, same
+    /// pattern as the linear/radial cases above. `aspect` is 1.0 for a 1x1
+    /// image, so dab.radius (width-only) behaves as a plain circle here.
+    #[allow(clippy::too_many_arguments)]
+    fn dab(x: f32, y: f32, radius: f32, hardness: f32, flow: f32, mode: &str) -> serde_json::Value {
+        serde_json::json!({ "x": x, "y": y, "radius": radius, "hardness": hardness, "flow": flow, "mode": mode })
+    }
+
+    fn brush_mask_stack(dabs: Vec<serde_json::Value>, invert: bool, exposure: f32) -> EditStack {
+        EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({
+                "op": "brush_mask",
+                "id": "test-brush-mask",
+                "dabs": dabs,
+                "invert": invert,
+                "exposure": exposure,
+                "contrast": 0.0,
+                "saturation": 0.0,
+            })],
+        }
+    }
+
+    /// A hard-edged dab (hardness=100) dead center gets the full local
+    /// adjustment -- same shape as the radial "center" case.
+    #[test]
+    fn brush_mask_dab_at_center_gets_full_local_adjustment() {
+        assert_mask_pixel(
+            brush_mask_stack(vec![dab(0.5, 0.5, 0.3, 100.0, 1.0, "add")], false, 1.0),
+            [200, 200, 200],
+        );
+    }
+
+    /// Exactly at the dab's radius boundary -- normalized_d=1.0 is
+    /// excluded (falloff=0), matching `dab_falloff`'s `>= 1.0` cutoff.
+    #[test]
+    fn brush_mask_dab_exactly_at_radius_boundary_gets_no_local_adjustment() {
+        assert_mask_pixel(
+            brush_mask_stack(vec![dab(0.2, 0.5, 0.3, 100.0, 1.0, "add")], false, 1.0),
+            [100, 100, 100],
+        );
+    }
+
+    /// Well outside any dab's radius -- no local adjustment.
+    #[test]
+    fn brush_mask_pixel_outside_every_dab_gets_no_local_adjustment() {
+        assert_mask_pixel(
+            brush_mask_stack(vec![dab(0.1, 0.1, 0.05, 100.0, 1.0, "add")], false, 1.0),
+            [100, 100, 100],
+        );
+    }
+
+    /// Two overlapping ADD dabs at the identical position/radius/hardness
+    /// (hardness=0, so the fixed sample point at distance 0.15 from a
+    /// radius-0.3 dab center falls exactly halfway through the falloff
+    /// band, giving weight 0.5) must union via max, not sum -- two
+    /// identical partial-coverage dabs still give weight 0.5, not 1.0.
+    #[test]
+    fn brush_mask_overlapping_add_dabs_union_via_max_not_sum() {
+        assert_mask_pixel(
+            brush_mask_stack(
+                vec![
+                    dab(0.35, 0.5, 0.3, 0.0, 1.0, "add"),
+                    dab(0.35, 0.5, 0.3, 0.0, 1.0, "add"),
+                ],
+                false,
+                1.0,
+            ),
+            [150, 150, 150],
+        );
+    }
+
+    /// An ERASE dab reduces the running weight MULTIPLICATIVELY, not by
+    /// subtraction -- an add dab giving weight 0.5, followed by an erase
+    /// dab with its own falloff 0.5 at the same spot, gives weight
+    /// 0.5*(1-0.5)=0.25 (multiplicative). A subtractive formula
+    /// (0.5-0.5=0) would produce a visibly different pixel ([100,100,100]
+    /// instead of [125,125,125]), so this test distinguishes the two.
+    #[test]
+    fn brush_mask_erase_dab_reduces_weight_multiplicatively() {
+        assert_mask_pixel(
+            brush_mask_stack(
+                vec![
+                    dab(0.35, 0.5, 0.3, 0.0, 1.0, "add"),
+                    dab(0.35, 0.5, 0.3, 0.0, 1.0, "erase"),
+                ],
+                false,
+                1.0,
+            ),
+            [125, 125, 125],
         );
     }
 }

@@ -12,9 +12,11 @@
    *   onChange: (patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onDelete: () => void,
    *   onClose: () => void,
+   *   showBrushOverlay: boolean,
+   *   onShowOverlayChange: (value: boolean) => void,
    * }}
    */
-  let { mask, onChange, onDelete, onClose } = $props();
+  let { mask, onChange, onDelete, onClose, showBrushOverlay, onShowOverlayChange } = $props();
 
   // M3 Slice 7: a REAL third branch, not a free ride -- unlike linear vs.
   // radial (where every field below is common to both kinds), brush masks
@@ -85,6 +87,20 @@
       />
       <span class="val">{mask.feather}</span>
     </div>
+  {/if}
+
+  {#if mask.op === "brush_mask"}
+    <!-- Soft colored overlay showing exactly what's painted -- brush masks
+         are otherwise invisible until a nonzero adjustment is set. Not a
+         mask data field (unlike every row above, which funnels through
+         onChange), so it gets its own separate prop pair, matching how
+         onDelete/onClose are already separate from onChange in this same
+         component. Also toggleable via the "O" hotkey while Develop is
+         open and this mask is selected -- see +page.svelte. -->
+    <label class="invert-row">
+      <input type="checkbox" checked={showBrushOverlay} onchange={(e) => onShowOverlayChange(e.currentTarget.checked)} />
+      <span>Show Overlay (O)</span>
+    </label>
   {/if}
 
   <label class="invert-row">

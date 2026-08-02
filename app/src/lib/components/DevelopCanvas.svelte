@@ -18,6 +18,7 @@
    *   brushHardness: number,
    *   brushFlow: number,
    *   eraseMode: boolean,
+   *   showBrushOverlay: boolean,
    *   onMaskCreated: (placement:
    *     | { kind: "linear_gradient", start: {x: number, y: number}, end: {x: number, y: number} }
    *     | { kind: "radial_gradient", center: {x: number, y: number}, radiusX: number, radiusY: number }
@@ -39,6 +40,7 @@
     brushHardness,
     brushFlow,
     eraseMode,
+    showBrushOverlay,
     onMaskCreated,
     onMaskUpdated,
     onMaskSelected,
@@ -172,6 +174,84 @@
   function brushCursorRyPercent() {
     if (!canvasEl || !canvasEl.height) return brushSize * 100;
     return brushSize * (canvasEl.width / canvasEl.height) * 100;
+  }
+
+  /** Clips the INFINITE line through `p` in direction `dir` (need not be
+   * unit length) against the [0,1]x[0,1] normalized-uv box, via
+   * Liang-Barsky. Returns the clipped segment's two endpoints, or `null`
+   * if the line never enters the box at all -- the correct semantic for a
+   * feather boundary that's genuinely off the edge of the photo (there's
+   * nothing to show), not "pick a length and hope it reaches." A fixed
+   * half-length was tried first and found to be structurally wrong (not
+   * just under-tuned): a boundary point outside the frame along the
+   * gradient's OWN axis can never be brought back in by extending a
+   * PERPENDICULAR line further, since the perpendicular offset can't
+   * correct a coordinate the axis direction is orthogonal to. */
+  function clipLineToUnitBox(/** @type {{x:number,y:number}} */ p, /** @type {{x:number,y:number}} */ dir) {
+    let t0 = -Infinity;
+    let t1 = Infinity;
+    const edges = [
+      { pk: -dir.x, qk: p.x }, // x >= 0
+      { pk: dir.x, qk: 1 - p.x }, // x <= 1
+      { pk: -dir.y, qk: p.y }, // y >= 0
+      { pk: dir.y, qk: 1 - p.y }, // y <= 1
+    ];
+    for (const { pk, qk } of edges) {
+      if (pk === 0) {
+        if (qk < 0) return null; // parallel to this edge and entirely outside it
+        continue;
+      }
+      const r = qk / pk;
+      if (pk < 0) {
+        t0 = Math.max(t0, r);
+      } else {
+        t1 = Math.min(t1, r);
+      }
+    }
+    if (t0 > t1) return null;
+    return {
+      x1: p.x + t0 * dir.x,
+      y1: p.y + t0 * dir.y,
+      x2: p.x + t1 * dir.x,
+      y2: p.y + t1 * dir.y,
+    };
+  }
+
+  /** The two feather-boundary guide lines for a linear mask (perpendicular
+   * to the gradient axis, at the weight=0 and weight=1 points) -- derived
+   * directly from the SAME `t` formula the WGSL shader/develop_engine.rs
+   * use (`weight = clamp((t+softness)/(1+2*softness), 0, 1)`): weight=0 at
+   * t=-softness, weight=1 at t=1+softness. Returns `null` entirely when
+   * feather is 0 (nothing additional to show -- the existing single axis
+   * line already IS the boundary in that case), and each individual line
+   * can independently be `null` if that boundary falls off-frame. */
+  function linearFeatherLines(/** @type {any} */ mask) {
+    if (!mask.feather || mask.feather <= 0) return null;
+    const softness = Math.min(mask.feather / 100, 0.999);
+    const dx = mask.end.x - mask.start.x;
+    const dy = mask.end.y - mask.start.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const perp = { x: -dy / len, y: dx / len };
+    const p0 = { x: mask.start.x - softness * dx, y: mask.start.y - softness * dy };
+    const p1 = { x: mask.end.x + softness * dx, y: mask.end.y + softness * dy };
+    return { zero: clipLineToUnitBox(p0, perp), one: clipLineToUnitBox(p1, perp) };
+  }
+
+  /** The two feather-boundary ellipses for a radial mask -- derived from
+   * the SAME ellipse-distance formula the shader/develop_engine.rs use:
+   * insideWeight is 1 at d=(1-softness), 0 at d=(1+softness), so those are
+   * exactly the ellipses at radiusX/radiusY scaled by (1-softness) and
+   * (1+softness). `null` when feather is 0 -- the existing single ellipse
+   * at the raw radius already IS the boundary in that case, and two
+   * coincident stroked shapes would alpha-composite to a visibly heavier
+   * line than one (a real regression, not just redundant markup). */
+  function radialFeatherRadii(/** @type {any} */ mask) {
+    if (!mask.feather || mask.feather <= 0) return null;
+    const softness = Math.min(mask.feather / 100, 0.999);
+    return {
+      inner: { rx: mask.radiusX * (1 - softness), ry: mask.radiusY * (1 - softness) },
+      outer: { rx: mask.radiusX * (1 + softness), ry: mask.radiusY * (1 + softness) },
+    };
   }
 
   // M3 Slice 5/6: a hard branch on `activeTool`, not a case bolted onto the
@@ -498,11 +578,18 @@
       return out;
     }
 
+    // Padded to a full 2x vec4 (32 bytes) deliberately -- mirrors the Mask
+    // struct's own "pack into vec4 multiples" discipline below, rather than
+    // leaving this at an arbitrary size once it grows past 4 scalars.
     struct Adjustments {
       exposure_ev: f32,
       contrast: f32,
       saturation: f32,
       mask_count: f32,
+      overlay_layer: f32,  // -1 = no overlay; else the selected brush mask's texture-array layer
+      overlay_invert: f32, // 0/1 -- overlay reflects the EFFECTIVE mask post-invert, not raw paint
+      _pad0: f32,
+      _pad1: f32,
     };
 
     // Packed entirely into vec4-multiples (48 bytes/mask) to sidestep
@@ -597,6 +684,17 @@
         rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
       }
 
+      // Brush mask overlay (soft colored fill, toggleable): reuses the
+      // SAME texture-array binding the mask loop above already samples --
+      // no new GPU resource, no separate CPU-side redraw/cache-key logic
+      // to keep correct, since this is just one more step in the render
+      // pass that already re-runs on every relevant state change.
+      if (adj.overlay_layer >= 0.0) {
+        var overlayWeight = textureSampleLevel(brushMasks, srcSampler, in.uv, i32(adj.overlay_layer), 0.0).r;
+        if (adj.overlay_invert > 0.5) { overlayWeight = 1.0 - overlayWeight; }
+        rgb = mix(rgb, vec3<f32>(1.0, 0.24, 0.24), overlayWeight * 0.55);
+      }
+
       rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
       return vec4<f32>(rgb, 1.0);
     }
@@ -624,7 +722,7 @@
     });
 
     uniformBuffer = device.createBuffer({
-      size: 16, // 4 x f32 (exposure, contrast, saturation, mask_count)
+      size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, overlay_layer, overlay_invert, 2x padding)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     masksBuffer = device.createBuffer({
@@ -825,10 +923,23 @@
   function writeAdjustmentsAndRender() {
     if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer) return;
     syncBrushRasterization();
+
+    // Brush mask overlay: reflects the EFFECTIVE mask (post-invert), only
+    // for the currently SELECTED mask (matches real Lightroom's own
+    // highlight-on-select, not a permanent multi-mask wash), only when the
+    // selection is actually a brush mask with a rasterized layer.
+    const selectedMaskForOverlay = /** @type {any} */ (masks.find((m) => m.id === selectedMaskId));
+    const overlayEntry =
+      showBrushOverlay && selectedMaskForOverlay?.op === "brush_mask"
+        ? brushRasterState.get(/** @type {string} */ (selectedMaskId))
+        : undefined;
+    const overlayLayer = overlayEntry ? overlayEntry.layer : -1;
+    const overlayInvert = overlayEntry && selectedMaskForOverlay.invert ? 1 : 0;
+
     device.queue.writeBuffer(
       uniformBuffer,
       0,
-      new Float32Array([exposure, contrast, saturation, masks.length]),
+      new Float32Array([exposure, contrast, saturation, masks.length, overlayLayer, overlayInvert, 0, 0]),
     );
 
     const maskData = new Float32Array(MAX_MASKS * 12);
@@ -896,11 +1007,16 @@
 
   $effect(() => {
     // Re-run whenever an adjustment or the mask list changes -- reads, not
-    // a re-fetch.
+    // a re-fetch. selectedMaskId/showBrushOverlay are included specifically
+    // for the brush overlay: selecting a DIFFERENT mask, or toggling the
+    // overlay, needs a re-render even when nothing else about the image or
+    // its masks has changed.
     void exposure;
     void contrast;
     void saturation;
     void masks;
+    void selectedMaskId;
+    void showBrushOverlay;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 </script>
@@ -927,9 +1043,26 @@
     <div class="mask-overlay" bind:this={overlayEl}>
       {#each masks as mask (mask.id)}
         {#if mask.op === "linear_gradient_mask"}
+          {@const fl = linearFeatherLines(mask)}
           <svg class="mask-line" class:selected={mask.id === selectedMaskId}>
             <line x1="{mask.start.x * 100}%" y1="{mask.start.y * 100}%" x2="{mask.end.x * 100}%" y2="{mask.end.y * 100}%" />
           </svg>
+          {#if fl}
+            <!-- Feather range indicators: two lines perpendicular to the
+                 gradient axis at the weight=0/weight=1 boundaries, only
+                 when feather > 0 -- purely additive/informational, does
+                 NOT change the existing draggable axis line/handles below.
+                 Each independently omitted (clipLineToUnitBox returns
+                 null) if that particular boundary falls off-frame. -->
+            <svg class="mask-feather-line">
+              {#if fl.zero}
+                <line x1="{fl.zero.x1 * 100}%" y1="{fl.zero.y1 * 100}%" x2="{fl.zero.x2 * 100}%" y2="{fl.zero.y2 * 100}%" />
+              {/if}
+              {#if fl.one}
+                <line x1="{fl.one.x1 * 100}%" y1="{fl.one.y1 * 100}%" x2="{fl.one.x2 * 100}%" y2="{fl.one.y2 * 100}%" />
+              {/if}
+            </svg>
+          {/if}
           <button
             class="mask-handle"
             class:selected={mask.id === selectedMaskId}
@@ -955,8 +1088,22 @@
                diagonal), confirmed by design review before implementation
                to correctly match this component's normalized (x=width-
                fraction, y=height-fraction) coordinate convention. -->
+          {@const fr = radialFeatherRadii(mask)}
           <svg class="mask-ellipse" class:selected={mask.id === selectedMaskId}>
-            <ellipse cx="{mask.center.x * 100}%" cy="{mask.center.y * 100}%" rx="{mask.radiusX * 100}%" ry="{mask.radiusY * 100}%" />
+            {#if fr}
+              <!-- Feather range indicators: inner (fully-inside boundary)
+                   + outer (fully-outside boundary) ellipses, only when
+                   feather > 0. The raw radiusX/radiusY (still what the
+                   radius handle below edits) now sits exactly halfway
+                   between them. feather=0 deliberately keeps the single-
+                   ellipse rendering rather than drawing two coincident
+                   shapes, which would alpha-composite to a visibly
+                   heavier line than one. -->
+              <ellipse cx="{mask.center.x * 100}%" cy="{mask.center.y * 100}%" rx="{fr.inner.rx * 100}%" ry="{fr.inner.ry * 100}%" />
+              <ellipse cx="{mask.center.x * 100}%" cy="{mask.center.y * 100}%" rx="{fr.outer.rx * 100}%" ry="{fr.outer.ry * 100}%" />
+            {:else}
+              <ellipse cx="{mask.center.x * 100}%" cy="{mask.center.y * 100}%" rx="{mask.radiusX * 100}%" ry="{mask.radiusY * 100}%" />
+            {/if}
           </svg>
           <button
             class="mask-handle"
@@ -1073,6 +1220,18 @@
   }
   .mask-line.placing line {
     stroke: var(--accent-strong);
+  }
+  .mask-feather-line {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .mask-feather-line line {
+    stroke: rgba(255, 255, 255, 0.3);
+    stroke-width: 1;
+    stroke-dasharray: 2 4;
   }
   .mask-ellipse {
     position: absolute;

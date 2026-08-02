@@ -168,6 +168,15 @@
   let brushHardness = $state(70);
   let brushFlow = $state(1);
   let eraseMode = $state(false);
+  // Mask UI polish: soft colored overlay for the SELECTED brush mask,
+  // toggleable via a MaskEditorPanel checkbox or the "O" hotkey. Grouped
+  // with the brush TOOL options above, not with activeTool/selectedMaskId
+  // -- deliberately NEVER force-reset on openDevelop/switchModule, same
+  // "a user's preferred setting should survive across strokes/masks/images
+  // within one session" reasoning those already document. Defaults true:
+  // brush masks are otherwise invisible until a nonzero adjustment is set,
+  // a real discoverability gap this directly fixes.
+  let showBrushOverlay = $state(true);
 
   function handleMaskCreated(
     /** @type {
@@ -619,7 +628,31 @@
   // target-computation needed.
   const COLOR_KEYS = { 6: "red", 7: "yellow", 8: "green", 9: "blue" };
 
-  function handleLibraryKeydown(/** @type {KeyboardEvent} */ e) {
+  // Renamed from handleLibraryKeydown (mask UI polish) -- now handles a
+  // Develop-scoped shortcut too, so the old Library-only name would be
+  // misleading.
+  function handleGlobalKeydown(/** @type {KeyboardEvent} */ e) {
+    if (activeModule === "develop") {
+      // The only dialogs actually reachable while activeModule==="develop"
+      // -- confirmingRemoval/creatingCollection/creatingSmartCollection/
+      // creatingCollectionWithImages are Library-only concerns, structurally
+      // impossible here, not copied blindly from the Library branch below.
+      if (exportItems !== null || settingsOpen || backupPromptOpen) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key.toLowerCase() === "o" && selectedMask?.op === "brush_mask") {
+        e.preventDefault();
+        showBrushOverlay = !showBrushOverlay;
+      }
+      return;
+    }
     if (activeModule !== "library") return;
     if (
       confirmingRemoval ||
@@ -840,7 +873,7 @@
 
 </script>
 
-<svelte:window onkeydown={handleLibraryKeydown} />
+<svelte:window onkeydown={handleGlobalKeydown} />
 
 <div class="app">
   <div class="titlebar">
@@ -1036,6 +1069,7 @@
         {brushHardness}
         {brushFlow}
         {eraseMode}
+        {showBrushOverlay}
         onMaskCreated={handleMaskCreated}
         onMaskUpdated={handleMaskUpdated}
         onMaskSelected={(id) => (selectedMaskId = id)}
@@ -1046,6 +1080,8 @@
           onChange={(patch) => handleMaskUpdated(/** @type {string} */ (selectedMaskId), patch)}
           onDelete={handleMaskDeleted}
           onClose={() => (selectedMaskId = null)}
+          {showBrushOverlay}
+          onShowOverlayChange={(v) => (showBrushOverlay = v)}
         />
       {/if}
       <DevelopPanel

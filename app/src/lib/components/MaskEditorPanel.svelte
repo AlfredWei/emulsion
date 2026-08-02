@@ -8,18 +8,23 @@
    * per-mask on-canvas position -- avoids following a diagonal line's
    * location on screen.
    * @type {{
-   *   mask: import('$lib/api/develop.js').LinearGradientMask,
-   *   onChange: (patch: Partial<import('$lib/api/develop.js').LinearGradientMask>) => void,
+   *   mask: import('$lib/api/develop.js').Mask,
+   *   onChange: (patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onDelete: () => void,
    *   onClose: () => void,
    * }}
    */
   let { mask, onChange, onDelete, onClose } = $props();
+
+  // Only the title differs by kind -- every field below (exposure/
+  // contrast/saturation/feather/invert/delete) is common to both mask
+  // kinds and never touches geometry, confirmed unchanged from Slice 5.
+  let title = $derived(mask.op === "radial_gradient_mask" ? "Radial Gradient" : "Linear Gradient");
 </script>
 
-<div class="panel" role="dialog" aria-label="Gradient adjustments">
+<div class="panel" role="dialog" aria-label="{title} adjustments">
   <div class="header">
-    <span class="title">Linear Gradient</span>
+    <span class="title">{title}</span>
     <button class="close" type="button" title="Deselect" onclick={onClose}>×</button>
   </div>
 
@@ -81,7 +86,7 @@
     <span>Invert</span>
   </label>
 
-  <button class="delete" type="button" onclick={onDelete}>Delete Gradient</button>
+  <button class="delete" type="button" onclick={onDelete}>Delete {title}</button>
 </div>
 
 <style>

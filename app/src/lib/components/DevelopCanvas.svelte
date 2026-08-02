@@ -11,11 +11,14 @@
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
-   *   masks: import('$lib/api/develop.js').LinearGradientMask[],
+   *   masks: import('$lib/api/develop.js').Mask[],
    *   activeTool: string | null,
    *   selectedMaskId: string | null,
-   *   onMaskCreated: (placement: { start: {x: number, y: number}, end: {x: number, y: number} }) => void,
-   *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').LinearGradientMask>) => void,
+   *   onMaskCreated: (placement:
+   *     | { kind: "linear_gradient", start: {x: number, y: number}, end: {x: number, y: number} }
+   *     | { kind: "radial_gradient", center: {x: number, y: number}, radiusX: number, radiusY: number }
+   *   ) => void,
+   *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onMaskSelected: (id: string) => void,
    * }}
    */
@@ -76,55 +79,105 @@
   let dragState = null;
   const DRAG_CLICK_THRESHOLD = 4; // px -- below this, pointerup is a click (toggle zoom), not a completed drag
 
-  // M3 Slice 5: while the "Linear Gradient" tool is active, dragging on
-  // the canvas places a new mask instead of panning -- tracks the
-  // in-progress drag (normalized coords) for the live preview line, not
+  // M3 Slice 5/6: while a mask tool is active, dragging on the canvas
+  // places a new mask instead of panning -- tracks the in-progress drag
+  // for the live preview (line for linear, ellipse for radial), not
   // committed to the edit stack until pointerup.
-  let placingMask = $state(/** @type {{ start: {x:number,y:number}, end: {x:number,y:number} } | null} */ (null));
-  /** @type {{ maskId: string, which: "start" | "end" } | null} */
+  let placingMask = $state(
+    /** @type {
+     *   | { kind: "linear_gradient", start: {x:number,y:number}, end: {x:number,y:number} }
+     *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
+     *   | null
+     * } */ (null),
+  );
+  /** @type {{ maskId: string, which: "start" | "end" | "center" | "radius", center?: {x:number,y:number} } | null} */
   let handleDragState = null;
 
-  /** CSS-pixel click position -> normalized (0..1) image-space coordinate,
-   * matching the shader's own `in.uv`. Reused from the zoom-to-point math
-   * (M3 Slice 3) -- `getBoundingClientRect()` already reflects the current
-   * scroll offset, so this needs no extra bookkeeping for panned/zoomed
-   * state. */
-  function screenToNormalized(/** @type {number} */ clientX, /** @type {number} */ clientY) {
+  /** CSS-pixel click position -> native canvas-backing-store pixel
+   * coordinate. Reused from the zoom-to-point math (M3 Slice 3) --
+   * `getBoundingClientRect()` already reflects the current scroll offset,
+   * so this needs no extra bookkeeping for panned/zoomed state. */
+  function screenToNativePixel(/** @type {number} */ clientX, /** @type {number} */ clientY) {
     if (!canvasEl) return { x: 0, y: 0 };
     const rect = canvasEl.getBoundingClientRect();
     const scaleX = rect.width / canvasEl.width;
     const scaleY = rect.height / canvasEl.height;
-    return {
-      x: (clientX - rect.left) / scaleX / canvasEl.width,
-      y: (clientY - rect.top) / scaleY / canvasEl.height,
-    };
+    return { x: (clientX - rect.left) / scaleX, y: (clientY - rect.top) / scaleY };
   }
 
-  // M3 Slice 5: a hard branch on `activeTool`, not a case bolted onto the
+  /** Native pixel coordinate -> normalized (0..1) image-space coordinate,
+   * matching the shader's own `in.uv`. */
+  function screenToNormalized(/** @type {number} */ clientX, /** @type {number} */ clientY) {
+    if (!canvasEl) return { x: 0, y: 0 };
+    const p = screenToNativePixel(clientX, clientY);
+    return { x: p.x / canvasEl.width, y: p.y / canvasEl.height };
+  }
+
+  /** M3 Slice 6: radius from a center + the current pointer, using the
+   * SAME native-pixel distance on both axes so a radial mask renders as a
+   * true on-screen circle by default -- a deliberate deviation from real
+   * Lightroom's actual free-form bounding-box ellipse drag (documented
+   * here explicitly, not left to read as an oversight); the stored data
+   * model (independent radiusX/radiusY) already supports a true
+   * ellipse-drag "for free" if a future slice wants it. */
+  function radiusFromDrag(/** @type {{x:number,y:number}} */ center, /** @type {number} */ clientX, /** @type {number} */ clientY) {
+    if (!canvasEl) return { radiusX: 0, radiusY: 0 };
+    const centerNative = { x: center.x * canvasEl.width, y: center.y * canvasEl.height };
+    const pointerNative = screenToNativePixel(clientX, clientY);
+    const radiusPx = Math.hypot(pointerNative.x - centerNative.x, pointerNative.y - centerNative.y);
+    return { radiusX: radiusPx / canvasEl.width, radiusY: radiusPx / canvasEl.height };
+  }
+
+  // M3 Slice 5/6: a hard branch on `activeTool`, not a case bolted onto the
   // pan/zoom logic -- while a mask tool is active, dragging NEVER pans or
   // toggles zoom, even in 100% mode, and vice versa.
+  /** `setPointerCapture` wrapped defensively and called AFTER the state it
+   * gates is already set -- see `handleMaskHandlePointerDown`'s comment for
+   * why: a real failed drag there proved a throw from this call can
+   * silently abort whatever runs after it. Capture is what keeps a drag
+   * working if the pointer exits the canvas mid-drag, not a strict
+   * requirement, so a failure to acquire it shouldn't block the drag. */
+  function tryCapturePointer(/** @type {PointerEvent} */ e) {
+    try {
+      canvasEl?.setPointerCapture(e.pointerId);
+    } catch {
+      // Non-fatal, see above.
+    }
+  }
+
   function handlePointerDown(/** @type {PointerEvent} */ e) {
     if (activeTool === "linear_gradient") {
       e.preventDefault();
-      canvasEl?.setPointerCapture(e.pointerId);
       const p = screenToNormalized(e.clientX, e.clientY);
-      placingMask = { start: p, end: p };
+      placingMask = { kind: "linear_gradient", start: p, end: p };
+      tryCapturePointer(e);
+      return;
+    }
+    if (activeTool === "radial_gradient") {
+      e.preventDefault();
+      const center = screenToNormalized(e.clientX, e.clientY);
+      placingMask = { kind: "radial_gradient", center, radiusX: 0, radiusY: 0 };
+      tryCapturePointer(e);
       return;
     }
     if (!wrapEl) return;
     e.preventDefault();
-    canvasEl?.setPointerCapture(e.pointerId);
     dragState = {
       startX: e.clientX,
       startY: e.clientY,
       startScrollLeft: wrapEl.scrollLeft,
       startScrollTop: wrapEl.scrollTop,
     };
+    tryCapturePointer(e);
   }
 
   function handlePointerMove(/** @type {PointerEvent} */ e) {
-    if (placingMask) {
+    if (placingMask?.kind === "linear_gradient") {
       placingMask = { ...placingMask, end: screenToNormalized(e.clientX, e.clientY) };
+      return;
+    }
+    if (placingMask?.kind === "radial_gradient") {
+      placingMask = { ...placingMask, ...radiusFromDrag(placingMask.center, e.clientX, e.clientY) };
       return;
     }
     if (!dragState || !wrapEl) return;
@@ -133,13 +186,28 @@
   }
 
   async function handlePointerUp(/** @type {PointerEvent} */ e) {
-    canvasEl?.releasePointerCapture(e.pointerId);
-    if (placingMask) {
+    try {
+      canvasEl?.releasePointerCapture(e.pointerId);
+    } catch {
+      // Releasing a capture that was never successfully acquired would
+      // itself throw -- non-fatal, see tryCapturePointer's comment.
+    }
+    if (placingMask?.kind === "linear_gradient") {
       const { start, end } = placingMask;
       placingMask = null;
       // Ignore a near-zero-size drag (an accidental click while the tool
       // was active) -- a real gradient needs two distinct points.
-      if (Math.hypot(end.x - start.x, end.y - start.y) > 0.01) onMaskCreated({ start, end });
+      if (Math.hypot(end.x - start.x, end.y - start.y) > 0.01) onMaskCreated({ kind: "linear_gradient", start, end });
+      return;
+    }
+    if (placingMask?.kind === "radial_gradient") {
+      const { center, radiusX, radiusY } = placingMask;
+      placingMask = null;
+      // Minimum-radius guard: radius is a divisor in both the WGSL shader
+      // and develop_engine.rs's CPU path, so a near-zero placement
+      // (accidental click) must be rejected, not committed -- it would
+      // corrupt the frame with Inf/NaN.
+      if (radiusX > 0.01 && radiusY > 0.01) onMaskCreated({ kind: "radial_gradient", center, radiusX, radiusY });
       return;
     }
     if (!dragState) return;
@@ -166,28 +234,59 @@
     wrapEl.scrollTop = nativeY - wrapEl.clientHeight / 2;
   }
 
-  /** Dragging an existing mask's start/end handle -- separate from the
-   * canvas's own pointer handlers above (these fire on the handle button
-   * itself, which sits visually on top, so the canvas never sees them). */
+  /** Dragging an existing mask's handle -- separate from the canvas's own
+   * pointer handlers above (these fire on the handle button itself, which
+   * sits visually on top, so the canvas never sees them). `start`/`end`
+   * (linear) and `center` (radial) are direct point patches; `radius`
+   * (radial) is a resize, recomputed the same "equal native-pixel radius
+   * on both axes" way as placement -- needs the mask's OWN center
+   * (captured at drag-start, since it doesn't change during a radius
+   * drag) to compute the new radius from. */
   function handleMaskHandlePointerDown(
     /** @type {PointerEvent} */ e,
     /** @type {string} */ maskId,
-    /** @type {"start" | "end"} */ which,
+    /** @type {"start" | "end" | "center" | "radius"} */ which,
+    /** @type {{x:number,y:number}=} */ center,
   ) {
     e.stopPropagation();
     e.preventDefault();
-    /** @type {HTMLElement} */ (e.currentTarget).setPointerCapture(e.pointerId);
-    handleDragState = { maskId, which };
+    // Set the drag state FIRST, `setPointerCapture` second, wrapped
+    // defensively: empirically confirmed via a real failed drag that
+    // `setPointerCapture` can throw here (button element, unlike the
+    // canvas's own capture calls elsewhere in this file, which have never
+    // been observed to throw) -- with the old order (capture first), a
+    // throw silently aborted the rest of this function, leaving
+    // `handleDragState` unset and the whole drag a no-op with no error
+    // surfaced anywhere. Capture is what keeps the drag working if the
+    // pointer exits the button's small hit area mid-drag -- a nice-to-have,
+    // not a strict requirement, so a failure to acquire it shouldn't break
+    // the drag itself.
+    handleDragState = { maskId, which, center };
     onMaskSelected(maskId);
+    try {
+      /** @type {HTMLElement} */ (e.currentTarget).setPointerCapture(e.pointerId);
+    } catch {
+      // See above -- non-fatal.
+    }
   }
 
   function handleMaskHandlePointerMove(/** @type {PointerEvent} */ e) {
     if (!handleDragState) return;
-    onMaskUpdated(handleDragState.maskId, { [handleDragState.which]: screenToNormalized(e.clientX, e.clientY) });
+    const { maskId, which, center } = handleDragState;
+    if (which === "radius" && center) {
+      onMaskUpdated(maskId, radiusFromDrag(center, e.clientX, e.clientY));
+      return;
+    }
+    onMaskUpdated(maskId, { [which]: screenToNormalized(e.clientX, e.clientY) });
   }
 
   function handleMaskHandlePointerUp(/** @type {PointerEvent} */ e) {
-    /** @type {HTMLElement} */ (e.currentTarget).releasePointerCapture(e.pointerId);
+    try {
+      /** @type {HTMLElement} */ (e.currentTarget).releasePointerCapture(e.pointerId);
+    } catch {
+      // Releasing a capture that was never successfully acquired (see
+      // handleMaskHandlePointerDown) would itself throw -- non-fatal.
+    }
     handleDragState = null;
   }
 
@@ -284,19 +383,41 @@
       let mask_count = i32(adj.mask_count);
       for (var i = 0; i < mask_count; i = i + 1) {
         let m = masks[i];
-        let dir = m.start_end.zw - m.start_end.xy;
-        let len2 = max(dot(dir, dir), 0.000001);
-        // Projection-onto-segment parametrization: 0 at start, 1 at end,
-        // extrapolated linearly beyond both, then clamped.
-        let t = dot(in.uv - m.start_end.xy, dir) / len2;
-        // Feather widens the transition band symmetrically around the
-        // midpoint -- at feather=50 the pins themselves move to weight
-        // 0.25/0.75 rather than staying at 0/1, matching real Lightroom's
-        // own gradient-feather model (separate outer feather lines beyond
-        // the pins), not a corner-only softening.
-        let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
-        var weight = clamp((t + softness) / (1.0 + 2.0 * softness), 0.0, 1.0);
-        if (m.params.y > 0.5) { weight = 1.0 - weight; }
+        var weight: f32;
+        if (m.params.z < 0.5) {
+          // Linear: projection-onto-segment parametrization. 0 at start, 1
+          // at end, extrapolated linearly beyond both, then clamped.
+          let dir = m.start_end.zw - m.start_end.xy;
+          let len2 = max(dot(dir, dir), 0.000001);
+          let t = dot(in.uv - m.start_end.xy, dir) / len2;
+          // Feather widens the transition band symmetrically around the
+          // midpoint -- at feather=50 the pins themselves move to weight
+          // 0.25/0.75 rather than staying at 0/1, matching real Lightroom's
+          // own gradient-feather model (separate outer feather lines beyond
+          // the pins), not a corner-only softening.
+          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
+          weight = clamp((t + softness) / (1.0 + 2.0 * softness), 0.0, 1.0);
+          if (m.params.y > 0.5) { weight = 1.0 - weight; }
+        } else {
+          // Radial (M3 Slice 6): start_end.xy = center, start_end.zw =
+          // (radiusX, radiusY). d is 0 at center, 1 at the ellipse
+          // boundary. At feather=0 the transition band is d in
+          // [0.999, 1.0] (width 0.001, sitting just inside the boundary,
+          // not symmetric around it); widens to roughly d in [0.001,1.999]
+          // as feather approaches 100. insideWeight is ~1 at/near the
+          // center regardless of feather.
+          let dx = (in.uv.x - m.start_end.x) / m.start_end.z;
+          let dy = (in.uv.y - m.start_end.y) / m.start_end.w;
+          let d = sqrt(dx * dx + dy * dy);
+          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
+          let denom = max(2.0 * softness, 0.001);
+          let insideWeight = clamp((1.0 + softness - d) / denom, 0.0, 1.0);
+          // Default (invert=false) applies the effect OUTSIDE the ellipse
+          // -- real Lightroom's own Radial Filter convention (its classic
+          // vignette use case); invert=true applies it inside (spotlight/
+          // subject use case).
+          weight = select(1.0 - insideWeight, insideWeight, m.params.y > 0.5);
+        }
         rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
       }
 
@@ -394,10 +515,19 @@
     const maskData = new Float32Array(MAX_MASKS * 12);
     masks.slice(0, MAX_MASKS).forEach((/** @type {any} */ m, /** @type {number} */ i) => {
       const o = i * 12;
-      maskData[o + 0] = m.start.x;
-      maskData[o + 1] = m.start.y;
-      maskData[o + 2] = m.end.x;
-      maskData[o + 3] = m.end.y;
+      if (m.op === "radial_gradient_mask") {
+        maskData[o + 0] = m.center.x;
+        maskData[o + 1] = m.center.y;
+        maskData[o + 2] = m.radiusX;
+        maskData[o + 3] = m.radiusY;
+        maskData[o + 6] = 1; // kind = radial
+      } else {
+        maskData[o + 0] = m.start.x;
+        maskData[o + 1] = m.start.y;
+        maskData[o + 2] = m.end.x;
+        maskData[o + 3] = m.end.y;
+        maskData[o + 6] = 0; // kind = linear
+      }
       maskData[o + 4] = m.feather;
       maskData[o + 5] = m.invert ? 1 : 0;
       maskData[o + 8] = m.exposure;
@@ -456,7 +586,7 @@
   <canvas
     bind:this={canvasEl}
     class:zoomed={zoomMode === "100"}
-    class:placing={activeTool === "linear_gradient"}
+    class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient"}
     onpointerdown={handlePointerDown}
     onpointermove={handlePointerMove}
     onpointerup={handlePointerUp}
@@ -472,31 +602,65 @@
          the individual handle buttons opt back in. -->
     <div class="mask-overlay" bind:this={overlayEl}>
       {#each masks as mask (mask.id)}
-        <svg class="mask-line" class:selected={mask.id === selectedMaskId}>
-          <line x1="{mask.start.x * 100}%" y1="{mask.start.y * 100}%" x2="{mask.end.x * 100}%" y2="{mask.end.y * 100}%" />
-        </svg>
-        <button
-          class="mask-handle"
-          class:selected={mask.id === selectedMaskId}
-          style="left:{mask.start.x * 100}%; top:{mask.start.y * 100}%"
-          aria-label="Gradient start"
-          onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "start")}
-          onpointermove={handleMaskHandlePointerMove}
-          onpointerup={handleMaskHandlePointerUp}
-        ></button>
-        <button
-          class="mask-handle"
-          class:selected={mask.id === selectedMaskId}
-          style="left:{mask.end.x * 100}%; top:{mask.end.y * 100}%"
-          aria-label="Gradient end"
-          onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "end")}
-          onpointermove={handleMaskHandlePointerMove}
-          onpointerup={handleMaskHandlePointerUp}
-        ></button>
+        {#if mask.op === "linear_gradient_mask"}
+          <svg class="mask-line" class:selected={mask.id === selectedMaskId}>
+            <line x1="{mask.start.x * 100}%" y1="{mask.start.y * 100}%" x2="{mask.end.x * 100}%" y2="{mask.end.y * 100}%" />
+          </svg>
+          <button
+            class="mask-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{mask.start.x * 100}%; top:{mask.start.y * 100}%"
+            aria-label="Gradient start"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "start")}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
+          <button
+            class="mask-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{mask.end.x * 100}%; top:{mask.end.y * 100}%"
+            aria-label="Gradient end"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "end")}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
+        {:else}
+          <!-- M3 Slice 6: cx/rx resolve against the SVG viewport's width,
+               cy/ry against height -- an <ellipse>-specific percentage
+               behavior (unlike <circle>'s r, which resolves against the
+               diagonal), confirmed by design review before implementation
+               to correctly match this component's normalized (x=width-
+               fraction, y=height-fraction) coordinate convention. -->
+          <svg class="mask-ellipse" class:selected={mask.id === selectedMaskId}>
+            <ellipse cx="{mask.center.x * 100}%" cy="{mask.center.y * 100}%" rx="{mask.radiusX * 100}%" ry="{mask.radiusY * 100}%" />
+          </svg>
+          <button
+            class="mask-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{mask.center.x * 100}%; top:{mask.center.y * 100}%"
+            aria-label="Radial center"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "center")}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
+          <button
+            class="mask-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{(mask.center.x + mask.radiusX) * 100}%; top:{mask.center.y * 100}%"
+            aria-label="Radial radius"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "radius", mask.center)}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
+        {/if}
       {/each}
-      {#if placingMask}
+      {#if placingMask?.kind === "linear_gradient"}
         <svg class="mask-line placing">
           <line x1="{placingMask.start.x * 100}%" y1="{placingMask.start.y * 100}%" x2="{placingMask.end.x * 100}%" y2="{placingMask.end.y * 100}%" />
+        </svg>
+      {:else if placingMask?.kind === "radial_gradient"}
+        <svg class="mask-ellipse placing">
+          <ellipse cx="{placingMask.center.x * 100}%" cy="{placingMask.center.y * 100}%" rx="{placingMask.radiusX * 100}%" ry="{placingMask.radiusY * 100}%" />
         </svg>
       {/if}
     </div>
@@ -575,6 +739,26 @@
     stroke-width: 2;
   }
   .mask-line.placing line {
+    stroke: var(--accent-strong);
+  }
+  .mask-ellipse {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .mask-ellipse ellipse {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.55);
+    stroke-width: 1.5;
+    stroke-dasharray: 5 4;
+  }
+  .mask-ellipse.selected ellipse {
+    stroke: var(--accent-strong);
+    stroke-width: 2;
+  }
+  .mask-ellipse.placing ellipse {
     stroke: var(--accent-strong);
   }
   .mask-handle {

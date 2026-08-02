@@ -5,12 +5,13 @@
    * Contextual tool strip above the Filmstrip in Develop, matching
    * UX-DESIGN.md's described layout ("a contextual tool strip above [the
    * filmstrip] for crop/mask/heal tools when active... designed into this
-   * layout now"). M3 Slice 5: one tool (Linear Gradient) plus a simple
-   * list of placed masks -- click-to-select is simpler and more robust
-   * here than hit-testing a click near a diagonal line on the canvas.
+   * layout now"). M3 Slice 5/6: Linear Gradient and Radial Gradient tools,
+   * plus a simple list of placed masks -- click-to-select is simpler and
+   * more robust here than hit-testing a click near a diagonal line/ellipse
+   * on the canvas.
    * @type {{
    *   activeTool: string | null,
-   *   masks: import('$lib/api/develop.js').LinearGradientMask[],
+   *   masks: import('$lib/api/develop.js').Mask[],
    *   selectedMaskId: string | null,
    *   onToolToggle: (tool: string) => void,
    *   onMaskSelect: (id: string) => void,
@@ -19,6 +20,21 @@
   let { activeTool, masks, selectedMaskId, onToolToggle, onMaskSelect } = $props();
 
   let atCap = $derived(masks.length >= MAX_MASKS);
+
+  // Per-kind chip numbering ("Gradient 1", "Radial 1") -- two independent
+  // counters, not one shared index, matching how Lightroom's own mask/
+  // history list names each tool instance by its own type.
+  let chipLabels = $derived.by(() => {
+    let gradientCount = 0;
+    let radialCount = 0;
+    return new Map(
+      masks.map((mask) =>
+        mask.op === "radial_gradient_mask"
+          ? [mask.id, `Radial ${++radialCount}`]
+          : [mask.id, `Gradient ${++gradientCount}`],
+      ),
+    );
+  });
 </script>
 
 <div class="strip">
@@ -30,17 +46,25 @@
     title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Linear Gradient"}
     onclick={() => onToolToggle("linear_gradient")}
   >Linear Gradient</button>
+  <button
+    class="tool"
+    class:active={activeTool === "radial_gradient"}
+    type="button"
+    disabled={atCap && activeTool !== "radial_gradient"}
+    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Radial Gradient"}
+    onclick={() => onToolToggle("radial_gradient")}
+  >Radial Gradient</button>
 
   {#if masks.length > 0}
     <div class="divider"></div>
     <div class="mask-list">
-      {#each masks as mask, i (mask.id)}
+      {#each masks as mask (mask.id)}
         <button
           class="mask-chip"
           class:selected={mask.id === selectedMaskId}
           type="button"
           onclick={() => onMaskSelect(mask.id)}
-        >Gradient {i + 1}</button>
+        >{chipLabels.get(mask.id)}</button>
       {/each}
     </div>
   {/if}

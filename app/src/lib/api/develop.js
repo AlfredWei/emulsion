@@ -30,9 +30,25 @@ import { invoke } from "@tauri-apps/api/core";
  */
 
 /**
+ * @typedef {Object} RadialGradientMask
+ * @property {"radial_gradient_mask"} op
+ * @property {string} id
+ * @property {{x: number, y: number}} center
+ * @property {number} radiusX
+ * @property {number} radiusY
+ * @property {number} feather
+ * @property {boolean} invert
+ * @property {number} exposure
+ * @property {number} contrast
+ * @property {number} saturation
+ */
+
+/** @typedef {LinearGradientMask | RadialGradientMask} Mask */
+
+/**
  * @typedef {Object} EditStack
  * @property {number} schema_version
- * @property {Array<EditOp | LinearGradientMask>} ops
+ * @property {Array<EditOp | Mask>} ops
  */
 
 /** @returns {Promise<DevelopPreviewInfo>} */
@@ -75,12 +91,20 @@ export function upsertOp(/** @type {EditStack} */ stack, /** @type {string} */ o
   return { ...stack, ops };
 }
 
-// M3 Slice 5: masks are id-keyed, multi-instance ops -- unlike the global
+// M3 Slice 5/6: masks are id-keyed, multi-instance ops -- unlike the global
 // sliders above (opValue/upsertOp's find-by-name-and-replace model), there
-// can be several linear gradients on one image, so each needs a stable
-// identity of its own, not a shared name slot. Matches the WGSL shader's
-// fixed-size array (DevelopCanvas.svelte), which the UI must cap at.
+// can be several masks (of possibly different kinds) on one image, so each
+// needs a stable identity of its own, not a shared name slot. Matches the
+// WGSL shader's fixed-size array (DevelopCanvas.svelte), which the UI must
+// cap at -- a combined cap across every kind, not per-kind, since it's a
+// hardware/uniform-array-size limit.
 export const MAX_MASKS = 8;
+
+// An explicit allowlist, not an implicit naming convention (e.g.
+// `endsWith("_mask")`) -- simpler and more robust, since it can't silently
+// misclassify some future non-mask op that happens to share the suffix.
+// Right-sized for two kinds; not a "kind registry" to avoid over-building.
+const MASK_OP_NAMES = ["linear_gradient_mask", "radial_gradient_mask"];
 
 /** @returns {LinearGradientMask} */
 export function createLinearGradientMask(
@@ -100,13 +124,38 @@ export function createLinearGradientMask(
   };
 }
 
-/** @returns {LinearGradientMask[]} */
+/** M3 Slice 6: default feather=50 (not 0 like linear's default) and
+ * invert=false meaning the effect applies OUTSIDE the ellipse -- both
+ * deliberately match real Lightroom's own Radial Filter convention (its
+ * classic vignette use case; checking Invert flips it to the
+ * spotlight/subject-enhancement inside application).
+ * @returns {RadialGradientMask} */
+export function createRadialGradientMask(
+  /** @type {{x: number, y: number}} */ center,
+  /** @type {number} */ radiusX,
+  /** @type {number} */ radiusY,
+) {
+  return {
+    op: "radial_gradient_mask",
+    id: crypto.randomUUID(),
+    center,
+    radiusX,
+    radiusY,
+    feather: 50,
+    invert: false,
+    exposure: 0,
+    contrast: 0,
+    saturation: 0,
+  };
+}
+
+/** @returns {Mask[]} */
 export function listMasks(/** @type {EditStack} */ stack) {
-  return /** @type {any} */ (stack.ops.filter((o) => o.op === "linear_gradient_mask"));
+  return /** @type {any} */ (stack.ops.filter((o) => MASK_OP_NAMES.includes(o.op)));
 }
 
 /** @returns {EditStack} */
-export function addMask(/** @type {EditStack} */ stack, /** @type {LinearGradientMask} */ mask) {
+export function addMask(/** @type {EditStack} */ stack, /** @type {Mask} */ mask) {
   return { ...stack, ops: [...stack.ops, mask] };
 }
 
@@ -114,16 +163,18 @@ export function addMask(/** @type {EditStack} */ stack, /** @type {LinearGradien
 export function updateMask(
   /** @type {EditStack} */ stack,
   /** @type {string} */ id,
-  /** @type {Partial<LinearGradientMask>} */ patch,
+  /** @type {Partial<Mask>} */ patch,
 ) {
   const ops = stack.ops.map((o) =>
-    o.op === "linear_gradient_mask" && /** @type {any} */ (o).id === id ? { ...o, ...patch } : o,
+    MASK_OP_NAMES.includes(o.op) && /** @type {any} */ (o).id === id
+      ? /** @type {any} */ ({ ...o, ...patch })
+      : o,
   );
   return { ...stack, ops };
 }
 
 /** @returns {EditStack} */
 export function removeMask(/** @type {EditStack} */ stack, /** @type {string} */ id) {
-  const ops = stack.ops.filter((o) => !(o.op === "linear_gradient_mask" && /** @type {any} */ (o).id === id));
+  const ops = stack.ops.filter((o) => !(MASK_OP_NAMES.includes(o.op) && /** @type {any} */ (o).id === id));
   return { ...stack, ops };
 }

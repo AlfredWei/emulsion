@@ -50,6 +50,7 @@
     updateMask,
     removeMask,
     createLinearGradientMask,
+    createRadialGradientMask,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -155,8 +156,16 @@
   let selectedMaskId = $state(/** @type {string | null} */ (null));
   let selectedMask = $derived(masks.find((m) => m.id === selectedMaskId) ?? null);
 
-  function handleMaskCreated(/** @type {{ start: {x:number,y:number}, end: {x:number,y:number} }} */ placement) {
-    const mask = createLinearGradientMask(placement.start, placement.end);
+  function handleMaskCreated(
+    /** @type {
+     *   | { kind: "linear_gradient", start: {x:number,y:number}, end: {x:number,y:number} }
+     *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
+     * } */ placement,
+  ) {
+    const mask =
+      placement.kind === "radial_gradient"
+        ? createRadialGradientMask(placement.center, placement.radiusX, placement.radiusY)
+        : createLinearGradientMask(placement.start, placement.end);
     editStack = addMask(editStack, mask);
     selectedMaskId = mask.id;
     activeTool = null; // drop back to selection after placing one, matching real Lightroom
@@ -808,6 +817,7 @@
 
     return () => unlistenClose?.();
   });
+
 </script>
 
 <svelte:window onkeydown={handleLibraryKeydown} />

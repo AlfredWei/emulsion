@@ -78,32 +78,27 @@ struct LinearGradientMask {
     saturation: f32,
 }
 
-fn parse_linear_gradient_masks(ops: &[serde_json::Value]) -> Vec<LinearGradientMask> {
-    ops.iter()
-        .filter(|op| op.get("op").and_then(|v| v.as_str()) == Some("linear_gradient_mask"))
-        .filter_map(|op| {
-            let start = op.get("start")?;
-            let end = op.get("end")?;
-            Some(LinearGradientMask {
-                start: (
-                    start.get("x")?.as_f64()? as f32,
-                    start.get("y")?.as_f64()? as f32,
-                ),
-                end: (
-                    end.get("x")?.as_f64()? as f32,
-                    end.get("y")?.as_f64()? as f32,
-                ),
-                feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
-                exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                saturation: op
-                    .get("saturation")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0) as f32,
-            })
-        })
-        .collect()
+fn parse_linear_gradient_mask(op: &serde_json::Value) -> Option<LinearGradientMask> {
+    let start = op.get("start")?;
+    let end = op.get("end")?;
+    Some(LinearGradientMask {
+        start: (
+            start.get("x")?.as_f64()? as f32,
+            start.get("y")?.as_f64()? as f32,
+        ),
+        end: (
+            end.get("x")?.as_f64()? as f32,
+            end.get("y")?.as_f64()? as f32,
+        ),
+        feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
+        exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        saturation: op
+            .get("saturation")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+    })
 }
 
 /// Same projection-onto-segment parametrization as the WGSL shader: `t` is
@@ -127,6 +122,104 @@ fn mask_weight(uv: (f32, f32), mask: &LinearGradientMask) -> f32 {
     weight
 }
 
+/// A `radial_gradient_mask` op (M3 Slice 6). `radius_x`/`radius_y` are
+/// independent normalized fractions (of image width/height respectively)
+/// so an on-screen-circular placement (equal *native pixel* radius on both
+/// axes, computed by the frontend) round-trips correctly regardless of the
+/// image's own aspect ratio.
+struct RadialGradientMask {
+    center: (f32, f32),
+    radius_x: f32,
+    radius_y: f32,
+    feather: f32,
+    invert: bool,
+    exposure: f32,
+    contrast: f32,
+    saturation: f32,
+}
+
+fn parse_radial_gradient_mask(op: &serde_json::Value) -> Option<RadialGradientMask> {
+    let center = op.get("center")?;
+    Some(RadialGradientMask {
+        center: (
+            center.get("x")?.as_f64()? as f32,
+            center.get("y")?.as_f64()? as f32,
+        ),
+        radius_x: op.get("radiusX")?.as_f64()? as f32,
+        radius_y: op.get("radiusY")?.as_f64()? as f32,
+        feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
+        exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        saturation: op
+            .get("saturation")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+    })
+}
+
+/// Same ellipse-distance parametrization as the WGSL shader: `d` is 0 at
+/// the center, 1 at the ellipse boundary, growing beyond it outside.
+/// `insideWeight` is 1 at/near the center regardless of feather; at
+/// feather=0 the transition band is `d` in `[0.999, 1.0]` (width 0.001,
+/// sitting just inside the boundary, not symmetric around it), widening to
+/// roughly `[0.001, 1.999]` as feather approaches 100. Default
+/// (`invert=false`) applies the effect OUTSIDE the ellipse -- real
+/// Lightroom's own Radial Filter convention (its classic vignette use
+/// case); `invert=true` applies it inside (spotlight/subject use case).
+fn radial_mask_weight(uv: (f32, f32), mask: &RadialGradientMask) -> f32 {
+    let dx = (uv.0 - mask.center.0) / mask.radius_x;
+    let dy = (uv.1 - mask.center.1) / mask.radius_y;
+    let d = (dx * dx + dy * dy).sqrt();
+    let softness = (mask.feather / 100.0).clamp(0.0, 0.999);
+    let denom = (2.0 * softness).max(0.001);
+    let inside_weight = ((1.0 + softness - d) / denom).clamp(0.0, 1.0);
+    if mask.invert {
+        inside_weight
+    } else {
+        1.0 - inside_weight
+    }
+}
+
+/// Wraps either mask kind so `parse_masks` can preserve the edit stack's
+/// TRUE op order across mixed kinds -- the frontend's `masks` array (built
+/// from one unfiltered pass over `stack.ops`, see `develop.js`'s
+/// `listMasks`) and the WGSL shader's packed array both already do this;
+/// parsing linear and radial into two separate `Vec`s and applying "all
+/// linear, then all radial" would silently diverge from that order
+/// whenever a user interleaves the two kinds, which is a real parity gap,
+/// not just a style choice.
+enum Mask {
+    Linear(LinearGradientMask),
+    Radial(RadialGradientMask),
+}
+
+impl Mask {
+    fn weight(&self, uv: (f32, f32)) -> f32 {
+        match self {
+            Mask::Linear(m) => mask_weight(uv, m),
+            Mask::Radial(m) => radial_mask_weight(uv, m),
+        }
+    }
+
+    fn adjustments(&self) -> (f32, f32, f32) {
+        match self {
+            Mask::Linear(m) => (m.exposure, m.contrast, m.saturation),
+            Mask::Radial(m) => (m.exposure, m.contrast, m.saturation),
+        }
+    }
+}
+
+fn parse_masks(ops: &[serde_json::Value]) -> Vec<Mask> {
+    ops.iter()
+        .filter_map(|op| match op.get("op").and_then(|v| v.as_str()) {
+            Some("linear_gradient_mask") => parse_linear_gradient_mask(op).map(Mask::Linear),
+            Some("radial_gradient_mask") => parse_radial_gradient_mask(op).map(Mask::Radial),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Same formula as `DevelopCanvas.svelte`'s WGSL fragment shader, in the
 /// same order, kept in `f32` to track the shader's precision. Not required
 /// to be byte-identical to the shader's GPU output (their source
@@ -135,16 +228,18 @@ fn mask_weight(uv: (f32, f32), mask: &LinearGradientMask) -> f32 {
 /// same hand-derived expected values, same tolerance the shader's own
 /// numeric smoke test already uses.
 ///
-/// Local adjustments (`linear_gradient_mask` ops) are applied AFTER the
-/// global exposure/contrast/saturation pass, in stack order -- matches
-/// real Lightroom's own layering (local adjustments grade on top of the
-/// globally-graded image) and keeps this in the same order the WGSL
-/// shader applies them.
+/// Local adjustments (mask ops) are applied AFTER the global exposure/
+/// contrast/saturation pass, in true stack order (via the unified `Mask`
+/// enum -- see its own doc comment for why parsing kinds into separate
+/// `Vec`s and applying "all of one kind, then all of the other" would be a
+/// real parity gap once a user interleaves linear and radial masks) --
+/// matches real Lightroom's own layering (local adjustments grade on top
+/// of the globally-graded image) and the WGSL shader's own order.
 pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let exposure_ev = op_value(&stack.ops, "exposure");
     let contrast = op_value(&stack.ops, "contrast");
     let saturation = op_value(&stack.ops, "saturation");
-    let masks = parse_linear_gradient_masks(&stack.ops);
+    let masks = parse_masks(&stack.ops);
 
     let (width, height) = (image.width(), image.height());
 
@@ -170,8 +265,9 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
                 (y as f32 + 0.5) / height as f32,
             );
             for mask in &masks {
-                let weight = mask_weight(uv, mask);
-                let local = apply_adjustments(rgb, mask.exposure, mask.contrast, mask.saturation);
+                let weight = mask.weight(uv);
+                let (m_exposure, m_contrast, m_saturation) = mask.adjustments();
+                let local = apply_adjustments(rgb, m_exposure, m_contrast, m_saturation);
                 for c in 0..3 {
                     rgb[c] += (local[c] - rgb[c]) * weight;
                 }
@@ -321,5 +417,87 @@ mod tests {
     #[test]
     fn linear_gradient_mask_feather_moves_the_anchor_off_zero() {
         assert_mask_pixel(mask_stack((0.5, 0.5), (0.8, 0.5), 50.0, 1.0), [125, 125, 125]);
+    }
+
+    /// Radial gradient masks (M3 Slice 6). A 1x1 test image always samples
+    /// at uv=(0.5,0.5) -- these cases vary the mask's center/radius so that
+    /// fixed point lands at the desired position relative to the ellipse
+    /// (center, well outside, etc). Each expected value hand-computed
+    /// precisely via script (not eyeballed), same pattern as the linear
+    /// cases above.
+    fn radial_mask_stack(
+        center: (f32, f32),
+        radius_x: f32,
+        radius_y: f32,
+        feather: f32,
+        invert: bool,
+        exposure: f32,
+    ) -> EditStack {
+        EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({
+                "op": "radial_gradient_mask",
+                "id": "test-radial-mask",
+                "center": { "x": center.0, "y": center.1 },
+                "radiusX": radius_x,
+                "radiusY": radius_y,
+                "feather": feather,
+                "invert": invert,
+                "exposure": exposure,
+                "contrast": 0.0,
+                "saturation": 0.0,
+            })],
+        }
+    }
+
+    /// Default (invert=false) applies OUTSIDE the ellipse -- a pixel at
+    /// dead center is fully "inside", so gets NO local adjustment.
+    #[test]
+    fn radial_gradient_mask_center_default_outside_gets_no_local_adjustment() {
+        assert_mask_pixel(
+            radial_mask_stack((0.5, 0.5), 0.3, 0.3, 0.0, false, 1.0),
+            [100, 100, 100],
+        );
+    }
+
+    /// Same geometry, invert=true (applies INSIDE) -- center gets the full
+    /// local adjustment.
+    #[test]
+    fn radial_gradient_mask_center_inverted_gets_full_local_adjustment() {
+        assert_mask_pixel(
+            radial_mask_stack((0.5, 0.5), 0.3, 0.3, 0.0, true, 1.0),
+            [200, 200, 200],
+        );
+    }
+
+    /// Well outside the ellipse, default (outside) -- gets the full local
+    /// adjustment (the opposite of the center case above).
+    #[test]
+    fn radial_gradient_mask_outside_default_gets_full_local_adjustment() {
+        assert_mask_pixel(
+            radial_mask_stack((0.1, 0.1), 0.05, 0.05, 0.0, false, 1.0),
+            [200, 200, 200],
+        );
+    }
+
+    /// Center is always fully "inside" regardless of feather -- a heavily
+    /// feathered, inverted mask still gives the center the full effect.
+    #[test]
+    fn radial_gradient_mask_center_stays_fully_inside_even_when_feathered() {
+        assert_mask_pixel(
+            radial_mask_stack((0.5, 0.5), 0.3, 0.3, 50.0, true, 1.0),
+            [200, 200, 200],
+        );
+    }
+
+    /// Well outside, feathered, inverted (inside-only effect) -- stays
+    /// unaffected, confirming feathering doesn't leak the inside effect
+    /// arbitrarily far outward.
+    #[test]
+    fn radial_gradient_mask_outside_feathered_inverted_stays_unaffected() {
+        assert_mask_pixel(
+            radial_mask_stack((0.1, 0.1), 0.05, 0.05, 50.0, true, 1.0),
+            [100, 100, 100],
+        );
     }
 }

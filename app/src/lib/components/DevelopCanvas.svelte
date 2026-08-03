@@ -18,7 +18,7 @@
    *   brushHardness: number,
    *   brushFlow: number,
    *   eraseMode: boolean,
-   *   showBrushOverlay: boolean,
+   *   showMaskOverlay: boolean,
    *   onMaskCreated: (placement:
    *     | { kind: "linear_gradient", start: {x: number, y: number}, end: {x: number, y: number} }
    *     | { kind: "radial_gradient", center: {x: number, y: number}, radiusX: number, radiusY: number }
@@ -40,7 +40,7 @@
     brushHardness,
     brushFlow,
     eraseMode,
-    showBrushOverlay,
+    showMaskOverlay,
     onMaskCreated,
     onMaskUpdated,
     onMaskSelected,
@@ -586,23 +586,31 @@
       contrast: f32,
       saturation: f32,
       mask_count: f32,
-      overlay_layer: f32,  // -1 = no overlay; else the selected brush mask's texture-array layer
-      overlay_invert: f32, // 0/1 -- overlay reflects the EFFECTIVE mask post-invert, not raw paint
+      // Mask-overlay: -1 = no overlay, else the LOOP INDEX (not a texture
+      // layer) of the currently selected mask, when overlay is enabled.
+      // Unified across every no-geometry mask kind (brush, luminance
+      // range) -- replaces this field's earlier brush-only overlay_layer/
+      // overlay_invert pair (mask UI polish slice): the overlay now
+      // reuses each mask's own already-computed, already-inverted weight
+      // from the main loop below, rather than a separate
+      // re-sample-and-re-invert step, so no per-kind overlay data is
+      // needed here at all.
+      selected_mask_index: f32,
       _pad0: f32,
       _pad1: f32,
+      _pad2: f32,
     };
 
     // Packed entirely into vec4-multiples (48 bytes/mask) to sidestep
     // WGSL's vec2/vec3-in-array uniform alignment footguns -- array stride
     // in the uniform address space must be a multiple of 16 bytes, and an
     // all-vec4 struct is trivially aligned with no implicit padding.
-    // M3 Slice 7: params.w, previously unused, now holds the brush mask's
-    // own texture-array layer index (as a float, cast to i32 at sample
-    // time) -- brush is the only kind that needs a fourth scalar; linear
-    // and radial masks leave it at 0.
+    // params.w holds the brush mask's own texture-array layer index (as a
+    // float, cast to i32 at sample time) -- brush is the only kind that
+    // needs a fourth scalar; every other kind leaves it at 0.
     struct Mask {
-      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space)
-      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1, z = kind (0=linear, 1=radial, 2=brush), w = brush texture-array layer
+      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100)
+      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1, z = kind (0=linear, 1=radial, 2=brush, 3=luminance range), w = brush texture-array layer
       adjustments: vec4<f32>, // x = exposure_ev, y = contrast, z = saturation, w unused
     };
     const MAX_MASKS = 8;
@@ -637,17 +645,16 @@
       let mask_count = i32(adj.mask_count);
       for (var i = 0; i < mask_count; i = i + 1) {
         let m = masks[i];
+        let kind = m.params.z;
         var weight: f32;
-        if (m.params.z > 1.5) {
-          // Brush (M3 Slice 7): rasterized CPU-side into this mask's own
-          // texture-array layer, luminance-as-weight (see
-          // DevelopCanvas.svelte's rasterizeDab/syncBrushRasterization and
-          // develop_engine.rs's dab_falloff/brush_mask_weight for the
-          // exact accumulation formula both renderers agree on).
-          let layer = i32(m.params.w);
-          weight = textureSampleLevel(brushMasks, srcSampler, in.uv, layer, 0.0).r;
-          if (m.params.y > 0.5) { weight = 1.0 - weight; }
-        } else if (m.params.z < 0.5) {
+        // Ascending bands, not the two-comparison overlapping-threshold
+        // chain this used to be (a real bug a design review caught: that
+        // older chain only correctly bucketed kinds 0/1/2 by coincidence,
+        // and adding a 4th kind would have silently aliased it onto the
+        // brush branch). Each else-if here bounds exactly one kind, so a
+        // future 5th kind just needs one more band inserted before the
+        // final else, not a re-audit of the whole chain's ordering.
+        if (kind < 0.5) {
           // Linear: projection-onto-segment parametrization. 0 at start, 1
           // at end, extrapolated linearly beyond both, then clamped.
           let dir = m.start_end.zw - m.start_end.xy;
@@ -661,14 +668,14 @@
           let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
           weight = clamp((t + softness) / (1.0 + 2.0 * softness), 0.0, 1.0);
           if (m.params.y > 0.5) { weight = 1.0 - weight; }
-        } else {
-          // Radial (M3 Slice 6): start_end.xy = center, start_end.zw =
-          // (radiusX, radiusY). d is 0 at center, 1 at the ellipse
-          // boundary. At feather=0 the transition band is d in
-          // [0.999, 1.0] (width 0.001, sitting just inside the boundary,
-          // not symmetric around it); widens to roughly d in [0.001,1.999]
-          // as feather approaches 100. insideWeight is ~1 at/near the
-          // center regardless of feather.
+        } else if (kind < 1.5) {
+          // Radial: start_end.xy = center, start_end.zw = (radiusX,
+          // radiusY). d is 0 at center, 1 at the ellipse boundary. At
+          // feather=0 the transition band is d in [0.999, 1.0] (width
+          // 0.001, sitting just inside the boundary, not symmetric around
+          // it); widens to roughly d in [0.001,1.999] as feather
+          // approaches 100. insideWeight is ~1 at/near the center
+          // regardless of feather.
           let dx = (in.uv.x - m.start_end.x) / m.start_end.z;
           let dy = (in.uv.y - m.start_end.y) / m.start_end.w;
           let d = sqrt(dx * dx + dy * dy);
@@ -680,19 +687,49 @@
           // vignette use case); invert=true applies it inside (spotlight/
           // subject use case).
           weight = select(1.0 - insideWeight, insideWeight, m.params.y > 0.5);
+        } else if (kind < 2.5) {
+          // Brush: rasterized CPU-side into this mask's own texture-array
+          // layer, luminance-as-weight (see DevelopCanvas.svelte's
+          // rasterizeDab/syncBrushRasterization and develop_engine.rs's
+          // dab_falloff/brush_mask_weight for the exact accumulation
+          // formula both renderers agree on).
+          let layer = i32(m.params.w);
+          weight = textureSampleLevel(brushMasks, srcSampler, in.uv, layer, 0.0).r;
+          if (m.params.y > 0.5) { weight = 1.0 - weight; }
+        } else {
+          // Luminance range: the first kind whose weight depends on pixel
+          // VALUE, not position -- reads rgb as already graded by every
+          // PRECEDING mask in the stack (this is a mutating accumulator,
+          // see develop_engine.rs's Mask::weight doc comment for why this
+          // order-dependence is the correct WYSIWYG behavior, not a bug).
+          // Trapezoidal falloff, raw-then-clamp-once (same style as the
+          // linear/radial formulas above) -- start_end.x/y hold
+          // rangeMin/rangeMax (0-100, same scale as feather).
+          let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+          let range_min = m.start_end.x / 100.0;
+          let range_max = m.start_end.y / 100.0;
+          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
+          let feather_width = softness * 0.5;
+          let denom = max(feather_width, 0.001);
+          let rising = (luma - (range_min - feather_width)) / denom;
+          let falling = (range_max + feather_width - luma) / denom;
+          weight = clamp(min(rising, falling), 0.0, 1.0);
+          if (m.params.y > 0.5) { weight = 1.0 - weight; }
         }
         rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
-      }
 
-      // Brush mask overlay (soft colored fill, toggleable): reuses the
-      // SAME texture-array binding the mask loop above already samples --
-      // no new GPU resource, no separate CPU-side redraw/cache-key logic
-      // to keep correct, since this is just one more step in the render
-      // pass that already re-runs on every relevant state change.
-      if (adj.overlay_layer >= 0.0) {
-        var overlayWeight = textureSampleLevel(brushMasks, srcSampler, in.uv, i32(adj.overlay_layer), 0.0).r;
-        if (adj.overlay_invert > 0.5) { overlayWeight = 1.0 - overlayWeight; }
-        rgb = mix(rgb, vec3<f32>(1.0, 0.24, 0.24), overlayWeight * 0.55);
+        // Selected-mask overlay (soft colored fill, toggleable): brush and
+        // luminance-range only (kind >= 2) -- linear/radial deliberately
+        // excluded, preserving the prior explicit scope decision that they
+        // keep their existing dashed-outline-only feedback (PROGRESS.md,
+        // mask-overlay-feather-indicators slice). Reuses the weight just
+        // computed above for THIS mask -- already invert-adjusted, already
+        // evaluated against the correct (pre-this-mask) rgb state -- so no
+        // separate re-sample-and-re-invert step is needed regardless of
+        // kind, unlike the brush-only texture-based mechanism this replaces.
+        if (kind > 1.5 && i == i32(adj.selected_mask_index)) {
+          rgb = mix(rgb, vec3<f32>(1.0, 0.24, 0.24), weight * 0.55);
+        }
       }
 
       rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -722,7 +759,7 @@
     });
 
     uniformBuffer = device.createBuffer({
-      size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, overlay_layer, overlay_invert, 2x padding)
+      size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, 3x padding)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     masksBuffer = device.createBuffer({
@@ -924,22 +961,17 @@
     if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer) return;
     syncBrushRasterization();
 
-    // Brush mask overlay: reflects the EFFECTIVE mask (post-invert), only
-    // for the currently SELECTED mask (matches real Lightroom's own
-    // highlight-on-select, not a permanent multi-mask wash), only when the
-    // selection is actually a brush mask with a rasterized layer.
-    const selectedMaskForOverlay = /** @type {any} */ (masks.find((m) => m.id === selectedMaskId));
-    const overlayEntry =
-      showBrushOverlay && selectedMaskForOverlay?.op === "brush_mask"
-        ? brushRasterState.get(/** @type {string} */ (selectedMaskId))
-        : undefined;
-    const overlayLayer = overlayEntry ? overlayEntry.layer : -1;
-    const overlayInvert = overlayEntry && selectedMaskForOverlay.invert ? 1 : 0;
+    // Mask overlay: -1 (disabled) unless the toggle is on AND the current
+    // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
+    // *is* the disabled state, so no separate per-kind lookup is needed
+    // here at all (the shader itself gates which kinds actually show the
+    // overlay; see the kind > 1.5 check in the mask loop below).
+    const selectedMaskIndex = showMaskOverlay ? masks.findIndex((m) => m.id === selectedMaskId) : -1;
 
     device.queue.writeBuffer(
       uniformBuffer,
       0,
-      new Float32Array([exposure, contrast, saturation, masks.length, overlayLayer, overlayInvert, 0, 0]),
+      new Float32Array([exposure, contrast, saturation, masks.length, selectedMaskIndex, 0, 0, 0]),
     );
 
     const maskData = new Float32Array(MAX_MASKS * 12);
@@ -955,7 +987,21 @@
       } else if (m.op === "brush_mask") {
         maskData[o + 6] = 2; // kind = brush
         maskData[o + 7] = brushRasterState.get(m.id)?.layer ?? 0;
+      } else if (m.op === "luminance_range_mask") {
+        maskData[o + 0] = m.rangeMin;
+        maskData[o + 1] = m.rangeMax;
+        maskData[o + 4] = m.feather;
+        maskData[o + 6] = 3; // kind = luminance range
       } else {
+        // linear_gradient_mask -- the only kind left once the three
+        // explicit branches above are exhausted, given MASK_OP_NAMES
+        // already gates what can appear in `masks` at all (develop.js).
+        // A real bug once lived here: this used to be an unconditional
+        // catch-all `else` written BEFORE luminance range existed, which
+        // assumed "anything that isn't radial or brush is linear" -- a
+        // luminance-range mask object has no .start/.end, so m.start.x
+        // would have thrown, aborting the render for every mask in the
+        // stack the instant one existed anywhere.
         maskData[o + 0] = m.start.x;
         maskData[o + 1] = m.start.y;
         maskData[o + 2] = m.end.x;
@@ -1007,8 +1053,8 @@
 
   $effect(() => {
     // Re-run whenever an adjustment or the mask list changes -- reads, not
-    // a re-fetch. selectedMaskId/showBrushOverlay are included specifically
-    // for the brush overlay: selecting a DIFFERENT mask, or toggling the
+    // a re-fetch. selectedMaskId/showMaskOverlay are included specifically
+    // for the mask overlay: selecting a DIFFERENT mask, or toggling the
     // overlay, needs a re-render even when nothing else about the image or
     // its masks has changed.
     void exposure;
@@ -1016,7 +1062,7 @@
     void saturation;
     void masks;
     void selectedMaskId;
-    void showBrushOverlay;
+    void showMaskOverlay;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 </script>

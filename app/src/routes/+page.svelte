@@ -52,6 +52,8 @@
     createLinearGradientMask,
     createRadialGradientMask,
     createBrushMask,
+    createLuminanceRangeMask,
+    OVERLAY_CAPABLE_MASK_OPS,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -168,15 +170,16 @@
   let brushHardness = $state(70);
   let brushFlow = $state(1);
   let eraseMode = $state(false);
-  // Mask UI polish: soft colored overlay for the SELECTED brush mask,
-  // toggleable via a MaskEditorPanel checkbox or the "O" hotkey. Grouped
-  // with the brush TOOL options above, not with activeTool/selectedMaskId
-  // -- deliberately NEVER force-reset on openDevelop/switchModule, same
-  // "a user's preferred setting should survive across strokes/masks/images
-  // within one session" reasoning those already document. Defaults true:
-  // brush masks are otherwise invisible until a nonzero adjustment is set,
-  // a real discoverability gap this directly fixes.
-  let showBrushOverlay = $state(true);
+  // Mask UI polish: soft colored overlay for the SELECTED no-geometry mask
+  // (brush, luminance range), toggleable via a MaskEditorPanel checkbox or
+  // the "O" hotkey. Grouped with the brush TOOL options above, not with
+  // activeTool/selectedMaskId -- deliberately NEVER force-reset on
+  // openDevelop/switchModule, same "a user's preferred setting should
+  // survive across strokes/masks/images within one session" reasoning
+  // those already document. Defaults true: these mask kinds are otherwise
+  // invisible until a nonzero adjustment is set, a real discoverability
+  // gap this directly fixes.
+  let showMaskOverlay = $state(true);
 
   function handleMaskCreated(
     /** @type {
@@ -198,6 +201,18 @@
     // inherently multi-stroke -- see DevelopCanvas.svelte's brush-state
     // doc comment) rather than force a re-click of the tool for every dab.
     if (placement.kind !== "brush") activeTool = null;
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  // Luminance range has no geometry to place, so it doesn't go through
+  // handleMaskCreated's placement-dispatch shape at all -- MaskToolStrip's
+  // button calls this directly (real Lightroom's own behavior: this mask
+  // kind is created on tool-select, no canvas interaction needed).
+  function handleCreateLuminanceRangeMask() {
+    const mask = createLuminanceRangeMask();
+    editStack = addMask(editStack, mask);
+    selectedMaskId = mask.id;
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(flushEditStack, 250);
   }
@@ -647,9 +662,9 @@
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key.toLowerCase() === "o" && selectedMask?.op === "brush_mask") {
+      if (e.key.toLowerCase() === "o" && OVERLAY_CAPABLE_MASK_OPS.includes(selectedMask?.op ?? "")) {
         e.preventDefault();
-        showBrushOverlay = !showBrushOverlay;
+        showMaskOverlay = !showMaskOverlay;
       }
       return;
     }
@@ -1069,7 +1084,7 @@
         {brushHardness}
         {brushFlow}
         {eraseMode}
-        {showBrushOverlay}
+        {showMaskOverlay}
         onMaskCreated={handleMaskCreated}
         onMaskUpdated={handleMaskUpdated}
         onMaskSelected={(id) => (selectedMaskId = id)}
@@ -1080,8 +1095,8 @@
           onChange={(patch) => handleMaskUpdated(/** @type {string} */ (selectedMaskId), patch)}
           onDelete={handleMaskDeleted}
           onClose={() => (selectedMaskId = null)}
-          {showBrushOverlay}
-          onShowOverlayChange={(v) => (showBrushOverlay = v)}
+          {showMaskOverlay}
+          onShowOverlayChange={(v) => (showMaskOverlay = v)}
         />
       {/if}
       <DevelopPanel
@@ -1108,6 +1123,7 @@
       onBrushFlowChange={(v) => (brushFlow = v)}
       onEraseToggle={() => (eraseMode = !eraseMode)}
       onNewBrush={() => (selectedMaskId = null)}
+      onCreateLuminanceRange={handleCreateLuminanceRangeMask}
     />
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>

@@ -81,45 +81,89 @@
 </script>
 
 <div class="strip">
+  <!-- Icon buttons, not text -- the strip was running out of horizontal
+       room as mask kinds accumulated (5 tools + brush options + a
+       variable-length mask-chip list all share this one row). `title`
+       (native tooltip) + `aria-label` (accessible name) together replace
+       the visible label that used to carry both jobs at once. -->
   <button
-    class="tool"
+    class="tool icon"
     class:active={activeTool === "linear_gradient"}
     type="button"
     disabled={atCap && activeTool !== "linear_gradient"}
     title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Linear Gradient"}
+    aria-label="Linear Gradient"
     onclick={() => onToolToggle("linear_gradient")}
-  >Linear Gradient</button>
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <circle cx="3.2" cy="12.5" r="1.5" fill="currentColor" />
+      <line x1="4" y1="11.5" x2="12" y2="3.5" stroke="currentColor" stroke-width="1.3" />
+      <circle cx="12.8" cy="2.7" r="1.5" fill="currentColor" />
+    </svg>
+  </button>
   <button
-    class="tool"
+    class="tool icon"
     class:active={activeTool === "radial_gradient"}
     type="button"
     disabled={atCap && activeTool !== "radial_gradient"}
     title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Radial Gradient"}
+    aria-label="Radial Gradient"
     onclick={() => onToolToggle("radial_gradient")}
-  >Radial Gradient</button>
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" />
+      <circle cx="8" cy="8" r="2.6" stroke="currentColor" stroke-width="1.4" />
+    </svg>
+  </button>
   <button
-    class="tool"
+    class="tool icon"
     class:active={activeTool === "brush"}
     type="button"
     disabled={atCap && activeTool !== "brush"}
     title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Brush"}
+    aria-label="Brush"
     onclick={() => onToolToggle("brush")}
-  >Brush</button>
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <rect x="9" y="1" width="2.6" height="8" rx="1.1" stroke="currentColor" stroke-width="1" transform="rotate(40 10.3 5)" />
+      <circle cx="4" cy="12.6" r="1.8" fill="currentColor" />
+    </svg>
+  </button>
   <button
-    class="tool"
+    class="tool icon"
     type="button"
     disabled={atCap}
     title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Luminance Range -- creates immediately, no canvas interaction needed (this mask has no geometry, real Lightroom's own behavior for this kind)"}
+    aria-label="Luminance Range"
     onclick={onCreateLuminanceRange}
-  >Luminance Range</button>
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="mts-luma-grad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#000" />
+          <stop offset="1" stop-color="#fff" />
+        </linearGradient>
+      </defs>
+      <rect x="1.5" y="6.2" width="13" height="3.6" rx="1" fill="url(#mts-luma-grad)" stroke="currentColor" stroke-width="0.75" />
+      <line x1="6" y1="4.3" x2="6" y2="11.7" stroke="currentColor" stroke-width="1.1" />
+      <line x1="10" y1="4.3" x2="10" y2="11.7" stroke="currentColor" stroke-width="1.1" />
+    </svg>
+  </button>
   <button
-    class="tool"
+    class="tool icon"
     class:active={activeTool === "color_range"}
     type="button"
     disabled={atCap && activeTool !== "color_range"}
     title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Color Range -- click a point on the image to sample its color and create a mask selecting similar colors"}
+    aria-label="Color Range"
     onclick={() => onToolToggle("color_range")}
-  >Color Range</button>
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <line x1="14" y1="2.3" x2="10.7" y2="5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+      <line x1="10.5" y1="5.4" x2="4.3" y2="11.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+      <path d="M4.3 11.6 L3 14 L5.4 12.7 Z" fill="currentColor" />
+    </svg>
+  </button>
 
   {#if activeTool === "brush"}
     <div class="divider"></div>
@@ -218,6 +262,17 @@
   .tool:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  .tool.icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 26px;
+    padding: 0;
+  }
+  .tool.icon svg {
+    display: block;
   }
   .divider {
     width: 1px;

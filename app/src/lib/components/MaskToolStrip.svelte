@@ -5,13 +5,17 @@
    * Contextual tool strip above the Filmstrip in Develop, matching
    * UX-DESIGN.md's described layout ("a contextual tool strip above [the
    * filmstrip] for crop/mask/heal tools when active... designed into this
-   * layout now"). Linear Gradient, Radial Gradient, Brush, and Luminance
-   * Range tools, plus a simple list of placed masks -- click-to-select is
-   * simpler and more robust here than hit-testing a click near a diagonal
-   * line/ellipse/painted region/pixel-value on the canvas. Luminance Range
-   * has no geometry, so it doesn't route through `activeTool` at all --
-   * `onCreateLuminanceRange` creates the mask directly on click (see
-   * +page.svelte).
+   * layout now"). Linear Gradient, Radial Gradient, Brush, Luminance
+   * Range, and Color Range tools, plus a simple list of placed masks --
+   * click-to-select is simpler and more robust here than hit-testing a
+   * click near a diagonal line/ellipse/painted region/pixel-value on the
+   * canvas. Luminance Range has no geometry, so it doesn't route through
+   * `activeTool` at all -- `onCreateLuminanceRange` creates the mask
+   * directly on click (see +page.svelte). Color Range DOES route through
+   * `activeTool` (unlike Luminance Range) -- it genuinely needs a canvas
+   * click's coordinates to sample a pixel color, so DevelopCanvas.svelte's
+   * own pointer handlers create and commit the mask, same funnel as
+   * linear/radial/brush.
    * @type {{
    *   activeTool: string | null,
    *   masks: import('$lib/api/develop.js').Mask[],
@@ -51,19 +55,25 @@
   let atCap = $derived(masks.length >= MAX_MASKS);
 
   // Per-kind chip numbering ("Gradient 1", "Radial 1", "Brush 1", "Range
-  // 1") -- four independent counters, not one shared index, matching how
-  // Lightroom's own mask/history list names each tool instance by its own
-  // type.
+  // 1", "Color 1") -- five independent counters, not one shared index,
+  // matching how Lightroom's own mask/history list names each tool
+  // instance by its own type. Each kind gets its own explicit branch
+  // before the linear-gradient fallback -- this file's own established
+  // discipline (see DevelopCanvas.svelte's packing-loop comment) is that
+  // an untyped fallback assuming "unrecognized = linear" is a real bug
+  // class already shipped and fixed once, not a style nit.
   let chipLabels = $derived.by(() => {
     let gradientCount = 0;
     let radialCount = 0;
     let brushCount = 0;
     let rangeCount = 0;
+    let colorCount = 0;
     return new Map(
       masks.map((mask) => {
         if (mask.op === "radial_gradient_mask") return [mask.id, `Radial ${++radialCount}`];
         if (mask.op === "brush_mask") return [mask.id, `Brush ${++brushCount}`];
         if (mask.op === "luminance_range_mask") return [mask.id, `Range ${++rangeCount}`];
+        if (mask.op === "color_range_mask") return [mask.id, `Color ${++colorCount}`];
         return [mask.id, `Gradient ${++gradientCount}`];
       }),
     );
@@ -102,6 +112,14 @@
     title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Luminance Range -- creates immediately, no canvas interaction needed (this mask has no geometry, real Lightroom's own behavior for this kind)"}
     onclick={onCreateLuminanceRange}
   >Luminance Range</button>
+  <button
+    class="tool"
+    class:active={activeTool === "color_range"}
+    type="button"
+    disabled={atCap && activeTool !== "color_range"}
+    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Color Range -- click a point on the image to sample its color and create a mask selecting similar colors"}
+    onclick={() => onToolToggle("color_range")}
+  >Color Range</button>
 
   {#if activeTool === "brush"}
     <div class="divider"></div>

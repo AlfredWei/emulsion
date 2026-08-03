@@ -87,7 +87,28 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} saturation
  */
 
-/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask} Mask */
+/**
+ * @typedef {Object} ColorRangeMask
+ * @property {"color_range_mask"} op
+ * @property {string} id
+ * @property {{r: number, g: number, b: number}} refColor - 0-1 floats,
+ *   sampled via a canvas click (see DevelopCanvas.svelte's
+ *   sampleSourcePixel) -- matches WGSL's own 0-1 texture-sample
+ *   convention, not 0-255.
+ * @property {number} range - 0-100, color-distance tolerance around
+ *   refColor (a single threshold, not linear/radial's boundary position).
+ * @property {number} feather - 0-100, transition-band width beyond
+ *   `range` -- a different meaning from linear/radial's single-boundary
+ *   feather and from luminance range's two-edge band width, so it's shown
+ *   via its own dedicated block in MaskEditorPanel.svelte alongside Range,
+ *   not the shared Feather row.
+ * @property {boolean} invert
+ * @property {number} exposure
+ * @property {number} contrast
+ * @property {number} saturation
+ */
+
+/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask} Mask */
 
 /**
  * @typedef {Object} EditStack
@@ -147,7 +168,13 @@ export const MAX_MASKS = 8;
 // An explicit allowlist, not an implicit naming convention (e.g.
 // `endsWith("_mask")`) -- simpler and more robust, since it can't silently
 // misclassify some future non-mask op that happens to share the suffix.
-const MASK_OP_NAMES = ["linear_gradient_mask", "radial_gradient_mask", "brush_mask", "luminance_range_mask"];
+const MASK_OP_NAMES = [
+  "linear_gradient_mask",
+  "radial_gradient_mask",
+  "brush_mask",
+  "luminance_range_mask",
+  "color_range_mask",
+];
 
 // Mask kinds with no on-canvas geometry to show (brush's painted region,
 // luminance range's pixel-value-based selection) get a toggleable colored
@@ -156,7 +183,7 @@ const MASK_OP_NAMES = ["linear_gradient_mask", "radial_gradient_mask", "brush_ma
 // (PROGRESS.md), preserved here as the single place this list lives so the
 // hotkey gate (+page.svelte) and the checkbox gate (MaskEditorPanel.svelte)
 // can't drift apart.
-export const OVERLAY_CAPABLE_MASK_OPS = ["brush_mask", "luminance_range_mask"];
+export const OVERLAY_CAPABLE_MASK_OPS = ["brush_mask", "luminance_range_mask", "color_range_mask"];
 
 /** @returns {LinearGradientMask} */
 export function createLinearGradientMask(
@@ -234,6 +261,29 @@ export function createLuminanceRangeMask() {
     id: crypto.randomUUID(),
     rangeMin: 30,
     rangeMax: 70,
+    feather: 20,
+    invert: false,
+    exposure: 0,
+    contrast: 0,
+    saturation: 0,
+  };
+}
+
+/** M3 Slice 8: created from a single click-to-sample on the canvas (see
+ * DevelopCanvas.svelte's colorRangeClickStart handling) -- unlike
+ * luminance range's no-canvas-interaction creation, this genuinely needs
+ * the sampled pixel color, which only the canvas can produce, so the
+ * caller passes it in rather than this factory picking a default.
+ * Defaults (25/20) select a moderate, immediately-tunable range around
+ * the sampled color, same "give the user something visible to tune
+ * immediately" reasoning as luminance range's own 30/70/20 defaults.
+ * @returns {ColorRangeMask} */
+export function createColorRangeMask(/** @type {{r: number, g: number, b: number}} */ refColor) {
+  return {
+    op: "color_range_mask",
+    id: crypto.randomUUID(),
+    refColor,
+    range: 25,
     feather: 20,
     invert: false,
     exposure: 0,

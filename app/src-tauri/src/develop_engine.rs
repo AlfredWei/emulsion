@@ -362,6 +362,82 @@ fn luminance_mask_weight(rgb: [f32; 3], mask: &LuminanceRangeMask) -> f32 {
     weight
 }
 
+/// A `color_range_mask` op -- like luminance range, weight depends on pixel
+/// VALUE (color) rather than position, but the shape is different: one
+/// reference color and one tolerance, not two edges, so this is a
+/// single-sided falloff (closer to `radial_mask_weight`'s inside/outside
+/// shape, but in RGB-distance space instead of image space) rather than
+/// luminance's two-sided `min(rising, falling)` band. `range`/`feather`
+/// stored 0-100, matching every other mask kind's own scale convention.
+struct ColorRangeMask {
+    ref_color: [f32; 3],
+    range: f32,
+    feather: f32,
+    invert: bool,
+    exposure: f32,
+    contrast: f32,
+    saturation: f32,
+}
+
+fn parse_color_range_mask(op: &serde_json::Value) -> Option<ColorRangeMask> {
+    let rc = op.get("refColor")?;
+    Some(ColorRangeMask {
+        ref_color: [
+            rc.get("r")?.as_f64()? as f32,
+            rc.get("g")?.as_f64()? as f32,
+            rc.get("b")?.as_f64()? as f32,
+        ],
+        range: op.get("range").and_then(|v| v.as_f64()).unwrap_or(25.0) as f32,
+        feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(20.0) as f32,
+        invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
+        exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        saturation: op
+            .get("saturation")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+    })
+}
+
+/// Single-sided trapezoid in RGB-distance space, same "raw expression,
+/// clamp exactly once" style as `radial_mask_weight`/`luminance_mask_weight`.
+/// `max_dist = sqrt(3)` is the largest possible Euclidean distance in the
+/// RGB unit cube (e.g. black to white).
+///
+/// **A real bug caught by design review before implementation, not by
+/// testing**: an earlier draft used
+/// `weight = clamp((threshold + feather_width - dist) / denom, 0, 1)` --
+/// algebraically tidier-looking, but wrong at `feather=0`
+/// (`feather_width=0`, `denom` floors to `0.001`): at the exact sampled
+/// pixel (`dist=0`), that formula evaluates to
+/// `clamp((threshold + 0 - 0) / 0.001, 0, 1)`, and since the numerator's
+/// `feather_width` term is what the formula relied on to guarantee full
+/// weight right at the boundary, diluting it against the same `denom`
+/// floor meant to prevent divide-by-zero meant the mask could select
+/// LESS than the clicked pixel itself at low feather -- the single most
+/// reachable "I want a strict color match" setting a user would pick,
+/// silently producing an empty mask. Fixed below by removing
+/// `feather_width` from the numerator entirely (`denom` is the transition
+/// width added AFTER the threshold via the `+ 1.0`, not blended into it),
+/// so `dist <= threshold` always yields exactly 1 no matter how small
+/// `denom` is.
+fn color_mask_weight(rgb: [f32; 3], mask: &ColorRangeMask) -> f32 {
+    let dx = rgb[0] - mask.ref_color[0];
+    let dy = rgb[1] - mask.ref_color[1];
+    let dz = rgb[2] - mask.ref_color[2];
+    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+    let max_dist = 3f32.sqrt();
+    let threshold = (mask.range / 100.0).clamp(0.0, 1.0) * max_dist;
+    let softness = (mask.feather / 100.0).clamp(0.0, 0.999);
+    let feather_width = softness * max_dist * 0.5;
+    let denom = feather_width.max(0.001);
+    let mut weight = ((threshold - dist) / denom + 1.0).clamp(0.0, 1.0);
+    if mask.invert {
+        weight = 1.0 - weight;
+    }
+    weight
+}
+
 /// Wraps either mask kind so `parse_masks` can preserve the edit stack's
 /// TRUE op order across mixed kinds -- the frontend's `masks` array (built
 /// from one unfiltered pass over `stack.ops`, see `develop.js`'s
@@ -375,6 +451,7 @@ enum Mask {
     Radial(RadialGradientMask),
     Brush(BrushMask),
     LuminanceRange(LuminanceRangeMask),
+    ColorRange(ColorRangeMask),
 }
 
 impl Mask {
@@ -395,6 +472,7 @@ impl Mask {
             Mask::Radial(m) => radial_mask_weight(uv, m),
             Mask::Brush(m) => brush_mask_weight(uv, m, aspect),
             Mask::LuminanceRange(m) => luminance_mask_weight(rgb, m),
+            Mask::ColorRange(m) => color_mask_weight(rgb, m),
         }
     }
 
@@ -404,6 +482,7 @@ impl Mask {
             Mask::Radial(m) => (m.exposure, m.contrast, m.saturation),
             Mask::Brush(m) => (m.exposure, m.contrast, m.saturation),
             Mask::LuminanceRange(m) => (m.exposure, m.contrast, m.saturation),
+            Mask::ColorRange(m) => (m.exposure, m.contrast, m.saturation),
         }
     }
 }
@@ -415,6 +494,7 @@ fn parse_masks(ops: &[serde_json::Value]) -> Vec<Mask> {
             Some("radial_gradient_mask") => parse_radial_gradient_mask(op).map(Mask::Radial),
             Some("brush_mask") => parse_brush_mask(op).map(Mask::Brush),
             Some("luminance_range_mask") => parse_luminance_range_mask(op).map(Mask::LuminanceRange),
+            Some("color_range_mask") => parse_color_range_mask(op).map(Mask::ColorRange),
             _ => None,
         })
         .collect()
@@ -915,5 +995,114 @@ mod tests {
             ],
         };
         assert_luminance_pixel(64, stack, [181, 181, 181]);
+    }
+
+    /// Color range masks -- single reference color + tolerance, single-sided
+    /// falloff (unlike luminance's two-sided band). These cases use a GRAY
+    /// reference color and a gray starting pixel so `dist = |gray - ref| *
+    /// sqrt(3)` (all three channels differ from the reference by the same
+    /// amount), keeping the distance arithmetic simple to hand-verify.
+    fn color_mask_stack(ref_gray: f32, range: f32, feather: f32, invert: bool, exposure: f32) -> EditStack {
+        EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({
+                "op": "color_range_mask",
+                "id": "test-color-mask",
+                "refColor": { "r": ref_gray, "g": ref_gray, "b": ref_gray },
+                "range": range,
+                "feather": feather,
+                "invert": invert,
+                "exposure": exposure,
+                "contrast": 0.0,
+                "saturation": 0.0,
+            })],
+        }
+    }
+
+    fn assert_color_pixel(gray: u8, stack: EditStack, expected: [i32; 3]) {
+        let mut image = RgbImage::from_pixel(1, 1, image::Rgb([gray, gray, gray]));
+        apply_edit_stack(&mut image, &stack);
+        let pixel = image.get_pixel(0, 0);
+        for (actual, expected) in pixel.0.iter().zip(expected.iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected ~{expected:?}, got {actual} (full pixel {:?})",
+                pixel.0
+            );
+        }
+    }
+
+    /// The exact regression case for the bug the design review caught:
+    /// `range=0, feather=0` (the most obvious "strict color match" setting)
+    /// against the EXACT reference color (`ref_gray = 128/255`, matching
+    /// the pixel's own f32 conversion bit-for-bit, so `dist=0` exactly) --
+    /// must still select the clicked pixel at full weight, not zero.
+    #[test]
+    fn color_range_mask_exact_match_at_zero_feather_gets_full_local_adjustment() {
+        let ref_gray = 128.0 / 255.0;
+        assert_color_pixel(128, color_mask_stack(ref_gray, 0.0, 0.0, false, 1.0), [255, 255, 255]);
+    }
+
+    /// White (gray=255) against a black reference (`ref_gray=0`) is
+    /// `dist = sqrt(3)` -- the maximum possible distance -- well outside
+    /// `range=25, feather=20`'s `threshold + denom` (~0.606): no local
+    /// adjustment.
+    #[test]
+    fn color_range_mask_far_pixel_gets_no_local_adjustment() {
+        assert_color_pixel(255, color_mask_stack(0.0, 25.0, 20.0, false, 1.0), [255, 255, 255]);
+    }
+
+    /// `ref_gray=0.3`, pixel gray=153/255=0.6 exactly -> `dist = 0.3*sqrt(3)
+    /// = 0.5196152`. With `range=25` (`threshold=0.4330127`) and `feather=20`
+    /// (`denom=0.1732051`), that's exactly `threshold + 0.5*denom` -- the
+    /// midpoint of the transition band -- so `weight=0.5`, a half-strength
+    /// local adjustment (exposure+1.0 doubles toward white at half
+    /// strength: `0.6 + (1.2-0.6)*0.5 = 0.9` -> byte 230).
+    #[test]
+    fn color_range_mask_feathered_edge_blends_halfway() {
+        assert_color_pixel(153, color_mask_stack(0.3, 25.0, 20.0, false, 1.0), [230, 230, 230]);
+    }
+
+    /// Order-dependency, mirroring luminance range's own such test: a
+    /// linear mask (full weight at the test point) boosts gray=128/255 by
+    /// +0.3EV to ~0.617987 BEFORE the color-range mask (ref_gray=0.6,
+    /// range=5 -> threshold=0.0866025, feather=0 -> near-hard edge) checks
+    /// its own distance -- `dist(0.617987, 0.6) = 0.031152`, well inside
+    /// threshold, so the color-range mask's own +0.5EV also applies, landing
+    /// at ~0.873962 (byte ~223). If mask order didn't matter (evaluated
+    /// against the ORIGINAL rgb=0.501961 instead), `dist = 0.169809` is far
+    /// outside threshold -- weight=0, and the result would stop at just the
+    /// linear mask's own boost (~0.617987, byte ~158) -- a value this test's
+    /// ±2 tolerance cannot accidentally satisfy alongside 223.
+    #[test]
+    fn color_range_mask_selection_depends_on_preceding_masks_effect() {
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![
+                serde_json::json!({
+                    "op": "linear_gradient_mask",
+                    "id": "color-order-test-linear",
+                    "start": { "x": 0.1, "y": 0.5 },
+                    "end": { "x": 0.4, "y": 0.5 },
+                    "feather": 0.0,
+                    "invert": false,
+                    "exposure": 0.3,
+                    "contrast": 0.0,
+                    "saturation": 0.0,
+                }),
+                serde_json::json!({
+                    "op": "color_range_mask",
+                    "id": "color-order-test-color",
+                    "refColor": { "r": 0.6, "g": 0.6, "b": 0.6 },
+                    "range": 5.0,
+                    "feather": 0.0,
+                    "invert": false,
+                    "exposure": 0.5,
+                    "contrast": 0.0,
+                    "saturation": 0.0,
+                }),
+            ],
+        };
+        assert_color_pixel(128, stack, [223, 223, 223]);
     }
 }

@@ -301,6 +301,67 @@ fn brush_mask_weight(uv: (f32, f32), mask: &BrushMask, aspect: f32) -> f32 {
     }
 }
 
+/// A `luminance_range_mask` op -- the first mask kind whose weight depends
+/// on pixel VALUE (luminance) rather than pixel POSITION (every earlier
+/// kind computed weight from `uv`/`aspect` alone). `range_min`/`range_max`/
+/// `feather` are stored 0-100, matching linear/radial's own `feather`
+/// scale convention rather than a separate 0-1 scale -- `feather` here
+/// means something different from theirs (a band WIDTH around each of two
+/// edges, not a single boundary), so it's edited via a dedicated Min/Max/
+/// Feather block in MaskEditorPanel.svelte, not the shared Feather row.
+struct LuminanceRangeMask {
+    range_min: f32,
+    range_max: f32,
+    feather: f32,
+    invert: bool,
+    exposure: f32,
+    contrast: f32,
+    saturation: f32,
+}
+
+fn parse_luminance_range_mask(op: &serde_json::Value) -> Option<LuminanceRangeMask> {
+    Some(LuminanceRangeMask {
+        range_min: op.get("rangeMin")?.as_f64()? as f32,
+        range_max: op.get("rangeMax")?.as_f64()? as f32,
+        feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(20.0) as f32,
+        invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
+        exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        saturation: op
+            .get("saturation")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+    })
+}
+
+/// Trapezoidal falloff around `[range_min, range_max]` (both 0-100,
+/// divided to 0-1 here to compare against luma), same "raw expression,
+/// clamp exactly once at the end" style as `mask_weight`/`radial_mask_weight`
+/// -- taking `min()` of the two UNCLAMPED slope expressions before the
+/// single final clamp is what keeps this correct outside the range (a
+/// naive per-term-clamped version would incorrectly clamp a
+/// far-outside-range luma back up toward 1 instead of 0, since a clamped
+/// "rising" term alone doesn't know it's also past the falling edge).
+/// `feather=0` gives `feather_width=0`, and `denom` floors to `0.001` --
+/// a near-hard step exactly at the range boundaries, matching the same
+/// `0.001`-floor pattern `radial_mask_weight` already established at its
+/// own `feather=0`.
+fn luminance_mask_weight(rgb: [f32; 3], mask: &LuminanceRangeMask) -> f32 {
+    let luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+    let range_min = mask.range_min / 100.0;
+    let range_max = mask.range_max / 100.0;
+    let softness = (mask.feather / 100.0).clamp(0.0, 0.999);
+    let feather_width = softness * 0.5;
+    let denom = feather_width.max(0.001);
+    let rising = (luma - (range_min - feather_width)) / denom;
+    let falling = (range_max + feather_width - luma) / denom;
+    let mut weight = rising.min(falling).clamp(0.0, 1.0);
+    if mask.invert {
+        weight = 1.0 - weight;
+    }
+    weight
+}
+
 /// Wraps either mask kind so `parse_masks` can preserve the edit stack's
 /// TRUE op order across mixed kinds -- the frontend's `masks` array (built
 /// from one unfiltered pass over `stack.ops`, see `develop.js`'s
@@ -313,17 +374,27 @@ enum Mask {
     Linear(LinearGradientMask),
     Radial(RadialGradientMask),
     Brush(BrushMask),
+    LuminanceRange(LuminanceRangeMask),
 }
 
 impl Mask {
-    /// `aspect` (image height/width) is only consumed by `Brush` -- linear
-    /// and radial masks already store per-axis geometry (radiusX/radiusY,
-    /// or a direction vector), so they need no separate aspect correction.
-    fn weight(&self, uv: (f32, f32), aspect: f32) -> f32 {
+    /// `aspect` (image height/width) is only consumed by `Brush`; `rgb` is
+    /// only consumed by `LuminanceRange` -- the first mask kind whose
+    /// weight depends on pixel VALUE, not just position. Because `rgb` is
+    /// the same mutating accumulator `apply_edit_stack`'s pixel loop
+    /// threads through every mask in stack order, a luminance-range mask's
+    /// effective selection now depends on which masks precede it in the
+    /// stack (their adjustments have already been blended into `rgb` by
+    /// the time this mask's own weight is evaluated) -- the correct
+    /// WYSIWYG behavior (select pixels as currently graded, matching what
+    /// the user sees), not an oversight; see the parity test exercising
+    /// this explicitly below.
+    fn weight(&self, uv: (f32, f32), aspect: f32, rgb: [f32; 3]) -> f32 {
         match self {
             Mask::Linear(m) => mask_weight(uv, m),
             Mask::Radial(m) => radial_mask_weight(uv, m),
             Mask::Brush(m) => brush_mask_weight(uv, m, aspect),
+            Mask::LuminanceRange(m) => luminance_mask_weight(rgb, m),
         }
     }
 
@@ -332,6 +403,7 @@ impl Mask {
             Mask::Linear(m) => (m.exposure, m.contrast, m.saturation),
             Mask::Radial(m) => (m.exposure, m.contrast, m.saturation),
             Mask::Brush(m) => (m.exposure, m.contrast, m.saturation),
+            Mask::LuminanceRange(m) => (m.exposure, m.contrast, m.saturation),
         }
     }
 }
@@ -342,6 +414,7 @@ fn parse_masks(ops: &[serde_json::Value]) -> Vec<Mask> {
             Some("linear_gradient_mask") => parse_linear_gradient_mask(op).map(Mask::Linear),
             Some("radial_gradient_mask") => parse_radial_gradient_mask(op).map(Mask::Radial),
             Some("brush_mask") => parse_brush_mask(op).map(Mask::Brush),
+            Some("luminance_range_mask") => parse_luminance_range_mask(op).map(Mask::LuminanceRange),
             _ => None,
         })
         .collect()
@@ -396,7 +469,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
                 (y as f32 + 0.5) / height as f32,
             );
             for mask in &masks {
-                let weight = mask.weight(uv, aspect);
+                let weight = mask.weight(uv, aspect, rgb);
                 let (m_exposure, m_contrast, m_saturation) = mask.adjustments();
                 let local = apply_adjustments(rgb, m_exposure, m_contrast, m_saturation);
                 for c in 0..3 {
@@ -725,5 +798,122 @@ mod tests {
             ),
             [125, 125, 125],
         );
+    }
+
+    /// Luminance range masks -- the first kind whose weight depends on
+    /// pixel VALUE, not just uv position. Unlike the geometric masks
+    /// above, the sample point (uv=(0.5,0.5) via `assert_mask_pixel`'s
+    /// fixed 1x1 image) never moves -- these cases instead vary the
+    /// STARTING pixel's own gray value to land its luma at the desired
+    /// position relative to the range. Each expected value hand-computed
+    /// precisely (not eyeballed), same discipline as every mask kind above.
+    fn luminance_mask_stack(
+        range_min: f32,
+        range_max: f32,
+        feather: f32,
+        invert: bool,
+        exposure: f32,
+    ) -> EditStack {
+        EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({
+                "op": "luminance_range_mask",
+                "id": "test-luminance-mask",
+                "rangeMin": range_min,
+                "rangeMax": range_max,
+                "feather": feather,
+                "invert": invert,
+                "exposure": exposure,
+                "contrast": 0.0,
+                "saturation": 0.0,
+            })],
+        }
+    }
+
+    fn assert_luminance_pixel(gray: u8, stack: EditStack, expected: [i32; 3]) {
+        let mut image = RgbImage::from_pixel(1, 1, image::Rgb([gray, gray, gray]));
+        apply_edit_stack(&mut image, &stack);
+        let pixel = image.get_pixel(0, 0);
+        for (actual, expected) in pixel.0.iter().zip(expected.iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected ~{expected:?}, got {actual} (full pixel {:?})",
+                pixel.0
+            );
+        }
+    }
+
+    /// gray=26 -> luma~0.102, well below range [0.3,0.7] with feather=0 --
+    /// no local adjustment.
+    #[test]
+    fn luminance_range_mask_below_range_gets_no_local_adjustment() {
+        assert_luminance_pixel(26, luminance_mask_stack(30.0, 70.0, 0.0, false, 1.0), [26, 26, 26]);
+    }
+
+    /// gray=128 -> luma~0.502, inside [0.3,0.7] with feather=0 -- full
+    /// local adjustment (exposure+1.0 doubles toward white, clamped).
+    #[test]
+    fn luminance_range_mask_inside_range_gets_full_local_adjustment() {
+        assert_luminance_pixel(128, luminance_mask_stack(30.0, 70.0, 0.0, false, 1.0), [255, 255, 255]);
+    }
+
+    /// gray=230 -> luma~0.902, well above range [0.3,0.7] with feather=0 --
+    /// no local adjustment.
+    #[test]
+    fn luminance_range_mask_above_range_gets_no_local_adjustment() {
+        assert_luminance_pixel(230, luminance_mask_stack(30.0, 70.0, 0.0, false, 1.0), [230, 230, 230]);
+    }
+
+    /// gray=51 -> luma=0.2 exactly, feather=40 -> feather_width=0.2, so
+    /// this sits exactly halfway through the rising edge below range_min
+    /// (0.3-0.2=0.1 at weight 0, 0.3 at weight 1, 0.2 is the midpoint) --
+    /// weight=0.5, half-strength local adjustment.
+    #[test]
+    fn luminance_range_mask_feathered_edge_blends_halfway() {
+        assert_luminance_pixel(51, luminance_mask_stack(30.0, 70.0, 40.0, false, 1.0), [76, 76, 76]);
+    }
+
+    /// Order-dependency (design point 4): a linear mask with full weight
+    /// at the test point doubles gray=64 (luma~0.251) to ~0.502 BEFORE the
+    /// luminance-range mask (range [45,55], feather=0) evaluates its own
+    /// weight against the ALREADY-DOUBLED rgb -- 0.502 falls INSIDE
+    /// [0.45,0.55], so the luminance mask's own +0.5EV boost also applies,
+    /// landing at ~181. If mask order didn't matter (an incorrect
+    /// implementation evaluating luminance weight against the ORIGINAL,
+    /// pre-linear-mask rgb=0.251, which falls OUTSIDE the range), the
+    /// luminance mask would have no effect at all and the result would
+    /// stop at ~128 (just the linear mask's own doubling) -- a value this
+    /// test's ±2 tolerance cannot accidentally satisfy alongside 181,
+    /// making this a real, discriminating test, not just a smoke check.
+    #[test]
+    fn luminance_range_mask_selection_depends_on_preceding_masks_effect() {
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![
+                serde_json::json!({
+                    "op": "linear_gradient_mask",
+                    "id": "order-test-linear",
+                    "start": { "x": 0.1, "y": 0.5 },
+                    "end": { "x": 0.4, "y": 0.5 },
+                    "feather": 0.0,
+                    "invert": false,
+                    "exposure": 1.0,
+                    "contrast": 0.0,
+                    "saturation": 0.0,
+                }),
+                serde_json::json!({
+                    "op": "luminance_range_mask",
+                    "id": "order-test-luminance",
+                    "rangeMin": 45.0,
+                    "rangeMax": 55.0,
+                    "feather": 0.0,
+                    "invert": false,
+                    "exposure": 0.5,
+                    "contrast": 0.0,
+                    "saturation": 0.0,
+                }),
+            ],
+        };
+        assert_luminance_pixel(64, stack, [181, 181, 181]);
     }
 }

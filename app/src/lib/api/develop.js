@@ -70,7 +70,24 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} saturation
  */
 
-/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask} Mask */
+/**
+ * @typedef {Object} LuminanceRangeMask
+ * @property {"luminance_range_mask"} op
+ * @property {string} id
+ * @property {number} rangeMin - 0-100, matching linear/radial's own feather
+ *   scale convention (not a separate 0-1 scale).
+ * @property {number} rangeMax - 0-100.
+ * @property {number} feather - 0-100, band WIDTH around each of the two
+ *   range edges (a different meaning from linear/radial's single-boundary
+ *   feather, so it's shown via a dedicated Min/Max/Feather block in
+ *   MaskEditorPanel.svelte, not the shared Feather row).
+ * @property {boolean} invert
+ * @property {number} exposure
+ * @property {number} contrast
+ * @property {number} saturation
+ */
+
+/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask} Mask */
 
 /**
  * @typedef {Object} EditStack
@@ -130,7 +147,16 @@ export const MAX_MASKS = 8;
 // An explicit allowlist, not an implicit naming convention (e.g.
 // `endsWith("_mask")`) -- simpler and more robust, since it can't silently
 // misclassify some future non-mask op that happens to share the suffix.
-const MASK_OP_NAMES = ["linear_gradient_mask", "radial_gradient_mask", "brush_mask"];
+const MASK_OP_NAMES = ["linear_gradient_mask", "radial_gradient_mask", "brush_mask", "luminance_range_mask"];
+
+// Mask kinds with no on-canvas geometry to show (brush's painted region,
+// luminance range's pixel-value-based selection) get a toggleable colored
+// overlay -- linear/radial keep their existing dashed-outline-only
+// feedback instead, a deliberate scope decision from the overlay slice
+// (PROGRESS.md), preserved here as the single place this list lives so the
+// hotkey gate (+page.svelte) and the checkbox gate (MaskEditorPanel.svelte)
+// can't drift apart.
+export const OVERLAY_CAPABLE_MASK_OPS = ["brush_mask", "luminance_range_mask"];
 
 /** @returns {LinearGradientMask} */
 export function createLinearGradientMask(
@@ -189,6 +215,26 @@ export function createBrushMask(/** @type {string=} */ id) {
     op: "brush_mask",
     id: id ?? crypto.randomUUID(),
     dabs: [],
+    invert: false,
+    exposure: 0,
+    contrast: 0,
+    saturation: 0,
+  };
+}
+
+/** Defaults (30/70/20) select midtones out of the box -- gives the user
+ * something visible to tune immediately, rather than an empty or
+ * full-frame selection. No canvas interaction needed to create this kind
+ * (see DevelopCanvas.svelte/MaskToolStrip.svelte -- it's created directly
+ * on tool-button click, real Lightroom's own behavior for this mask kind).
+ * @returns {LuminanceRangeMask} */
+export function createLuminanceRangeMask() {
+  return {
+    op: "luminance_range_mask",
+    id: crypto.randomUUID(),
+    rangeMin: 30,
+    rangeMax: 70,
+    feather: 20,
     invert: false,
     exposure: 0,
     contrast: 0,

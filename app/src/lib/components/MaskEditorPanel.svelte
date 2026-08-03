@@ -1,4 +1,6 @@
 <script>
+  import { OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
+
   /**
    * Floating panel for the currently-selected mask (M3 Slice 5) -- not a
    * `DevelopPanel.svelte` section, deliberately: every section there is a
@@ -12,19 +14,27 @@
    *   onChange: (patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onDelete: () => void,
    *   onClose: () => void,
-   *   showBrushOverlay: boolean,
+   *   showMaskOverlay: boolean,
    *   onShowOverlayChange: (value: boolean) => void,
    * }}
    */
-  let { mask, onChange, onDelete, onClose, showBrushOverlay, onShowOverlayChange } = $props();
+  let { mask, onChange, onDelete, onClose, showMaskOverlay, onShowOverlayChange } = $props();
 
-  // M3 Slice 7: a REAL third branch, not a free ride -- unlike linear vs.
-  // radial (where every field below is common to both kinds), brush masks
-  // have no mask-level `feather` (softness is baked per-dab at paint time
-  // from the tool's own Feather/Size/Flow settings, see MaskToolStrip.svelte),
-  // so the Feather row is hidden entirely for brush, not just relabeled.
+  // A REAL per-kind branch, not a free ride -- unlike linear vs. radial
+  // (where every field below is common to both kinds), brush masks have
+  // no mask-level `feather` (softness is baked per-dab at paint time from
+  // the tool's own Feather/Size/Flow settings, see MaskToolStrip.svelte),
+  // and luminance-range masks have a DIFFERENT `feather` meaning (a band
+  // width around two edges, not one boundary) shown via its own Min/Max/
+  // Feather block below -- so the shared Feather row is hidden for both.
   let title = $derived(
-    mask.op === "radial_gradient_mask" ? "Radial Gradient" : mask.op === "brush_mask" ? "Brush" : "Linear Gradient",
+    mask.op === "radial_gradient_mask"
+      ? "Radial Gradient"
+      : mask.op === "brush_mask"
+        ? "Brush"
+        : mask.op === "luminance_range_mask"
+          ? "Luminance Range"
+          : "Linear Gradient",
   );
 </script>
 
@@ -73,7 +83,7 @@
     />
     <span class="val">{mask.saturation >= 0 ? "+" : ""}{mask.saturation}</span>
   </div>
-  {#if mask.op !== "brush_mask"}
+  {#if mask.op !== "brush_mask" && mask.op !== "luminance_range_mask"}
     <div class="row">
       <label for="mask-feather">Feather</label>
       <input
@@ -89,16 +99,69 @@
     </div>
   {/if}
 
-  {#if mask.op === "brush_mask"}
-    <!-- Soft colored overlay showing exactly what's painted -- brush masks
-         are otherwise invisible until a nonzero adjustment is set. Not a
-         mask data field (unlike every row above, which funnels through
-         onChange), so it gets its own separate prop pair, matching how
-         onDelete/onClose are already separate from onChange in this same
-         component. Also toggleable via the "O" hotkey while Develop is
-         open and this mask is selected -- see +page.svelte. -->
+  {#if mask.op === "luminance_range_mask"}
+    <!-- Min/Max/Feather, not the shared Feather row above -- this kind's
+         `feather` means a band WIDTH around two edges, a different
+         concept from every other kind's single-boundary feather. The
+         gradient-bar track background (below, in <style>) is a cheap
+         stand-in for a real luminance histogram -- not pixel-accurate,
+         but closes the "what does 30 even mean" gap a bare 0-100 slider
+         would otherwise leave, without building histogram UI from scratch. -->
+    <div class="row">
+      <label for="mask-range-min">Min</label>
+      <input
+        id="mask-range-min"
+        class="luma-slider"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={mask.rangeMin}
+        oninput={(e) => onChange({ rangeMin: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.rangeMin}</span>
+    </div>
+    <div class="row">
+      <label for="mask-range-max">Max</label>
+      <input
+        id="mask-range-max"
+        class="luma-slider"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={mask.rangeMax}
+        oninput={(e) => onChange({ rangeMax: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.rangeMax}</span>
+    </div>
+    <div class="row">
+      <label for="mask-range-feather">Feather</label>
+      <input
+        id="mask-range-feather"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={mask.feather}
+        oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.feather}</span>
+    </div>
+  {/if}
+
+  {#if OVERLAY_CAPABLE_MASK_OPS.includes(mask.op)}
+    <!-- Soft colored overlay showing exactly what's selected -- brush and
+         luminance-range masks are otherwise invisible until a nonzero
+         adjustment is set (unlike linear/radial, which always show a
+         dashed outline). Not a mask data field (unlike every row above,
+         which funnels through onChange), so it gets its own separate prop
+         pair, matching how onDelete/onClose are already separate from
+         onChange in this same component. Also toggleable via the "O"
+         hotkey while Develop is open and this mask is selected -- see
+         +page.svelte. -->
     <label class="invert-row">
-      <input type="checkbox" checked={showBrushOverlay} onchange={(e) => onShowOverlayChange(e.currentTarget.checked)} />
+      <input type="checkbox" checked={showMaskOverlay} onchange={(e) => onShowOverlayChange(e.currentTarget.checked)} />
       <span>Show Overlay (O)</span>
     </label>
   {/if}
@@ -175,6 +238,12 @@
     background: var(--accent-strong);
     border: 2px solid var(--bg-panel);
     cursor: pointer;
+  }
+  /* Cheap stand-in for a real luminance histogram (see the luminance-range
+     Min/Max markup above) -- a plain black-to-white track background so
+     the slider's own position at least visually maps to "how bright". */
+  .row input[type="range"].luma-slider {
+    background: linear-gradient(to right, #000, #fff);
   }
   .row .val {
     width: 38px;

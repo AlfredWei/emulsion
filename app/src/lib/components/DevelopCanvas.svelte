@@ -27,6 +27,8 @@
    *   ) => void,
    *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onMaskSelected: (id: string) => void,
+   *   colorRangeResampleId: string | null,
+   *   onColorRangeResampled: (id: string, refColor: {r: number, g: number, b: number}) => void,
    * }}
    */
   let {
@@ -45,6 +47,8 @@
     onMaskCreated,
     onMaskUpdated,
     onMaskSelected,
+    colorRangeResampleId,
+    onColorRangeResampled,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -478,7 +482,18 @@
       if (moved < DRAG_CLICK_THRESHOLD) {
         const p = screenToNormalized(e.clientX, e.clientY);
         const color = sampleSourcePixel(p.x, p.y);
-        if (color) onMaskCreated({ kind: "color_range", refColor: color });
+        if (color) {
+          // Re-sampling an EXISTING mask's reference color (triggered from
+          // MaskEditorPanel's eyedropper button, see +page.svelte's
+          // colorRangeResampleId wiring) reuses this exact same click
+          // gesture -- only the commit target differs: patch the existing
+          // mask instead of creating a new one.
+          if (colorRangeResampleId) {
+            onColorRangeResampled(colorRangeResampleId, color);
+          } else {
+            onMaskCreated({ kind: "color_range", refColor: color });
+          }
+        }
       }
       return;
     }

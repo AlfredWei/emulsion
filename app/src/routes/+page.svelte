@@ -182,6 +182,61 @@
   // gap this directly fixes.
   let showMaskOverlay = $state(true);
 
+  // Color range's "change select color" action: re-uses the SAME
+  // click-to-sample canvas gesture that CREATES a color-range mask
+  // (activeTool === "color_range" in DevelopCanvas.svelte), but points it
+  // at an existing mask's `refColor` instead of creating a new mask.
+  // `colorRangeResampleTarget` is the mask id awaiting its next canvas
+  // click; kept separate from `selectedMaskId`/`activeTool` (rather than
+  // overloading either) since NEITHER of those two states alone can tell
+  // "the tool is active AND it's specifically in re-sample-into-an-
+  // existing-mask mode, targeting THIS mask" apart from "the tool is
+  // active to place a brand new mask."
+  let colorRangeResampleTarget = $state(/** @type {string | null} */ (null));
+  // Self-cleaning rather than patched into every place activeTool/
+  // selectedMaskId can change (tool-strip toggle, panel close, mask
+  // delete, module switch, selecting a different mask...): resample mode
+  // is only ever valid while the color-range tool is active AND its
+  // target is still the selected mask -- the instant either goes false,
+  // there is no correct target left to resample into.
+  $effect(() => {
+    if (colorRangeResampleTarget !== null && (activeTool !== "color_range" || selectedMaskId !== colorRangeResampleTarget)) {
+      colorRangeResampleTarget = null;
+    }
+  });
+  let isResamplingColor = $derived(colorRangeResampleTarget !== null && colorRangeResampleTarget === selectedMaskId);
+
+  /** Toggle symmetry with MaskToolStrip's own onToolToggle: clicking the
+   * eyedropper again while already resampling cancels it, matching how
+   * clicking an active tool button a second time turns it off. */
+  function handleResampleColorToggle() {
+    if (isResamplingColor) {
+      activeTool = null;
+      colorRangeResampleTarget = null;
+      return;
+    }
+    if (selectedMaskId === null) return;
+    activeTool = "color_range";
+    colorRangeResampleTarget = selectedMaskId;
+  }
+
+  /** Commit path for a re-sample click -- patches the EXISTING mask
+   * (unlike handleMaskCreated's color_range branch, which always adds a
+   * new one) and, unlike the generic handleMaskUpdated slider path, also
+   * exits resample mode afterward -- a re-sample is a one-shot action,
+   * matching real Lightroom's own "click to pick, done" model for this
+   * tool, not a mode you stay in. */
+  function handleColorRangeResampled(
+    /** @type {string} */ id,
+    /** @type {{r: number, g: number, b: number}} */ refColor,
+  ) {
+    editStack = updateMask(editStack, id, { refColor });
+    colorRangeResampleTarget = null;
+    activeTool = null;
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
   function handleMaskCreated(
     /** @type {
      *   | { kind: "linear_gradient", start: {x:number,y:number}, end: {x:number,y:number} }
@@ -899,7 +954,6 @@
 
     return () => unlistenClose?.();
   });
-
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} />
@@ -1102,6 +1156,8 @@
         onMaskCreated={handleMaskCreated}
         onMaskUpdated={handleMaskUpdated}
         onMaskSelected={(id) => (selectedMaskId = id)}
+        colorRangeResampleId={colorRangeResampleTarget}
+        onColorRangeResampled={handleColorRangeResampled}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1111,6 +1167,8 @@
           onClose={() => (selectedMaskId = null)}
           {showMaskOverlay}
           onShowOverlayChange={(v) => (showMaskOverlay = v)}
+          {isResamplingColor}
+          onResampleColor={handleResampleColorToggle}
         />
       {/if}
       <DevelopPanel

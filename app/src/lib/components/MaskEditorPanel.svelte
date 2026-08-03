@@ -16,9 +16,11 @@
    *   onClose: () => void,
    *   showMaskOverlay: boolean,
    *   onShowOverlayChange: (value: boolean) => void,
+   *   isResamplingColor: boolean,
+   *   onResampleColor: () => void,
    * }}
    */
-  let { mask, onChange, onDelete, onClose, showMaskOverlay, onShowOverlayChange } = $props();
+  let { mask, onChange, onDelete, onClose, showMaskOverlay, onShowOverlayChange, isResamplingColor, onResampleColor } = $props();
 
   // A REAL per-kind branch, not a free ride -- unlike linear vs. radial
   // (where every field below is common to both kinds), brush masks have
@@ -162,10 +164,12 @@
     <!-- Swatch + Range/Feather, not the shared Feather row above -- same
          reasoning as luminance range's own dedicated block: this kind's
          `feather` means a transition band beyond a color-distance
-         threshold, not one boundary. The swatch is deliberately
-         non-interactive -- re-sampling an existing mask's reference color
-         is out of scope (delete and recreate instead, matching real
-         Lightroom's own "click again to re-sample" model for this tool). -->
+         threshold, not one boundary. The swatch itself stays a
+         non-interactive preview; the eyedropper button next to it re-uses
+         DevelopCanvas's existing click-to-sample gesture (the same one
+         that creates a NEW color-range mask) but targets THIS mask's
+         `refColor` instead -- see +page.svelte's colorRangeResampleTarget
+         wiring. -->
     <div class="row">
       <label for="mask-color-swatch">Color</label>
       <div
@@ -173,6 +177,20 @@
         class="color-swatch"
         style="background: rgb({Math.round(mask.refColor.r * 255)}, {Math.round(mask.refColor.g * 255)}, {Math.round(mask.refColor.b * 255)})"
       ></div>
+      <button
+        class="resample"
+        class:active={isResamplingColor}
+        type="button"
+        title={isResamplingColor ? "Click a point on the image to sample its color" : "Re-sample color"}
+        aria-label="Re-sample color"
+        onclick={onResampleColor}
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <line x1="14" y1="2.3" x2="10.7" y2="5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <line x1="10.5" y1="5.4" x2="4.3" y2="11.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <path d="M4.3 11.6 L3 14 L5.4 12.7 Z" fill="currentColor" />
+        </svg>
+      </button>
     </div>
     <div class="row">
       <label for="mask-color-range">Range</label>
@@ -305,6 +323,27 @@
     height: 16px;
     border-radius: var(--radius-s);
     border: 1px solid var(--border-strong);
+  }
+  .resample {
+    all: unset;
+    cursor: pointer;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 20px;
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-s);
+  }
+  .resample:hover {
+    color: var(--text-primary);
+  }
+  .resample.active {
+    color: var(--accent-strong);
+    border-color: var(--accent);
+    background: var(--accent-soft);
   }
   .row .val {
     width: 38px;

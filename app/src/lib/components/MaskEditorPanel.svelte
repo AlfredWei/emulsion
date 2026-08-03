@@ -24,9 +24,15 @@
   // (where every field below is common to both kinds), brush masks have
   // no mask-level `feather` (softness is baked per-dab at paint time from
   // the tool's own Feather/Size/Flow settings, see MaskToolStrip.svelte),
-  // and luminance-range masks have a DIFFERENT `feather` meaning (a band
-  // width around two edges, not one boundary) shown via its own Min/Max/
-  // Feather block below -- so the shared Feather row is hidden for both.
+  // and luminance-range/color-range masks have a DIFFERENT `feather`
+  // meaning (a band width around two edges, or a transition band beyond a
+  // color-distance threshold, not one boundary) shown via their own
+  // dedicated blocks below -- so the shared Feather row is hidden for all
+  // three. Every kind gets its own explicit branch before the linear
+  // fallback (not appended after it) -- this file's own established
+  // discipline: an untyped fallback assuming "unrecognized = linear" is a
+  // real bug class already shipped and fixed once elsewhere in this
+  // codebase (DevelopCanvas.svelte's mask-packing loop).
   let title = $derived(
     mask.op === "radial_gradient_mask"
       ? "Radial Gradient"
@@ -34,7 +40,9 @@
         ? "Brush"
         : mask.op === "luminance_range_mask"
           ? "Luminance Range"
-          : "Linear Gradient",
+          : mask.op === "color_range_mask"
+            ? "Color Range"
+            : "Linear Gradient",
   );
 </script>
 
@@ -83,7 +91,7 @@
     />
     <span class="val">{mask.saturation >= 0 ? "+" : ""}{mask.saturation}</span>
   </div>
-  {#if mask.op !== "brush_mask" && mask.op !== "luminance_range_mask"}
+  {#if mask.op !== "brush_mask" && mask.op !== "luminance_range_mask" && mask.op !== "color_range_mask"}
     <div class="row">
       <label for="mask-feather">Feather</label>
       <input
@@ -150,11 +158,55 @@
     </div>
   {/if}
 
+  {#if mask.op === "color_range_mask"}
+    <!-- Swatch + Range/Feather, not the shared Feather row above -- same
+         reasoning as luminance range's own dedicated block: this kind's
+         `feather` means a transition band beyond a color-distance
+         threshold, not one boundary. The swatch is deliberately
+         non-interactive -- re-sampling an existing mask's reference color
+         is out of scope (delete and recreate instead, matching real
+         Lightroom's own "click again to re-sample" model for this tool). -->
+    <div class="row">
+      <label for="mask-color-swatch">Color</label>
+      <div
+        id="mask-color-swatch"
+        class="color-swatch"
+        style="background: rgb({Math.round(mask.refColor.r * 255)}, {Math.round(mask.refColor.g * 255)}, {Math.round(mask.refColor.b * 255)})"
+      ></div>
+    </div>
+    <div class="row">
+      <label for="mask-color-range">Range</label>
+      <input
+        id="mask-color-range"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={mask.range}
+        oninput={(e) => onChange({ range: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.range}</span>
+    </div>
+    <div class="row">
+      <label for="mask-color-feather">Feather</label>
+      <input
+        id="mask-color-feather"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={mask.feather}
+        oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.feather}</span>
+    </div>
+  {/if}
+
   {#if OVERLAY_CAPABLE_MASK_OPS.includes(mask.op)}
-    <!-- Soft colored overlay showing exactly what's selected -- brush and
-         luminance-range masks are otherwise invisible until a nonzero
-         adjustment is set (unlike linear/radial, which always show a
-         dashed outline). Not a mask data field (unlike every row above,
+    <!-- Soft colored overlay showing exactly what's selected -- brush,
+         luminance-range, and color-range masks are otherwise invisible
+         until a nonzero adjustment is set (unlike linear/radial, which
+         always show a dashed outline). Not a mask data field (unlike every row above,
          which funnels through onChange), so it gets its own separate prop
          pair, matching how onDelete/onClose are already separate from
          onChange in this same component. Also toggleable via the "O"
@@ -244,6 +296,15 @@
      the slider's own position at least visually maps to "how bright". */
   .row input[type="range"].luma-slider {
     background: linear-gradient(to right, #000, #fff);
+  }
+  /* The sampled reference color for a color-range mask -- non-interactive,
+     see the color-range block's own comment for why re-sampling isn't
+     supported here. */
+  .color-swatch {
+    flex: 1;
+    height: 16px;
+    border-radius: var(--radius-s);
+    border: 1px solid var(--border-strong);
   }
   .row .val {
     width: 38px;

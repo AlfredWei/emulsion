@@ -53,6 +53,7 @@
     createRadialGradientMask,
     createBrushMask,
     createLuminanceRangeMask,
+    createColorRangeMask,
     OVERLAY_CAPABLE_MASK_OPS,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
@@ -186,20 +187,33 @@
      *   | { kind: "linear_gradient", start: {x:number,y:number}, end: {x:number,y:number} }
      *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
      *   | { kind: "brush", id: string }
+     *   | { kind: "color_range", refColor: {r:number,g:number,b:number} }
      * } */ placement,
   ) {
+    // Every kind gets its own explicit branch before the final
+    // createLinearGradientMask fallback (not appended after it) -- an
+    // untyped fallback assuming "unrecognized = linear" is a real bug
+    // class already shipped and fixed once elsewhere in this codebase
+    // (DevelopCanvas.svelte's mask-packing loop); a color-range placement
+    // has no `.start`/`.end` at all, so hitting this fallback by mistake
+    // would construct a broken linear mask and crash later.
     const mask =
       placement.kind === "radial_gradient"
         ? createRadialGradientMask(placement.center, placement.radiusX, placement.radiusY)
         : placement.kind === "brush"
           ? createBrushMask(placement.id)
-          : createLinearGradientMask(placement.start, placement.end);
+          : placement.kind === "color_range"
+            ? createColorRangeMask(placement.refColor)
+            : createLinearGradientMask(placement.start, placement.end);
     editStack = addMask(editStack, mask);
     selectedMaskId = mask.id;
     // Real Lightroom drops back to selection after placing a gradient, but
     // a brush stroke should keep the Brush tool active (painting is
     // inherently multi-stroke -- see DevelopCanvas.svelte's brush-state
     // doc comment) rather than force a re-click of the tool for every dab.
+    // Color range is a one-shot placement like linear/radial (not
+    // multi-shot like brush), so it correctly falls through the same
+    // `!== "brush"` reset below.
     if (placement.kind !== "brush") activeTool = null;
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(flushEditStack, 250);

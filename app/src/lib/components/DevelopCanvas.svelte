@@ -23,6 +23,7 @@
    *     | { kind: "linear_gradient", start: {x: number, y: number}, end: {x: number, y: number} }
    *     | { kind: "radial_gradient", center: {x: number, y: number}, radiusX: number, radiusY: number }
    *     | { kind: "brush", id: string }
+   *     | { kind: "color_range", refColor: {r: number, g: number, b: number} }
    *   ) => void,
    *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onMaskSelected: (id: string) => void,
@@ -104,6 +105,21 @@
   /** @type {{ maskId: string, which: "start" | "end" | "center" | "radius", center?: {x:number,y:number} } | null} */
   let handleDragState = null;
 
+  // M3 Slice 8: color range's creation pattern is a fourth-and-different
+  // one from every other kind -- linear/radial drag two points, luminance
+  // range creates on tool-button click with no canvas interaction at all,
+  // brush paints continuous strokes. Color range is a SINGLE click on the
+  // canvas that samples a pixel and immediately commits a new mask, tuned
+  // afterward via Range/Feather sliders. Tracked as a lightweight
+  // click-start point (not `placingMask`, which drives a live drag
+  // preview this kind has no geometry for) so `handlePointerUp` can reuse
+  // the SAME click-vs-drag threshold already established below for the
+  // zoom-toggle click, rather than committing unconditionally on
+  // pointerdown -- a real movement past the threshold is treated as a
+  // cancel, not a commit.
+  /** @type {{x:number,y:number} | null} */
+  let colorRangeClickStart = null;
+
   // M3 Slice 7: brush painting. Deliberately transient, per-stroke state --
   // no persistent "which mask am I painting into" tracking survives past
   // pointerup. Instead, EVERY pointerdown re-derives the paint target from
@@ -144,6 +160,37 @@
     if (!canvasEl) return { x: 0, y: 0 };
     const p = screenToNativePixel(clientX, clientY);
     return { x: p.x / canvasEl.width, y: p.y / canvasEl.height };
+  }
+
+  // M3 Slice 8: retained sampleable pixel data, drawn once per image load
+  // (see loadImage) into a persistent 2D OffscreenCanvas -- the decoded
+  // ImageBitmap itself is discarded right after its one-time
+  // copyExternalImageToTexture GPU upload (see loadImage), so nothing
+  // else in this component keeps pixel data around for a CPU-side read
+  // like an eyedropper needs. Same "own persistent per-image resource,
+  // reset in loadImage" pattern brushTextureArray/brushRasterState
+  // already use.
+  /** @type {OffscreenCanvas | null} */
+  let sourceSampleCanvas = null;
+  /** @type {OffscreenCanvasRenderingContext2D | null} */
+  let sourceSampleCtx = null;
+
+  /** Samples the ORIGINAL DECODED SOURCE pixel at a normalized (0..1)
+   * coordinate -- deliberately not the currently-graded preview the user
+   * sees on screen. A true WYSIWYG eyedropper matching exactly what's
+   * displayed would need a live GPU texture readback (copyTextureToBuffer
+   * + mapAsync against the rendered output, plus COPY_SRC usage on the
+   * canvas's own texture) -- genuinely separate, heavier plumbing than
+   * this slice's real scope, deferred explicitly. Source-pixel sampling
+   * is still a real, useful eyedropper for moderate edits, just not exact
+   * for a heavily-graded image. Returns `{r,g,b}` as 0-1 floats, matching
+   * WGSL's own texture-sample convention. */
+  function sampleSourcePixel(/** @type {number} */ normX, /** @type {number} */ normY) {
+    if (!sourceSampleCtx || !sourceSampleCanvas) return null;
+    const px = Math.min(Math.max(Math.round(normX * sourceSampleCanvas.width), 0), sourceSampleCanvas.width - 1);
+    const py = Math.min(Math.max(Math.round(normY * sourceSampleCanvas.height), 0), sourceSampleCanvas.height - 1);
+    const d = sourceSampleCtx.getImageData(px, py, 1, 1).data;
+    return { r: d[0] / 255, g: d[1] / 255, b: d[2] / 255 };
   }
 
   /** M3 Slice 6: radius from a center + the current pointer, using the
@@ -328,6 +375,12 @@
       tryCapturePointer(e);
       return;
     }
+    if (activeTool === "color_range") {
+      e.preventDefault();
+      colorRangeClickStart = { x: e.clientX, y: e.clientY };
+      tryCapturePointer(e);
+      return;
+    }
     if (activeTool === "brush") {
       e.preventDefault();
       const p = screenToNormalized(e.clientX, e.clientY);
@@ -412,6 +465,21 @@
       // (accidental click) must be rejected, not committed -- it would
       // corrupt the frame with Inf/NaN.
       if (radiusX > 0.01 && radiusY > 0.01) onMaskCreated({ kind: "radial_gradient", center, radiusX, radiusY });
+      return;
+    }
+    if (colorRangeClickStart) {
+      const moved = Math.max(Math.abs(e.clientX - colorRangeClickStart.x), Math.abs(e.clientY - colorRangeClickStart.y));
+      colorRangeClickStart = null;
+      // A movement past the threshold is a cancel (no mask created), not a
+      // pan -- the hard activeTool branch above already prevents panning
+      // while this tool is active, so this is purely a "did the user mean
+      // to click, or did their hand slip" check, same threshold/reasoning
+      // as the zoom-toggle click below.
+      if (moved < DRAG_CLICK_THRESHOLD) {
+        const p = screenToNormalized(e.clientX, e.clientY);
+        const color = sampleSourcePixel(p.x, p.y);
+        if (color) onMaskCreated({ kind: "color_range", refColor: color });
+      }
       return;
     }
     if (activeTool === "brush") {
@@ -609,8 +677,8 @@
     // float, cast to i32 at sample time) -- brush is the only kind that
     // needs a fourth scalar; every other kind leaves it at 0.
     struct Mask {
-      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100)
-      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1, z = kind (0=linear, 1=radial, 2=brush, 3=luminance range), w = brush texture-array layer
+      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100); color range: xyz=refColor (0-1), w=range (0-100)
+      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1, z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range), w = brush texture-array layer
       adjustments: vec4<f32>, // x = exposure_ev, y = contrast, z = saturation, w unused
     };
     const MAX_MASKS = 8;
@@ -696,7 +764,7 @@
           let layer = i32(m.params.w);
           weight = textureSampleLevel(brushMasks, srcSampler, in.uv, layer, 0.0).r;
           if (m.params.y > 0.5) { weight = 1.0 - weight; }
-        } else {
+        } else if (kind < 3.5) {
           // Luminance range: the first kind whose weight depends on pixel
           // VALUE, not position -- reads rgb as already graded by every
           // PRECEDING mask in the stack (this is a mutating accumulator,
@@ -715,13 +783,41 @@
           let falling = (range_max + feather_width - luma) / denom;
           weight = clamp(min(rising, falling), 0.0, 1.0);
           if (m.params.y > 0.5) { weight = 1.0 - weight; }
+        } else {
+          // Color range (4), and any future kind >= 4: also reads the
+          // mutating rgb accumulator, same order-dependence as luminance
+          // range. One reference color and one tolerance rather than two
+          // edges, so this is a SINGLE-sided falloff (closer to radial's
+          // inside/outside shape, but in RGB-distance space) rather than
+          // luminance's two-sided min(rising,falling) band. start_end.xyz
+          // holds refColor (0-1, matching this shader's own texture-sample
+          // convention), start_end.w holds range (0-100).
+          //
+          // The exact-match pixel must get weight=1 regardless of how
+          // small feather is -- an earlier draft blended feather_width
+          // into the numerator alongside threshold, which meant the same
+          // denom floor meant to prevent divide-by-zero at feather=0 also
+          // diluted that term, so dist=0 could evaluate to LESS than full
+          // weight at low feather (see develop_engine.rs's
+          // color_mask_weight doc comment for the full derivation). Fixed
+          // here the same way: denom is the transition width added AFTER
+          // threshold via the "+ 1.0", never blended into the numerator.
+          let dist = distance(rgb, m.start_end.xyz);
+          let max_dist = sqrt(3.0);
+          let threshold = clamp(m.start_end.w / 100.0, 0.0, 1.0) * max_dist;
+          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
+          let feather_width = softness * max_dist * 0.5;
+          let denom = max(feather_width, 0.001);
+          weight = clamp((threshold - dist) / denom + 1.0, 0.0, 1.0);
+          if (m.params.y > 0.5) { weight = 1.0 - weight; }
         }
         rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
 
-        // Selected-mask overlay (soft colored fill, toggleable): brush and
-        // luminance-range only (kind >= 2) -- linear/radial deliberately
-        // excluded, preserving the prior explicit scope decision that they
-        // keep their existing dashed-outline-only feedback (PROGRESS.md,
+        // Selected-mask overlay (soft colored fill, toggleable): every
+        // no-geometry kind (brush, luminance range, color range -- kind >=
+        // 2) -- linear/radial deliberately excluded, preserving the prior
+        // explicit scope decision that they keep their existing
+        // dashed-outline-only feedback (PROGRESS.md,
         // mask-overlay-feather-indicators slice). Reuses the weight just
         // computed above for THIS mask -- already invert-adjusted, already
         // evaluated against the correct (pre-this-mask) rgb state -- so no
@@ -792,6 +888,19 @@
       [bitmap.width, bitmap.height],
     );
 
+    // M3 Slice 8: retain sampleable pixel data for the color-range
+    // eyedropper -- draw the SAME bitmap once into a persistent 2D
+    // OffscreenCanvas before it's discarded. Neither this draw nor the GPU
+    // upload above closes/consumes the bitmap, so order between them
+    // doesn't matter -- bitmap.close() happens later in this function
+    // (NOT here), once every remaining `bitmap.width`/`.height` read below
+    // is done: per spec, close() zeroes a bitmap's width/height, so
+    // closing it before those later reads would corrupt the brush texture
+    // array's size and the canvas's own dimensions.
+    sourceSampleCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    sourceSampleCtx = /** @type {OffscreenCanvasRenderingContext2D} */ (sourceSampleCanvas.getContext("2d"));
+    sourceSampleCtx.drawImage(bitmap, 0, 0);
+
     // M3 Slice 7: recreated per image -- must be sized to THIS image's
     // native resolution, an OffscreenCanvas at the wrong resolution would
     // rasterize dabs at the wrong scale. Existing brush masks' dab lists
@@ -824,6 +933,10 @@
       context.canvas.height = bitmap.height;
     }
     context.configure({ device, format: presentationFormat, alphaMode: "opaque" });
+    // Every remaining bitmap.width/.height read is done -- free it now
+    // that both its consumers (the GPU upload and the sample-canvas draw
+    // above) are finished with it.
+    bitmap.close();
 
     status = "ready";
     await tick(); // overlayEl only mounts once status flips to "ready"
@@ -992,16 +1105,25 @@
         maskData[o + 1] = m.rangeMax;
         maskData[o + 4] = m.feather;
         maskData[o + 6] = 3; // kind = luminance range
+      } else if (m.op === "color_range_mask") {
+        maskData[o + 0] = m.refColor.r;
+        maskData[o + 1] = m.refColor.g;
+        maskData[o + 2] = m.refColor.b;
+        maskData[o + 3] = m.range;
+        maskData[o + 4] = m.feather;
+        maskData[o + 6] = 4; // kind = color range
       } else {
-        // linear_gradient_mask -- the only kind left once the three
+        // linear_gradient_mask -- the only kind left once the four
         // explicit branches above are exhausted, given MASK_OP_NAMES
         // already gates what can appear in `masks` at all (develop.js).
-        // A real bug once lived here: this used to be an unconditional
-        // catch-all `else` written BEFORE luminance range existed, which
-        // assumed "anything that isn't radial or brush is linear" -- a
-        // luminance-range mask object has no .start/.end, so m.start.x
-        // would have thrown, aborting the render for every mask in the
-        // stack the instant one existed anywhere.
+        // A real bug once lived here (before luminance range existed):
+        // an unconditional catch-all `else` assumed "anything that isn't
+        // radial or brush is linear" -- a mask object of a kind with no
+        // .start/.end would have thrown on m.start.x, aborting the render
+        // for every mask in the stack the instant one existed anywhere.
+        // Every new kind since (luminance range, color range) has gotten
+        // its own explicit branch above this fallback for exactly that
+        // reason.
         maskData[o + 0] = m.start.x;
         maskData[o + 1] = m.start.y;
         maskData[o + 2] = m.end.x;
@@ -1071,7 +1193,7 @@
   <canvas
     bind:this={canvasEl}
     class:zoomed={zoomMode === "100"}
-    class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush"}
+    class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range"}
     onpointerdown={handlePointerDown}
     onpointermove={handlePointerMove}
     onpointerup={handlePointerUp}

@@ -308,6 +308,69 @@ export function sampleCurveLut(/** @type {Float32Array} */ lut, /** @type {numbe
   return lut[i0] * (1 - frac) + lut[i1] * frac;
 }
 
+// HSL / Color Mixer (M3): a global-only op (applied after exposure ->
+// contrast -> saturation -> tone curve, before any mask -- see
+// develop_engine.rs/DevelopCanvas.svelte's shared pipeline-order comment),
+// with a band-KEYED payload (not a single scalar, not an array) -- a
+// per-band UI control needs to patch exactly one band's 3 values without
+// threading the other 21 through, which a flat array index wouldn't give
+// for free. Band order is fixed and shared with the GPU-upload/CPU-parse
+// order in DevelopCanvas.svelte/develop_engine.rs -- no band-name string
+// is ever uploaded to the GPU, only positional order, so this list is the
+// single source of truth both sides must stay in lockstep with.
+export const HSL_BAND_NAMES = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"];
+// Evenly spaced 45 degrees apart starting at red -- this is a from-scratch
+// reimplementation, not file-compatible with Lightroom, and there's no
+// verifiable source for Adobe's own exact internal band-center angles to
+// match instead. Index-aligned with HSL_BAND_NAMES.
+export const HSL_BAND_CENTERS_DEG = [0, 45, 90, 135, 180, 225, 270, 315];
+
+export const IDENTITY_HSL_BANDS = Object.freeze(
+  Object.fromEntries(
+    HSL_BAND_NAMES.map((name) => [name, Object.freeze({ hue: 0, saturation: 0, luminance: 0 })]),
+  ),
+);
+
+/** @returns {Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>} */
+export function getHslBands(
+  /** @type {EditStack} */ stack,
+  /** @type {Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>} */ fallback = IDENTITY_HSL_BANDS,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "hsl"));
+  return op?.bands ?? fallback;
+}
+
+/** Patches ONE band's values (any subset of hue/saturation/luminance),
+ * leaving the other 7 bands untouched -- the access pattern a per-band UI
+ * control actually needs, matching how masks needed their own CRUD
+ * instead of opValue/upsertOp's single-scalar shape.
+ * @returns {EditStack} */
+export function upsertHslBand(
+  /** @type {EditStack} */ stack,
+  /** @type {string} */ bandName,
+  /** @type {Partial<{hue: number, saturation: number, luminance: number}>} */ patch,
+) {
+  const current = getHslBands(stack);
+  const bands = { ...current, [bandName]: { ...current[bandName], ...patch } };
+  const ops = stack.ops.filter((o) => o.op !== "hsl");
+  ops.push(/** @type {any} */ ({ op: "hsl", bands }));
+  return { ...stack, ops };
+}
+
+/** Packs the 8-band object into the exact Float32Array layout
+ * DevelopCanvas.svelte's `hslBandsBuffer` expects (8 x vec4, band order =
+ * HSL_BAND_NAMES, w-component unused padding). */
+export function buildHslUniformData(
+  /** @type {Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>} */ bands,
+) {
+  const data = new Float32Array(32);
+  HSL_BAND_NAMES.forEach((name, i) => {
+    const b = bands[name] ?? IDENTITY_HSL_BANDS[name];
+    data.set([b.hue, b.saturation, b.luminance, 0], i * 4);
+  });
+  return data;
+}
+
 // M3 Slice 5/6: masks are id-keyed, multi-instance ops -- unlike the global
 // sliders above (opValue/upsertOp's find-by-name-and-replace model), there
 // can be several masks (of possibly different kinds) on one image, so each

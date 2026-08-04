@@ -230,6 +230,19 @@ async fn remove_images(
                         eprintln!("preview cleanup failed for {}: {e}", preview_path.display());
                     }
                 }
+                // The lazily-built 1:1 tier (preview_cache::ensure_develop_full_preview)
+                // -- only exists if this image was ever zoomed to 100%, but when it
+                // does exist it's a large, uncapped native-resolution PNG that would
+                // otherwise become a permanent orphan on removal.
+                let full_preview_path = previews_dir.join(format!(
+                    "{content_hash}{}.png",
+                    preview_cache::DEVELOP_FULL_PREVIEW_SUFFIX
+                ));
+                if full_preview_path.exists() {
+                    if let Err(e) = std::fs::remove_file(&full_preview_path) {
+                        eprintln!("full-preview cleanup failed for {}: {e}", full_preview_path.display());
+                    }
+                }
             }
         }
         Ok(())
@@ -386,6 +399,29 @@ async fn get_develop_preview(app: AppHandle, path: String) -> Result<DevelopPrev
 
     tauri::async_runtime::spawn_blocking(move || {
         preview_cache::ensure_develop_preview(std::path::Path::new(&path), &previews_dir)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The 1:1 tier alongside `get_develop_preview`'s Standard tier -- a
+/// sibling command, not a parameter on the existing one, matching this
+/// codebase's established one-function-per-concern split (e.g.
+/// `decode_preview`/`decode_develop_preview`). `DevelopCanvas.svelte`
+/// only calls this once the user actually zooms an image to 100%; see
+/// `preview_cache::ensure_develop_full_preview`'s own doc comment for why
+/// this is lazy, not part of the background pregeneration pass.
+#[tauri::command]
+async fn get_develop_full_preview(app: AppHandle, path: String) -> Result<DevelopPreviewInfo, String> {
+    let previews_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("previews");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_cache::ensure_develop_full_preview(std::path::Path::new(&path), &previews_dir)
             .map_err(|e| e.to_string())
     })
     .await
@@ -601,6 +637,7 @@ pub fn run() {
             list_collections,
             list_collection_image_ids,
             get_develop_preview,
+            get_develop_full_preview,
             get_edit_stack,
             set_edit_stack,
             regenerate_thumbnail,

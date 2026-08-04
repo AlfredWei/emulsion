@@ -118,6 +118,69 @@ pub fn ensure_develop_preview_for_hash(
     })
 }
 
+/// A second, higher-resolution tier (mirrors real Lightroom's own
+/// "1:1 Preview" alongside its "Standard Preview" -- PRD/PRD.md's own
+/// explicit "Standard/1:1 Preview cache" phrasing). The draft tier above
+/// is always capped to `DEVELOP_PREVIEW_MAX_DIMENSION` for fast interactive
+/// loading and Fit-mode viewing; this tier is the source's true native
+/// resolution, uncapped, for 100% zoom -- built lazily (see
+/// `ensure_develop_full_preview`'s doc comment), never pregenerated in
+/// `pregenerate_missing` below.
+pub const DEVELOP_FULL_PREVIEW_SUFFIX: &str = "_full";
+
+/// Interactive path, mirroring `ensure_develop_preview`. `DevelopCanvas.svelte`
+/// only calls this once the user actually zooms an image to 100% --
+/// pregenerating this for every cataloged image up front would multiply
+/// background decode/disk cost by roughly the ratio of native resolution
+/// to the ~2048px draft cap (often 5-10x pixel count) for images that may
+/// never be zoomed into.
+pub fn ensure_develop_full_preview(
+    source_path: &Path,
+    previews_dir: &Path,
+) -> Result<DevelopPreviewInfo, PreviewCacheError> {
+    let bytes = std::fs::read(source_path)?;
+    let content_hash = blake3::hash(&bytes).to_hex().to_string();
+    ensure_develop_full_preview_for_hash(source_path, &content_hash, previews_dir)
+}
+
+/// Cache key is `{content_hash}_full.png` -- a distinct filename from the
+/// draft tier's own `{content_hash}.png`, so both coexist on disk with no
+/// collision (same "distinct suffix for a second content-hash-keyed
+/// artifact" precedent the edited-thumbnail cache already established).
+/// Decodes via `source_decode::decode_preview` -- the SAME function
+/// `export.rs` already uses for full-resolution final export -- with no
+/// resize/cap applied afterward: this tier IS the source's native size.
+pub fn ensure_develop_full_preview_for_hash(
+    source_path: &Path,
+    content_hash: &str,
+    previews_dir: &Path,
+) -> Result<DevelopPreviewInfo, PreviewCacheError> {
+    let out_path = previews_dir.join(format!("{content_hash}{DEVELOP_FULL_PREVIEW_SUFFIX}.png"));
+
+    if out_path.exists() {
+        let (width, height) = image::image_dimensions(&out_path)?;
+        return Ok(DevelopPreviewInfo {
+            path: out_path.to_string_lossy().to_string(),
+            width,
+            height,
+        });
+    }
+
+    std::fs::create_dir_all(previews_dir)?;
+
+    let decoded = source_decode::decode_preview(source_path)?;
+    let source = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
+        .ok_or(PreviewCacheError::BufferMismatch)?;
+
+    source.save(&out_path)?;
+
+    Ok(DevelopPreviewInfo {
+        path: out_path.to_string_lossy().to_string(),
+        width: source.width(),
+        height: source.height(),
+    })
+}
+
 /// Walks every cataloged image and ensures each has a cache entry,
 /// skipping (not aborting on) per-image failures -- same "continue past
 /// one bad file" discipline as `import::scan_and_import`. Cheap to call
@@ -222,6 +285,90 @@ mod tests {
 
         let from_a = ensure_develop_preview(&copy_a, &previews_dir).expect("decodes copy a");
         let from_b = ensure_develop_preview(&copy_b, &previews_dir).expect("hits cache for copy b");
+
+        assert_eq!(from_a.path, from_b.path, "identical content must resolve to the same cache entry");
+
+        let _ = std::fs::remove_dir_all(&previews_dir);
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+    }
+
+    /// The full tier must produce a real, independently-cached file at a
+    /// DIFFERENT path from the draft tier's own cache entry for the same
+    /// source -- if these ever collided, one tier would silently clobber
+    /// the other on disk.
+    #[test]
+    fn full_preview_is_cached_separately_from_the_draft_tier() {
+        let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else {
+            eprintln!("skipping: set EMULSION_TEST_RAW_SAMPLE=/path/to/file.DNG to run this test");
+            return;
+        };
+        let previews_dir = temp_previews_dir("full-tier-separate");
+
+        let draft = ensure_develop_preview(Path::new(&sample_path), &previews_dir)
+            .expect("draft tier decodes and caches");
+        let full = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir)
+            .expect("full tier decodes and caches");
+
+        assert_ne!(draft.path, full.path, "draft and full tiers must not share a cache file");
+        assert!(
+            full.path.ends_with(&format!("{DEVELOP_FULL_PREVIEW_SUFFIX}.png")),
+            "full tier's filename should carry the distinguishing suffix, got {}",
+            full.path
+        );
+        assert!(std::path::Path::new(&draft.path).exists());
+        assert!(std::path::Path::new(&full.path).exists());
+
+        let _ = std::fs::remove_dir_all(&previews_dir);
+    }
+
+    /// Same cache-hit-skips-redecode discipline as the draft tier's own
+    /// `cache_hit_skips_redecode` above.
+    #[test]
+    fn full_preview_cache_hit_skips_redecode() {
+        let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else {
+            eprintln!("skipping: set EMULSION_TEST_RAW_SAMPLE=/path/to/file.DNG to run this test");
+            return;
+        };
+        let previews_dir = temp_previews_dir("full-tier-cache-hit");
+
+        let first = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir)
+            .expect("first call decodes and caches");
+        let mtime_after_first = std::fs::metadata(&first.path).unwrap().modified().unwrap();
+
+        let second = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir)
+            .expect("second call hits the cache");
+        let mtime_after_second = std::fs::metadata(&second.path).unwrap().modified().unwrap();
+
+        assert_eq!(first.path, second.path);
+        assert_eq!(
+            mtime_after_first, mtime_after_second,
+            "second call must not rewrite the cached PNG"
+        );
+
+        let _ = std::fs::remove_dir_all(&previews_dir);
+    }
+
+    /// Same-content-different-path dedupe, mirrored for the full tier.
+    #[test]
+    fn full_preview_same_content_different_path_reuses_cache_entry() {
+        let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else {
+            eprintln!("skipping: set EMULSION_TEST_RAW_SAMPLE=/path/to/file.DNG to run this test");
+            return;
+        };
+        let previews_dir = temp_previews_dir("full-tier-dedup");
+        let scratch_dir = temp_previews_dir("full-tier-dedup-sources");
+
+        let ext = Path::new(&sample_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("dng");
+        let copy_a = scratch_dir.join(format!("a.{ext}"));
+        let copy_b = scratch_dir.join(format!("b.{ext}"));
+        std::fs::copy(&sample_path, &copy_a).unwrap();
+        std::fs::copy(&sample_path, &copy_b).unwrap();
+
+        let from_a = ensure_develop_full_preview(&copy_a, &previews_dir).expect("decodes copy a");
+        let from_b = ensure_develop_full_preview(&copy_b, &previews_dir).expect("hits cache for copy b");
 
         assert_eq!(from_a.path, from_b.path, "identical content must resolve to the same cache entry");
 

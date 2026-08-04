@@ -64,6 +64,129 @@ fn apply_adjustments(rgb: [f32; 3], exposure_ev: f32, contrast: f32, saturation:
     c
 }
 
+/// Tone Curve (M3): a global-only op applied as the pipeline's new final
+/// step -- exposure -> contrast -> saturation -> tone curve -- before any
+/// mask reads the graded `rgb` as its own accumulator base (see
+/// `apply_edit_stack`'s call site below and `Mask::weight`'s own doc
+/// comment on that ordering). Number of samples in the shared LUT both
+/// this module and DevelopCanvas.svelte's WGSL shader build and consume --
+/// see `build_curve_lut`'s doc comment for why both sides build the exact
+/// same discretized LUT rather than each evaluating the spline exactly.
+const CURVE_LUT_SAMPLES: usize = 256;
+
+/// Parses the `tone_curve` op's `points` array, defaulting to the 2-point
+/// identity line `(0,0)-(1,1)` -- the same "always a clean passthrough for
+/// an untouched image" contract `op_value` already establishes for the
+/// scalar ops. Falls back to identity (not a panic) if fewer than 2 points
+/// parse, e.g. a corrupt/partial payload.
+fn tone_curve_points(ops: &[serde_json::Value]) -> Vec<(f32, f32)> {
+    let parsed = ops
+        .iter()
+        .find(|op| op.get("op").and_then(|v| v.as_str()) == Some("tone_curve"))
+        .and_then(|op| op.get("points"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            let mut pts: Vec<(f32, f32)> = arr
+                .iter()
+                .filter_map(|p| Some((p.get("x")?.as_f64()? as f32, p.get("y")?.as_f64()? as f32)))
+                .collect();
+            pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            pts
+        });
+    match parsed {
+        Some(pts) if pts.len() >= 2 => pts,
+        _ => vec![(0.0, 0.0), (1.0, 1.0)],
+    }
+}
+
+/// Fritsch-Carlson monotonic cubic Hermite tangents -- the Rust twin of
+/// `develop.js`'s `computeTangents` (same algorithm, kept in lockstep by
+/// hand; see this module's own doc comment on the parity obligation with
+/// the WGSL shader, which applies equally here). Step C (necessary-
+/// condition zeroing at local extrema) is NOT redundant with Step D's
+/// magnitude-only rescale: a plain averaged tangent can have the wrong
+/// SIGN at an extremum, which only Step C catches. `pts` must already be
+/// sorted by x.
+fn compute_tangents(pts: &[(f32, f32)]) -> Vec<f32> {
+    let n = pts.len();
+    let d: Vec<f32> = (0..n - 1)
+        .map(|k| (pts[k + 1].1 - pts[k].1) / (pts[k + 1].0 - pts[k].0))
+        .collect();
+    let mut m = vec![0.0f32; n];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for k in 1..n - 1 {
+        m[k] = (d[k - 1] + d[k]) / 2.0;
+    }
+    for k in 1..n - 1 {
+        if d[k - 1] == 0.0 || d[k] == 0.0 || d[k - 1].signum() != d[k].signum() {
+            m[k] = 0.0;
+        }
+    }
+    for k in 0..n - 1 {
+        if d[k] == 0.0 {
+            m[k] = 0.0;
+            m[k + 1] = 0.0;
+            continue;
+        }
+        let alpha = m[k] / d[k];
+        let beta = m[k + 1] / d[k];
+        let s = alpha * alpha + beta * beta;
+        if s > 9.0 {
+            let tau = 3.0 / s.sqrt();
+            m[k] = tau * alpha * d[k];
+            m[k + 1] = tau * beta * d[k];
+        }
+    }
+    m
+}
+
+/// Evaluates the Hermite cubic through `pts` (with tangents `m`) at `x`,
+/// clamped to the curve's own domain.
+fn hermite_at(pts: &[(f32, f32)], m: &[f32], x: f32) -> f32 {
+    let n = pts.len();
+    let xc = x.clamp(pts[0].0, pts[n - 1].0);
+    let mut k = 0;
+    while k < n - 2 && xc > pts[k + 1].0 {
+        k += 1;
+    }
+    let h = pts[k + 1].0 - pts[k].0;
+    let t = if h == 0.0 { 0.0 } else { (xc - pts[k].0) / h };
+    let (t2, t3) = (t * t, t * t * t);
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    h00 * pts[k].1 + h10 * h * m[k] + h01 * pts[k + 1].1 + h11 * h * m[k + 1]
+}
+
+/// The Rust twin of `develop.js`'s `buildToneCurveLut` -- must build the
+/// SAME discretized `CURVE_LUT_SAMPLES`-sample LUT the WGSL shader
+/// consumes, not evaluate the spline exactly, so parity between the
+/// interactive preview and this module's own CPU export/thumbnail-regen
+/// output is by construction rather than relying on this module's own
+/// `±2/255` test tolerance to paper over two structurally different
+/// evaluation methods near a curve's extrema.
+fn build_curve_lut(points: &[(f32, f32)]) -> [f32; CURVE_LUT_SAMPLES] {
+    let m = compute_tangents(points);
+    let mut lut = [0.0f32; CURVE_LUT_SAMPLES];
+    for (i, entry) in lut.iter_mut().enumerate() {
+        let x = i as f32 / (CURVE_LUT_SAMPLES - 1) as f32;
+        *entry = hermite_at(points, &m, x).clamp(0.0, 1.0);
+    }
+    lut
+}
+
+/// Same linear-interpolation-between-samples formula as `develop.js`'s
+/// `sampleCurveLut` and the WGSL shader's `sampleCurveLut`.
+fn sample_lut(lut: &[f32], v: f32) -> f32 {
+    let idx = v.clamp(0.0, 1.0) * (lut.len() - 1) as f32;
+    let i0 = idx.floor() as usize;
+    let i1 = (i0 + 1).min(lut.len() - 1);
+    let frac = idx - i0 as f32;
+    lut[i0] * (1.0 - frac) + lut[i1] * frac
+}
+
 /// A `linear_gradient_mask` op (M3 Slice 5), parsed from its opaque JSON
 /// shape -- see MaskToolStrip.svelte/develop.js for how the frontend
 /// creates these. Coordinates are normalized (0..1, matching the WGSL
@@ -520,6 +643,10 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let contrast = op_value(&stack.ops, "contrast");
     let saturation = op_value(&stack.ops, "saturation");
     let masks = parse_masks(&stack.ops);
+    // Built once per call, not per pixel -- see build_curve_lut's own doc
+    // comment for why this must be the same discretized LUT the WGSL
+    // shader consumes, not an exact per-pixel spline evaluation.
+    let curve_lut = build_curve_lut(&tone_curve_points(&stack.ops));
 
     let (width, height) = (image.width(), image.height());
     // Only consumed by brush masks (see Mask::weight) -- converts a dab's
@@ -538,6 +665,15 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             contrast,
             saturation,
         );
+        // Tone curve is the global pass's new final step -- applied
+        // before any mask below reads `rgb` as its own accumulator base,
+        // matching real Lightroom's own "Tone Curve is global-only, local
+        // adjustments layer on top of it" ordering.
+        rgb = [
+            sample_lut(&curve_lut, rgb[0]),
+            sample_lut(&curve_lut, rgb[1]),
+            sample_lut(&curve_lut, rgb[2]),
+        ];
 
         if !masks.is_empty() {
             // Pixel-center sampling, matching how a texture lookup samples
@@ -635,6 +771,104 @@ mod tests {
     #[test]
     fn apply_edit_stack_clamps_past_white_instead_of_wrapping() {
         assert_pixel([250, 250, 250], &[("exposure", 2.0)], [255, 255, 255]);
+    }
+
+    /// Builds an EditStack with the given scalar global ops (exposure/
+    /// contrast/saturation, same shape `stack_with` uses) plus one
+    /// `tone_curve` op -- `stack_with` alone can't express a curve's
+    /// structured `points` payload.
+    fn stack_with_curve(
+        scalar_ops: &[(&str, f32)],
+        points: &[(f32, f32)],
+    ) -> EditStack {
+        let mut stack = stack_with(scalar_ops);
+        stack.ops.push(serde_json::json!({
+            "op": "tone_curve",
+            "points": points.iter().map(|(x, y)| serde_json::json!({ "x": x, "y": y })).collect::<Vec<_>>(),
+        }));
+        stack
+    }
+
+    fn assert_pixel_with_curve(input: [u8; 3], points: &[(f32, f32)], expected: [i32; 3]) {
+        let mut image = RgbImage::from_pixel(1, 1, image::Rgb(input));
+        apply_edit_stack(&mut image, &stack_with_curve(&[], points));
+        let pixel = image.get_pixel(0, 0);
+        for (actual, expected) in pixel.0.iter().zip(expected.iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected ~{expected:?}, got {actual} (full pixel {:?}, points {points:?})",
+                pixel.0
+            );
+        }
+    }
+
+    /// The default 2-point identity curve `(0,0)-(1,1)` must be an exact
+    /// passthrough -- a Hermite cubic with tangents matching the line's own
+    /// slope exactly reproduces that line, so this should hold well within
+    /// the module's usual ±2/255 tolerance, not just approximately.
+    #[test]
+    fn tone_curve_identity_is_a_passthrough() {
+        assert_pixel_with_curve([100, 120, 140], &[(0.0, 0.0), (1.0, 1.0)], [100, 120, 140]);
+    }
+
+    /// A 2-point curve degenerates to an exact straight line (see this
+    /// module's own doc comment on `compute_tangents`/Hermite evaluation),
+    /// so the expected values here are computed by hand exactly, not
+    /// approximated: curve(x) = 0.2 + 0.8*x. Applied to r=0/255=0,
+    /// g=128/255, b=255/255=1: curve(0)=0.2 -> 51, curve(128/255)=
+    /// 0.2+0.8*0.501960784=0.601568627 -> 153.4 -> 153, curve(1)=1.0 ->
+    /// 255. Each channel maps through the SAME function independently
+    /// (this is a master curve, not a luma-weighted saturation-style
+    /// adjustment) -- confirmed by these three genuinely different inputs
+    /// landing at their own independently-correct outputs, not all
+    /// shifted toward one shared luma value.
+    #[test]
+    fn tone_curve_applies_per_channel_independently() {
+        assert_pixel_with_curve([0, 128, 255], &[(0.0, 0.2), (1.0, 1.0)], [51, 153, 255]);
+    }
+
+    /// The tone curve is the global pass's new final step, applied BEFORE
+    /// any mask reads `rgb` as its own accumulator base -- mirrors the
+    /// existing `luminance_range_mask_selection_depends_on_preceding_masks_effect`
+    /// pattern, but proves the curve (not another mask) is what shifts the
+    /// value a later luminance-range mask's own weight formula reads.
+    ///
+    /// Hand-derived: gray=73 -> luma=73/255=0.286275. A 2-point curve
+    /// degenerates to an exact straight line (no spline approximation to
+    /// worry about): points (0,0.3)-(1,1) give curve(x)=0.3+0.7x, so
+    /// curve(0.286275)=0.3+0.7*0.286275=0.500392 -- landing comfortably
+    /// inside the luminance mask's [0.45,0.55] range (5 percentage points
+    /// of margin on either side, well clear of any rounding noise), so its
+    /// feather=0 weight is exactly 1.0. The mask's own +0.5EV then applies
+    /// at full weight: 0.500392 * 2^0.5 = 0.707745 -> round(0.707745*255)
+    /// = round(180.475) = 180. If the curve applied AFTER (or was skipped
+    /// by) the mask loop instead, the mask would read the pre-curve
+    /// luma=0.286275 -- clearly outside [0.45,0.55] -- weight would be 0,
+    /// and the pixel would stay at ~73, not jump to ~180.
+    #[test]
+    fn tone_curve_applies_after_saturation_before_masks() {
+        let mut stack = stack_with_curve(&[], &[(0.0, 0.3), (1.0, 1.0)]);
+        stack.ops.push(serde_json::json!({
+            "op": "luminance_range_mask",
+            "id": "curve-order-test",
+            "rangeMin": 45.0,
+            "rangeMax": 55.0,
+            "feather": 0.0,
+            "invert": false,
+            "exposure": 0.5,
+            "contrast": 0.0,
+            "saturation": 0.0,
+        }));
+        let mut image = RgbImage::from_pixel(1, 1, image::Rgb([73, 73, 73]));
+        apply_edit_stack(&mut image, &stack);
+        let pixel = image.get_pixel(0, 0);
+        for actual in pixel.0.iter() {
+            assert!(
+                (*actual as i32 - 180).abs() <= 2,
+                "expected ~180 (curve lifts gray=73 into the mask's range, triggering its +0.5EV), got {:?}",
+                pixel.0
+            );
+        }
     }
 
     /// A 1x1 test image always samples at uv=(0.5,0.5) (pixel-center

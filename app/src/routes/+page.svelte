@@ -55,6 +55,9 @@
     createLuminanceRangeMask,
     createColorRangeMask,
     OVERLAY_CAPABLE_MASK_OPS,
+    getToneCurvePoints,
+    upsertToneCurve,
+    IDENTITY_TONE_CURVE,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -861,6 +864,19 @@
     persistTimer = setTimeout(flushEditStack, 250);
   }
 
+  // Tone Curve (M3): a global-only adjustment (applied after exposure/
+  // contrast/saturation, before any mask -- see develop_engine.rs/
+  // DevelopCanvas.svelte's shared ordering comment), but its payload is a
+  // structured `points` array, not upsertOp's single scalar -- same
+  // reason masks needed their own dedicated handler shape.
+  let toneCurvePoints = $derived(getToneCurvePoints(editStack, IDENTITY_TONE_CURVE));
+
+  function handleToneCurveChange(/** @type {{x: number, y: number}[]} */ points) {
+    editStack = upsertToneCurve(editStack, points);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
   function handleExportClick() {
     // If a slider was just dragged, the debounced save may not have
     // landed yet -- flush it first so Export reads the value currently
@@ -1158,6 +1174,7 @@
         onMaskSelected={(id) => (selectedMaskId = id)}
         colorRangeResampleId={colorRangeResampleTarget}
         onColorRangeResampled={handleColorRangeResampled}
+        {toneCurvePoints}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1178,6 +1195,8 @@
         onExposureChange={(v) => handleAdjustmentChange("exposure", v)}
         onContrastChange={(v) => handleAdjustmentChange("contrast", v)}
         onSaturationChange={(v) => handleAdjustmentChange("saturation", v)}
+        {toneCurvePoints}
+        onToneCurveChange={handleToneCurveChange}
       />
     </div>
     <MaskToolStrip

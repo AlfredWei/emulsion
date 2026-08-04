@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut } from "$lib/api/develop.js";
 
   const MAX_MASKS = 8;
 
@@ -29,6 +29,7 @@
    *   onMaskSelected: (id: string) => void,
    *   colorRangeResampleId: string | null,
    *   onColorRangeResampled: (id: string, refColor: {r: number, g: number, b: number}) => void,
+   *   toneCurvePoints: readonly {x: number, y: number}[],
    * }}
    */
   let {
@@ -49,6 +50,7 @@
     onMaskSelected,
     colorRangeResampleId,
     onColorRangeResampled,
+    toneCurvePoints,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -636,6 +638,13 @@
   let uniformBuffer = null;
   /** @type {GPUBuffer | null} */
   let masksBuffer = null;
+  // Tone Curve (M3): device-scoped like uniformBuffer/masksBuffer above
+  // (created once in initGpu, rewritten via writeBuffer whenever the curve
+  // changes) -- NOT recreated per image/tier-swap the way sourceTexture/
+  // brushTextureArray are, since a curve's shape has nothing to do with
+  // which image is loaded.
+  /** @type {GPUBuffer | null} */
+  let curveLutBuffer = null;
   /** @type {GPUBindGroup | null} */
   let bindGroup = null;
   /** @type {GPUTextureFormat} */
@@ -741,6 +750,14 @@
     // and textureSampleLevel has no implicit-derivative uniformity
     // restriction to worry about, unlike textureSample.
     @group(0) @binding(4) var brushMasks: texture_2d_array<f32>;
+    // Tone curve LUT (M3): 256 f32 samples packed into 64 vec4s, NOT
+    // array<f32,256> -- WGSL's uniform-address-space array stride must be
+    // a multiple of 16 bytes (the Mask struct's own comment above
+    // documents hitting this exact footgun), and this packing lets a
+    // plain contiguous Float32Array(256) upload directly with no manual
+    // padding on the JS side. Device-scoped, not per-image -- see
+    // curveLutBuffer's own declaration in the script.
+    @group(0) @binding(5) var<uniform> curveLut: array<vec4<f32>, 64>;
 
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
       var c = rgb * pow(2.0, exposure_ev);
@@ -750,10 +767,30 @@
       return c;
     }
 
+    // Same LUT-plus-linear-interpolation formula as develop.js's
+    // sampleCurveLut and develop_engine.rs's sample_lut -- all three sides
+    // must agree exactly, since the LUT itself (not an independent exact
+    // spline evaluation) is what parity is built on here.
+    fn sampleCurveLut(v: f32) -> f32 {
+      let idx = clamp(v, 0.0, 1.0) * 255.0;
+      let i0 = i32(floor(idx));
+      let i1 = min(i0 + 1, 255);
+      let frac = idx - f32(i0);
+      let v0 = curveLut[i0 / 4][i0 % 4];
+      let v1 = curveLut[i1 / 4][i1 % 4];
+      return mix(v0, v1, frac);
+    }
+
     @fragment
     fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
       var rgb = textureSample(srcTexture, srcSampler, in.uv).rgb;
       rgb = apply_adjustments(rgb, adj.exposure_ev, adj.contrast, adj.saturation);
+      // Tone curve: the global pass's new final step, applied before any
+      // mask below reads rgb as its own accumulator base -- matches real
+      // Lightroom's own "Tone Curve is global-only, local adjustments
+      // layer on top of it" ordering and develop_engine.rs's identical
+      // insertion point.
+      rgb = vec3<f32>(sampleCurveLut(rgb.x), sampleCurveLut(rgb.y), sampleCurveLut(rgb.z));
 
       // Local adjustments layer on top of the globally-graded image,
       // matching real Lightroom's own ordering and develop_engine.rs's.
@@ -909,6 +946,10 @@
       size: MAX_MASKS * 12 * 4, // 12 f32s (3x vec4) per mask
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    curveLutBuffer = device.createBuffer({
+      size: 64 * 16, // 64 vec4<f32> (256 f32 samples), packed to avoid WGSL's 16-byte uniform-array-stride requirement -- see the Mask struct's own comment on this exact footgun
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
   }
 
   /** Every GPU-resource-side-effect of "a decoded bitmap is now the active
@@ -922,7 +963,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer) return;
+    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -1000,6 +1041,7 @@
         { binding: 2, resource: { buffer: uniformBuffer } },
         { binding: 3, resource: { buffer: masksBuffer } },
         { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
+        { binding: 5, resource: { buffer: curveLutBuffer } },
       ],
     });
 
@@ -1015,7 +1057,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer) return;
+    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -1208,8 +1250,14 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer || !curveLutBuffer) return;
     syncBrushRasterization();
+
+    // Tone curve: rebuilt from the current control points and rewritten
+    // every render, same "cheap enough to just always redo" treatment as
+    // the uniform/mask buffers below -- no dirty-tracking needed given
+    // buildToneCurveLut's own cost (a handful of points, 256 samples).
+    device.queue.writeBuffer(curveLutBuffer, 0, buildToneCurveLut(toneCurvePoints));
 
     // Mask overlay: -1 (disabled) unless the toggle is on AND the current
     // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
@@ -1322,6 +1370,7 @@
     void masks;
     void selectedMaskId;
     void showMaskOverlay;
+    void toneCurvePoints;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 

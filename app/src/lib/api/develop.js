@@ -166,6 +166,148 @@ export function upsertOp(/** @type {EditStack} */ stack, /** @type {string} */ o
   return { ...stack, ops };
 }
 
+// Tone Curve (M3): a global-only op (see the pipeline-order comment in
+// develop_engine.rs/DevelopCanvas.svelte -- exposure -> contrast ->
+// saturation -> tone curve, applied before any mask reads the graded rgb),
+// but its payload is a structured `points` array, not a single scalar --
+// the same reason masks needed their own CRUD helpers instead of reusing
+// opValue/upsertOp above.
+export const MAX_CURVE_POINTS = 16;
+// Two permanent endpoint anchors, identity (no adjustment) -- a straight
+// line, not an artificial default S-curve, matching every other adjustment
+// in this app defaulting to a true no-op. Frozen so a caller can't
+// accidentally mutate the shared default array in place.
+export const IDENTITY_TONE_CURVE = Object.freeze([
+  Object.freeze({ x: 0, y: 0 }),
+  Object.freeze({ x: 1, y: 1 }),
+]);
+// Matches 8-bit output granularity -- see buildToneCurveLut's own doc
+// comment for why both this module and develop_engine.rs build the exact
+// same discretized LUT rather than each evaluating the spline exactly.
+export const CURVE_LUT_SAMPLES = 256;
+
+/** @returns {readonly {x:number,y:number}[]} */
+export function getToneCurvePoints(
+  /** @type {EditStack} */ stack,
+  /** @type {readonly {x:number,y:number}[]} */ fallback = IDENTITY_TONE_CURVE,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "tone_curve"));
+  return op?.points ?? fallback;
+}
+
+/** @returns {EditStack} */
+export function upsertToneCurve(
+  /** @type {EditStack} */ stack,
+  /** @type {readonly {x:number,y:number}[]} */ points,
+) {
+  const ops = stack.ops.filter((o) => o.op !== "tone_curve");
+  ops.push(/** @type {any} */ ({ op: "tone_curve", points }));
+  return { ...stack, ops };
+}
+
+/** Fritsch-Carlson monotonic cubic Hermite tangents -- chosen over a naive
+ * natural cubic spline specifically because it never overshoots between
+ * control points (a natural spline can ring/overshoot and produce visibly
+ * reversed-tone banding in a photo). `pts` must already be sorted by x.
+ *
+ * Step C below (zeroing a tangent whose neighboring secants disagree in
+ * sign) is a real, easy-to-skip requirement, not redundant with Step D:
+ * Step B's plain averaged tangent can end up with the WRONG SIGN at a
+ * local extremum in the data, and Step D's magnitude-only test
+ * (alpha^2+beta^2 > 9) does not by itself catch a sign disagreement --
+ * only Step C's explicit sign check does. Both steps are required for the
+ * result to actually be monotonic. */
+function computeTangents(/** @type {{x:number,y:number}[]} */ pts) {
+  const n = pts.length;
+  const d = [];
+  for (let k = 0; k < n - 1; k++) {
+    d.push((pts[k + 1].y - pts[k].y) / (pts[k + 1].x - pts[k].x));
+  }
+  const m = new Array(n);
+  m[0] = d[0];
+  m[n - 1] = d[n - 2];
+  for (let k = 1; k < n - 1; k++) m[k] = (d[k - 1] + d[k]) / 2;
+  // Step C: necessary-condition zeroing at interior local extrema.
+  for (let k = 1; k < n - 1; k++) {
+    if (d[k - 1] === 0 || d[k] === 0 || Math.sign(d[k - 1]) !== Math.sign(d[k])) m[k] = 0;
+  }
+  // Step D: sufficient-condition (Fritsch-Carlson) rescale, ascending --
+  // each interval only ever rescales its own two endpoint tangents using
+  // whatever value they currently hold; already-processed intervals are
+  // not revisited (the standard single-forward-pass formulation).
+  for (let k = 0; k < n - 1; k++) {
+    if (d[k] === 0) {
+      m[k] = 0;
+      m[k + 1] = 0;
+      continue;
+    }
+    const alpha = m[k] / d[k];
+    const beta = m[k + 1] / d[k];
+    const s = alpha * alpha + beta * beta;
+    if (s > 9) {
+      const tau = 3 / Math.sqrt(s);
+      m[k] = tau * alpha * d[k];
+      m[k + 1] = tau * beta * d[k];
+    }
+  }
+  return m;
+}
+
+/** Evaluates the Hermite cubic through `pts` (with tangents `m`) at `x`,
+ * clamped to the curve's own domain. Segment lookup is a linear scan --
+ * fine given MAX_CURVE_POINTS's small bound and that this only runs
+ * CURVE_LUT_SAMPLES times per LUT build, not per pixel. */
+function hermiteAt(/** @type {{x:number,y:number}[]} */ pts, /** @type {number[]} */ m, /** @type {number} */ x) {
+  const n = pts.length;
+  const xc = Math.min(Math.max(x, pts[0].x), pts[n - 1].x);
+  let k = 0;
+  while (k < n - 2 && xc > pts[k + 1].x) k++;
+  const h = pts[k + 1].x - pts[k].x;
+  const t = h === 0 ? 0 : (xc - pts[k].x) / h;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  return h00 * pts[k].y + h10 * h * m[k] + h01 * pts[k + 1].y + h11 * h * m[k + 1];
+}
+
+/** The one canonical curve-LUT builder -- consumed by DevelopCanvas.svelte
+ * (GPU uniform upload) AND ToneCurveEditor.svelte (drawing the visual
+ * curve), so what's drawn always exactly matches what's applied.
+ *
+ * `develop_engine.rs`'s CPU export path builds this SAME discretized
+ * 256-sample LUT (not an independently-exact spline evaluation) so parity
+ * between the interactive preview and the final export is by
+ * construction -- both sides apply the identical piecewise-linear
+ * approximation of the spline, not two differently-rounded exact
+ * evaluations that could diverge near a curve's extrema.
+ * @returns {Float32Array} length `samples` */
+export function buildToneCurveLut(
+  /** @type {readonly {x:number,y:number}[]} */ points,
+  /** @type {number} */ samples = CURVE_LUT_SAMPLES,
+) {
+  const pts = [...points].sort((a, b) => a.x - b.x);
+  const m = computeTangents(pts);
+  const lut = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    lut[i] = Math.min(Math.max(hermiteAt(pts, m, i / (samples - 1)), 0), 1);
+  }
+  return lut;
+}
+
+/** Samples a built LUT with linear interpolation between the two nearest
+ * entries -- the same formula develop_engine.rs's `sample_lut` and the
+ * WGSL shader's `sampleCurveLut` both use, so all three sides agree. */
+export function sampleCurveLut(/** @type {Float32Array} */ lut, /** @type {number} */ v) {
+  const idx = Math.min(Math.max(v, 0), 1) * (lut.length - 1);
+  const i0 = Math.floor(idx);
+  const i1 = Math.min(i0 + 1, lut.length - 1);
+  const frac = idx - i0;
+  return lut[i0] * (1 - frac) + lut[i1] * frac;
+}
+
 // M3 Slice 5/6: masks are id-keyed, multi-instance ops -- unlike the global
 // sliders above (opValue/upsertOp's find-by-name-and-replace model), there
 // can be several masks (of possibly different kinds) on one image, so each

@@ -1,4 +1,6 @@
 <script>
+  import ToneCurveEditor from "$lib/components/ToneCurveEditor.svelte";
+
   /**
    * @type {{
    *   exposure: number,
@@ -7,13 +9,22 @@
    *   onExposureChange: (value: number) => void,
    *   onContrastChange: (value: number) => void,
    *   onSaturationChange: (value: number) => void,
+   *   toneCurvePoints: readonly {x: number, y: number}[],
+   *   onToneCurveChange: (points: {x: number, y: number}[]) => void,
    * }}
    */
-  let { exposure, contrast, saturation, onExposureChange, onContrastChange, onSaturationChange } =
-    $props();
+  let {
+    exposure,
+    contrast,
+    saturation,
+    onExposureChange,
+    onContrastChange,
+    onSaturationChange,
+    toneCurvePoints,
+    onToneCurveChange,
+  } = $props();
 
   const STATIC_SECTIONS = [
-    { title: "Tone Curve", note: "Point curve editor" },
     { title: "HSL / Color", note: "Per-channel hue · sat · lum" },
     { title: "Detail", note: "Sharpening · noise reduction" },
     { title: "Effects", note: "Grain · vignette" },
@@ -64,6 +75,13 @@
         />
         <span class="val">{saturation >= 0 ? "+" : ""}{saturation}</span>
       </div>
+    </div>
+  </details>
+
+  <details class="section" open>
+    <summary>Tone Curve</summary>
+    <div class="sub-body">
+      <ToneCurveEditor points={toneCurvePoints} onChange={onToneCurveChange} />
     </div>
   </details>
 

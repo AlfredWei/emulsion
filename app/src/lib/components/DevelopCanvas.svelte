@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData } from "$lib/api/develop.js";
 
   const MAX_MASKS = 8;
 
@@ -30,6 +30,7 @@
    *   colorRangeResampleId: string | null,
    *   onColorRangeResampled: (id: string, refColor: {r: number, g: number, b: number}) => void,
    *   toneCurvePoints: readonly {x: number, y: number}[],
+   *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
    * }}
    */
   let {
@@ -51,6 +52,7 @@
     colorRangeResampleId,
     onColorRangeResampled,
     toneCurvePoints,
+    hslBands,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -645,6 +647,11 @@
   // which image is loaded.
   /** @type {GPUBuffer | null} */
   let curveLutBuffer = null;
+  // HSL / Color Mixer (M3): same device-scoped treatment as curveLutBuffer
+  // above -- created once, rewritten via writeBuffer on every render, not
+  // tied to which image is loaded.
+  /** @type {GPUBuffer | null} */
+  let hslBandsBuffer = null;
   /** @type {GPUBindGroup | null} */
   let bindGroup = null;
   /** @type {GPUTextureFormat} */
@@ -758,6 +765,14 @@
     // padding on the JS side. Device-scoped, not per-image -- see
     // curveLutBuffer's own declaration in the script.
     @group(0) @binding(5) var<uniform> curveLut: array<vec4<f32>, 64>;
+    // HSL / Color Mixer (M3): one vec4 per band -- x=hue shift (degrees,
+    // -100..100), y=saturation delta (percent, -100..100), z=luminance
+    // delta (percent, -100..100), w=unused padding, trivially vec4-
+    // aligned per the same footgun documented above. Band order is fixed
+    // and MUST match develop.js's HSL_BAND_NAMES/HSL_BAND_CENTERS_DEG and
+    // develop_engine.rs's HSL_BAND_NAMES -- no band-name string is ever
+    // uploaded, only positional order. Device-scoped, not per-image.
+    @group(0) @binding(6) var<uniform> hslBands: array<vec4<f32>, 8>;
 
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
       var c = rgb * pow(2.0, exposure_ev);
@@ -781,6 +796,110 @@
       return mix(v0, v1, frac);
     }
 
+    const HSL_BAND_CENTERS = array<f32, 8>(0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0);
+
+    // WGSL's modulo operator is truncated remainder (sign follows the
+    // dividend), NOT the always-non-negative floor-mod this HSL math needs
+    // for correct hue wraparound at 0/360 -- this is the standard
+    // floor-mod construction (a minus b times floor(a/b)), matching
+    // Rust's f32::rem_euclid exactly, which develop_engine.rs's twin of
+    // this code uses throughout.
+    fn rem_euclid(a: f32, b: f32) -> f32 {
+      return a - b * floor(a / b);
+    }
+
+    // Standard HSL, not this shader's own perceptual luma (used elsewhere
+    // for global Saturation) -- see develop_engine.rs's rgb_to_hsl doc
+    // comment for why the two must not be conflated. Returns
+    // (hue_degrees 0..360, saturation 0..1, lightness 0..1).
+    fn rgbToHsl(rgb: vec3<f32>) -> vec3<f32> {
+      let mx = max(rgb.r, max(rgb.g, rgb.b));
+      let mn = min(rgb.r, min(rgb.g, rgb.b));
+      let delta = mx - mn;
+      let l = (mx + mn) / 2.0;
+      if (delta == 0.0) {
+        return vec3<f32>(0.0, 0.0, l);
+      }
+      let s = delta / (1.0 - abs(2.0 * l - 1.0));
+      var h: f32;
+      if (mx == rgb.r) {
+        h = 60.0 * rem_euclid((rgb.g - rgb.b) / delta, 6.0);
+      } else if (mx == rgb.g) {
+        h = 60.0 * (((rgb.b - rgb.r) / delta) + 2.0);
+      } else {
+        h = 60.0 * (((rgb.r - rgb.g) / delta) + 4.0);
+      }
+      h = rem_euclid(h, 360.0);
+      return vec3<f32>(h, s, l);
+    }
+
+    fn hslToRgb(h: f32, s: f32, l: f32) -> vec3<f32> {
+      let c = (1.0 - abs(2.0 * l - 1.0)) * s;
+      let x = c * (1.0 - abs(rem_euclid(h / 60.0, 2.0) - 1.0));
+      let m = l - c / 2.0;
+      var rgb1: vec3<f32>;
+      if (h < 60.0) { rgb1 = vec3<f32>(c, x, 0.0); }
+      else if (h < 120.0) { rgb1 = vec3<f32>(x, c, 0.0); }
+      else if (h < 180.0) { rgb1 = vec3<f32>(0.0, c, x); }
+      else if (h < 240.0) { rgb1 = vec3<f32>(0.0, x, c); }
+      else if (h < 300.0) { rgb1 = vec3<f32>(x, 0.0, c); }
+      else { rgb1 = vec3<f32>(c, 0.0, x); }
+      return rgb1 + vec3<f32>(m, m, m);
+    }
+
+    // Raised-cosine blend weight -- see develop_engine.rs's hsl_band_weight
+    // doc comment for why this shape (not a triangular ramp) and why band
+    // centers exactly 45 degrees apart guarantee at most 2 nonzero weights
+    // summing to exactly 1, with no renormalization needed.
+    fn hueBandWeight(hueDeg: f32, centerDeg: f32) -> f32 {
+      let d = rem_euclid(hueDeg - centerDeg + 180.0, 360.0) - 180.0;
+      let dist = abs(d);
+      if (dist >= 45.0) {
+        return 0.0;
+      }
+      return 0.5 * (cos(dist / 45.0 * 3.14159265) + 1.0);
+    }
+
+    // See develop_engine.rs's apply_hsl_bands doc comment for the full
+    // reasoning (combining shift DELTAS not resultant angles, the
+    // load-bearing chromaFade suppression in low-saturation regions where
+    // hue is numerically unreliable) -- this is a direct WGSL port of the
+    // identical formula, no LUT: the whole computation here is cheap,
+    // closed-form trig/arithmetic with no interpolation-method ambiguity
+    // to diverge on between this and the Rust side.
+    fn applyHslBands(rgb: vec3<f32>) -> vec3<f32> {
+      let hsl = rgbToHsl(rgb);
+      let hPx = hsl.x;
+      let sPx = hsl.y;
+      let lPx = hsl.z;
+
+      var hueAcc = 0.0;
+      var satAcc = 0.0;
+      var lumAcc = 0.0;
+      for (var i = 0; i < 8; i = i + 1) {
+        let w = hueBandWeight(hPx, HSL_BAND_CENTERS[i]);
+        let band = hslBands[i];
+        hueAcc = hueAcc + w * band.x;
+        satAcc = satAcc + w * band.y;
+        lumAcc = lumAcc + w * band.z;
+      }
+
+      let chromaFade = clamp(sPx / 0.08, 0.0, 1.0);
+
+      let newH = rem_euclid(hPx + hueAcc * chromaFade, 360.0);
+      let newS = clamp(sPx * (1.0 + satAcc / 100.0), 0.0, 1.0);
+
+      let lumFrac = (lumAcc / 100.0) * chromaFade;
+      var newL: f32;
+      if (lumFrac >= 0.0) {
+        newL = lPx + (1.0 - lPx) * lumFrac;
+      } else {
+        newL = lPx + lPx * lumFrac;
+      }
+
+      return hslToRgb(newH, newS, newL);
+    }
+
     @fragment
     fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
       var rgb = textureSample(srcTexture, srcSampler, in.uv).rgb;
@@ -791,6 +910,9 @@
       // layer on top of it" ordering and develop_engine.rs's identical
       // insertion point.
       rgb = vec3<f32>(sampleCurveLut(rgb.x), sampleCurveLut(rgb.y), sampleCurveLut(rgb.z));
+      // HSL / Color Mixer: the global pass's new final step after the
+      // tone curve, still before any mask below reads rgb.
+      rgb = applyHslBands(rgb);
 
       // Local adjustments layer on top of the globally-graded image,
       // matching real Lightroom's own ordering and develop_engine.rs's.
@@ -950,6 +1072,10 @@
       size: 64 * 16, // 64 vec4<f32> (256 f32 samples), packed to avoid WGSL's 16-byte uniform-array-stride requirement -- see the Mask struct's own comment on this exact footgun
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    hslBandsBuffer = device.createBuffer({
+      size: 8 * 16, // 8 bands x vec4<f32> (hue, saturation, luminance, unused padding)
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
   }
 
   /** Every GPU-resource-side-effect of "a decoded bitmap is now the active
@@ -963,7 +1089,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer) return;
+    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -1042,6 +1168,7 @@
         { binding: 3, resource: { buffer: masksBuffer } },
         { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
         { binding: 5, resource: { buffer: curveLutBuffer } },
+        { binding: 6, resource: { buffer: hslBandsBuffer } },
       ],
     });
 
@@ -1057,7 +1184,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer) return;
+    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -1250,7 +1377,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer || !curveLutBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -1258,6 +1385,7 @@
     // the uniform/mask buffers below -- no dirty-tracking needed given
     // buildToneCurveLut's own cost (a handful of points, 256 samples).
     device.queue.writeBuffer(curveLutBuffer, 0, buildToneCurveLut(toneCurvePoints));
+    device.queue.writeBuffer(hslBandsBuffer, 0, buildHslUniformData(hslBands));
 
     // Mask overlay: -1 (disabled) unless the toggle is on AND the current
     // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
@@ -1371,6 +1499,7 @@
     void selectedMaskId;
     void showMaskOverlay;
     void toneCurvePoints;
+    void hslBands;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 

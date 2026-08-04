@@ -187,6 +187,164 @@ fn sample_lut(lut: &[f32], v: f32) -> f32 {
     lut[i0] * (1.0 - frac) + lut[i1] * frac
 }
 
+/// HSL / Color Mixer (M3): a global-only op, applied as the pipeline's new
+/// final step -- exposure -> contrast -> saturation -> tone curve -> HSL
+/// -- before any mask reads the graded `rgb` as its own accumulator base
+/// (see `apply_edit_stack`'s call site below). Band order/centers must
+/// stay in lockstep by hand with `develop.js`'s `HSL_BAND_NAMES`/
+/// `HSL_BAND_CENTERS_DEG` and DevelopCanvas.svelte's WGSL twin -- this
+/// module's own doc comment already establishes that parity obligation
+/// generally, for every formula here.
+const HSL_BAND_NAMES: [&str; 8] = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"];
+const HSL_BAND_CENTERS_DEG: [f32; 8] = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0];
+
+#[derive(Clone, Copy)]
+struct HslBand {
+    hue: f32,
+    saturation: f32,
+    luminance: f32,
+}
+
+impl Default for HslBand {
+    fn default() -> Self {
+        HslBand { hue: 0.0, saturation: 0.0, luminance: 0.0 }
+    }
+}
+
+/// Parses the `hsl` op's `bands` object by the fixed `HSL_BAND_NAMES`
+/// list, defaulting any missing/partial band to identity -- same
+/// "fall back to identity on partial/corrupt payload" contract
+/// `tone_curve_points` already establishes for its own op.
+fn hsl_bands(ops: &[serde_json::Value]) -> [HslBand; 8] {
+    let bands_obj = ops
+        .iter()
+        .find(|op| op.get("op").and_then(|v| v.as_str()) == Some("hsl"))
+        .and_then(|op| op.get("bands"));
+
+    let mut result = [HslBand::default(); 8];
+    for (i, name) in HSL_BAND_NAMES.iter().enumerate() {
+        let Some(band) = bands_obj.and_then(|b| b.get(name)) else { continue };
+        result[i] = HslBand {
+            hue: band.get("hue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            saturation: band.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            luminance: band.get("luminance").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        };
+    }
+    result
+}
+
+/// Standard HSL, not this module's own perceptual luma (used elsewhere for
+/// global Saturation and luminance-range-mask selection) -- the HSL->RGB
+/// reconstruction below is only mathematically valid for the L it was
+/// derived from (`(max+min)/2`), so substituting perceptual luma in would
+/// produce colorimetrically wrong output, not just a stylistic
+/// difference. No consistency obligation exists between this and the
+/// other, unrelated uses of luma elsewhere in this file.
+/// Returns (hue_degrees 0..360, saturation 0..1, lightness 0..1).
+fn rgb_to_hsl(rgb: [f32; 3]) -> (f32, f32, f32) {
+    let [r, g, b] = rgb;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let l = (max + min) / 2.0;
+    if delta == 0.0 {
+        return (0.0, 0.0, l);
+    }
+    let s = delta / (1.0 - (2.0 * l - 1.0).abs());
+    let mut h = if max == r {
+        60.0 * (((g - b) / delta).rem_euclid(6.0))
+    } else if max == g {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+    h = h.rem_euclid(360.0);
+    (h, s, l)
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - (((h / 60.0).rem_euclid(2.0)) - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r1, g1, b1) = if h < 60.0 {
+        (c, x, 0.0)
+    } else if h < 120.0 {
+        (x, c, 0.0)
+    } else if h < 180.0 {
+        (0.0, c, x)
+    } else if h < 240.0 {
+        (0.0, x, c)
+    } else if h < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    [r1 + m, g1 + m, b1 + m]
+}
+
+/// Raised-cosine blend weight between a pixel's hue and one band center --
+/// C1-continuous (zero slope at the center and at each 50/50 crossover),
+/// chosen over a triangular ramp specifically because a triangular ramp
+/// has a slope kink exactly at every band center, which on a continuous
+/// hue gradient (sky, skin) is more likely to read as a visible seam.
+/// Band centers are exactly 45 degrees apart, so at most 2 bands are ever
+/// nonzero at any hue, and they sum to exactly 1 by the cosine identity
+/// cos(x) + cos(pi-x) = 0 -- no gap, no double-count, no renormalization
+/// needed anywhere this is used.
+fn hsl_band_weight(hue_deg: f32, center_deg: f32) -> f32 {
+    let d = ((hue_deg - center_deg + 180.0).rem_euclid(360.0)) - 180.0;
+    let dist = d.abs();
+    if dist >= 45.0 {
+        0.0
+    } else {
+        0.5 * ((dist / 45.0 * std::f32::consts::PI).cos() + 1.0)
+    }
+}
+
+/// Combines all 8 bands into ONE hue/saturation/luminance delta, applied
+/// once -- correct (not just cheaper) because at most 2 band weights are
+/// ever nonzero at once (see `hsl_band_weight`), so there's no
+/// compounding-order question the mask-blend pattern elsewhere in this
+/// file has to solve. The hue-wraparound pitfall is avoided by combining
+/// SHIFT DELTAS (not resultant angles) and wrapping only once, on the
+/// summed delta -- never averaging two angles that straddle 0/360
+/// directly. `chroma_fade` is a load-bearing mitigation, not a defensive
+/// nicety: hue is derived from ratios/differences of near-equal channel
+/// values, which is precisely where 8-bit source quantization noise is
+/// largest relative to signal (low-saturation regions -- skies, skin,
+/// walls) -- without fading hue/luminance shift out as saturation
+/// approaches 0, a pixel-to-pixel hue estimate can jitter enough to
+/// surface as visible mottling no earlier op in this pipeline can
+/// produce. Saturation-delta needs no separate gate: it's naturally
+/// self-fading (0 * anything = 0).
+fn apply_hsl_bands(rgb: [f32; 3], bands: &[HslBand; 8]) -> [f32; 3] {
+    let (h_px, s_px, l_px) = rgb_to_hsl(rgb);
+
+    let mut hue_acc = 0.0f32;
+    let mut sat_acc = 0.0f32;
+    let mut lum_acc = 0.0f32;
+    for (i, band) in bands.iter().enumerate() {
+        let w = hsl_band_weight(h_px, HSL_BAND_CENTERS_DEG[i]);
+        hue_acc += w * band.hue;
+        sat_acc += w * band.saturation;
+        lum_acc += w * band.luminance;
+    }
+
+    let chroma_fade = (s_px / 0.08).clamp(0.0, 1.0);
+
+    let new_h = (h_px + hue_acc * chroma_fade).rem_euclid(360.0);
+    let new_s = (s_px * (1.0 + sat_acc / 100.0)).clamp(0.0, 1.0);
+
+    let lum_frac = (lum_acc / 100.0) * chroma_fade;
+    let new_l = if lum_frac >= 0.0 {
+        l_px + (1.0 - l_px) * lum_frac
+    } else {
+        l_px + l_px * lum_frac
+    };
+
+    hsl_to_rgb(new_h, new_s, new_l)
+}
+
 /// A `linear_gradient_mask` op (M3 Slice 5), parsed from its opaque JSON
 /// shape -- see MaskToolStrip.svelte/develop.js for how the frontend
 /// creates these. Coordinates are normalized (0..1, matching the WGSL
@@ -647,6 +805,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     // comment for why this must be the same discretized LUT the WGSL
     // shader consumes, not an exact per-pixel spline evaluation.
     let curve_lut = build_curve_lut(&tone_curve_points(&stack.ops));
+    let bands = hsl_bands(&stack.ops);
 
     let (width, height) = (image.width(), image.height());
     // Only consumed by brush masks (see Mask::weight) -- converts a dab's
@@ -674,6 +833,10 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             sample_lut(&curve_lut, rgb[1]),
             sample_lut(&curve_lut, rgb[2]),
         ];
+        // HSL / Color Mixer: the global pass's new final step after the
+        // tone curve, still before any mask reads `rgb` as its own
+        // accumulator base.
+        rgb = apply_hsl_bands(rgb, &bands);
 
         if !masks.is_empty() {
             // Pixel-center sampling, matching how a texture lookup samples
@@ -869,6 +1032,93 @@ mod tests {
                 pixel.0
             );
         }
+    }
+
+    fn stack_with_hsl_bands(bands: &[(&str, f32, f32, f32)]) -> EditStack {
+        let bands_obj: serde_json::Map<String, serde_json::Value> = bands
+            .iter()
+            .map(|(name, hue, sat, lum)| {
+                (
+                    name.to_string(),
+                    serde_json::json!({ "hue": hue, "saturation": sat, "luminance": lum }),
+                )
+            })
+            .collect();
+        EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({ "op": "hsl", "bands": bands_obj })],
+        }
+    }
+
+    fn assert_pixel_with_hsl(input: [u8; 3], bands: &[(&str, f32, f32, f32)], expected: [i32; 3]) {
+        let mut image = RgbImage::from_pixel(1, 1, image::Rgb(input));
+        apply_edit_stack(&mut image, &stack_with_hsl_bands(bands));
+        let pixel = image.get_pixel(0, 0);
+        for (actual, expected) in pixel.0.iter().zip(expected.iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected ~{expected:?}, got {actual} (full pixel {:?}, bands {bands:?})",
+                pixel.0
+            );
+        }
+    }
+
+    /// All-zero (absent) bands must be an exact passthrough -- confirmed
+    /// algebraically in this module's own `apply_hsl_bands` doc comment
+    /// (hue_acc=sat_acc=lum_acc=0 collapses the whole formula to a
+    /// round-trip through rgb_to_hsl/hsl_to_rgb of the same value).
+    #[test]
+    fn hsl_bands_absent_is_a_passthrough() {
+        assert_pixel_with_hsl([200, 100, 50], &[], [200, 100, 50]);
+    }
+
+    /// (200,50,50) has hue exactly 0 degrees (script-verified: max=r,
+    /// g==b so the numerator (g-b) is 0) -- landing exactly on the Red
+    /// band's own center, where hsl_band_weight gives Red weight 1.0 and
+    /// every other band (Orange is the nearest neighbor, 45 degrees away)
+    /// weight exactly 0. Only Red's own hue=+50/saturation=+50/
+    /// luminance=+30 should have any effect. Expected value computed via
+    /// script running the exact same formula as apply_hsl_bands (not
+    /// eyeballed): (246, 219, 82).
+    #[test]
+    fn hsl_single_band_at_its_own_center_isolates_that_band() {
+        assert_pixel_with_hsl([200, 50, 50], &[("red", 50.0, 50.0, 30.0)], [246, 219, 82]);
+    }
+
+    /// (179,115,77)'s hue (script-verified) is ~22.35 degrees -- inside
+    /// the Red/Orange boundary region, roughly equidistant from both
+    /// centers (weight ~0.505 Red / ~0.495 Orange). Red's luminance is set
+    /// to +40, Orange's to -40 -- opposite signs specifically so a hard
+    /// nearest-band-only cutoff (a real bug this test would catch) would
+    /// produce a LARGE shift in one direction, while the correct smooth
+    /// blend nearly cancels the two (net lum_acc ~= 0.4, not +/-40).
+    /// Expected value computed via script running the exact same formula:
+    /// (179, 116, 78) -- a tiny shift, not the large one a hard-cutoff bug
+    /// would produce.
+    #[test]
+    fn hsl_boundary_hue_blends_both_neighboring_bands() {
+        assert_pixel_with_hsl(
+            [179, 115, 77],
+            &[("red", 0.0, 0.0, 40.0), ("orange", 0.0, 0.0, -40.0)],
+            [179, 116, 78],
+        );
+    }
+
+    /// (133,128,122) is a near-gray pixel (script-verified saturation
+    /// ~0.043, well under the chroma_fade denominator of 0.08) -- proves
+    /// chroma_fade meaningfully suppresses the hue/luminance shift instead
+    /// of applying it at full strength. Both Red and Orange set to an
+    /// identical (80,80,80) so the blend-vs-cutoff distinction (covered by
+    /// the previous test) doesn't confound this one -- this test is
+    /// specifically about the fade, not the blend. Expected value computed
+    /// via script running the exact same formula: (185, 188, 177).
+    #[test]
+    fn hsl_near_gray_pixel_shift_is_suppressed_by_chroma_fade() {
+        assert_pixel_with_hsl(
+            [133, 128, 122],
+            &[("red", 80.0, 80.0, 80.0), ("orange", 80.0, 80.0, 80.0)],
+            [185, 188, 177],
+        );
     }
 
     /// A 1x1 test image always samples at uv=(0.5,0.5) (pixel-center

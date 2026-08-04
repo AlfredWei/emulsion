@@ -1,5 +1,6 @@
 <script>
   import ToneCurveEditor from "$lib/components/ToneCurveEditor.svelte";
+  import { HSL_BAND_NAMES, HSL_BAND_CENTERS_DEG, IDENTITY_HSL_BANDS } from "$lib/api/develop.js";
 
   /**
    * @type {{
@@ -11,6 +12,8 @@
    *   onSaturationChange: (value: number) => void,
    *   toneCurvePoints: readonly {x: number, y: number}[],
    *   onToneCurveChange: (points: {x: number, y: number}[]) => void,
+   *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
+   *   onHslBandChange: (bandName: string, patch: Partial<{hue: number, saturation: number, luminance: number}>) => void,
    * }}
    */
   let {
@@ -22,14 +25,19 @@
     onSaturationChange,
     toneCurvePoints,
     onToneCurveChange,
+    hslBands,
+    onHslBandChange,
   } = $props();
 
   const STATIC_SECTIONS = [
-    { title: "HSL / Color", note: "Per-channel hue · sat · lum" },
     { title: "Detail", note: "Sharpening · noise reduction" },
     { title: "Effects", note: "Grain · vignette" },
     { title: "Lens Corrections", note: "Profile · chromatic aberration" },
   ];
+
+  function bandLabel(/** @type {string} */ name) {
+    return name[0].toUpperCase() + name.slice(1);
+  }
 </script>
 
 <div class="panel">
@@ -82,6 +90,60 @@
     <summary>Tone Curve</summary>
     <div class="sub-body">
       <ToneCurveEditor points={toneCurvePoints} onChange={onToneCurveChange} />
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>HSL / Color</summary>
+    <div class="sub-body">
+      {#each HSL_BAND_NAMES as bandName, i (bandName)}
+        {@const band = hslBands[bandName] ?? IDENTITY_HSL_BANDS[bandName]}
+        <div class="hsl-band">
+          <div class="hsl-band-label">
+            <span class="swatch" style="background: hsl({HSL_BAND_CENTERS_DEG[i]}, 70%, 50%)"></span>
+            <span>{bandLabel(bandName)}</span>
+          </div>
+          <div class="row">
+            <label for="hsl-{bandName}-hue">Hue</label>
+            <input
+              id="hsl-{bandName}-hue"
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={band.hue}
+              oninput={(e) => onHslBandChange(bandName, { hue: Number(e.currentTarget.value) })}
+            />
+            <span class="val">{band.hue >= 0 ? "+" : ""}{band.hue}</span>
+          </div>
+          <div class="row">
+            <label for="hsl-{bandName}-sat">Sat</label>
+            <input
+              id="hsl-{bandName}-sat"
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={band.saturation}
+              oninput={(e) => onHslBandChange(bandName, { saturation: Number(e.currentTarget.value) })}
+            />
+            <span class="val">{band.saturation >= 0 ? "+" : ""}{band.saturation}</span>
+          </div>
+          <div class="row">
+            <label for="hsl-{bandName}-lum">Lum</label>
+            <input
+              id="hsl-{bandName}-lum"
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={band.luminance}
+              oninput={(e) => onHslBandChange(bandName, { luminance: Number(e.currentTarget.value) })}
+            />
+            <span class="val">{band.luminance >= 0 ? "+" : ""}{band.luminance}</span>
+          </div>
+        </div>
+      {/each}
     </div>
   </details>
 
@@ -184,5 +246,29 @@
     font-variant-numeric: tabular-nums;
     font-size: 10.5px;
     color: var(--text-tertiary);
+  }
+  .hsl-band {
+    padding: 6px 4px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .hsl-band:last-child {
+    border-bottom: none;
+    padding-bottom: 4px;
+  }
+  .hsl-band-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 0 2px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    flex: none;
   }
 </style>

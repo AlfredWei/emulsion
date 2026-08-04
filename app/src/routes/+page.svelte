@@ -58,6 +58,9 @@
     getToneCurvePoints,
     upsertToneCurve,
     IDENTITY_TONE_CURVE,
+    getHslBands,
+    upsertHslBand,
+    IDENTITY_HSL_BANDS,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -877,6 +880,19 @@
     persistTimer = setTimeout(flushEditStack, 250);
   }
 
+  // HSL / Color Mixer (M3): same global-only, structured-payload shape as
+  // Tone Curve above -- band-keyed, not upsertOp's single scalar.
+  let hslBands = $derived(getHslBands(editStack, IDENTITY_HSL_BANDS));
+
+  function handleHslBandChange(
+    /** @type {string} */ bandName,
+    /** @type {Partial<{hue: number, saturation: number, luminance: number}>} */ patch,
+  ) {
+    editStack = upsertHslBand(editStack, bandName, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
   function handleExportClick() {
     // If a slider was just dragged, the debounced save may not have
     // landed yet -- flush it first so Export reads the value currently
@@ -1175,6 +1191,7 @@
         colorRangeResampleId={colorRangeResampleTarget}
         onColorRangeResampled={handleColorRangeResampled}
         {toneCurvePoints}
+        {hslBands}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1197,6 +1214,8 @@
         onSaturationChange={(v) => handleAdjustmentChange("saturation", v)}
         {toneCurvePoints}
         onToneCurveChange={handleToneCurveChange}
+        {hslBands}
+        onHslBandChange={handleHslBandChange}
       />
     </div>
     <MaskToolStrip

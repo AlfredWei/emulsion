@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview } from "$lib/api/develop.js";
 
   const MAX_MASKS = 8;
 
@@ -91,6 +91,30 @@
   // is true 1:1 canvas-backing-store pixels, scrollable via the browser's
   // own native scroll clamping rather than hand-rolled pan math.
   let zoomMode = $state("fit"); // "fit" | "100"
+
+  // 1:1 preview tier (mirrors real Lightroom's Standard/1:1 Preview split,
+  // PRD/PRD.md's own explicit phrasing): "fit" always shows the draft tier
+  // (getDevelopPreview, capped to DEVELOP_PREVIEW_MAX_DIMENSION on the
+  // Rust side); "100" lazily upgrades to a true native-resolution texture
+  // the FIRST time an image is zoomed in, so 100% actually shows finer
+  // detail rather than just CSS-magnifying the same capped preview. Once
+  // upgraded, stays upgraded for the rest of this image's session (toggling
+  // back to "fit" doesn't downgrade -- see the zoom-trigger $effect below)
+  // -- these three vars are plain module state, not $state, matching
+  // dragState/paintingMaskId's own "imperative bookkeeping, not something
+  // markup reads reactively" reasoning elsewhere in this file.
+  /** @type {string | null} */
+  let fullTierPath = null; // path the currently-uploaded full tier belongs to, or null
+  /** @type {Promise<void> | null} */
+  let fullTierPromise = null; // in-flight upgrade, deduped so rapid zoom toggling can't fire it twice
+  let activeTier = "draft"; // "draft" | "full"
+  // Normalized (0-1) focus point for zoom-to-100% scroll centering --
+  // resolution-independent (unlike a native-pixel point), so the SAME
+  // fraction re-centers correctly against the draft tier's dimensions at
+  // the moment of the click AND against the full tier's dimensions once
+  // upgradeToFullTier swaps them in moments later. Defaults to center for
+  // the zoom-badge-button entry path, which has no click point at all.
+  let lastZoomFocus = { x: 0.5, y: 0.5 };
   /** @type {{ startX: number, startY: number, startScrollLeft: number, startScrollTop: number } | null} */
   let dragState = null;
   const DRAG_CLICK_THRESHOLD = 4; // px -- below this, pointerup is a click (toggle zoom), not a completed drag
@@ -523,6 +547,14 @@
     const scaleY = rect.height / canvasEl.height;
     const nativeX = (clickPoint.x - rect.left) / scaleX;
     const nativeY = (clickPoint.y - rect.top) / scaleY;
+    // Stored normalized (0-1), not as a native-pixel point -- the point
+    // itself doesn't change resolution, but the canvas's own backing-store
+    // size DOES once upgradeToFullTier swaps in the 1:1 tier moments
+    // later. A native-pixel value captured here would silently go stale
+    // and mis-center once that resize happens; the normalized fraction
+    // re-applies correctly against whichever tier's dimensions are
+    // current when it's read.
+    lastZoomFocus = { x: nativeX / canvasEl.width, y: nativeY / canvasEl.height };
 
     zoomMode = "100";
     await tick(); // required: $state-triggered DOM patches (the new canvas size) land on a microtask
@@ -879,14 +911,36 @@
     });
   }
 
-  async function loadImage(/** @type {string} */ path) {
+  /** Every GPU-resource-side-effect of "a decoded bitmap is now the active
+   * source image" -- shared between loadImage (a genuinely new image) and
+   * upgradeToFullTier (the SAME image, a higher-resolution decode of it),
+   * so the ~70 lines of WebGPU setup below exist in exactly one place
+   * rather than two copies that could drift out of sync. */
+  async function applyBitmapToGpu(/** @type {ImageBitmap} */ bitmap) {
+    // Both callers (loadImage, upgradeToFullTier) already only reach here
+    // once initGpu has run, but re-asserted here too -- both for a real
+    // defensive guard against an unexpected call order, and because
+    // TypeScript's null-narrowing from a caller's own guard doesn't carry
+    // across a function boundary.
     if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer) return;
-    status = "loading";
-    errorMessage = "";
 
-    const preview = await getDevelopPreview(path);
-    const response = await fetch(convertFileSrc(preview.path));
-    const bitmap = await createImageBitmap(await response.blob());
+    // GPU texture-dimension safety: a genuinely native-resolution decode
+    // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
+    // device's actual texture-size limit on a very-high-megapixel body --
+    // the draft tier is already capped to DEVELOP_PREVIEW_MAX_DIMENSION so
+    // this is normally a no-op there. Downscaling defensively here (one
+    // code path, both tiers) is an honest, accepted degradation on
+    // whatever hardware this ends up mattering for, not a crash from an
+    // opaque WebGPU validation error.
+    const maxDim = device.limits.maxTextureDimension2D;
+    if (bitmap.width > maxDim || bitmap.height > maxDim) {
+      const scale = maxDim / Math.max(bitmap.width, bitmap.height);
+      bitmap = await createImageBitmap(bitmap, {
+        resizeWidth: Math.max(1, Math.round(bitmap.width * scale)),
+        resizeHeight: Math.max(1, Math.round(bitmap.height * scale)),
+        resizeQuality: "high",
+      });
+    }
 
     sourceTexture?.destroy();
     sourceTexture = device.createTexture({
@@ -911,17 +965,23 @@
     // (NOT here), once every remaining `bitmap.width`/`.height` read below
     // is done: per spec, close() zeroes a bitmap's width/height, so
     // closing it before those later reads would corrupt the brush texture
-    // array's size and the canvas's own dimensions.
+    // array's size and the canvas's own dimensions. Re-drawn on every call
+    // (including a tier upgrade), not just the first -- leaving this stale
+    // at draft resolution while the GPU texture is full-res would silently
+    // make the eyedropper keep sampling coarser data at exactly the moment
+    // the user zoomed in to inspect detail more closely.
     sourceSampleCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     sourceSampleCtx = /** @type {OffscreenCanvasRenderingContext2D} */ (sourceSampleCanvas.getContext("2d"));
     sourceSampleCtx.drawImage(bitmap, 0, 0);
 
-    // M3 Slice 7: recreated per image -- must be sized to THIS image's
-    // native resolution, an OffscreenCanvas at the wrong resolution would
-    // rasterize dabs at the wrong scale. Existing brush masks' dab lists
-    // (loaded from a previously-saved edit stack) are re-rasterized from
-    // scratch into fresh canvases by syncBrushRasterization, called below
-    // via this function's own writeAdjustmentsAndRender() call at the end.
+    // M3 Slice 7: recreated whenever the active bitmap's resolution
+    // changes (new image, OR a tier upgrade) -- must be sized to match, an
+    // OffscreenCanvas at the wrong resolution would rasterize dabs at the
+    // wrong scale. Existing brush masks' dab lists are stored normalized
+    // (0-1), so re-rasterizing from scratch into freshly-sized canvases
+    // (via syncBrushRasterization, called below through this function's
+    // caller's own writeAdjustmentsAndRender()) is correct with no
+    // special-casing regardless of why the resolution changed.
     brushTextureArray?.destroy();
     brushTextureArray = device.createTexture({
       size: [bitmap.width, bitmap.height, MAX_MASKS],
@@ -952,11 +1012,73 @@
     // that both its consumers (the GPU upload and the sample-canvas draw
     // above) are finished with it.
     bitmap.close();
+  }
+
+  async function loadImage(/** @type {string} */ path) {
+    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer) return;
+    status = "loading";
+    errorMessage = "";
+    // A genuinely new image -- any 1:1 tier state belonged to whatever was
+    // loaded before and is meaningless here.
+    fullTierPath = null;
+    fullTierPromise = null;
+    activeTier = "draft";
+
+    const preview = await getDevelopPreview(path);
+    const response = await fetch(convertFileSrc(preview.path));
+    const bitmap = await createImageBitmap(await response.blob());
+    await applyBitmapToGpu(bitmap);
 
     status = "ready";
     await tick(); // overlayEl only mounts once status flips to "ready"
     syncOverlayPosition();
     writeAdjustmentsAndRender();
+  }
+
+  /** Lazily fetches and swaps in the native-resolution 1:1 tier for the
+   * CURRENTLY loaded image, the first time it's actually zoomed to 100%
+   * (triggered by the $effect below, not called directly from pointer
+   * handlers) -- matches real Lightroom's own lazy 1:1-preview-build
+   * behavior, and this request's own trigger ("when the image zooms in").
+   * Deliberately does NOT touch `status`: the draft-resolution image stays
+   * visible and interactive for the whole time this decodes in the
+   * background (a progressive upgrade, not a blank "Decoding..." reload) --
+   * a full-native-resolution RAW decode is genuinely multi-second-capable
+   * on a large sensor, unverified at interactive latency in this
+   * environment, which is exactly why this must not block the UI. */
+  async function upgradeToFullTier(/** @type {string} */ path) {
+    if (fullTierPath === path && activeTier === "full") return;
+    if (fullTierPromise) {
+      await fullTierPromise;
+      return;
+    }
+    fullTierPromise = (async () => {
+      const preview = await getDevelopFullPreview(path);
+      // The user may have switched images or zoomed back out while this
+      // was in flight -- only apply if still relevant, otherwise this
+      // would silently stomp whatever loadImage/a later upgrade already
+      // put in place.
+      if (imagePath !== path || zoomMode !== "100" || !device) return;
+      const response = await fetch(convertFileSrc(preview.path));
+      const bitmap = await createImageBitmap(await response.blob());
+      if (imagePath !== path || zoomMode !== "100") return; // re-check post-decode too
+      await applyBitmapToGpu(bitmap);
+      fullTierPath = path;
+      activeTier = "full";
+      // Re-center on the same normalized focus point now that the
+      // canvas's native size has just changed out from under any earlier
+      // scroll position -- see lastZoomFocus's own doc comment.
+      if (wrapEl && canvasEl) {
+        wrapEl.scrollLeft = lastZoomFocus.x * canvasEl.width - wrapEl.clientWidth / 2;
+        wrapEl.scrollTop = lastZoomFocus.y * canvasEl.height - wrapEl.clientHeight / 2;
+      }
+      writeAdjustmentsAndRender();
+    })();
+    try {
+      await fullTierPromise;
+    } finally {
+      fullTierPromise = null;
+    }
   }
 
   /** Draws ONE dab onto a persistent per-mask OffscreenCanvas, white-on-
@@ -1201,6 +1323,19 @@
     void selectedMaskId;
     void showMaskOverlay;
     if (status === "ready") writeAdjustmentsAndRender();
+  });
+
+  // 1:1 tier trigger -- fires for BOTH ways zoomMode can flip to "100"
+  // (the canvas click-to-zoom in handlePointerUp, and the zoom-badge
+  // button's onclick both just set zoomMode directly), so neither call
+  // site needs to know about the tier upgrade at all. Guarded on
+  // activeTier so it's a no-op once already upgraded for this image, and
+  // on status==="ready" so it can't fire before loadImage has finished
+  // its own initial setup.
+  $effect(() => {
+    if (status === "ready" && zoomMode === "100" && activeTier !== "full") {
+      upgradeToFullTier(imagePath);
+    }
   });
 </script>
 

@@ -121,6 +121,16 @@ export function getDevelopPreview(/** @type {string} */ path) {
   return invoke("get_develop_preview", { path });
 }
 
+/** The 1:1 tier alongside `getDevelopPreview`'s Standard/draft tier --
+ * uncapped native resolution, built lazily by the backend on first call
+ * (see `preview_cache::ensure_develop_full_preview`'s doc comment).
+ * DevelopCanvas.svelte only calls this once the user actually zooms an
+ * image to 100%, not on every Develop open.
+ * @returns {Promise<DevelopPreviewInfo>} */
+export function getDevelopFullPreview(/** @type {string} */ path) {
+  return invoke("get_develop_full_preview", { path });
+}
+
 /** @returns {Promise<EditStack>} */
 export function getEditStack(/** @type {number} */ versionId) {
   return invoke("get_edit_stack", { versionId });

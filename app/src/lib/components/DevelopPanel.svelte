@@ -14,6 +14,9 @@
    *   onToneCurveChange: (points: {x: number, y: number}[]) => void,
    *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
    *   onHslBandChange: (bandName: string, patch: Partial<{hue: number, saturation: number, luminance: number}>) => void,
+   *   splitToning: {shadows: {hue: number, saturation: number}, highlights: {hue: number, saturation: number}, balance: number},
+   *   onSplitToningZoneChange: (zone: "shadows" | "highlights", patch: Partial<{hue: number, saturation: number}>) => void,
+   *   onSplitToningBalanceChange: (balance: number) => void,
    * }}
    */
   let {
@@ -27,6 +30,9 @@
     onToneCurveChange,
     hslBands,
     onHslBandChange,
+    splitToning,
+    onSplitToningZoneChange,
+    onSplitToningBalanceChange,
   } = $props();
 
   const STATIC_SECTIONS = [
@@ -144,6 +150,89 @@
           </div>
         </div>
       {/each}
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>Split Toning</summary>
+    <div class="sub-body">
+      <div class="split-zone">
+        <div class="split-zone-label">
+          <span class="swatch" style="background: hsl({splitToning.shadows.hue}, {splitToning.shadows.saturation}%, 50%)"></span>
+          <span>Shadows</span>
+        </div>
+        <div class="row">
+          <label for="st-shadow-hue">Hue</label>
+          <input
+            id="st-shadow-hue"
+            type="range"
+            min="0"
+            max="360"
+            step="1"
+            value={splitToning.shadows.hue}
+            oninput={(e) => onSplitToningZoneChange("shadows", { hue: Number(e.currentTarget.value) })}
+          />
+          <span class="val">{splitToning.shadows.hue}</span>
+        </div>
+        <div class="row">
+          <label for="st-shadow-sat">Sat</label>
+          <input
+            id="st-shadow-sat"
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={splitToning.shadows.saturation}
+            oninput={(e) => onSplitToningZoneChange("shadows", { saturation: Number(e.currentTarget.value) })}
+          />
+          <span class="val">{splitToning.shadows.saturation}</span>
+        </div>
+      </div>
+      <div class="split-zone">
+        <div class="split-zone-label">
+          <span class="swatch" style="background: hsl({splitToning.highlights.hue}, {splitToning.highlights.saturation}%, 50%)"></span>
+          <span>Highlights</span>
+        </div>
+        <div class="row">
+          <label for="st-highlight-hue">Hue</label>
+          <input
+            id="st-highlight-hue"
+            type="range"
+            min="0"
+            max="360"
+            step="1"
+            value={splitToning.highlights.hue}
+            oninput={(e) => onSplitToningZoneChange("highlights", { hue: Number(e.currentTarget.value) })}
+          />
+          <span class="val">{splitToning.highlights.hue}</span>
+        </div>
+        <div class="row">
+          <label for="st-highlight-sat">Sat</label>
+          <input
+            id="st-highlight-sat"
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={splitToning.highlights.saturation}
+            oninput={(e) => onSplitToningZoneChange("highlights", { saturation: Number(e.currentTarget.value) })}
+          />
+          <span class="val">{splitToning.highlights.saturation}</span>
+        </div>
+      </div>
+      <div class="row">
+        <label for="st-balance">Balance</label>
+        <input
+          id="st-balance"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={splitToning.balance}
+          oninput={(e) => onSplitToningBalanceChange(Number(e.currentTarget.value))}
+        />
+        <span class="val">{splitToning.balance >= 0 ? "+" : ""}{splitToning.balance}</span>
+      </div>
     </div>
   </details>
 
@@ -270,5 +359,18 @@
     border-radius: 50%;
     border: 1px solid var(--border-strong);
     flex: none;
+  }
+  .split-zone {
+    padding: 6px 4px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .split-zone-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 0 2px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
   }
 </style>

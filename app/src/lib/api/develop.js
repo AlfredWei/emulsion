@@ -371,6 +371,70 @@ export function buildHslUniformData(
   return data;
 }
 
+// Split Toning (M3): a global-only op (applied after exposure ->
+// contrast -> saturation -> tone curve -> HSL, before any mask -- see
+// develop_engine.rs/DevelopCanvas.svelte's shared pipeline-order
+// comment), with a NESTED per-zone payload -- a per-zone UI control
+// patches one zone's hue/saturation without touching the other zone or
+// balance, same access pattern upsertHslBand already gives per-band. Also
+// scales cleanly to a later 3-zone Color Grading follow-up (a `midtones`
+// key becomes additive, not a flat-naming-scheme collision).
+export const IDENTITY_SPLIT_TONING = Object.freeze({
+  shadows: Object.freeze({ hue: 0, saturation: 0 }),
+  highlights: Object.freeze({ hue: 0, saturation: 0 }),
+  balance: 0,
+});
+
+/** @returns {{shadows: {hue: number, saturation: number}, highlights: {hue: number, saturation: number}, balance: number}} */
+export function getSplitToning(
+  /** @type {EditStack} */ stack,
+  /** @type {typeof IDENTITY_SPLIT_TONING} */ fallback = IDENTITY_SPLIT_TONING,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "split_toning"));
+  if (!op) return fallback;
+  return {
+    shadows: { ...IDENTITY_SPLIT_TONING.shadows, ...op.shadows },
+    highlights: { ...IDENTITY_SPLIT_TONING.highlights, ...op.highlights },
+    balance: op.balance ?? 0,
+  };
+}
+
+/** Patches ONE zone's hue/saturation (any subset), leaving the other
+ * zone and balance untouched.
+ * @returns {EditStack} */
+export function upsertSplitToningZone(
+  /** @type {EditStack} */ stack,
+  /** @type {"shadows" | "highlights"} */ zone,
+  /** @type {Partial<{hue: number, saturation: number}>} */ patch,
+) {
+  const current = getSplitToning(stack);
+  const next = { ...current, [zone]: { ...current[zone], ...patch } };
+  const ops = stack.ops.filter((o) => o.op !== "split_toning");
+  ops.push(/** @type {any} */ ({ op: "split_toning", ...next }));
+  return { ...stack, ops };
+}
+
+/** @returns {EditStack} */
+export function upsertSplitToningBalance(/** @type {EditStack} */ stack, /** @type {number} */ balance) {
+  const current = getSplitToning(stack);
+  const ops = stack.ops.filter((o) => o.op !== "split_toning");
+  ops.push(/** @type {any} */ ({ op: "split_toning", ...current, balance }));
+  return { ...stack, ops };
+}
+
+/** Packs into the exact Float32Array layout DevelopCanvas.svelte's
+ * `splitToningBuffer`/the WGSL `SplitToning` struct expects (field order
+ * matters -- must match the struct's own field order exactly). */
+export function buildSplitToningUniformData(
+  /** @type {ReturnType<typeof getSplitToning>} */ st,
+) {
+  return new Float32Array([
+    st.shadows.hue, st.shadows.saturation,
+    st.highlights.hue, st.highlights.saturation,
+    st.balance, 0, 0, 0,
+  ]);
+}
+
 // M3 Slice 5/6: masks are id-keyed, multi-instance ops -- unlike the global
 // sliders above (opValue/upsertOp's find-by-name-and-replace model), there
 // can be several masks (of possibly different kinds) on one image, so each

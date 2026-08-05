@@ -61,6 +61,10 @@
     getHslBands,
     upsertHslBand,
     IDENTITY_HSL_BANDS,
+    getSplitToning,
+    upsertSplitToningZone,
+    upsertSplitToningBalance,
+    IDENTITY_SPLIT_TONING,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -893,6 +897,26 @@
     persistTimer = setTimeout(flushEditStack, 250);
   }
 
+  // Split Toning (M3): same global-only shape as Tone Curve/HSL above, but
+  // nested per-zone -- a per-zone UI control patches just that zone's
+  // hue/saturation, leaving the other zone and balance untouched.
+  let splitToning = $derived(getSplitToning(editStack, IDENTITY_SPLIT_TONING));
+
+  function handleSplitToningZoneChange(
+    /** @type {"shadows" | "highlights"} */ zone,
+    /** @type {Partial<{hue: number, saturation: number}>} */ patch,
+  ) {
+    editStack = upsertSplitToningZone(editStack, zone, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  function handleSplitToningBalanceChange(/** @type {number} */ balance) {
+    editStack = upsertSplitToningBalance(editStack, balance);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
   function handleExportClick() {
     // If a slider was just dragged, the debounced save may not have
     // landed yet -- flush it first so Export reads the value currently
@@ -1192,6 +1216,7 @@
         onColorRangeResampled={handleColorRangeResampled}
         {toneCurvePoints}
         {hslBands}
+        {splitToning}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1216,6 +1241,9 @@
         onToneCurveChange={handleToneCurveChange}
         {hslBands}
         onHslBandChange={handleHslBandChange}
+        {splitToning}
+        onSplitToningZoneChange={handleSplitToningZoneChange}
+        onSplitToningBalanceChange={handleSplitToningBalanceChange}
       />
     </div>
     <MaskToolStrip

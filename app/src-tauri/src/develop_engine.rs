@@ -345,6 +345,103 @@ fn apply_hsl_bands(rgb: [f32; 3], bands: &[HslBand; 8]) -> [f32; 3] {
     hsl_to_rgb(new_h, new_s, new_l)
 }
 
+/// Split Toning (M3): a global-only op, the pipeline's new final step --
+/// exposure -> contrast -> saturation -> tone curve -> HSL -> split
+/// toning -- before any mask reads the graded `rgb` as its own
+/// accumulator base. Reuses `rgb_to_hsl`/`hsl_to_rgb` as-is -- no new
+/// color-space math needed. Unlike `apply_hsl_bands`, this formula never
+/// reads a pixel's own hue or saturation, only its lightness, so the
+/// `chroma_fade` near-gray mitigation that formula needs does NOT apply
+/// here (there's no ratio-of-near-equal-channels computation to be
+/// numerically unstable) -- and porting it over anyway would actively
+/// break this feature, since tinting near-neutral tones is split toning's
+/// entire purpose (classic teal-orange grading relies on exactly that).
+struct SplitToning {
+    shadow_hue: f32,
+    shadow_saturation: f32,
+    highlight_hue: f32,
+    highlight_saturation: f32,
+    balance: f32,
+}
+
+impl Default for SplitToning {
+    fn default() -> Self {
+        SplitToning {
+            shadow_hue: 0.0,
+            shadow_saturation: 0.0,
+            highlight_hue: 0.0,
+            highlight_saturation: 0.0,
+            balance: 0.0,
+        }
+    }
+}
+
+/// Parses the `split_toning` op's nested `shadows`/`highlights`/`balance`
+/// fields, defaulting any missing piece to identity -- same "fall back to
+/// identity on partial/corrupt payload" contract `tone_curve_points`/
+/// `hsl_bands` already establish for their own ops.
+fn split_toning(ops: &[serde_json::Value]) -> SplitToning {
+    let op = ops
+        .iter()
+        .find(|op| op.get("op").and_then(|v| v.as_str()) == Some("split_toning"));
+    let zone = |key: &str| -> (f32, f32) {
+        let z = op.and_then(|o| o.get(key));
+        (
+            z.and_then(|z| z.get("hue")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            z.and_then(|z| z.get("saturation")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        )
+    };
+    let (shadow_hue, shadow_saturation) = zone("shadows");
+    let (highlight_hue, highlight_saturation) = zone("highlights");
+    let balance = op.and_then(|o| o.get("balance")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    SplitToning {
+        shadow_hue,
+        shadow_saturation,
+        highlight_hue,
+        highlight_saturation,
+        balance,
+    }
+}
+
+/// Smoothstep(0,1,t) of the balance-shifted lightness -- C1-continuous
+/// (zero slope at both ends) so the shadow/highlight transition has no
+/// slope-kink seam on a smooth luminance gradient, same reasoning
+/// `hsl_band_weight` used raised-cosine for. `weight_shadows` (the
+/// complement, computed at the call site) partitions to exactly 1 with
+/// this weight for every `l`/`balance` -- no separate normalization
+/// needed, by construction.
+fn split_tone_highlight_weight(l: f32, balance: f32) -> f32 {
+    let t = (l + balance / 200.0).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// A single simultaneous 3-way convex combination, NOT two sequential
+/// blends -- a real bug a design review caught before this was written:
+/// sequentially blending shadow-then-highlight (or the reverse) is
+/// order-dependent whenever both zone weights are nonzero, which given
+/// the full-range smoothstep transition above is true for nearly every
+/// pixel, not a rare edge case. This formula is order-independent by
+/// construction (one sum) and provably a valid convex combination with no
+/// clamp needed: `weight_shadows + weight_highlights == 1` always, and
+/// both `saturation/100 <= 1`, so `a_sh + a_hi` (a weighted average of two
+/// values each <=1) is itself always <=1, guaranteeing
+/// `1 - a_sh - a_hi >= 0` -- three non-negative weights summing to
+/// exactly 1.
+fn apply_split_toning(rgb: [f32; 3], st: &SplitToning) -> [f32; 3] {
+    let (_, _, l_px) = rgb_to_hsl(rgb); // hue/saturation discarded -- only lightness needed
+    let w_hi = split_tone_highlight_weight(l_px, st.balance);
+    let w_sh = 1.0 - w_hi;
+    let a_sh = w_sh * (st.shadow_saturation / 100.0);
+    let a_hi = w_hi * (st.highlight_saturation / 100.0);
+    let tint_sh = hsl_to_rgb(st.shadow_hue, 1.0, l_px);
+    let tint_hi = hsl_to_rgb(st.highlight_hue, 1.0, l_px);
+    let mut out = [0.0f32; 3];
+    for c in 0..3 {
+        out[c] = rgb[c] * (1.0 - a_sh - a_hi) + tint_sh[c] * a_sh + tint_hi[c] * a_hi;
+    }
+    out
+}
+
 /// A `linear_gradient_mask` op (M3 Slice 5), parsed from its opaque JSON
 /// shape -- see MaskToolStrip.svelte/develop.js for how the frontend
 /// creates these. Coordinates are normalized (0..1, matching the WGSL
@@ -806,6 +903,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     // shader consumes, not an exact per-pixel spline evaluation.
     let curve_lut = build_curve_lut(&tone_curve_points(&stack.ops));
     let bands = hsl_bands(&stack.ops);
+    let split = split_toning(&stack.ops);
 
     let (width, height) = (image.width(), image.height());
     // Only consumed by brush masks (see Mask::weight) -- converts a dab's
@@ -837,6 +935,9 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         // tone curve, still before any mask reads `rgb` as its own
         // accumulator base.
         rgb = apply_hsl_bands(rgb, &bands);
+        // Split Toning: the global pass's new final step after HSL, still
+        // before any mask reads `rgb` as its own accumulator base.
+        rgb = apply_split_toning(rgb, &split);
 
         if !masks.is_empty() {
             // Pixel-center sampling, matching how a texture lookup samples
@@ -1119,6 +1220,96 @@ mod tests {
             &[("red", 80.0, 80.0, 80.0), ("orange", 80.0, 80.0, 80.0)],
             [185, 188, 177],
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stack_with_split_toning(
+        shadow_hue: f32,
+        shadow_saturation: f32,
+        highlight_hue: f32,
+        highlight_saturation: f32,
+        balance: f32,
+    ) -> EditStack {
+        EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({
+                "op": "split_toning",
+                "shadows": { "hue": shadow_hue, "saturation": shadow_saturation },
+                "highlights": { "hue": highlight_hue, "saturation": highlight_saturation },
+                "balance": balance,
+            })],
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assert_pixel_with_split_toning(
+        input: [u8; 3],
+        shadow_hue: f32,
+        shadow_saturation: f32,
+        highlight_hue: f32,
+        highlight_saturation: f32,
+        balance: f32,
+        expected: [i32; 3],
+    ) {
+        let mut image = RgbImage::from_pixel(1, 1, image::Rgb(input));
+        apply_edit_stack(
+            &mut image,
+            &stack_with_split_toning(shadow_hue, shadow_saturation, highlight_hue, highlight_saturation, balance),
+        );
+        let pixel = image.get_pixel(0, 0);
+        for (actual, expected) in pixel.0.iter().zip(expected.iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected ~{expected:?}, got {actual} (full pixel {:?})",
+                pixel.0
+            );
+        }
+    }
+
+    /// Both saturations at 0 must be an exact passthrough regardless of
+    /// hue/balance -- confirmed algebraically in apply_split_toning's own
+    /// doc comment (a_sh=a_hi=0 whenever both saturations are 0,
+    /// independent of hue/balance, which only feed the now-zero-weighted
+    /// tint terms).
+    #[test]
+    fn split_toning_zero_saturation_is_a_passthrough() {
+        assert_pixel_with_split_toning([100, 150, 200], 200.0, 0.0, 30.0, 0.0, 50.0, [100, 150, 200]);
+    }
+
+    /// Dark gray (30,30,30) has lightness 30/255=0.1176 -- comfortably in
+    /// the shadow-dominated region even at balance=0 (weight_shadows ~=
+    /// 0.962). Only the Shadow zone is set (hue=200, saturation=80);
+    /// Highlight is left at identity. Expected value computed via script
+    /// running the exact same formula: (7, 38, 53).
+    #[test]
+    fn split_toning_pure_shadow_pixel_isolates_the_shadow_zone() {
+        assert_pixel_with_split_toning([30, 30, 30], 200.0, 80.0, 0.0, 0.0, 0.0, [7, 38, 53]);
+    }
+
+    /// Bright gray (220,220,220) has lightness 220/255=0.8627 -- comfortably
+    /// in the highlight-dominated region. Only the Highlight zone is set
+    /// (hue=30, saturation=70); Shadow is left at identity. Expected value
+    /// computed via script running the exact same formula: (243, 220, 197).
+    #[test]
+    fn split_toning_pure_highlight_pixel_isolates_the_highlight_zone() {
+        assert_pixel_with_split_toning([220, 220, 220], 0.0, 0.0, 30.0, 70.0, 0.0, [243, 220, 197]);
+    }
+
+    /// Mid-gray (128,128,128) at balance=0 has weight_shadows~=0.497 and
+    /// weight_highlights~=0.503 -- both zones meaningfully active at once,
+    /// with deliberately NON-complementary hues (0=red, 90=chartreuse) and
+    /// unequal saturations (70 vs 40) so shadow-first-sequential and
+    /// highlight-first-sequential blending would each produce a
+    /// DIFFERENT, wrong answer from the correct single-shot combination --
+    /// script-verified: the correct simultaneous blend gives (172,109,58),
+    /// while a sequential shadow-then-highlight blend of the exact same
+    /// inputs gives (163,118,67), a difference well outside this test's
+    /// own tolerance. This is a real regression test for the exact bug a
+    /// design review caught before this formula was implemented, not a
+    /// hypothetical.
+    #[test]
+    fn split_toning_blends_both_zones_simultaneously_not_sequentially() {
+        assert_pixel_with_split_toning([128, 128, 128], 0.0, 70.0, 90.0, 40.0, 0.0, [172, 109, 58]);
     }
 
     /// A 1x1 test image always samples at uv=(0.5,0.5) (pixel-center

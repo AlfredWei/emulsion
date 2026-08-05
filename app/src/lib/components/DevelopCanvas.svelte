@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData } from "$lib/api/develop.js";
 
   const MAX_MASKS = 8;
 
@@ -31,6 +31,7 @@
    *   onColorRangeResampled: (id: string, refColor: {r: number, g: number, b: number}) => void,
    *   toneCurvePoints: readonly {x: number, y: number}[],
    *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
+   *   splitToning: {shadows: {hue: number, saturation: number}, highlights: {hue: number, saturation: number}, balance: number},
    * }}
    */
   let {
@@ -53,6 +54,7 @@
     onColorRangeResampled,
     toneCurvePoints,
     hslBands,
+    splitToning,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -652,6 +654,10 @@
   // tied to which image is loaded.
   /** @type {GPUBuffer | null} */
   let hslBandsBuffer = null;
+  // Split Toning (M3): same device-scoped treatment as curveLutBuffer/
+  // hslBandsBuffer above.
+  /** @type {GPUBuffer | null} */
+  let splitToningBuffer = null;
   /** @type {GPUBindGroup | null} */
   let bindGroup = null;
   /** @type {GPUTextureFormat} */
@@ -773,6 +779,23 @@
     // develop_engine.rs's HSL_BAND_NAMES -- no band-name string is ever
     // uploaded, only positional order. Device-scoped, not per-image.
     @group(0) @binding(6) var<uniform> hslBands: array<vec4<f32>, 8>;
+    // Split Toning (M3): a small, fixed, NAMED bag of scalars -- mirrors
+    // Adjustments' own struct style rather than HSL's/curveLut's vec4-
+    // array shape, since there's no natural per-element repetition in 5
+    // named fields the way there is for 8 bands or 256 samples. Padded to
+    // a full vec4 multiple (32 bytes) per the same footgun documented
+    // above (hit three times now: Mask, curveLut, hslBands).
+    struct SplitToning {
+      shadow_hue: f32,           // 0..360, absolute hue-wheel position
+      shadow_saturation: f32,    // 0..100
+      highlight_hue: f32,        // 0..360
+      highlight_saturation: f32, // 0..100
+      balance: f32,              // -100..100
+      _pad0: f32,
+      _pad1: f32,
+      _pad2: f32,
+    };
+    @group(0) @binding(7) var<uniform> splitToning: SplitToning;
 
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
       var c = rgb * pow(2.0, exposure_ev);
@@ -900,6 +923,33 @@
       return hslToRgb(newH, newS, newL);
     }
 
+    // Split Toning (M3): a direct WGSL port of develop_engine.rs's
+    // apply_split_toning -- see that function's doc comment for the full
+    // reasoning (single simultaneous 3-way blend, not two sequential
+    // ones -- a real bug a design review caught before this was written;
+    // sequential blending is order-dependent whenever both zone weights
+    // are nonzero, which given this smoothstep transition is true for
+    // nearly every pixel). Reuses rgbToHsl/hslToRgb as-is, no new
+    // color-space math. Unlike applyHslBands, this never reads a pixel's
+    // own hue or saturation -- only lightness -- so it needs no
+    // chromaFade-style near-gray suppression (there's no ratio-of-near-
+    // equal-channels term here to be numerically unstable).
+    fn splitToneHighlightWeight(l: f32, balance: f32) -> f32 {
+      let t = clamp(l + balance / 200.0, 0.0, 1.0);
+      return t * t * (3.0 - 2.0 * t); // smoothstep(0,1,t)
+    }
+
+    fn applySplitToning(rgb: vec3<f32>) -> vec3<f32> {
+      let lPx = rgbToHsl(rgb).z;
+      let wHi = splitToneHighlightWeight(lPx, splitToning.balance);
+      let wSh = 1.0 - wHi;
+      let aSh = wSh * (splitToning.shadow_saturation / 100.0);
+      let aHi = wHi * (splitToning.highlight_saturation / 100.0);
+      let tintSh = hslToRgb(splitToning.shadow_hue, 1.0, lPx);
+      let tintHi = hslToRgb(splitToning.highlight_hue, 1.0, lPx);
+      return rgb * (1.0 - aSh - aHi) + tintSh * aSh + tintHi * aHi;
+    }
+
     @fragment
     fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
       var rgb = textureSample(srcTexture, srcSampler, in.uv).rgb;
@@ -913,6 +963,9 @@
       // HSL / Color Mixer: the global pass's new final step after the
       // tone curve, still before any mask below reads rgb.
       rgb = applyHslBands(rgb);
+      // Split Toning: the global pass's new final step after HSL, still
+      // before any mask below reads rgb.
+      rgb = applySplitToning(rgb);
 
       // Local adjustments layer on top of the globally-graded image,
       // matching real Lightroom's own ordering and develop_engine.rs's.
@@ -1076,6 +1129,10 @@
       size: 8 * 16, // 8 bands x vec4<f32> (hue, saturation, luminance, unused padding)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    splitToningBuffer = device.createBuffer({
+      size: 8 * 4, // 8 f32 (5 real fields + 3 padding), matches the WGSL SplitToning struct
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
   }
 
   /** Every GPU-resource-side-effect of "a decoded bitmap is now the active
@@ -1089,7 +1146,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer) return;
+    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -1169,6 +1226,7 @@
         { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
         { binding: 5, resource: { buffer: curveLutBuffer } },
         { binding: 6, resource: { buffer: hslBandsBuffer } },
+        { binding: 7, resource: { buffer: splitToningBuffer } },
       ],
     });
 
@@ -1184,7 +1242,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer) return;
+    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -1377,7 +1435,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -1386,6 +1444,7 @@
     // buildToneCurveLut's own cost (a handful of points, 256 samples).
     device.queue.writeBuffer(curveLutBuffer, 0, buildToneCurveLut(toneCurvePoints));
     device.queue.writeBuffer(hslBandsBuffer, 0, buildHslUniformData(hslBands));
+    device.queue.writeBuffer(splitToningBuffer, 0, buildSplitToningUniformData(splitToning));
 
     // Mask overlay: -1 (disabled) unless the toggle is on AND the current
     // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
@@ -1500,6 +1559,7 @@
     void showMaskOverlay;
     void toneCurvePoints;
     void hslBands;
+    void splitToning;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 

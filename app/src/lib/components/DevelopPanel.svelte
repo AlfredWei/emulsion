@@ -20,6 +20,8 @@
    *   highlightedHslBand: string | null,
    *   isEyedropperActive: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point") => boolean,
    *   onEyedropperToggle: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point") => void,
+   *   hasEdits: boolean,
+   *   onResetRequest: () => void,
    * }}
    */
   let {
@@ -39,6 +41,8 @@
     highlightedHslBand,
     isEyedropperActive,
     onEyedropperToggle,
+    hasEdits,
+    onResetRequest,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -79,6 +83,10 @@
 {/snippet}
 
 <div class="panel">
+  <div class="panel-header">
+    <span class="panel-title">Edit</span>
+    <button class="reset-btn" type="button" disabled={!hasEdits} onclick={onResetRequest}>Reset</button>
+  </div>
   <details class="section" open>
     <summary>Basic</summary>
     <div class="sub-body">
@@ -331,6 +339,36 @@
     overflow-y: auto;
     overflow-x: hidden;
     padding: 14px 12px;
+  }
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 4px 10px;
+  }
+  .panel-title {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-primary);
+  }
+  /* Same destructive-action color as MaskEditorPanel.svelte's .delete
+     button and ConfirmDialog.svelte's .danger confirm button -- one
+     consistent "this is destructive" visual language, not a new one. */
+  .reset-btn {
+    all: unset;
+    cursor: pointer;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: var(--radius-s);
+    color: var(--label-red);
+    border: 1px solid var(--border-strong);
+  }
+  .reset-btn:disabled {
+    cursor: default;
+    color: var(--text-tertiary);
+    opacity: 0.6;
   }
   .section {
     border-bottom: 1px solid var(--border-subtle);

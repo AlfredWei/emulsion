@@ -45,6 +45,7 @@
     regenerateThumbnail,
     opValue,
     upsertOp,
+    resetEditStack,
     listMasks,
     addMask,
     updateMask,
@@ -356,6 +357,23 @@
     flushEditStack();
   }
 
+  // Develop panel "Reset": reverts every adjustment AND mask on the current
+  // photo back to default in one shot, gated behind a confirmation (see
+  // confirmingReset/the ConfirmDialog below) since it's destructive and
+  // can't be undone. Same immediate-flush shape as handleMaskDeleted above
+  // -- a confirmed destructive action should persist right away, not risk
+  // being lost to the usual 250ms slider debounce.
+  let confirmingReset = $state(false);
+
+  function handleResetEditStack() {
+    if (developVersionId === null) return;
+    editStack = resetEditStack(editStack);
+    selectedMaskId = null;
+    activeTool = null;
+    confirmingReset = false;
+    flushEditStack();
+  }
+
   // What Export would act on right now: the open Develop image, or every
   // selected Library image (M2 Slice 3 batch export -- the frontend-only
   // follow-up M1 Slice 5's export_batch was explicitly built to accept).
@@ -410,17 +428,31 @@
   // actually reached Rust/SQLite yet -- silently fire-and-forget. Fixed to
   // return the real promise; this is the fix the window-close flush below
   // actually depends on to mean anything.
+  //
+  // Reset-button slice: the write itself used to be gated on
+  // `persistTimer !== null` -- correct for every slider-driven caller
+  // (handleAdjustmentChange etc. always set persistTimer right before a
+  // later flush), but a REAL bug for handleMaskDeleted and
+  // handleResetEditStack below, which mutate `editStack` directly and call
+  // this expecting an immediate write: since neither ever sets
+  // persistTimer first, the old gate silently skipped the write entirely.
+  // Verified empirically (a mask deletion's own persist was being silently
+  // dropped -- the mask would incorrectly reappear after a full quit and
+  // reopen, since the catalog was never actually updated). Fixed by always
+  // writing whenever a develop image is open, regardless of whether a
+  // timer happened to be pending -- harmless when nothing changed (an
+  // idempotent re-write of the same stack), correct when something did.
   function flushEditStack() {
     if (persistTimer !== null) {
       clearTimeout(persistTimer);
       persistTimer = null;
-      if (developVersionId !== null) {
-        const versionId = developVersionId;
-        const stack = editStack;
-        pendingSave = setEditStack(versionId, stack).finally(() => {
-          pendingSave = null;
-        });
-      }
+    }
+    if (developVersionId !== null) {
+      const versionId = developVersionId;
+      const stack = editStack;
+      pendingSave = setEditStack(versionId, stack).finally(() => {
+        pendingSave = null;
+      });
     }
     return pendingSave ?? Promise.resolve();
   }
@@ -1184,6 +1216,15 @@
     onCancel={() => (confirmingRemoval = false)}
   />
 
+  <ConfirmDialog
+    open={confirmingReset}
+    title="Reset all edits"
+    message="Revert every adjustment and mask on this photo back to default? This can't be undone."
+    confirmLabel="Reset"
+    onConfirm={handleResetEditStack}
+    onCancel={() => (confirmingReset = false)}
+  />
+
   <TextPromptDialog
     open={creatingCollection}
     title="New Collection"
@@ -1355,6 +1396,8 @@
         {highlightedHslBand}
         {isEyedropperActive}
         onEyedropperToggle={handleEyedropperToggle}
+        hasEdits={editStack.ops.length > 0}
+        onResetRequest={() => (confirmingReset = true)}
       />
     </div>
     <MaskToolStrip

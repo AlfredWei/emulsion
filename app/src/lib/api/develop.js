@@ -166,6 +166,17 @@ export function upsertOp(/** @type {EditStack} */ stack, /** @type {string} */ o
   return { ...stack, ops };
 }
 
+/** Reverts every adjustment, tool op, and mask back to default in one
+ * shot -- clears the ops array entirely, keeping schema_version. Real
+ * Lightroom's own Develop "Reset": a full revert to as-shot, not a
+ * per-section reset. Every section's own getter already falls back to its
+ * own identity default when its op is absent, so nothing else needs to
+ * change for this to take full effect.
+ * @returns {EditStack} */
+export function resetEditStack(/** @type {EditStack} */ stack) {
+  return { ...stack, ops: [] };
+}
+
 // Tone Curve (M3): a global-only op (see the pipeline-order comment in
 // develop_engine.rs/DevelopCanvas.svelte -- exposure -> contrast ->
 // saturation -> tone curve, applied before any mask reads the graded rgb),

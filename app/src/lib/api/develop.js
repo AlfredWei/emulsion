@@ -435,6 +435,86 @@ export function buildSplitToningUniformData(
   ]);
 }
 
+// Eyedropper pickers (M3): the canvas's existing click-to-sample gesture
+// (DevelopCanvas.svelte's sampleSourcePixel, reused from the color-range
+// mask feature) reports a raw {r,g,b} 0-1 float sample. Every one of the
+// three sampling-based eyedroppers (Split Toning zone tint, HSL band
+// identification, Tone Curve point x-value) needs SOME projection of that
+// color into hue/saturation/lightness -- this is the one shared conversion,
+// not three ad hoc ones.
+
+function remEuclid(/** @type {number} */ x, /** @type {number} */ m) {
+  const r = x % m;
+  return r < 0 ? r + m : r;
+}
+
+/** RGB (0-1 floats) -> HSL, mirroring develop_engine.rs's `rgb_to_hsl`
+ * exactly (same `(max+min)/2` lightness -- NOT this module's separate
+ * perceptual-luma formula used elsewhere for global Saturation -- and the
+ * same `rem_euclid` hue wraparound the WGSL shader's own `rgbToHsl` uses).
+ * @returns {{h: number, s: number, l: number}} h in 0-360 deg, s/l in 0-1 */
+export function rgbToHsl(/** @type {number} */ r, /** @type {number} */ g, /** @type {number} */ b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  const l = (max + min) / 2;
+  if (delta === 0) return { h: 0, s: 0, l };
+  const s = delta / (1 - Math.abs(2 * l - 1));
+  let h;
+  if (max === r) h = 60 * remEuclid((g - b) / delta, 6);
+  else if (max === g) h = 60 * ((b - r) / delta + 2);
+  else h = 60 * ((r - g) / delta + 4);
+  return { h: remEuclid(h, 360), s, l };
+}
+
+/** Which HSL_BAND_NAMES entry a hue is angularly closest to -- for the HSL
+ * eyedropper's band-jump navigation only, NOT the render path's
+ * `hsl_band_weight`/`hueBandWeight` smooth-blend formula (a different
+ * question: "how much should up to 2 adjacent bands blend" vs. this
+ * function's "which single band wins"). Since HSL_BAND_CENTERS_DEG are
+ * evenly spaced 45deg apart, nearest-by-circular-distance and
+ * highest-blend-weight always pick the same band, so this is exact for a
+ * single-winner answer, not an approximation of the render-path formula.
+ * @returns {string} one of HSL_BAND_NAMES */
+export function nearestHslBand(/** @type {number} */ hueDeg) {
+  let bestIndex = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < HSL_BAND_CENTERS_DEG.length; i++) {
+    const d = Math.abs(remEuclid(hueDeg - HSL_BAND_CENTERS_DEG[i] + 180, 360) - 180);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIndex = i;
+    }
+  }
+  return HSL_BAND_NAMES[bestIndex];
+}
+
+// Minimum spacing (normalized 0-1 units) enforced between any two tone
+// curve points' x -- guards against a degenerate/zero-width segment (a
+// divide-by-zero in the secant-slope computation this module/
+// develop_engine.rs/DevelopCanvas.svelte's WGSL shader all share). Lifted
+// out of ToneCurveEditor.svelte's own former private MIN_X_GAP so both that
+// component's click-on-graph gesture and the Tone Curve eyedropper's
+// click-on-photo gesture enforce the identical rule from one place.
+export const MIN_TONE_CURVE_X_GAP = 0.001;
+
+/** Sort-insert (x,y) into a tone curve's point list. Returns `points`
+ * UNCHANGED (the same array reference) if rejected -- already at
+ * MAX_CURVE_POINTS, or within MIN_TONE_CURVE_X_GAP of an existing point's x
+ * -- so callers can cheaply check `result === points` to know whether the
+ * insert actually happened.
+ * @returns {readonly {x: number, y: number}[]} */
+export function insertToneCurvePoint(
+  /** @type {readonly {x: number, y: number}[]} */ points,
+  /** @type {number} */ x,
+  /** @type {number} */ y,
+) {
+  const sorted = [...points].sort((a, b) => a.x - b.x);
+  if (sorted.length >= MAX_CURVE_POINTS) return points;
+  if (sorted.some((p) => Math.abs(p.x - x) < MIN_TONE_CURVE_X_GAP)) return points;
+  return [...sorted, { x, y }].sort((a, b) => a.x - b.x);
+}
+
 // M3 Slice 5/6: masks are id-keyed, multi-instance ops -- unlike the global
 // sliders above (opValue/upsertOp's find-by-name-and-replace model), there
 // can be several masks (of possibly different kinds) on one image, so each

@@ -29,6 +29,7 @@
    *   onMaskSelected: (id: string) => void,
    *   colorRangeResampleId: string | null,
    *   onColorRangeResampled: (id: string, refColor: {r: number, g: number, b: number}) => void,
+   *   onEyedropperSampled: (color: {r: number, g: number, b: number}) => void,
    *   toneCurvePoints: readonly {x: number, y: number}[],
    *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
    *   splitToning: {shadows: {hue: number, saturation: number}, highlights: {hue: number, saturation: number}, balance: number},
@@ -52,6 +53,7 @@
     onMaskSelected,
     colorRangeResampleId,
     onColorRangeResampled,
+    onEyedropperSampled,
     toneCurvePoints,
     hslBands,
     splitToning,
@@ -153,6 +155,16 @@
   // cancel, not a commit.
   /** @type {{x:number,y:number} | null} */
   let colorRangeClickStart = null;
+
+  // Eyedropper pickers (M3): Tone Curve point-insert, HSL band-identify,
+  // Split Toning zone-tint -- all four share ONE click-to-sample gesture
+  // (see +page.svelte's eyedropperTarget for how the commit is routed to
+  // the right destination). Same click-vs-drag-threshold shape as
+  // colorRangeClickStart above, deliberately not merged with it: this
+  // component only reports the raw sampled color via onEyedropperSampled,
+  // it never needs to know WHICH destination is waiting for it.
+  /** @type {{x:number,y:number} | null} */
+  let eyedropperClickStart = null;
 
   // M3 Slice 7: brush painting. Deliberately transient, per-stroke state --
   // no persistent "which mask am I painting into" tracking survives past
@@ -415,6 +427,12 @@
       tryCapturePointer(e);
       return;
     }
+    if (activeTool === "eyedropper") {
+      e.preventDefault();
+      eyedropperClickStart = { x: e.clientX, y: e.clientY };
+      tryCapturePointer(e);
+      return;
+    }
     if (activeTool === "brush") {
       e.preventDefault();
       const p = screenToNormalized(e.clientX, e.clientY);
@@ -524,6 +542,16 @@
             onMaskCreated({ kind: "color_range", refColor: color });
           }
         }
+      }
+      return;
+    }
+    if (eyedropperClickStart) {
+      const moved = Math.max(Math.abs(e.clientX - eyedropperClickStart.x), Math.abs(e.clientY - eyedropperClickStart.y));
+      eyedropperClickStart = null;
+      if (moved < DRAG_CLICK_THRESHOLD) {
+        const p = screenToNormalized(e.clientX, e.clientY);
+        const color = sampleSourcePixel(p.x, p.y);
+        if (color) onEyedropperSampled(color);
       }
       return;
     }
@@ -1581,7 +1609,7 @@
   <canvas
     bind:this={canvasEl}
     class:zoomed={zoomMode === "100"}
-    class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range"}
+    class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper"}
     onpointerdown={handlePointerDown}
     onpointermove={handlePointerMove}
     onpointerup={handlePointerUp}

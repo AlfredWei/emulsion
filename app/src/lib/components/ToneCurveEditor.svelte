@@ -1,5 +1,5 @@
 <script>
-  import { buildToneCurveLut, MAX_CURVE_POINTS } from "$lib/api/develop.js";
+  import { buildToneCurveLut, insertToneCurvePoint, MIN_TONE_CURVE_X_GAP } from "$lib/api/develop.js";
 
   /**
    * Master RGB point-curve editor (M3): the graph draws from the SAME
@@ -14,17 +14,12 @@
    * default identity line).
    * @type {{
    *   points: readonly {x: number, y: number}[],
-   *   onChange: (points: {x: number, y: number}[]) => void,
+   *   onChange: (points: readonly {x: number, y: number}[]) => void,
    * }}
    */
   let { points, onChange } = $props();
 
   const SIZE = 200;
-  // Minimum spacing (normalized 0-1 units) enforced between any two
-  // points' x -- guards against a degenerate/zero-width segment (a
-  // divide-by-zero in the secant-slope computation both this module and
-  // develop_engine.rs/DevelopCanvas.svelte's WGSL shader perform).
-  const MIN_X_GAP = 0.001;
 
   let svgEl = $state(/** @type {SVGSVGElement | null} */ (null));
 
@@ -52,10 +47,8 @@
   }
 
   function addPointAt(/** @type {{x: number, y: number}} */ p) {
-    if (sorted.length >= MAX_CURVE_POINTS) return;
-    if (sorted.some((existing) => Math.abs(existing.x - p.x) < MIN_X_GAP)) return;
-    const next = [...sorted, p].sort((a, b) => a.x - b.x);
-    onChange(next);
+    const next = insertToneCurvePoint(sorted, p.x, p.y);
+    if (next !== sorted) onChange(next);
   }
 
   /** Click on the background (not a control point -- circles sit on top
@@ -99,8 +92,8 @@
     const next = sorted.map((pt, i) => {
       if (i !== draggingIndex) return pt;
       if (isEndpoint) return { x: pt.x, y: p.y };
-      const minX = sorted[i - 1].x + MIN_X_GAP;
-      const maxX = sorted[i + 1].x - MIN_X_GAP;
+      const minX = sorted[i - 1].x + MIN_TONE_CURVE_X_GAP;
+      const maxX = sorted[i + 1].x - MIN_TONE_CURVE_X_GAP;
       return { x: Math.min(Math.max(p.x, minX), maxX), y: p.y };
     });
     onChange(next);

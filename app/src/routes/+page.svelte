@@ -58,13 +58,18 @@
     getToneCurvePoints,
     upsertToneCurve,
     IDENTITY_TONE_CURVE,
+    buildToneCurveLut,
+    sampleCurveLut,
+    insertToneCurvePoint,
     getHslBands,
     upsertHslBand,
     IDENTITY_HSL_BANDS,
+    nearestHslBand,
     getSplitToning,
     upsertSplitToningZone,
     upsertSplitToningBalance,
     IDENTITY_SPLIT_TONING,
+    rgbToHsl,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -245,6 +250,48 @@
     activeTool = null;
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  // Eyedropper pickers (M3): Tone Curve point-insert, HSL band-identify,
+  // Split Toning zone-tint all share ONE click-to-sample canvas gesture
+  // (activeTool === "eyedropper" in DevelopCanvas.svelte), generalizing the
+  // color-range resample pattern just above. `eyedropperTarget` names WHICH
+  // of the four destinations is waiting for the next canvas click -- kept
+  // separate from `activeTool` for the same reason `colorRangeResampleTarget`
+  // is: `activeTool` alone can't distinguish "eyedropper active for Split
+  // Toning Shadows" from "for HSL band-identify." Deliberately NOT threaded
+  // into DevelopCanvas as a prop (unlike colorRangeResampleTarget): none of
+  // these four destinations change how DevelopCanvas itself samples or
+  // reports a click, only where +page.svelte routes the result afterward.
+  let eyedropperTarget = $state(
+    /** @type {"split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point" | null} */ (
+      null
+    ),
+  );
+  // Self-cleaning, same reasoning as colorRangeResampleTarget's own effect
+  // above -- including the two blanket `activeTool = null` resets on image
+  // switch / module switch, which need no separate edit because this effect
+  // already reacts to either of them.
+  $effect(() => {
+    if (eyedropperTarget !== null && activeTool !== "eyedropper") {
+      eyedropperTarget = null;
+    }
+  });
+
+  function isEyedropperActive(/** @type {typeof eyedropperTarget} */ target) {
+    return activeTool === "eyedropper" && eyedropperTarget === target;
+  }
+
+  /** Toggle symmetry with handleResampleColorToggle above: clicking an
+   * active eyedropper button again cancels it. */
+  function handleEyedropperToggle(/** @type {typeof eyedropperTarget} */ target) {
+    if (activeTool === "eyedropper" && eyedropperTarget === target) {
+      activeTool = null;
+      eyedropperTarget = null;
+      return;
+    }
+    activeTool = "eyedropper";
+    eyedropperTarget = target;
   }
 
   function handleMaskCreated(
@@ -878,7 +925,7 @@
   // reason masks needed their own dedicated handler shape.
   let toneCurvePoints = $derived(getToneCurvePoints(editStack, IDENTITY_TONE_CURVE));
 
-  function handleToneCurveChange(/** @type {{x: number, y: number}[]} */ points) {
+  function handleToneCurveChange(/** @type {readonly {x: number, y: number}[]} */ points) {
     editStack = upsertToneCurve(editStack, points);
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(flushEditStack, 250);
@@ -915,6 +962,66 @@
     editStack = upsertSplitToningBalance(editStack, balance);
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  // HSL band-jump eyedropper's transient navigation target -- NOT persisted
+  // edit-stack state, purely a "which band should the panel scroll to and
+  // highlight" signal, self-clearing after a fixed delay rather than on
+  // "the next unrelated interaction" (which would mean hooking an unbounded
+  // set of DOM listeners across the panel). Same fixed-timeout-reset-on-
+  // retrigger idiom as persistTimer's own debounce, just for UI feedback
+  // instead of persistence.
+  let highlightedHslBand = $state(/** @type {string | null} */ (null));
+  let hslBandHighlightTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+
+  /** Commit path for all four eyedropper destinations -- see
+   * eyedropperTarget's own doc comment above for why one shared gesture
+   * routes here. One-shot: resets activeTool/eyedropperTarget immediately,
+   * matching handleColorRangeResampled's own "click to pick, done" model. */
+  function handleEyedropperSampled(/** @type {{r: number, g: number, b: number}} */ color) {
+    const target = eyedropperTarget;
+    activeTool = null;
+    eyedropperTarget = null;
+    if (target === null) return;
+    const { h, s, l } = rgbToHsl(color.r, color.g, color.b);
+
+    if (target === "split_toning_shadows" || target === "split_toning_highlights") {
+      const zone = target === "split_toning_shadows" ? "shadows" : "highlights";
+      editStack = upsertSplitToningZone(editStack, zone, { hue: h, saturation: s * 100 });
+      if (persistTimer) clearTimeout(persistTimer);
+      persistTimer = setTimeout(flushEditStack, 250);
+      return;
+    }
+    if (target === "hsl_band") {
+      // Navigation only -- deliberately no editStack write, no persist.
+      // HSL's own sliders are relative hue/sat/lum shifts, not an absolute
+      // color a sampled pixel could set; this just finds "which band".
+      highlightedHslBand = nearestHslBand(h);
+      if (hslBandHighlightTimer) clearTimeout(hslBandHighlightTimer);
+      hslBandHighlightTimer = setTimeout(() => (highlightedHslBand = null), 1500);
+      return;
+    }
+    if (target === "tone_curve_point") {
+      // x comes from the sampled pixel's own lightness. Note: like every
+      // eyedropper here, this samples the ORIGINAL SOURCE pixel, not the
+      // graded preview (see DevelopCanvas.svelte's sampleSourcePixel doc
+      // comment) -- for Tone Curve specifically this means the inserted
+      // point's x itself (not just a selectivity parameter, as for the
+      // other three destinations) can visibly diverge from "the tone the
+      // user thinks they clicked" on a heavily-graded image. A named,
+      // accepted limitation, not a bug.
+      //
+      // y is seeded at the curve's OWN current value at that x, so
+      // insertion alone never changes the curve's visible shape until the
+      // new point is dragged.
+      const y = sampleCurveLut(buildToneCurveLut(toneCurvePoints), l);
+      const next = insertToneCurvePoint(toneCurvePoints, l, y);
+      if (next !== toneCurvePoints) {
+        editStack = upsertToneCurve(editStack, next);
+        if (persistTimer) clearTimeout(persistTimer);
+        persistTimer = setTimeout(flushEditStack, 250);
+      }
+    }
   }
 
   function handleExportClick() {
@@ -1214,6 +1321,7 @@
         onMaskSelected={(id) => (selectedMaskId = id)}
         colorRangeResampleId={colorRangeResampleTarget}
         onColorRangeResampled={handleColorRangeResampled}
+        onEyedropperSampled={handleEyedropperSampled}
         {toneCurvePoints}
         {hslBands}
         {splitToning}
@@ -1244,6 +1352,9 @@
         {splitToning}
         onSplitToningZoneChange={handleSplitToningZoneChange}
         onSplitToningBalanceChange={handleSplitToningBalanceChange}
+        {highlightedHslBand}
+        {isEyedropperActive}
+        onEyedropperToggle={handleEyedropperToggle}
       />
     </div>
     <MaskToolStrip

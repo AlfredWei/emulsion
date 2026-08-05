@@ -11,12 +11,15 @@
    *   onContrastChange: (value: number) => void,
    *   onSaturationChange: (value: number) => void,
    *   toneCurvePoints: readonly {x: number, y: number}[],
-   *   onToneCurveChange: (points: {x: number, y: number}[]) => void,
+   *   onToneCurveChange: (points: readonly {x: number, y: number}[]) => void,
    *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
    *   onHslBandChange: (bandName: string, patch: Partial<{hue: number, saturation: number, luminance: number}>) => void,
    *   splitToning: {shadows: {hue: number, saturation: number}, highlights: {hue: number, saturation: number}, balance: number},
    *   onSplitToningZoneChange: (zone: "shadows" | "highlights", patch: Partial<{hue: number, saturation: number}>) => void,
    *   onSplitToningBalanceChange: (balance: number) => void,
+   *   highlightedHslBand: string | null,
+   *   isEyedropperActive: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point") => boolean,
+   *   onEyedropperToggle: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point") => void,
    * }}
    */
   let {
@@ -33,7 +36,20 @@
     splitToning,
     onSplitToningZoneChange,
     onSplitToningBalanceChange,
+    highlightedHslBand,
+    isEyedropperActive,
+    onEyedropperToggle,
   } = $props();
+
+  // HSL band-jump eyedropper: scroll the identified band into view whenever
+  // it changes. Meaningful (not decorative) because .panel is genuinely
+  // overflow-y:auto and a band near the bottom (magenta) can sit outside
+  // the visible scroll area when the section first opens.
+  $effect(() => {
+    if (highlightedHslBand) {
+      document.querySelector(`[data-band="${highlightedHslBand}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  });
 
   const STATIC_SECTIONS = [
     { title: "Detail", note: "Sharpening · noise reduction" },
@@ -44,7 +60,23 @@
   function bandLabel(/** @type {string} */ name) {
     return name[0].toUpperCase() + name.slice(1);
   }
+
+  /**
+   * @typedef {"split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point"} EyedropperTarget
+   */
 </script>
+
+<!-- Eyedropper icon, reused verbatim from MaskEditorPanel.svelte's own
+     .resample button -- this codebase's established "same icon vocabulary
+     across the app" practice (that button was itself reused from the
+     Color Range mask tool's own eyedropper icon). -->
+{#snippet eyedropperIcon()}
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+    <line x1="14" y1="2.3" x2="10.7" y2="5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+    <line x1="10.5" y1="5.4" x2="4.3" y2="11.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+    <path d="M4.3 11.6 L3 14 L5.4 12.7 Z" fill="currentColor" />
+  </svg>
+{/snippet}
 
 <div class="panel">
   <details class="section" open>
@@ -95,6 +127,19 @@
   <details class="section" open>
     <summary>Tone Curve</summary>
     <div class="sub-body">
+      <div class="row eyedropper-row">
+        <button
+          class="resample"
+          class:active={isEyedropperActive("tone_curve_point")}
+          type="button"
+          title="Add a curve point from a photo tone"
+          aria-label="Add a curve point from a photo tone"
+          onclick={() => onEyedropperToggle("tone_curve_point")}
+        >
+          {@render eyedropperIcon()}
+        </button>
+        <span>Click a tone in the photo to add a point</span>
+      </div>
       <ToneCurveEditor points={toneCurvePoints} onChange={onToneCurveChange} />
     </div>
   </details>
@@ -102,9 +147,22 @@
   <details class="section">
     <summary>HSL / Color</summary>
     <div class="sub-body">
+      <div class="row eyedropper-row">
+        <button
+          class="resample"
+          class:active={isEyedropperActive("hsl_band")}
+          type="button"
+          title="Identify a color's HSL band"
+          aria-label="Identify a color's HSL band"
+          onclick={() => onEyedropperToggle("hsl_band")}
+        >
+          {@render eyedropperIcon()}
+        </button>
+        <span>Sample from photo to jump to its band</span>
+      </div>
       {#each HSL_BAND_NAMES as bandName, i (bandName)}
         {@const band = hslBands[bandName] ?? IDENTITY_HSL_BANDS[bandName]}
-        <div class="hsl-band">
+        <div class="hsl-band" class:jump-highlight={bandName === highlightedHslBand} data-band={bandName}>
           <div class="hsl-band-label">
             <span class="swatch" style="background: hsl({HSL_BAND_CENTERS_DEG[i]}, 70%, 50%)"></span>
             <span>{bandLabel(bandName)}</span>
@@ -160,6 +218,16 @@
         <div class="split-zone-label">
           <span class="swatch" style="background: hsl({splitToning.shadows.hue}, {splitToning.shadows.saturation}%, 50%)"></span>
           <span>Shadows</span>
+          <button
+            class="resample"
+            class:active={isEyedropperActive("split_toning_shadows")}
+            type="button"
+            title="Sample shadow tint from photo"
+            aria-label="Sample shadow tint from photo"
+            onclick={() => onEyedropperToggle("split_toning_shadows")}
+          >
+            {@render eyedropperIcon()}
+          </button>
         </div>
         <div class="row">
           <label for="st-shadow-hue">Hue</label>
@@ -192,6 +260,16 @@
         <div class="split-zone-label">
           <span class="swatch" style="background: hsl({splitToning.highlights.hue}, {splitToning.highlights.saturation}%, 50%)"></span>
           <span>Highlights</span>
+          <button
+            class="resample"
+            class:active={isEyedropperActive("split_toning_highlights")}
+            type="button"
+            title="Sample highlight tint from photo"
+            aria-label="Sample highlight tint from photo"
+            onclick={() => onEyedropperToggle("split_toning_highlights")}
+          >
+            {@render eyedropperIcon()}
+          </button>
         </div>
         <div class="row">
           <label for="st-highlight-hue">Hue</label>
@@ -372,5 +450,43 @@
     font-size: 11px;
     font-weight: 600;
     color: var(--text-secondary);
+  }
+  .split-zone-label .resample {
+    margin-left: auto;
+  }
+  .eyedropper-row {
+    padding-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  /* Reused verbatim from MaskEditorPanel.svelte's own .resample button. */
+  .resample {
+    all: unset;
+    cursor: pointer;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 20px;
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-s);
+  }
+  .resample:hover {
+    color: var(--text-primary);
+  }
+  .resample.active {
+    color: var(--accent-strong);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  /* Transient highlight for the HSL eyedropper's band-jump navigation --
+     fades back to the normal border after the same timeout that clears
+     highlightedHslBand in +page.svelte. */
+  .hsl-band.jump-highlight {
+    outline: 1.5px solid var(--accent);
+    outline-offset: -1.5px;
+    transition: outline-color 0.2s ease;
   }
 </style>

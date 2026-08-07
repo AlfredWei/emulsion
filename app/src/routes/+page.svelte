@@ -922,7 +922,23 @@
     // over the id it actually applies to, not whatever developVersionId
     // happens to be by the time the async work runs).
     const previousVersionId = developVersionId;
-    flushEditStack();
+    // Awaited -- regenerate_thumbnail's own Rust command re-reads the edit
+    // stack fresh from the catalog rather than trusting a client-supplied
+    // one (see lib.rs's own doc comment on that command), which means it
+    // could race flushEditStack's own catalog write if the two IPC calls
+    // were fired back-to-back without awaiting: neither Tauri's own
+    // command dispatch nor the underlying SQLite write is guaranteed to
+    // land before the very next command's own read starts. A real,
+    // code-verified hazard (two dependent IPC calls previously fired
+    // without awaiting the first) -- not independently confirmed as a
+    // reproduced user-visible symptom (an attempt to reproduce one was
+    // confounded by reusing identical edit-stack values across test runs,
+    // which produces an identical, correctly-unchanged content-addressed
+    // thumbnail path regardless of ordering), but the same class of
+    // "unawaited dependent write" bug this project already found and
+    // fixed once this session (flushEditStack's own now-removed
+    // persistTimer gate) -- worth closing on that precedent alone.
+    await flushEditStack();
     regenerateThumbnailFor(previousVersionId);
     const image = images.find((img) => img.version_id === versionId);
     if (!image) return;
@@ -934,9 +950,12 @@
     activeModule = "develop";
   }
 
-  function switchModule(/** @type {string} */ target) {
+  async function switchModule(/** @type {string} */ target) {
     if (activeModule === "develop" && target !== "develop") {
-      flushEditStack();
+      // Awaited -- same unawaited-dependent-IPC-calls hazard openDevelop's
+      // own flush/regen pair guards against, see that function's own doc
+      // comment.
+      await flushEditStack();
       regenerateThumbnailFor(developVersionId);
       activeTool = null;
       selectedMaskId = null;
@@ -1063,12 +1082,14 @@
     }
   }
 
-  function handleExportClick() {
+  async function handleExportClick() {
     // If a slider was just dragged, the debounced save may not have
     // landed yet -- flush it first so Export reads the value currently
-    // on screen, not the last-persisted one.
+    // on screen, not the last-persisted one. Awaited for the same
+    // unawaited-dependent-IPC-calls hazard openDevelop's own flush/regen
+    // pair guards against, see that function's own doc comment.
     if (activeModule === "develop") {
-      flushEditStack();
+      await flushEditStack();
       regenerateThumbnailFor(developVersionId);
     }
     // null stays the "closed" sentinel -- never open with an empty list.

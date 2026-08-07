@@ -442,6 +442,150 @@ fn apply_split_toning(rgb: [f32; 3], st: &SplitToning) -> [f32; 3] {
     out
 }
 
+/// Dehaze (M3): dark-channel-prior haze removal (He et al. 2009), the
+/// pipeline's new final GLOBAL step -- exposure -> contrast -> saturation ->
+/// tone curve -> HSL -> split toning -> **dehaze** -- before any mask reads
+/// the graded `rgb` as its own accumulator base. Unlike every op above it,
+/// dark-channel-prior fundamentally needs NEIGHBORING pixels' already-graded
+/// values (a local minimum filter for the dark channel, a whole-image
+/// reduction for atmospheric light) -- it cannot be folded into the
+/// existing single per-pixel loop the way every earlier op was; see
+/// `apply_edit_stack`'s own restructuring below, now a genuine multi-pass
+/// pipeline over intermediate buffers, not one loop.
+///
+/// Algorithm constants are fixed, not user-exposed (same "fix the knob,
+/// expose only Amount" choice Split Toning made for its own transition
+/// width): `DEHAZE_PATCH_RADIUS=7` (15x15 dark-channel window, the textbook
+/// value), `DEHAZE_OMEGA=0.95` (keep 5% residual haze for a natural look,
+/// textbook value), `DEHAZE_T0=0.1` (transmission floor, prevents noise
+/// blowup where transmission is near zero, textbook value),
+/// `DEHAZE_REFINE_RADIUS=4` (9x9 transmission-refinement window).
+///
+/// **Two deliberate, named deviations from He et al.'s own algorithm** -- a
+/// design review caught real bugs in earlier drafts of both before this was
+/// written; these are the corrected versions:
+/// - Atmospheric light is estimated via ARGMAX-BY-LUMINANCE (the whole RGB
+///   triple of whichever pixel has the highest luminance in the graded
+///   image), NOT independent per-channel maxima -- component-wise max can
+///   synthesize a color no pixel in the image actually has, and is
+///   unboundedly sensitive to a single outlier channel (e.g. a sensor speck
+///   bright only in R). This is also not gated by "top 0.1% of the dark
+///   channel" the way He et al.'s own refinement is (closer to Tan 2008's
+///   simpler pre-DCP baseline) -- an accepted, named scope cut, not
+///   silently dropped; a bright non-atmospheric object (white car, snow)
+///   could still throw off the estimate. Deferred to a later slice.
+/// - The per-channel `I^c/A^c` normalization happens BEFORE the windowed
+///   min (`dehaze_atmospheric_light` runs first, then `min_channel` divides
+///   per-channel, matching He et al. exactly) -- an earlier draft collapsed
+///   the cross-channel min FIRST and divided the resulting scalar by a
+///   single scalar representative of A afterward, which is not a
+///   numerically-close approximation but a structurally different (and
+///   generally wrong) result once the cross-channel min has already picked
+///   a channel.
+/// - The transmission-refinement box-mean filter (`separable_mean_filter`)
+///   stands in for He et al.'s edge-preserving guided filter -- named
+///   limitation: mild haloing near strong contrast edges a real guided
+///   filter would avoid. Deferred to a later slice (cheap to add given the
+///   box-filter primitive already built here).
+const DEHAZE_PATCH_RADIUS: i32 = 7;
+const DEHAZE_OMEGA: f32 = 0.95;
+const DEHAZE_T0: f32 = 0.1;
+const DEHAZE_REFINE_RADIUS: i32 = 4;
+
+/// Atmospheric light: the whole RGB triple of the graded image's own
+/// highest-LUMINANCE pixel -- a single full-image scan. No bounded-pass
+/// reduction chain needed here the way the GPU side needs one (see this
+/// group's own doc comment above); the CPU path has no such constraint.
+fn dehaze_atmospheric_light(graded: &[[f32; 3]]) -> [f32; 3] {
+    let mut best_luma = -1.0f32;
+    let mut best = [1.0f32, 1.0, 1.0];
+    for &rgb in graded {
+        let luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+        if luma > best_luma {
+            best_luma = luma;
+            best = rgb;
+        }
+    }
+    best
+}
+
+/// Separable box-MIN filter (the dark-channel step): a horizontal pass then
+/// a vertical pass over a single-channel buffer -- correct (not just
+/// cheaper) because a rectangular window's min is associative/commutative
+/// over its two axes independently (min over a 2D box == min over rows of
+/// (min over each row's own 1D box)). Edge taps clamp to the buffer's own
+/// bounds, same reasoning the GPU shader's own manual `textureLoad` clamp
+/// needs (an out-of-range read must never pull in a phantom value).
+fn separable_min_filter(buf: &[f32], width: usize, height: usize, radius: i32) -> Vec<f32> {
+    let mut h_pass = vec![0.0f32; buf.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let mut m = f32::INFINITY;
+            for dx in -radius..=radius {
+                let sx = (x as i32 + dx).clamp(0, width as i32 - 1) as usize;
+                m = m.min(buf[y * width + sx]);
+            }
+            h_pass[y * width + x] = m;
+        }
+    }
+    let mut v_pass = vec![0.0f32; buf.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let mut m = f32::INFINITY;
+            for dy in -radius..=radius {
+                let sy = (y as i32 + dy).clamp(0, height as i32 - 1) as usize;
+                m = m.min(h_pass[sy * width + x]);
+            }
+            v_pass[y * width + x] = m;
+        }
+    }
+    v_pass
+}
+
+/// Separable box-MEAN filter (the transmission-refinement step): unlike the
+/// min filter above, a sum can be tracked with an exact O(1)-per-pixel
+/// sliding-window accumulator (add the entering tap, subtract the leaving
+/// one) -- an operation min/max has no equivalent for, since neither can be
+/// "un-added". Correct even where the window clamps at an edge (multiple
+/// taps mapping to the same clamped index): each step still adds/removes
+/// exactly one conceptual tap, so the running sum stays exact regardless of
+/// how many taps on either side happen to share a clamped index.
+fn separable_mean_filter(buf: &[f32], width: usize, height: usize, radius: i32) -> Vec<f32> {
+    let window = (2 * radius + 1) as f32;
+    let mut h_pass = vec![0.0f32; buf.len()];
+    for y in 0..height {
+        let row = &buf[y * width..(y + 1) * width];
+        let mut sum = 0.0f32;
+        for dx in -radius..=radius {
+            let sx = dx.clamp(0, width as i32 - 1) as usize;
+            sum += row[sx];
+        }
+        h_pass[y * width] = sum / window;
+        for x in 1..width {
+            let leave = (x as i32 - 1 - radius).clamp(0, width as i32 - 1) as usize;
+            let enter = (x as i32 + radius).clamp(0, width as i32 - 1) as usize;
+            sum += row[enter] - row[leave];
+            h_pass[y * width + x] = sum / window;
+        }
+    }
+    let mut v_pass = vec![0.0f32; buf.len()];
+    for x in 0..width {
+        let mut sum = 0.0f32;
+        for dy in -radius..=radius {
+            let sy = dy.clamp(0, height as i32 - 1) as usize;
+            sum += h_pass[sy * width + x];
+        }
+        v_pass[x] = sum / window;
+        for y in 1..height {
+            let leave = (y as i32 - 1 - radius).clamp(0, height as i32 - 1) as usize;
+            let enter = (y as i32 + radius).clamp(0, height as i32 - 1) as usize;
+            sum += h_pass[enter * width + x] - h_pass[leave * width + x];
+            v_pass[y * width + x] = sum / window;
+        }
+    }
+    v_pass
+}
+
 /// A `linear_gradient_mask` op (M3 Slice 5), parsed from its opaque JSON
 /// shape -- see MaskToolStrip.svelte/develop.js for how the frontend
 /// creates these. Coordinates are normalized (0..1, matching the WGSL
@@ -904,14 +1048,28 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let curve_lut = build_curve_lut(&tone_curve_points(&stack.ops));
     let bands = hsl_bands(&stack.ops);
     let split = split_toning(&stack.ops);
+    // Reuses the generic scalar-op reader `op_value` already establishes
+    // for exposure/contrast/saturation -- `{op:"dehaze", value: amount}` is
+    // the exact same single-scalar shape, no dedicated parser needed.
+    let dehaze_amount = op_value(&stack.ops, "dehaze");
 
     let (width, height) = (image.width(), image.height());
     // Only consumed by brush masks (see Mask::weight) -- converts a dab's
     // width-only `radius` into a true circle in pixel space regardless of
     // the image's own aspect ratio.
     let aspect = height as f32 / width as f32;
+    let (w, h) = (width as usize, height as usize);
 
-    for (x, y, pixel) in image.enumerate_pixels_mut() {
+    // Pass 1: the existing global chain (exposure -> ... -> split toning),
+    // written into an intermediate buffer rather than the image directly.
+    // Dehaze (below) is the first op in this pipeline that needs
+    // NEIGHBORING pixels' graded value -- an in-place single loop can't
+    // provide that without a race (a pixel's neighbor would already be
+    // overwritten with final output before this pixel could read its
+    // still-graded, not-yet-finalized value). Every op above this one was a
+    // pure per-pixel remap and fit directly in one loop; this one can't.
+    let mut graded = vec![[0.0f32; 3]; w * h];
+    for (x, y, pixel) in image.enumerate_pixels() {
         let mut rgb = apply_adjustments(
             [
                 pixel[0] as f32 / 255.0,
@@ -922,22 +1080,51 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             contrast,
             saturation,
         );
-        // Tone curve is the global pass's new final step -- applied
-        // before any mask below reads `rgb` as its own accumulator base,
-        // matching real Lightroom's own "Tone Curve is global-only, local
-        // adjustments layer on top of it" ordering.
         rgb = [
             sample_lut(&curve_lut, rgb[0]),
             sample_lut(&curve_lut, rgb[1]),
             sample_lut(&curve_lut, rgb[2]),
         ];
-        // HSL / Color Mixer: the global pass's new final step after the
-        // tone curve, still before any mask reads `rgb` as its own
-        // accumulator base.
         rgb = apply_hsl_bands(rgb, &bands);
-        // Split Toning: the global pass's new final step after HSL, still
-        // before any mask reads `rgb` as its own accumulator base.
         rgb = apply_split_toning(rgb, &split);
+        graded[y as usize * w + x as usize] = rgb;
+    }
+
+    // Passes 2-6: Dehaze's dark-channel-prior maps (see the doc comment
+    // above `dehaze_atmospheric_light` for the corrected algorithm and its
+    // two named deviations from He et al.). Skipped entirely at amount=0 --
+    // not just cheap-but-computed-anyway, since these are several full-image
+    // passes and most photos won't use Dehaze; this also keeps "amount=0 is
+    // an exact passthrough" a structural guarantee (the final loop below
+    // simply has nothing to blend toward), not a numerically-near-zero one.
+    let dehaze_maps = if dehaze_amount != 0.0 {
+        let a = dehaze_atmospheric_light(&graded);
+        let min_channel: Vec<f32> = graded
+            .iter()
+            .map(|c| (c[0] / a[0]).min(c[1] / a[1]).min(c[2] / a[2]))
+            .collect();
+        let dark_channel = separable_min_filter(&min_channel, w, h, DEHAZE_PATCH_RADIUS);
+        let t_raw: Vec<f32> = dark_channel.iter().map(|d| 1.0 - DEHAZE_OMEGA * d).collect();
+        let t_refined = separable_mean_filter(&t_raw, w, h, DEHAZE_REFINE_RADIUS);
+        Some((a, t_refined))
+    } else {
+        None
+    };
+
+    // Pass 7 (final): Dehaze recovery + amount blend, then the existing
+    // mask loop -- reading the post-dehaze value as its own accumulator
+    // base, the same contract every mask already has with every op above.
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        let idx = y as usize * w + x as usize;
+        let graded_rgb = graded[idx];
+        let mut rgb = graded_rgb;
+        if let Some((a, t_refined)) = &dehaze_maps {
+            let t = t_refined[idx].max(DEHAZE_T0);
+            for c in 0..3 {
+                let recovered = (graded_rgb[c] - a[c]) / t + a[c];
+                rgb[c] = graded_rgb[c] + (recovered - graded_rgb[c]) * (dehaze_amount / 100.0);
+            }
+        }
 
         if !masks.is_empty() {
             // Pixel-center sampling, matching how a texture lookup samples
@@ -1779,5 +1966,142 @@ mod tests {
             ],
         };
         assert_color_pixel(128, stack, [223, 223, 223]);
+    }
+
+    // Dehaze -- the first op in this module needing a real multi-pixel
+    // image (every earlier op's test used a 1x1 image, since every earlier
+    // op is purely per-pixel; dark-channel-prior genuinely needs spatial
+    // extent to exercise its windowed min-filter).
+
+    /// A small "sky" patch (near-white, brighter than everything else) in
+    /// one corner plus a uniform "scene" fill everywhere else -- crafted so
+    /// `dehaze_atmospheric_light` picks the sky patch's own exact color
+    /// (highest luminance) and the DARK-CHANNEL WINDOW (15x15, radius 7) is
+    /// always much larger than the 3x3 patch, so every pixel's own
+    /// dark-channel value is dominated by the scene's (lower) minChannel
+    /// value -- confirmed by hand: even a window centered at the very
+    /// corner (0,0), clamped to an 8x8 region, still reaches scene pixels
+    /// at x/y >= 3, so no window is ever entirely contained within the
+    /// patch. This makes the dark channel/transmission maps uniform across
+    /// the whole image, which is what makes this test's expected values
+    /// hand-computable exactly rather than needing a real reference
+    /// implementation to check against.
+    fn dehaze_test_image(width: u32, height: u32, scene: [u8; 3], sky: [u8; 3]) -> RgbImage {
+        image::ImageBuffer::from_fn(width, height, |x, y| {
+            if x < 3 && y < 3 {
+                image::Rgb(sky)
+            } else {
+                image::Rgb(scene)
+            }
+        })
+    }
+
+    /// amount=0 must be an EXACT passthrough regardless of the rest of the
+    /// algorithm -- not just numerically close to identity, structurally
+    /// guaranteed by `apply_edit_stack` skipping the entire dark-channel/
+    /// transmission computation at amount=0 (see its own doc comment), so
+    /// this also doubles as a check that the skip path doesn't panic/
+    /// misbehave on a real multi-pixel image.
+    #[test]
+    fn dehaze_amount_zero_is_an_exact_passthrough() {
+        let mut image = dehaze_test_image(20, 20, [176, 171, 166], [242, 242, 242]);
+        apply_edit_stack(&mut image, &stack_with(&[("dehaze", 0.0)]));
+        assert_eq!(*image.get_pixel(19, 19), image::Rgb([176, 171, 166]));
+        assert_eq!(*image.get_pixel(0, 0), image::Rgb([242, 242, 242]));
+    }
+
+    /// Hand-derived recovery at amount=100, chosen so `A=(1,1,1)` (the sky
+    /// patch is pure white) -- this eliminates the `I^c/A^c` division's
+    /// denominator entirely, keeping the arithmetic exact rather than
+    /// approximated. Scene = (204,153,102) = (0.8, 0.6, 0.4) exactly (each
+    /// is a clean multiple of 1/255).
+    ///
+    /// minChannel(scene) = min(0.8,0.6,0.4)/1 = 0.4 (blue channel) --
+    /// dominates the whole image's dark channel per `dehaze_test_image`'s
+    /// own doc comment (patch too small to ever fill an entire 15x15
+    /// window), so darkChannel = 0.4 everywhere, EXACTLY (not approximated
+    /// -- every window, including ones centered on the patch itself,
+    /// includes scene pixels, and scene's own minChannel is the global
+    /// minimum).
+    ///
+    /// t_raw = 1 - 0.95*0.4 = 0.62 exactly, uniform -> t_refined = 0.62
+    /// exactly too (box-mean of a constant field is that same constant).
+    ///
+    /// Recovery (a pixel far from the patch, e.g. (19,19)):
+    /// r: (0.8-1.0)/0.62 + 1.0 = 1 - 0.2/0.62 = 1 - 10/31 = 0.677419 -> 172.7 -> 173
+    /// g: (0.6-1.0)/0.62 + 1.0 = 1 - 0.4/0.62 = 1 - 20/31 = 0.354839 -> 90.5 -> 90
+    /// b: (0.4-1.0)/0.62 + 1.0 = 1 - 0.6/0.62 = 1 - 30/31 = 0.032258 -> 8.2 -> 8
+    #[test]
+    fn dehaze_amount_100_matches_hand_derived_recovery() {
+        let mut image = dehaze_test_image(20, 20, [204, 153, 102], [255, 255, 255]);
+        apply_edit_stack(&mut image, &stack_with(&[("dehaze", 100.0)]));
+        let pixel = image.get_pixel(19, 19);
+        for (actual, expected) in pixel.0.iter().zip([173, 90, 8].iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected ~{expected:?}, got {actual} (full pixel {:?})",
+                pixel.0
+            );
+        }
+    }
+
+    /// A sky pixel that already equals atmospheric light exactly (I=A)
+    /// should recover UNCHANGED -- physically sensible (a clear-sky pixel
+    /// needs no correction) and a real property of the formula (`(A-A)/t +
+    /// A = A` for any t), worth asserting explicitly rather than only
+    /// checking the scene-pixel case above.
+    #[test]
+    fn dehaze_pixel_already_at_atmospheric_light_is_unchanged() {
+        let mut image = dehaze_test_image(20, 20, [204, 153, 102], [255, 255, 255]);
+        apply_edit_stack(&mut image, &stack_with(&[("dehaze", 100.0)]));
+        assert_eq!(*image.get_pixel(0, 0), image::Rgb([255, 255, 255]));
+    }
+
+    /// `dehaze_atmospheric_light` must pick a REAL pixel's whole RGB triple
+    /// (argmax-by-luminance), not a synthesized independent-per-channel-max
+    /// color -- the real bug a design review caught before this was
+    /// written. `[1,0,0]` and `[0,1,0]` are each brightest in a DIFFERENT
+    /// single channel; a per-channel-max implementation would incorrectly
+    /// synthesize `[1,1,0]`, a color present in neither input pixel. The
+    /// correct argmax-by-luminance picks `[0,1,0]` (luma 0.7152, the
+    /// highest of the three candidates -- [1,0,0] is 0.2126, [0.5,0.5,0.5]
+    /// is 0.5) as the WHOLE winning triple.
+    #[test]
+    fn dehaze_atmospheric_light_picks_a_real_pixel_not_a_synthesized_color() {
+        let pixels = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.5, 0.5, 0.5]];
+        assert_eq!(dehaze_atmospheric_light(&pixels), [0.0, 1.0, 0.0]);
+    }
+
+    /// `separable_min_filter` against a small hand-computed 5x1 array,
+    /// radius=1 (3-tap window). Height=1 makes the vertical pass a no-op
+    /// (each column's own single value, min'd with itself 3 times via
+    /// clamped taps), isolating the horizontal pass's own correctness:
+    /// x=0: taps (clamped) at indices 0,0,1 -> min(5,5,3)=3
+    /// x=1: indices 0,1,2 -> min(5,3,8)=3
+    /// x=2: indices 1,2,3 -> min(3,8,1)=1
+    /// x=3: indices 2,3,4 -> min(8,1,9)=1
+    /// x=4: indices 3,4,4 -> min(1,9,9)=1
+    #[test]
+    fn separable_min_filter_matches_hand_computed_values() {
+        let buf = [5.0f32, 3.0, 8.0, 1.0, 9.0];
+        let result = separable_min_filter(&buf, 5, 1, 1);
+        assert_eq!(result, vec![3.0, 3.0, 1.0, 1.0, 1.0]);
+    }
+
+    /// `separable_mean_filter` against the same 5x1 array/radius, same
+    /// no-op-vertical-pass isolation as the min-filter test above:
+    /// x=0: (5+5+3)/3 = 4.333..
+    /// x=1: (5+3+8)/3 = 5.333..
+    /// x=2: (3+8+1)/3 = 4.0
+    /// x=3: (8+1+9)/3 = 6.0
+    /// x=4: (1+9+9)/3 = 6.333..
+    #[test]
+    fn separable_mean_filter_matches_hand_computed_values() {
+        let buf = [5.0f32, 3.0, 8.0, 1.0, 9.0];
+        let result = separable_mean_filter(&buf, 5, 1, 1);
+        let expected = [13.0 / 3.0, 16.0 / 3.0, 4.0, 6.0, 19.0 / 3.0];
+        for (actual, expected) in result.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 0.001, "expected {expected}, got {actual}");
+        }
     }
 }

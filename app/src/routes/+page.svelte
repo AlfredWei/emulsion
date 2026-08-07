@@ -996,6 +996,13 @@
     persistTimer = setTimeout(flushEditStack, 250);
   }
 
+  // Dehaze (M3): a single global scalar op (dark-channel-prior haze
+  // removal), the SAME shape exposure/contrast/saturation already use --
+  // reuses opValue/upsertOp/handleAdjustmentChange directly rather than a
+  // dedicated getter/handler pair, since there's nothing structured about
+  // its payload the generic single-scalar op model doesn't already cover.
+  let dehaze = $derived(opValue(editStack, "dehaze", 0));
+
   // HSL band-jump eyedropper's transient navigation target -- NOT persisted
   // edit-stack state, purely a "which band should the panel scroll to and
   // highlight" signal, self-clearing after a fixed delay rather than on
@@ -1366,6 +1373,7 @@
         {toneCurvePoints}
         {hslBands}
         {splitToning}
+        {dehaze}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1398,6 +1406,8 @@
         onEyedropperToggle={handleEyedropperToggle}
         hasEdits={editStack.ops.length > 0}
         onResetRequest={() => (confirmingReset = true)}
+        {dehaze}
+        onDehazeChange={(v) => handleAdjustmentChange("dehaze", v)}
       />
     </div>
     <MaskToolStrip

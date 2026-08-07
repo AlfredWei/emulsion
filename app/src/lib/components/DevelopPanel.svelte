@@ -22,6 +22,8 @@
    *   onEyedropperToggle: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point") => void,
    *   hasEdits: boolean,
    *   onResetRequest: () => void,
+   *   dehaze: number,
+   *   onDehazeChange: (value: number) => void,
    * }}
    */
   let {
@@ -43,6 +45,8 @@
     onEyedropperToggle,
     hasEdits,
     onResetRequest,
+    dehaze,
+    onDehazeChange,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -318,6 +322,25 @@
           oninput={(e) => onSplitToningBalanceChange(Number(e.currentTarget.value))}
         />
         <span class="val">{splitToning.balance >= 0 ? "+" : ""}{splitToning.balance}</span>
+      </div>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>Dehaze</summary>
+    <div class="sub-body">
+      <div class="row">
+        <label for="dehaze-amount">Amount</label>
+        <input
+          id="dehaze-amount"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={dehaze}
+          oninput={(e) => onDehazeChange(Number(e.currentTarget.value))}
+        />
+        <span class="val">{dehaze}</span>
       </div>
     </div>
   </details>

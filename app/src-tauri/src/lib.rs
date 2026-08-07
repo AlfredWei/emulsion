@@ -398,8 +398,15 @@ async fn get_develop_preview(app: AppHandle, path: String) -> Result<DevelopPrev
         .join("previews");
 
     tauri::async_runtime::spawn_blocking(move || {
+        // user_message(), not to_string() -- a missing/moved/offline
+        // source file (PreviewCacheError::Io with ErrorKind::NotFound) is
+        // a normal, expected-to-happen-eventually reality for any photo
+        // catalog; the raw OS errno string ("No such file or directory
+        // (os error 2)") means nothing to someone who never touched the
+        // filesystem directly. See PreviewCacheError::user_message's own
+        // doc comment.
         preview_cache::ensure_develop_preview(std::path::Path::new(&path), &previews_dir)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.user_message())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -421,8 +428,10 @@ async fn get_develop_full_preview(app: AppHandle, path: String) -> Result<Develo
         .join("previews");
 
     tauri::async_runtime::spawn_blocking(move || {
+        // user_message(), not to_string() -- same reasoning as
+        // get_develop_preview's own identical switch above.
         preview_cache::ensure_develop_full_preview(std::path::Path::new(&path), &previews_dir)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.user_message())
     })
     .await
     .map_err(|e| e.to_string())?

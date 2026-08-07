@@ -45,6 +45,30 @@ pub enum PreviewCacheError {
     Image(#[from] image::ImageError),
 }
 
+impl PreviewCacheError {
+    /// A clean, user-facing message for the Tauri command boundary --
+    /// deliberately separate from this type's own `Display` impl above
+    /// (left unchanged, still technical -- used internally/in tests, where
+    /// the precise error is more useful than a friendly one). A raw
+    /// `std::io::Error`'s own Display ("No such file or directory (os
+    /// error 2)") means nothing to someone who never touched the
+    /// filesystem directly -- a missing/moved/renamed source file, or one
+    /// on a now-disconnected drive, is a normal, expected-to-happen-
+    /// eventually reality for any photo catalog, not something a raw OS
+    /// errno should represent to the user. Every OTHER error kind still
+    /// falls through to the existing technical message -- this only
+    /// special-cases the one kind (`NotFound`) that has an obvious,
+    /// actionable, non-technical explanation.
+    pub fn user_message(&self) -> String {
+        if let PreviewCacheError::Io(io_err) = self {
+            if io_err.kind() == std::io::ErrorKind::NotFound {
+                return "Source photo not found -- it may have been moved, renamed, or deleted outside the app, or is on a disconnected drive.".to_string();
+            }
+        }
+        self.to_string()
+    }
+}
+
 fn capped_dimensions(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
     if width <= max_dim && height <= max_dim {
         return (width, height);
@@ -234,6 +258,42 @@ mod tests {
         let via_preview_cache = blake3::hash(bytes).to_hex().to_string();
         let via_import_pattern = blake3::hash(bytes).to_hex().to_string();
         assert_eq!(via_preview_cache, via_import_pattern);
+    }
+
+    /// `ensure_develop_preview` on a genuinely nonexistent path must
+    /// produce the friendly, actionable message -- not the raw OS errno
+    /// string ("No such file or directory (os error 2)") that a plain
+    /// `std::io::Error::to_string()` would give. This is the exact
+    /// real-world trigger (a dangling catalog reference to a moved/
+    /// deleted/offline source file) `user_message()` exists to fix.
+    #[test]
+    fn user_message_is_friendly_for_a_missing_source_file() {
+        let previews_dir = temp_previews_dir("missing-source");
+        let err = ensure_develop_preview(
+            std::path::Path::new("/definitely/does/not/exist/nowhere.jpg"),
+            &previews_dir,
+        )
+        .expect_err("a nonexistent source path must fail");
+        assert_eq!(
+            err.user_message(),
+            "Source photo not found -- it may have been moved, renamed, or deleted outside the app, or is on a disconnected drive."
+        );
+        // The technical Display message is UNCHANGED -- still exposes the
+        // raw OS string, since that's still useful internally/in logs,
+        // only user_message() is meant to be shown to a user.
+        assert!(err.to_string().contains("could not read source file from disk"));
+    }
+
+    /// A DIFFERENT io::ErrorKind (not NotFound) must still fall through to
+    /// the existing technical message -- user_message() only special-cases
+    /// the one kind with an obvious, actionable, non-technical
+    /// explanation, not every possible I/O failure.
+    #[test]
+    fn user_message_falls_back_to_technical_message_for_other_error_kinds() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied (test)");
+        let err = PreviewCacheError::Io(io_err);
+        assert_eq!(err.user_message(), err.to_string());
+        assert!(err.user_message().contains("could not read source file from disk"));
     }
 
     /// Real-file-gated, same pattern as raw_decode.rs/import.rs: point

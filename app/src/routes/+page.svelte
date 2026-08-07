@@ -14,6 +14,7 @@
   import SmartCollectionDialog from "$lib/components/SmartCollectionDialog.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import Filmstrip from "$lib/components/Filmstrip.svelte";
+  import DevelopInfoBar from "$lib/components/DevelopInfoBar.svelte";
   import BackupPromptDialog from "$lib/components/BackupPromptDialog.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import {
@@ -1450,6 +1451,10 @@
     />
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>
+  {/if}
+
+  {#if activeModule === "develop" && developImagePath}
+    <DevelopInfoBar imagePath={developImagePath} />
   {/if}
 
   {#if activeModule === "library"}

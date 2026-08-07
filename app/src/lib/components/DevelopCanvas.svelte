@@ -33,6 +33,7 @@
    *   toneCurvePoints: readonly {x: number, y: number}[],
    *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
    *   splitToning: {shadows: {hue: number, saturation: number}, highlights: {hue: number, saturation: number}, balance: number},
+   *   dehaze: number,
    * }}
    */
   let {
@@ -57,6 +58,7 @@
     toneCurvePoints,
     hslBands,
     splitToning,
+    dehaze,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -691,6 +693,86 @@
   /** @type {GPUTextureFormat} */
   let presentationFormat = "bgra8unorm";
 
+  // Dehaze (M3): the first op in this pipeline needing a real multi-pass
+  // render graph (dark-channel-prior haze removal genuinely needs
+  // neighboring-pixel/whole-image data, unlike every earlier op's single
+  // straight-through fs_main) -- see the WGSL source's own doc comments on
+  // fs_grade/fs_atm_reduce/fs_min_channel/fs_min_h/fs_min_v/fs_mean_h/
+  // fs_mean_v/fs_final for the algorithm. `pipeline`/`bindGroup` above
+  // are REPURPOSED as the final pass's own pipeline/bind group (entryPoint
+  // "fs_final" now, not "fs_main") -- their bind group layout is
+  // genuinely DIFFERENT from before, not a superset: fs_final no longer
+  // references srcTexture(1)/curveLut(5)/hslBands(6)/splitToning(7) (those
+  // moved into fs_grade below), but DOES still need srcSampler(0) -- the
+  // mask loop's own pre-existing brushMasks sample uses it, unrelated to
+  // Dehaze. layout:"auto" infers {0,2,3,4,8,10,12} for it -- see
+  // applyBitmapToGpu's rebuilt bindGroup entries.
+  /** @type {GPURenderPipeline | null} */
+  let gradePipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let atmReducePipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let minChannelPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let minHPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let minVPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let meanHPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let meanVPipeline = null;
+
+  // Intermediate textures -- all sized to match the CURRENT source
+  // texture's own resolution (recreated in applyBitmapToGpu whenever that
+  // changes, same lifecycle as sourceTexture/brushTextureArray), except
+  // the atmospheric-light reduction chain, which is a SEQUENCE of
+  // successively-smaller textures (8x8 block reduction per pass) computed
+  // from the source resolution -- see buildAtmLightChainSizes.
+  /** @type {GPUTexture | null} */
+  let gradedTex = null;
+  /** @type {GPUTexture | null} */
+  let minChannelTex = null;
+  /** @type {GPUTexture | null} */
+  let darkChannelHTex = null;
+  /** @type {GPUTexture | null} */
+  let tRawTex = null;
+  /** @type {GPUTexture | null} */
+  let transmissionHTex = null;
+  /** @type {GPUTexture | null} */
+  let transmissionTex = null;
+  /** @type {GPUTexture[]} */
+  let atmLightChain = [];
+
+  /** @type {GPUBindGroup | null} */
+  let gradeBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let minChannelBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let minHBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let minVBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let meanHBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let meanVBindGroup = null;
+  /** @type {GPUBindGroup[]} */
+  let atmReduceBindGroups = [];
+
+  // Dirty-key caching: the dark-channel/atmospheric-light/transmission
+  // passes above depend ONLY on {exposure, contrast, saturation,
+  // toneCurvePoints, hslBands, splitToning} -- NOT on masks/
+  // selectedMaskId/showMaskOverlay, which only affect the cheap final
+  // pass. A VALUE-based key (not reference equality) is required: masks/
+  // toneCurvePoints/hslBands/splitToning are all rebuilt via $derived from
+  // editStack in +page.svelte on EVERY edit-stack change regardless of
+  // which op changed, so a reference check would always report "changed"
+  // and silently defeat this cache. `null` (not computed yet) is always
+  // treated as dirty, which is what makes the very first render safe --
+  // gradedTex/darkChannelHTex/etc are guaranteed to hold real values (not
+  // uninitialized garbage) before fs_final ever reads them.
+  /** @type {string | null} */
+  let dehazeInputsKey = null;
+
   // M3 Slice 7: brush masks rasterize into a shared texture ARRAY (one
   // layer per active brush mask, sized to the same combined MAX_MASKS
   // budget every mask kind shares) rather than a single texture -- a
@@ -761,7 +843,11 @@
       // re-sample-and-re-invert step, so no per-kind overlay data is
       // needed here at all.
       selected_mask_index: f32,
-      _pad0: f32,
+      // Dehaze (M3): 0-100, reuses this struct's own last spare padding
+      // float rather than a whole new tiny uniform buffer/binding for one
+      // scalar -- unlike Split Toning (5 new fields, genuinely didn't fit
+      // in 3 spare floats), Dehaze's single Amount slider does.
+      dehaze_amount: f32,
       _pad1: f32,
       _pad2: f32,
     };
@@ -978,22 +1064,189 @@
       return rgb * (1.0 - aSh - aHi) + tintSh * aSh + tintHi * aHi;
     }
 
+    // Grade pass (M3 Dehaze): the existing global chain (exposure ->
+    // contrast -> saturation -> tone curve -> HSL -> split toning),
+    // redirected to write into gradedTex instead of the swapchain --
+    // Dehaze (below) is the first op in this pipeline that needs
+    // NEIGHBORING pixels' graded value (a windowed min-filter for the dark
+    // channel, a whole-image reduction for atmospheric light), which a
+    // single straight-through fragment shader can't provide -- it cannot
+    // read the texture it is currently writing. Every earlier op fit in
+    // one shader invocation; this is the first that genuinely needs a
+    // multi-pass render graph. Mirrors develop_engine.rs's own Pass 1
+    // (writing into its graded buffer instead of the source image directly).
     @fragment
-    fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_grade(in: VertexOut) -> @location(0) vec4<f32> {
       var rgb = textureSample(srcTexture, srcSampler, in.uv).rgb;
       rgb = apply_adjustments(rgb, adj.exposure_ev, adj.contrast, adj.saturation);
-      // Tone curve: the global pass's new final step, applied before any
-      // mask below reads rgb as its own accumulator base -- matches real
-      // Lightroom's own "Tone Curve is global-only, local adjustments
-      // layer on top of it" ordering and develop_engine.rs's identical
-      // insertion point.
       rgb = vec3<f32>(sampleCurveLut(rgb.x), sampleCurveLut(rgb.y), sampleCurveLut(rgb.z));
-      // HSL / Color Mixer: the global pass's new final step after the
-      // tone curve, still before any mask below reads rgb.
       rgb = applyHslBands(rgb);
-      // Split Toning: the global pass's new final step after HSL, still
-      // before any mask below reads rgb.
       rgb = applySplitToning(rgb);
+      return vec4<f32>(rgb, 1.0);
+    }
+
+    // Dehaze (M3): dark-channel-prior haze removal (He et al. 2009), a
+    // direct WGSL port of develop_engine.rs's own restructured algorithm --
+    // see that module's doc comment above dehaze_atmospheric_light for the
+    // full algorithm, its two named deviations from He et al., and the
+    // design review that caught real bugs in earlier drafts of both before
+    // this was written. Fixed constants, matching the Rust twin exactly.
+    const DEHAZE_PATCH_RADIUS: i32 = 7;
+    const DEHAZE_OMEGA: f32 = 0.95;
+    const DEHAZE_T0: f32 = 0.1;
+    const DEHAZE_REFINE_RADIUS: i32 = 4;
+
+    // All new intermediates read via textureLoad (explicit integer coords,
+    // mip 0), not textureSample -- r32float/rgba16float aren't filterable
+    // by default in WebGPU (needs an unrequested optional feature), and an
+    // exact block/window reduction needs exact taps anyway, never a
+    // filtered blend. gradedTex/atmLightFinal/transmissionTexFinal are each
+    // read by a FIXED set of passes and never rebound mid-frame;
+    // reduceInput/filterInput are each reused across MULTIPLE passes,
+    // rebound to a different actual texture per pass (a different bind
+    // group each time, same pipeline/shader code) -- see the JS side's own
+    // pass-list for exactly which real texture each is bound to per draw.
+    @group(0) @binding(8) var gradedTex: texture_2d<f32>;
+    @group(0) @binding(9) var reduceInput: texture_2d<f32>;
+    @group(0) @binding(10) var atmLightFinal: texture_2d<f32>;
+    @group(0) @binding(11) var filterInput: texture_2d<f32>;
+    @group(0) @binding(12) var transmissionTexFinal: texture_2d<f32>;
+
+    fn luma(rgb: vec3<f32>) -> f32 {
+      return dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    }
+
+    // Atmospheric-light reduction: one pass of an 8x8-block ARGMAX-BY-
+    // LUMINANCE reduction (see develop_engine.rs's dehaze_atmospheric_light
+    // doc comment for why this, not independent per-channel maxima -- a
+    // real bug an earlier draft had) -- run repeatedly against
+    // progressively smaller inputs (JS side decides how many times, sized
+    // to the source image's own dimensions) until reaching 1x1. Duplicate
+    // clamped edge taps are harmless for an argmax (unlike a sum), since a
+    // repeated candidate can't change which one wins.
+    @fragment
+    fn fs_atm_reduce(in: VertexOut) -> @location(0) vec4<f32> {
+      let outCoord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(reduceInput));
+      var best = vec3<f32>(0.0, 0.0, 0.0);
+      var bestLuma = -1.0;
+      for (var dy = 0; dy < 8; dy = dy + 1) {
+        for (var dx = 0; dx < 8; dx = dx + 1) {
+          let coord = clamp(outCoord * 8 + vec2<i32>(dx, dy), vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+          let c = textureLoad(reduceInput, coord, 0).rgb;
+          let l = luma(c);
+          if (l > bestLuma) {
+            bestLuma = l;
+            best = c;
+          }
+        }
+      }
+      return vec4<f32>(best, 1.0);
+    }
+
+    // Normalized min-channel: min_c(I^c/A^c), per pixel -- the atmospheric-
+    // light division happens HERE, before the windowed min below, matching
+    // He et al. exactly. A real bug an earlier draft had: collapsing the
+    // cross-channel min FIRST and dividing the resulting scalar by a
+    // single scalar representative of A afterward is not a numerically-
+    // close approximation but a structurally different, generally wrong,
+    // result (see develop_engine.rs's own doc comment for the concrete
+    // counterexample that caught this).
+    @fragment
+    fn fs_min_channel(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let c = textureLoad(gradedTex, coord, 0).rgb;
+      let a = textureLoad(atmLightFinal, vec2<i32>(0, 0), 0).rgb;
+      let m = min(c.r / a.r, min(c.g / a.g, c.b / a.b));
+      return vec4<f32>(m, 0.0, 0.0, 1.0);
+    }
+
+    // Separable box-MIN filter (the dark-channel step): horizontal pass
+    // then vertical pass -- correct (not just cheaper) because a
+    // rectangular window's min is associative/commutative over its two
+    // axes independently. Edge taps clamp to the input texture's own
+    // bounds -- textureLoad on an out-of-range coordinate silently returns
+    // zero, which would corrupt the min near image borders if not guarded.
+    @fragment
+    fn fs_min_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var m = 1e6;
+      for (var dx = -DEHAZE_PATCH_RADIUS; dx <= DEHAZE_PATCH_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        m = min(m, textureLoad(filterInput, vec2<i32>(sx, coord.y), 0).r);
+      }
+      return vec4<f32>(m, 0.0, 0.0, 1.0);
+    }
+
+    // Vertical pass, completing the dark channel -- folds in the raw-
+    // transmission step (1 - omega * darkChannel) directly (one fewer pass
+    // than a separate step would need), matching develop_engine.rs's own
+    // combined t_raw computation.
+    @fragment
+    fn fs_min_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var m = 1e6;
+      for (var dy = -DEHAZE_PATCH_RADIUS; dy <= DEHAZE_PATCH_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        m = min(m, textureLoad(filterInput, vec2<i32>(coord.x, sy), 0).r);
+      }
+      let tRaw = 1.0 - DEHAZE_OMEGA * m;
+      return vec4<f32>(tRaw, 0.0, 0.0, 1.0);
+    }
+
+    // Separable box-MEAN filter (transmission refinement, standing in for
+    // He et al.'s edge-preserving guided filter -- named limitation: mild
+    // haloing near strong contrast edges a real guided filter would
+    // avoid). A sum-based sliding-window accumulator would be cheaper on
+    // the CPU side (see develop_engine.rs's separable_mean_filter), but a
+    // naive per-tap sum here is simplest and still cheap at this radius --
+    // GPU fragment shaders parallelize across pixels, not within one.
+    @fragment
+    fn fs_mean_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var sum = 0.0;
+      for (var dx = -DEHAZE_REFINE_RADIUS; dx <= DEHAZE_REFINE_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(filterInput, vec2<i32>(sx, coord.y), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_mean_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var sum = 0.0;
+      for (var dy = -DEHAZE_REFINE_RADIUS; dy <= DEHAZE_REFINE_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(filterInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // Final pass: reads the graded color back from gradedTex (not a
+    // re-sample of srcTexture -- every global op through Split Toning is
+    // already baked in), applies the Dehaze recovery + amount blend, then
+    // runs the EXISTING mask loop unchanged, writing the real swapchain
+    // output. Safe to read the dehaze maps unconditionally even at
+    // amount=0 (the blend multiplies their contribution by 0) as long as
+    // they're always populated with REAL values before this ever runs --
+    // see writeAdjustmentsAndRender's dirty-key caching, which always
+    // treats "nothing cached yet" (the very first render) as dirty.
+    @fragment
+    fn fs_final(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      var rgb = textureLoad(gradedTex, coord, 0).rgb;
+
+      let a = textureLoad(atmLightFinal, vec2<i32>(0, 0), 0).rgb;
+      let t = max(textureLoad(transmissionTexFinal, coord, 0).r, DEHAZE_T0);
+      let recovered = (rgb - a) / t + a;
+      rgb = rgb + (recovered - rgb) * (adj.dehaze_amount / 100.0);
 
       // Local adjustments layer on top of the globally-graded image,
       // matching real Lightroom's own ordering and develop_engine.rs's.
@@ -1129,20 +1382,104 @@
     device = await adapter.requestDevice();
     presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
+    // A real, pre-existing gap this component never had a way to surface:
+    // most WebGPU errors (shader compile failures, bind-group-layout
+    // mismatches, invalid texture usage, etc.) are reported ASYNCHRONOUSLY
+    // via this event, not as a catchable JS exception at the call site --
+    // createShaderModule/createRenderPipeline/beginRenderPass etc. don't
+    // throw on an invalid WGSL module or a malformed pipeline; they just
+    // silently produce an invalid resource, and any draw using it
+    // no-ops. Without this listener, such an error would only ever be
+    // visible in the webview's own devtools console, which isn't
+    // reachable from outside the app -- worth catching for real now that
+    // Dehaze made this shader's own pipeline count/complexity jump
+    // significantly (1 pipeline -> 8).
+    device.addEventListener("uncapturederror", (/** @type {any} */ event) => {
+      status = "error";
+      errorMessage = `WebGPU: ${event.error.message}`;
+    });
+
     context = canvas.getContext("webgpu");
     if (!context) throw new Error("canvas.getContext('webgpu') returned null");
     context.configure({ device, format: presentationFormat, alphaMode: "opaque" });
 
+    // One compiled module, many entry points -- each createRenderPipeline
+    // call below just picks a different entryPoint out of the SAME
+    // compiled WGSL, no separate compilation per pass. Each pipeline gets
+    // its OWN layout:"auto"-inferred bind group layout, scoped to only the
+    // bindings that specific entry point's own code actually references
+    // (NOT the whole module's declarations) -- see the WGSL source's own
+    // comment on gradePipeline/pipeline(final)'s deliberately DIFFERENT
+    // inferred layouts for why a bind group built for one pipeline can't
+    // be reused for another, even where their WGSL code looks similar.
     const module = device.createShaderModule({ code: WGSL });
+    // Kept permanently (not a debugging leftover) -- shader COMPILATION
+    // errors are a separate WebGPU error category from the validation
+    // errors device.onuncapturederror catches above; they surface ONLY via
+    // this async call, never as a device error. Without it, a future WGSL
+    // typo could compile to a silently-invalid module with zero visible
+    // signal beyond "the canvas is blank" -- exactly the class of bug that
+    // made Dehaze's own real bind-group bug (a missing srcSampler entry,
+    // unrelated to this specific check but discovered while debugging the
+    // same "no error surfaces anywhere" symptom) so slow to localize.
+    module.getCompilationInfo().then((info) => {
+      const problems = info.messages.filter((m) => m.type !== "info");
+      if (problems.length > 0) {
+        status = "error";
+        errorMessage = `WGSL compile: ${problems.map((m) => `line ${m.lineNum}: ${m.message}`).join(" | ")}`;
+      }
+    });
     pipeline = device.createRenderPipeline({
       layout: "auto",
       vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_main", targets: [{ format: presentationFormat }] },
+      fragment: { module, entryPoint: "fs_final", targets: [{ format: presentationFormat }] },
+      primitive: { topology: "triangle-list" },
+    });
+    gradePipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_grade", targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    atmReducePipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_atm_reduce", targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    minChannelPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_min_channel", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    minHPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_min_h", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    minVPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_min_v", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    meanHPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_mean_h", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    meanVPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_mean_v", targets: [{ format: "r32float" }] },
       primitive: { topology: "triangle-list" },
     });
 
     uniformBuffer = device.createBuffer({
-      size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, 3x padding)
+      size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, dehaze_amount, 2x padding)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     masksBuffer = device.createBuffer({
@@ -1168,13 +1505,51 @@
    * upgradeToFullTier (the SAME image, a higher-resolution decode of it),
    * so the ~70 lines of WebGPU setup below exist in exactly one place
    * rather than two copies that could drift out of sync. */
+  /** The atmospheric-light reduction chain's own successive sizes (M3
+   * Dehaze) -- each pass does an 8x8-block reduction (see fs_atm_reduce's
+   * own doc comment), so each step's size is ceil(previous/8), stopping
+   * once BOTH dimensions reach 1. `do...while` (not `while`) guarantees at
+   * least one entry even for a degenerate 1x1 source, so
+   * atmLightChain[atmLightChain.length - 1] is never read from an empty
+   * array. */
+  function buildAtmLightChainSizes(/** @type {number} */ width, /** @type {number} */ height) {
+    const sizes = [];
+    let w = width;
+    let h = height;
+    do {
+      w = Math.max(1, Math.ceil(w / 8));
+      h = Math.max(1, Math.ceil(h / 8));
+      sizes.push([w, h]);
+    } while (w > 1 || h > 1);
+    return sizes;
+  }
+
+  /** One fullscreen-triangle draw into `outputView` -- the shared shape
+   * every dehaze pass and the existing final pass use, factored out to
+   * avoid repeating the same beginRenderPass/setPipeline/setBindGroup/
+   * draw/end boilerplate for what's now up to ~9 passes per render. */
+  function runFullscreenPass(
+    /** @type {GPUCommandEncoder} */ enc,
+    /** @type {GPURenderPipeline} */ pl,
+    /** @type {GPUBindGroup} */ bg,
+    /** @type {GPUTextureView} */ outputView,
+  ) {
+    const p = enc.beginRenderPass({
+      colorAttachments: [{ view: outputView, loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+    });
+    p.setPipeline(pl);
+    p.setBindGroup(0, bg);
+    p.draw(3);
+    p.end();
+  }
+
   async function applyBitmapToGpu(/** @type {ImageBitmap} */ bitmap) {
     // Both callers (loadImage, upgradeToFullTier) already only reach here
     // once initGpu has run, but re-asserted here too -- both for a real
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -1243,20 +1618,153 @@
     brushRasterState = new Map();
     freeBrushLayers = Array.from({ length: MAX_MASKS }, (_, i) => i);
 
+    // Dehaze (M3): intermediates sized to match this bitmap's own
+    // resolution -- same "recreate whenever the source resolution changes"
+    // lifecycle as sourceTexture/brushTextureArray above.
+    gradedTex?.destroy();
+    gradedTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      // rgba16float, not rgba8unorm -- filterable+renderable by default
+      // (no feature request needed) and avoids a NEW 8-bit quantization
+      // step between Split Toning and Dehaze/masks that didn't exist in
+      // the old single-pass fs_main.
+      format: "rgba16float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    minChannelTex?.destroy();
+    minChannelTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    darkChannelHTex?.destroy();
+    darkChannelHTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    tRawTex?.destroy();
+    tRawTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    transmissionHTex?.destroy();
+    transmissionHTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    transmissionTex?.destroy();
+    transmissionTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    // Atmospheric-light reduction chain: an ARRAY of successively-smaller
+    // textures (see buildAtmLightChainSizes/fs_atm_reduce's own doc
+    // comment), not one texture's mip chain -- simpler to create and bind
+    // correctly by hand than juggling createView({baseMipLevel}) at every
+    // step, and these are all tiny (the largest is ~1/64th of the source
+    // resolution).
+    atmLightChain.forEach((tex) => tex.destroy());
+    const chainSizes = buildAtmLightChainSizes(bitmap.width, bitmap.height);
+    // Captured as a local `const` -- TS can't narrow the outer `device`/
+    // `atmReducePipeline` `let`s (reassignable elsewhere in this module)
+    // across a closure boundary, even though the top-of-function guard
+    // above already ensures both are non-null for this entire call.
+    const gpuDevice = device;
+    const reducePipeline = atmReducePipeline;
+    atmLightChain = chainSizes.map(([w, h]) =>
+      gpuDevice.createTexture({
+        size: [w, h],
+        format: "rgba16float",
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+      }),
+    );
+    const atmLightFinalTex = atmLightChain[atmLightChain.length - 1];
+
     const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
-    bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
+
+    gradeBindGroup = gpuDevice.createBindGroup({
+      layout: gradePipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: sampler },
         { binding: 1, resource: sourceTexture.createView() },
         { binding: 2, resource: { buffer: uniformBuffer } },
-        { binding: 3, resource: { buffer: masksBuffer } },
-        { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
         { binding: 5, resource: { buffer: curveLutBuffer } },
         { binding: 6, resource: { buffer: hslBandsBuffer } },
         { binding: 7, resource: { buffer: splitToningBuffer } },
       ],
     });
+
+    // One bind group per reduction pass -- `reduceInput` (binding 9) is
+    // rebound to a DIFFERENT actual texture each step (gradedTex for the
+    // first pass, then each successively-smaller chain texture in turn),
+    // the SAME atmReducePipeline object reused for every draw call.
+    atmReduceBindGroups = chainSizes.map((_, i) => {
+      const input = /** @type {GPUTexture} */ (i === 0 ? gradedTex : atmLightChain[i - 1]);
+      return gpuDevice.createBindGroup({
+        layout: reducePipeline.getBindGroupLayout(0),
+        entries: [{ binding: 9, resource: input.createView() }],
+      });
+    });
+
+    minChannelBindGroup = gpuDevice.createBindGroup({
+      layout: minChannelPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 8, resource: gradedTex.createView() },
+        { binding: 10, resource: atmLightFinalTex.createView() },
+      ],
+    });
+    minHBindGroup = gpuDevice.createBindGroup({
+      layout: minHPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 11, resource: minChannelTex.createView() }],
+    });
+    minVBindGroup = gpuDevice.createBindGroup({
+      layout: minVPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 11, resource: darkChannelHTex.createView() }],
+    });
+    meanHBindGroup = gpuDevice.createBindGroup({
+      layout: meanHPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 11, resource: tRawTex.createView() }],
+    });
+    meanVBindGroup = gpuDevice.createBindGroup({
+      layout: meanVPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 11, resource: transmissionHTex.createView() }],
+    });
+
+    // Final pass's own bind group -- a genuinely DIFFERENT entry set than
+    // before (0,2,3,4,8,10,12), NOT the old single-pass fs_main's {0-7} --
+    // fs_final no longer references srcTexture/curveLut/hslBands/
+    // splitToning (those moved into fs_grade), but DOES still need
+    // srcSampler(0) -- the mask loop's own pre-existing brushMasks sample
+    // uses it, unrelated to Dehaze.
+    bindGroup = gpuDevice.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        // binding 0 (srcSampler) IS still needed here -- fs_final's mask
+        // loop (copied unchanged from the old fs_main) samples brushMasks
+        // via textureSampleLevel(brushMasks, srcSampler, ...), a real
+        // dependency this bind group's entry list missed on the first
+        // pass (assumed fs_final needed none of the original 0/1/5/6/7
+        // bindings, but the mask loop's OWN pre-existing srcSampler use
+        // doesn't go away just because Dehaze was inserted above it).
+        { binding: 0, resource: sampler },
+        { binding: 2, resource: { buffer: uniformBuffer } },
+        { binding: 3, resource: { buffer: masksBuffer } },
+        { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
+        { binding: 8, resource: gradedTex.createView() },
+        { binding: 10, resource: atmLightFinalTex.createView() },
+        { binding: 12, resource: transmissionTex.createView() },
+      ],
+    });
+    // Every dehaze intermediate above is freshly (re)created for this
+    // bitmap -- any previously-cached dirty key belonged to a DIFFERENT
+    // image/tier's now-destroyed textures, so it must not be trusted to
+    // skip recomputing the expensive passes on the next render.
+    dehazeInputsKey = null;
 
     if (context.canvas instanceof HTMLCanvasElement) {
       context.canvas.width = bitmap.width;
@@ -1270,7 +1778,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -1463,7 +1971,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -1484,7 +1992,7 @@
     device.queue.writeBuffer(
       uniformBuffer,
       0,
-      new Float32Array([exposure, contrast, saturation, masks.length, selectedMaskIndex, 0, 0, 0]),
+      new Float32Array([exposure, contrast, saturation, masks.length, selectedMaskIndex, dehaze, 0, 0]),
     );
 
     const maskData = new Float32Array(MAX_MASKS * 12);
@@ -1539,20 +2047,40 @@
     device.queue.writeBuffer(masksBuffer, 0, maskData);
 
     const encoder = device.createCommandEncoder();
-    const pass = encoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: context.getCurrentTexture().createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 1 },
-          loadOp: "clear",
-          storeOp: "store",
-        },
-      ],
-    });
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.draw(3);
-    pass.end();
+
+    // Dehaze: the dark-channel/atmospheric-light/transmission passes
+    // depend ONLY on {exposure, contrast, saturation, toneCurvePoints,
+    // hslBands, splitToning} -- NOT masks/selectedMaskId/showMaskOverlay,
+    // which only ever affect the cheap final pass below. Without this
+    // check, an unthrottled mask-handle drag (handlePointerMove calling
+    // onMaskUpdated on every pointermove) would retrigger this ~9-pass
+    // chain every single frame. A VALUE-based key, not reference equality
+    // -- see dehazeInputsKey's own doc comment for why masks/
+    // toneCurvePoints/hslBands/splitToning being freshly rebuilt via
+    // $derived on every editStack change (regardless of which op changed)
+    // makes a reference check always report "changed," silently defeating
+    // this cache. `dehazeInputsKey === null` (nothing cached yet, e.g. the
+    // very first render, or right after a fresh applyBitmapToGpu) is
+    // always treated as dirty.
+    const dehazeKey = JSON.stringify({ exposure, contrast, saturation, toneCurvePoints, hslBands, splitToning });
+    if (dehazeKey !== dehazeInputsKey) {
+      dehazeInputsKey = dehazeKey;
+      runFullscreenPass(encoder, gradePipeline, gradeBindGroup, gradedTex.createView());
+      // Captured as a local `const` for the same reason applyBitmapToGpu's
+      // own gpuDevice/reducePipeline aliases are -- TS can't narrow a
+      // reassignable outer `let` across a closure boundary.
+      const reducePipeline = atmReducePipeline;
+      atmReduceBindGroups.forEach((bg, i) => {
+        runFullscreenPass(encoder, reducePipeline, bg, atmLightChain[i].createView());
+      });
+      runFullscreenPass(encoder, minChannelPipeline, minChannelBindGroup, minChannelTex.createView());
+      runFullscreenPass(encoder, minHPipeline, minHBindGroup, darkChannelHTex.createView());
+      runFullscreenPass(encoder, minVPipeline, minVBindGroup, tRawTex.createView());
+      runFullscreenPass(encoder, meanHPipeline, meanHBindGroup, transmissionHTex.createView());
+      runFullscreenPass(encoder, meanVPipeline, meanVBindGroup, transmissionTex.createView());
+    }
+
+    runFullscreenPass(encoder, pipeline, bindGroup, context.getCurrentTexture().createView());
     device.queue.submit([encoder.finish()]);
   }
 
@@ -1588,6 +2116,7 @@
     void toneCurvePoints;
     void hslBands;
     void splitToning;
+    void dehaze;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 

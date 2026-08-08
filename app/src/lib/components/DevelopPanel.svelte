@@ -24,6 +24,10 @@
    *   onResetRequest: () => void,
    *   dehaze: number,
    *   onDehazeChange: (value: number) => void,
+   *   texture: number,
+   *   onTextureChange: (value: number) => void,
+   *   clarity: number,
+   *   onClarityChange: (value: number) => void,
    * }}
    */
   let {
@@ -47,6 +51,10 @@
     onResetRequest,
     dehaze,
     onDehazeChange,
+    texture,
+    onTextureChange,
+    clarity,
+    onClarityChange,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -322,6 +330,38 @@
           oninput={(e) => onSplitToningBalanceChange(Number(e.currentTarget.value))}
         />
         <span class="val">{splitToning.balance >= 0 ? "+" : ""}{splitToning.balance}</span>
+      </div>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>Texture &amp; Clarity</summary>
+    <div class="sub-body">
+      <div class="row">
+        <label for="texture-amount">Texture</label>
+        <input
+          id="texture-amount"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={texture}
+          oninput={(e) => onTextureChange(Number(e.currentTarget.value))}
+        />
+        <span class="val">{texture}</span>
+      </div>
+      <div class="row">
+        <label for="clarity-amount">Clarity</label>
+        <input
+          id="clarity-amount"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={clarity}
+          oninput={(e) => onClarityChange(Number(e.currentTarget.value))}
+        />
+        <span class="val">{clarity}</span>
       </div>
     </div>
   </details>

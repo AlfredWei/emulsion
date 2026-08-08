@@ -28,6 +28,8 @@
    *   onTextureChange: (value: number) => void,
    *   clarity: number,
    *   onClarityChange: (value: number) => void,
+   *   vignette: {amount: number, midpoint: number, feather: number},
+   *   onVignetteChange: (patch: Partial<{amount: number, midpoint: number, feather: number}>) => void,
    * }}
    */
   let {
@@ -55,6 +57,8 @@
     onTextureChange,
     clarity,
     onClarityChange,
+    vignette,
+    onVignetteChange,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -69,7 +73,7 @@
 
   const STATIC_SECTIONS = [
     { title: "Detail", note: "Sharpening · noise reduction" },
-    { title: "Effects", note: "Grain · vignette" },
+    { title: "Effects", note: "Grain" },
     { title: "Lens Corrections", note: "Profile · chromatic aberration" },
   ];
 
@@ -381,6 +385,51 @@
           oninput={(e) => onDehazeChange(Number(e.currentTarget.value))}
         />
         <span class="val">{dehaze}</span>
+      </div>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>Vignette</summary>
+    <div class="sub-body">
+      <div class="row">
+        <label for="vignette-amount">Amount</label>
+        <input
+          id="vignette-amount"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={vignette.amount}
+          oninput={(e) => onVignetteChange({ amount: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{vignette.amount}</span>
+      </div>
+      <div class="row">
+        <label for="vignette-midpoint">Midpoint</label>
+        <input
+          id="vignette-midpoint"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={vignette.midpoint}
+          oninput={(e) => onVignetteChange({ midpoint: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{vignette.midpoint}</span>
+      </div>
+      <div class="row">
+        <label for="vignette-feather">Feather</label>
+        <input
+          id="vignette-feather"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={vignette.feather}
+          oninput={(e) => onVignetteChange({ feather: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{vignette.feather}</span>
       </div>
     </div>
   </details>

@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildGrainUniformData } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData } from "$lib/api/develop.js";
 
   const MAX_MASKS = 8;
 
@@ -38,6 +38,9 @@
    *   clarity: number,
    *   vignette: {amount: number, midpoint: number, feather: number},
    *   grain: {amount: number, size: number, roughness: number},
+   *   sharpen: {amount: number, radius: number, detail: number, masking: number},
+   *   lumaNR: {amount: number, detail: number, contrast: number},
+   *   colorNR: {amount: number, detail: number},
    * }}
    */
   let {
@@ -67,6 +70,9 @@
     clarity,
     vignette,
     grain,
+    sharpen,
+    lumaNR,
+    colorNR,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -707,6 +713,15 @@
   // padding left).
   /** @type {GPUBuffer | null} */
   let grainBuffer = null;
+  // Sharpening / Noise Reduction (M3): same device-scoped, own-small-
+  // buffer treatment as Vignette/Grain above, one buffer per structured
+  // op.
+  /** @type {GPUBuffer | null} */
+  let sharpenBuffer = null;
+  /** @type {GPUBuffer | null} */
+  let lumaNRBuffer = null;
+  /** @type {GPUBuffer | null} */
+  let colorNRBuffer = null;
   /** @type {GPUBindGroup | null} */
   let bindGroup = null;
   /** @type {GPUTextureFormat} */
@@ -748,6 +763,18 @@
   let clarityHPipeline = null;
   /** @type {GPURenderPipeline | null} */
   let clarityVPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let sharpenHPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let sharpenVPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let lumaNRHPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let lumaNRVPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let colorNRHPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let colorNRVPipeline = null;
 
   // Intermediate textures -- all sized to match the CURRENT source
   // texture's own resolution (recreated in applyBitmapToGpu whenever that
@@ -783,6 +810,24 @@
   let textureAdjustedTex = null;
   /** @type {GPUTexture | null} */
   let clarityBlurScratchTex = null;
+  // Sharpening / Noise Reduction (M3): same one-texture-per-stage
+  // convention as Texture/Clarity above -- an H-output scratch texture
+  // and a final (post-V-pass) result texture per op, all read directly
+  // by fs_final (none of these overwrite gradedTex the way Clarity's own
+  // V-pass does -- see fs_final's own doc comment for why these stay as
+  // separate delta-source textures instead).
+  /** @type {GPUTexture | null} */
+  let sharpenBlurHTex = null;
+  /** @type {GPUTexture | null} */
+  let sharpenBlurTex = null;
+  /** @type {GPUTexture | null} */
+  let lumaNRBlurHTex = null;
+  /** @type {GPUTexture | null} */
+  let lumaNRBlurTex = null;
+  /** @type {GPUTexture | null} */
+  let colorNRBlurHTex = null;
+  /** @type {GPUTexture | null} */
+  let colorNRBlurTex = null;
 
   /** @type {GPUBindGroup | null} */
   let gradeBindGroup = null;
@@ -804,6 +849,18 @@
   let clarityHBindGroup = null;
   /** @type {GPUBindGroup | null} */
   let clarityVBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let sharpenHBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let sharpenVBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let lumaNRHBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let lumaNRVBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let colorNRHBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let colorNRVBindGroup = null;
   /** @type {GPUBindGroup[]} */
   let atmReduceBindGroups = [];
 
@@ -1028,6 +1085,154 @@
       let roughN = grainHash(floor(scaled));
       let noise = mix(smoothN, roughN, clamp(grain.roughness / 100.0, 0.0, 1.0));
       return (noise * 2.0 - 1.0) * (grain.amount / 100.0) * GRAIN_STRENGTH;
+    }
+
+    // Sharpening / Noise Reduction (M3): a direct WGSL port of
+    // develop_engine.rs's own sharpen_delta/luma_nr_delta/color_nr_delta
+    // -- see that module's doc comments (Sharpen, LumaNr, ColorNr structs
+    // and their delta functions) for the full parameter reasoning
+    // (Detail vs Masking's genuinely different amplitude-vs-spatial
+    // gates, Contrast's post-smoothing restoration, Color NR's exact
+    // luma-preserving chroma-delta construction -- algebraically verified
+    // in this slice's own design review). All three blurs read gradedTex
+    // DIRECTLY (never rebound, unlike Texture/Clarity's lcRgbInput) --
+    // they always read the SAME pre-Dehaze-recovery snapshot, see the
+    // Rust twin's own doc comment on that named, accepted limitation.
+    struct SharpenParams {
+      amount: f32,   // 0..100
+      radius: f32,   // 0..100 slider, mapped to a pixel radius below
+      detail: f32,   // 0..100
+      masking: f32,  // 0..100
+    };
+    struct LumaNrParams {
+      amount: f32,    // 0..100
+      detail: f32,    // 0..100
+      contrast: f32,  // 0..100
+      _pad0: f32,
+    };
+    struct ColorNrParams {
+      amount: f32,  // 0..100
+      detail: f32,  // 0..100
+      _pad0: f32,
+      _pad1: f32,
+    };
+    @group(0) @binding(19) var<uniform> sharpenParams: SharpenParams;
+    @group(0) @binding(20) var<uniform> lumaNrParams: LumaNrParams;
+    @group(0) @binding(21) var<uniform> colorNrParams: ColorNrParams;
+    // Rebound per V-pass, same "generic scratch, many bind groups" pattern
+    // filterInput(11)/lcBlurInput(14) already established -- binding 17 is
+    // reused across Sharpen's and Luma NR's own H-output (both r32float,
+    // single-channel); binding 18 is Color NR's own H-output (rgba16float,
+    // a full-channel blur, needs its own dedicated slot).
+    @group(0) @binding(17) var blurScratchR32: texture_2d<f32>;
+    @group(0) @binding(18) var blurScratchRgba: texture_2d<f32>;
+    // Final (post-V-pass) blur results -- read only by fs_final, each its
+    // own dedicated binding (not reused/rebound, since fs_final needs all
+    // three simultaneously in one draw call, unlike the scratch slots
+    // above which are only ever bound one-at-a-time per H/V pass).
+    @group(0) @binding(22) var sharpenBlurFinal: texture_2d<f32>;
+    @group(0) @binding(23) var lumaNrBlurFinal: texture_2d<f32>;
+    @group(0) @binding(24) var colorNrBlurFinal: texture_2d<f32>;
+
+    const SHARPEN_MAX_RADIUS_PX: i32 = 8;
+    const SHARPEN_STRENGTH: f32 = 1.6;
+    const SHARPEN_DETAIL_SCALE: f32 = 0.06;
+    const SHARPEN_MASK_SCALE: f32 = 0.05;
+    const LUMA_NR_RADIUS: i32 = 3;
+    const NR_DETAIL_SCALE: f32 = 0.05;
+    const NR_CONTRAST_STRENGTH: f32 = 0.6;
+    const COLOR_NR_RADIUS: i32 = 4;
+    const COLOR_NR_DETAIL_SCALE: f32 = 0.08;
+
+    // Sharpening's Radius is a genuine USER slider, not a compile-time
+    // const the way every other radius in this shader is (Texture/
+    // Clarity/Dehaze's own radii are all baked into the WGSL source at
+    // authoring time) -- this is a deliberate, new precedent: a real
+    // uniform-driven dynamic loop bound in fs_sharpen_h/fs_sharpen_v
+    // below, not a template to copy for future fixed-radius ops.
+    fn sharpenRadiusPx(radiusSlider: f32) -> i32 {
+      let r = 1.0 + (radiusSlider / 100.0) * (f32(SHARPEN_MAX_RADIUS_PX) - 1.0);
+      return max(i32(round(r)), 1);
+    }
+
+    @fragment
+    fn fs_sharpen_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      let radius = sharpenRadiusPx(sharpenParams.radius);
+      var sum = 0.0;
+      for (var dx = -radius; dx <= radius; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + luma(textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb);
+      }
+      let window = f32(2 * radius + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchR32));
+      let radius = sharpenRadiusPx(sharpenParams.radius);
+      var sum = 0.0;
+      for (var dy = -radius; dy <= radius; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchR32, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * radius + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_lumaNR_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      var sum = 0.0;
+      for (var dx = -LUMA_NR_RADIUS; dx <= LUMA_NR_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + luma(textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb);
+      }
+      let window = f32(2 * LUMA_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_lumaNR_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchR32));
+      var sum = 0.0;
+      for (var dy = -LUMA_NR_RADIUS; dy <= LUMA_NR_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchR32, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * LUMA_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      for (var dx = -COLOR_NR_RADIUS; dx <= COLOR_NR_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchRgba));
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      for (var dy = -COLOR_NR_RADIUS; dy <= COLOR_NR_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchRgba, vec2<i32>(coord.x, sy), 0).rgb;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 1.0);
     }
 
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
@@ -1468,6 +1673,60 @@
       let recovered = (rgb - a) / t + a;
       rgb = rgb + (recovered - rgb) * (adj.dehaze_amount / 100.0);
 
+      // Noise Reduction (luminance, then color), then Sharpening -- see
+      // develop_engine.rs's own doc comments (above sharpen_delta/
+      // luma_nr_delta/color_nr_delta) for the full formula reasoning and
+      // the pipeline-order rationale (NR before Sharpen, to avoid
+      // re-amplifying noise). origLuma/origRgb re-read gradedTex directly
+      // (NOT the local rgb, which may already carry Dehaze's recovery) --
+      // matching the Rust twin's own use of graded_luma/graded_rgb, the
+      // same pre-Dehaze-recovery snapshot the blur passes above were
+      // computed from.
+      let origRgb = textureLoad(gradedTex, coord, 0).rgb;
+      let origLuma = luma(origRgb);
+
+      let lnBlurred = textureLoad(lumaNrBlurFinal, coord, 0).r;
+      let lnDiff = origLuma - lnBlurred;
+      let lnEdgeThreshold = max(NR_DETAIL_SCALE * (1.0 - lumaNrParams.detail / 100.0), 0.0001);
+      let lnSmoothWeight = 1.0 - smoothstep(0.0, lnEdgeThreshold, abs(lnDiff));
+      let lnSmoothDelta = -lnDiff * (lumaNrParams.amount / 100.0) * lnSmoothWeight;
+      let lnContrastRestore = lnDiff * (lumaNrParams.contrast / 100.0) * NR_CONTRAST_STRENGTH * (lumaNrParams.amount / 100.0);
+      let lnTotal = lnSmoothDelta + lnContrastRestore;
+      rgb = rgb + vec3<f32>(lnTotal, lnTotal, lnTotal);
+
+      let cnrBlurred = textureLoad(colorNrBlurFinal, coord, 0).rgb;
+      let cnrD = cnrBlurred - origRgb;
+      let cnrWeightedMean = dot(cnrD, vec3<f32>(0.2126, 0.7152, 0.0722));
+      let cnrChromaDelta = cnrD - vec3<f32>(cnrWeightedMean, cnrWeightedMean, cnrWeightedMean);
+      let cnrMag = length(cnrChromaDelta);
+      let cnrThreshold = max(COLOR_NR_DETAIL_SCALE * (1.0 - colorNrParams.detail / 100.0), 0.0001);
+      let cnrSmoothWeight = 1.0 - smoothstep(0.0, cnrThreshold, cnrMag);
+      let cnrK = (colorNrParams.amount / 100.0) * cnrSmoothWeight;
+      rgb = rgb + cnrChromaDelta * cnrK;
+
+      let shBlurred = textureLoad(sharpenBlurFinal, coord, 0).r;
+      let shDiff = origLuma - shBlurred;
+      let shDetailThreshold = max(SHARPEN_DETAIL_SCALE * (1.0 - sharpenParams.detail / 100.0), 0.0001);
+      let shDetailWeight = smoothstep(0.0, shDetailThreshold, abs(shDiff));
+      // Local gradient magnitude (Masking): a 4-neighbor central
+      // difference on gradedTex's own luma -- a genuine spatial "near an
+      // edge" signal, deliberately distinct from Detail's own per-pixel
+      // diff-amplitude gate above (see the Rust twin's own
+      // local_gradient_magnitude doc comment for why the two needed to be
+      // different, per this slice's design review).
+      let dimsG = vec2<i32>(textureDimensions(gradedTex));
+      let shXm = clamp(coord.x - 1, 0, dimsG.x - 1);
+      let shXp = clamp(coord.x + 1, 0, dimsG.x - 1);
+      let shYm = clamp(coord.y - 1, 0, dimsG.y - 1);
+      let shYp = clamp(coord.y + 1, 0, dimsG.y - 1);
+      let shGx = luma(textureLoad(gradedTex, vec2<i32>(shXp, coord.y), 0).rgb) - luma(textureLoad(gradedTex, vec2<i32>(shXm, coord.y), 0).rgb);
+      let shGy = luma(textureLoad(gradedTex, vec2<i32>(coord.x, shYp), 0).rgb) - luma(textureLoad(gradedTex, vec2<i32>(coord.x, shYm), 0).rgb);
+      let shGradMag = sqrt(shGx * shGx + shGy * shGy) * 0.5;
+      let shMaskThreshold = max(SHARPEN_MASK_SCALE * (sharpenParams.masking / 100.0), 0.0001);
+      let shMaskWeight = smoothstep(0.0, shMaskThreshold, shGradMag);
+      let shDelta = shDiff * (sharpenParams.amount / 100.0) * shDetailWeight * shMaskWeight * SHARPEN_STRENGTH;
+      rgb = rgb + vec3<f32>(shDelta, shDelta, shDelta);
+
       // Vignette: aspect-corrected elliptical falloff -- see
       // develop_engine.rs's vignette_factor doc comment for the full
       // shape/parameter reasoning, mirrored exactly here.
@@ -1743,6 +2002,42 @@
       fragment: { module, entryPoint: "fs_clarity_v", targets: [{ format: "rgba16float" }] },
       primitive: { topology: "triangle-list" },
     });
+    sharpenHPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_sharpen_h", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    sharpenVPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_sharpen_v", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    lumaNRHPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_lumaNR_h", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    lumaNRVPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_lumaNR_v", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    colorNRHPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_colorNR_h", targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    colorNRVPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_colorNR_v", targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list" },
+    });
 
     uniformBuffer = device.createBuffer({
       size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, dehaze_amount, texture_amount, clarity_amount)
@@ -1770,6 +2065,18 @@
     });
     grainBuffer = device.createBuffer({
       size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL Grain struct
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    sharpenBuffer = device.createBuffer({
+      size: 4 * 4, // 4 f32 (amount, radius, detail, masking), matches the WGSL SharpenParams struct
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    lumaNRBuffer = device.createBuffer({
+      size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL LumaNrParams struct
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    colorNRBuffer = device.createBuffer({
+      size: 4 * 4, // 4 f32 (2 real fields + 2 padding), matches the WGSL ColorNrParams struct
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
   }
@@ -1823,7 +2130,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -1960,6 +2267,45 @@
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
+    // Sharpening / Noise Reduction (M3): same "recreate whenever source
+    // resolution changes" lifecycle as every intermediate above.
+    sharpenBlurHTex?.destroy();
+    sharpenBlurHTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    sharpenBlurTex?.destroy();
+    sharpenBlurTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    lumaNRBlurHTex?.destroy();
+    lumaNRBlurHTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    lumaNRBlurTex?.destroy();
+    lumaNRBlurTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    colorNRBlurHTex?.destroy();
+    colorNRBlurHTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "rgba16float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    colorNRBlurTex?.destroy();
+    colorNRBlurTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "rgba16float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
     // Atmospheric-light reduction chain: an ARRAY of successively-smaller
     // textures (see buildAtmLightChainSizes/fs_atm_reduce's own doc
     // comment), not one texture's mip chain -- simpler to create and bind
@@ -2068,18 +2414,58 @@
       ],
     });
 
+    // Sharpening / Noise Reduction (M3): all three H-passes read
+    // gradedTex(8) DIRECTLY (never rebound the way Texture/Clarity's own
+    // lcRgbInput is) -- they always read the SAME pre-Dehaze-recovery
+    // snapshot, so no per-pass rebinding is needed. Sharpen's own H/V
+    // passes additionally need binding 19 (sharpenParams) for its
+    // uniform-driven radius; Luma/Color NR's radii are fixed WGSL consts,
+    // so their own H/V bind groups need no uniform at all.
+    sharpenHBindGroup = gpuDevice.createBindGroup({
+      layout: sharpenHPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 8, resource: gradedTex.createView() },
+        { binding: 19, resource: { buffer: sharpenBuffer } },
+      ],
+    });
+    sharpenVBindGroup = gpuDevice.createBindGroup({
+      layout: sharpenVPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 17, resource: sharpenBlurHTex.createView() },
+        { binding: 19, resource: { buffer: sharpenBuffer } },
+      ],
+    });
+    lumaNRHBindGroup = gpuDevice.createBindGroup({
+      layout: lumaNRHPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 8, resource: gradedTex.createView() }],
+    });
+    lumaNRVBindGroup = gpuDevice.createBindGroup({
+      layout: lumaNRVPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 17, resource: lumaNRBlurHTex.createView() }],
+    });
+    colorNRHBindGroup = gpuDevice.createBindGroup({
+      layout: colorNRHPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 8, resource: gradedTex.createView() }],
+    });
+    colorNRVBindGroup = gpuDevice.createBindGroup({
+      layout: colorNRVPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 18, resource: colorNRBlurHTex.createView() }],
+    });
+
     // Final pass's own bind group -- a genuinely DIFFERENT entry set than
     // before (0,2,3,4,8,10,12,15,16), NOT the old single-pass fs_main's
     // {0-7} -- fs_final no longer references srcTexture/curveLut/
     // hslBands/splitToning (those moved into fs_grade), but DOES still
     // need srcSampler(0) -- the mask loop's own pre-existing brushMasks
     // sample uses it, unrelated to Dehaze. binding 16 (grain) is the
-    // newest addition here -- double-checked against fs_final's own WGSL
-    // body (which reads grain.amount/size/roughness via grainDelta)
+    // newest additions here -- double-checked against fs_final's own WGSL
+    // body (which reads sharpenParams/lumaNrParams/colorNrParams and
+    // samples sharpenBlurFinal/lumaNrBlurFinal/colorNrBlurFinal directly)
     // before adding, given this exact bind group has already missed a
     // real binding THREE times now (srcSampler, then the Adjustments
-    // uniform in fs_texture_v/fs_clarity_v, then almost a fourth time
-    // here) per this comment's own history.
+    // uniform in fs_texture_v/fs_clarity_v, then almost a fourth time for
+    // Grain) per this comment's own history -- six new bindings in one
+    // slice is exactly the kind of change most likely to repeat it.
     bindGroup = gpuDevice.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
@@ -2099,6 +2485,12 @@
         { binding: 12, resource: transmissionTex.createView() },
         { binding: 15, resource: { buffer: vignetteBuffer } },
         { binding: 16, resource: { buffer: grainBuffer } },
+        { binding: 19, resource: { buffer: sharpenBuffer } },
+        { binding: 20, resource: { buffer: lumaNRBuffer } },
+        { binding: 21, resource: { buffer: colorNRBuffer } },
+        { binding: 22, resource: sharpenBlurTex.createView() },
+        { binding: 23, resource: lumaNRBlurTex.createView() },
+        { binding: 24, resource: colorNRBlurTex.createView() },
       ],
     });
     // Every intermediate above is freshly (re)created for this bitmap --
@@ -2119,7 +2511,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -2312,7 +2704,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -2324,6 +2716,9 @@
     device.queue.writeBuffer(splitToningBuffer, 0, buildSplitToningUniformData(splitToning));
     device.queue.writeBuffer(vignetteBuffer, 0, buildVignetteUniformData(vignette));
     device.queue.writeBuffer(grainBuffer, 0, buildGrainUniformData(grain));
+    device.queue.writeBuffer(sharpenBuffer, 0, buildSharpenUniformData(sharpen));
+    device.queue.writeBuffer(lumaNRBuffer, 0, buildLumaNrUniformData(lumaNR));
+    device.queue.writeBuffer(colorNRBuffer, 0, buildColorNrUniformData(colorNR));
 
     // Mask overlay: -1 (disabled) unless the toggle is on AND the current
     // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
@@ -2391,27 +2786,41 @@
 
     const encoder = device.createCommandEncoder();
 
-    // Texture/Clarity/Dehaze: the local-contrast and dark-channel/
-    // atmospheric-light/transmission passes depend on {exposure, contrast,
-    // saturation, toneCurvePoints, hslBands, splitToning, texture,
-    // clarity} -- NOT masks/selectedMaskId/showMaskOverlay, which only
-    // ever affect the cheap final pass below, and NOT dehaze (only
-    // fs_final's own cheap blend reads dehaze_amount; none of the maps
-    // computed in this block depend on it). texture/clarity DO belong in
-    // this key, unlike dehaze -- fs_texture_v/fs_clarity_v write their
-    // result INTO gradedTex itself, inside this block, so a texture/
-    // clarity-only change must still invalidate the cache. Without this
-    // check, an unthrottled mask-handle drag (handlePointerMove calling
-    // onMaskUpdated on every pointermove) would retrigger this ~13-pass
-    // chain every single frame. A VALUE-based key, not reference equality
-    // -- see spatialOpsInputsKey's own doc comment for why masks/
-    // toneCurvePoints/hslBands/splitToning being freshly rebuilt via
-    // $derived on every editStack change (regardless of which op changed)
-    // makes a reference check always report "changed," silently defeating
-    // this cache. `spatialOpsInputsKey === null` (nothing cached yet, e.g.
-    // the very first render, or right after a fresh applyBitmapToGpu) is
-    // always treated as dirty.
-    const spatialOpsKey = JSON.stringify({ exposure, contrast, saturation, toneCurvePoints, hslBands, splitToning, texture, clarity });
+    // Texture/Clarity/Dehaze/Sharpen/NR: the local-contrast, dark-channel/
+    // atmospheric-light/transmission, and sharpen/NR blur passes depend on
+    // {exposure, contrast, saturation, toneCurvePoints, hslBands,
+    // splitToning, texture, clarity, sharpenRadius} -- NOT masks/
+    // selectedMaskId/showMaskOverlay, which only ever affect the cheap
+    // final pass below, and NOT dehaze/sharpen's-own-amount/lumaNR/colorNR
+    // (only fs_final's own cheap blend reads those; none of the BLUR
+    // CONTENT computed in this block depends on them). texture/clarity DO
+    // belong in this key, unlike dehaze -- fs_texture_v/fs_clarity_v write
+    // their result INTO gradedTex itself, inside this block, so a
+    // texture/clarity-only change must still invalidate the cache.
+    // `sharpenRadius` belongs here for the SAME reason but a DIFFERENT
+    // mechanism: unlike dehaze_amount/lumaNR/colorNR's amount-only
+    // sliders, Sharpening's Radius controls the blur KERNEL SIZE itself
+    // (fs_sharpen_h/fs_sharpen_v's own loop bound) -- omitting it here was
+    // a real bug this slice's own design review caught before it ever
+    // shipped: dragging Radius alone would silently show a stale blur
+    // until some UNRELATED slider happened to invalidate the block.
+    // Luminance/Color NR need nothing added -- both use FIXED radii, so
+    // their blur CONTENT never changes regardless of amount/detail/
+    // contrast, the same reasoning that already excludes dehaze_amount.
+    // Without this whole cache, an unthrottled mask-handle drag
+    // (handlePointerMove calling onMaskUpdated on every pointermove) would
+    // retrigger this ~19-pass chain every single frame. A VALUE-based key,
+    // not reference equality -- see spatialOpsInputsKey's own doc comment
+    // for why masks/toneCurvePoints/hslBands/splitToning being freshly
+    // rebuilt via $derived on every editStack change (regardless of which
+    // op changed) makes a reference check always report "changed,"
+    // silently defeating this cache. `spatialOpsInputsKey === null`
+    // (nothing cached yet, e.g. the very first render, or right after a
+    // fresh applyBitmapToGpu) is always treated as dirty.
+    const spatialOpsKey = JSON.stringify({
+      exposure, contrast, saturation, toneCurvePoints, hslBands, splitToning, texture, clarity,
+      sharpenRadius: sharpen.radius,
+    });
     if (spatialOpsKey !== spatialOpsInputsKey) {
       spatialOpsInputsKey = spatialOpsKey;
       runFullscreenPass(encoder, gradePipeline, gradeBindGroup, gradedTex.createView());
@@ -2423,6 +2832,19 @@
       // one command encoder) and why no third "final graded" texture is
       // needed.
       runFullscreenPass(encoder, clarityVPipeline, clarityVBindGroup, gradedTex.createView());
+      // Sharpening / Noise Reduction: all three read gradedTex in this
+      // SAME post-Texture/Clarity, pre-Dehaze-recovery state -- see
+      // develop_engine.rs's own doc comment on the blur-source
+      // precomputation for the named, accepted limitation this implies.
+      // Order among these three (and relative to the atm-reduce chain
+      // below) doesn't matter -- all read the same stable gradedTex
+      // snapshot with no interdependency between them.
+      runFullscreenPass(encoder, sharpenHPipeline, sharpenHBindGroup, sharpenBlurHTex.createView());
+      runFullscreenPass(encoder, sharpenVPipeline, sharpenVBindGroup, sharpenBlurTex.createView());
+      runFullscreenPass(encoder, lumaNRHPipeline, lumaNRHBindGroup, lumaNRBlurHTex.createView());
+      runFullscreenPass(encoder, lumaNRVPipeline, lumaNRVBindGroup, lumaNRBlurTex.createView());
+      runFullscreenPass(encoder, colorNRHPipeline, colorNRHBindGroup, colorNRBlurHTex.createView());
+      runFullscreenPass(encoder, colorNRVPipeline, colorNRVBindGroup, colorNRBlurTex.createView());
       // Captured as a local `const` for the same reason applyBitmapToGpu's
       // own gpuDevice/reducePipeline aliases are -- TS can't narrow a
       // reassignable outer `let` across a closure boundary.
@@ -2478,6 +2900,9 @@
     void clarity;
     void vignette;
     void grain;
+    void sharpen;
+    void lumaNR;
+    void colorNR;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 

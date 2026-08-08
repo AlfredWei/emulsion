@@ -32,6 +32,12 @@
    *   onVignetteChange: (patch: Partial<{amount: number, midpoint: number, feather: number}>) => void,
    *   grain: {amount: number, size: number, roughness: number},
    *   onGrainChange: (patch: Partial<{amount: number, size: number, roughness: number}>) => void,
+   *   sharpen: {amount: number, radius: number, detail: number, masking: number},
+   *   onSharpenChange: (patch: Partial<{amount: number, radius: number, detail: number, masking: number}>) => void,
+   *   lumaNR: {amount: number, detail: number, contrast: number},
+   *   onLumaNRChange: (patch: Partial<{amount: number, detail: number, contrast: number}>) => void,
+   *   colorNR: {amount: number, detail: number},
+   *   onColorNRChange: (patch: Partial<{amount: number, detail: number}>) => void,
    * }}
    */
   let {
@@ -63,6 +69,12 @@
     onVignetteChange,
     grain,
     onGrainChange,
+    sharpen,
+    onSharpenChange,
+    lumaNR,
+    onLumaNRChange,
+    colorNR,
+    onColorNRChange,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -76,7 +88,6 @@
   });
 
   const STATIC_SECTIONS = [
-    { title: "Detail", note: "Sharpening · noise reduction" },
     { title: "Lens Corrections", note: "Profile · chromatic aberration" },
   ];
 
@@ -393,6 +404,137 @@
   </details>
 
   <details class="section">
+    <summary>Sharpening</summary>
+    <div class="sub-body">
+      <div class="row">
+        <label for="sharpen-amount">Amount</label>
+        <input
+          id="sharpen-amount"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={sharpen.amount}
+          oninput={(e) => onSharpenChange({ amount: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{sharpen.amount}</span>
+      </div>
+      <div class="row">
+        <label for="sharpen-radius">Radius</label>
+        <input
+          id="sharpen-radius"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={sharpen.radius}
+          oninput={(e) => onSharpenChange({ radius: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{sharpen.radius}</span>
+      </div>
+      <div class="row">
+        <label for="sharpen-detail">Detail</label>
+        <input
+          id="sharpen-detail"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={sharpen.detail}
+          oninput={(e) => onSharpenChange({ detail: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{sharpen.detail}</span>
+      </div>
+      <div class="row">
+        <label for="sharpen-masking">Masking</label>
+        <input
+          id="sharpen-masking"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={sharpen.masking}
+          oninput={(e) => onSharpenChange({ masking: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{sharpen.masking}</span>
+      </div>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>Noise Reduction</summary>
+    <div class="sub-body">
+      <div class="subsection-label">Luminance</div>
+      <div class="row">
+        <label for="luma-nr-amount">Amount</label>
+        <input
+          id="luma-nr-amount"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={lumaNR.amount}
+          oninput={(e) => onLumaNRChange({ amount: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{lumaNR.amount}</span>
+      </div>
+      <div class="row">
+        <label for="luma-nr-detail">Detail</label>
+        <input
+          id="luma-nr-detail"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={lumaNR.detail}
+          oninput={(e) => onLumaNRChange({ detail: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{lumaNR.detail}</span>
+      </div>
+      <div class="row">
+        <label for="luma-nr-contrast">Contrast</label>
+        <input
+          id="luma-nr-contrast"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={lumaNR.contrast}
+          oninput={(e) => onLumaNRChange({ contrast: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{lumaNR.contrast}</span>
+      </div>
+      <div class="subsection-label">Color</div>
+      <div class="row">
+        <label for="color-nr-amount">Amount</label>
+        <input
+          id="color-nr-amount"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={colorNR.amount}
+          oninput={(e) => onColorNRChange({ amount: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{colorNR.amount}</span>
+      </div>
+      <div class="row">
+        <label for="color-nr-detail">Detail</label>
+        <input
+          id="color-nr-detail"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={colorNR.detail}
+          oninput={(e) => onColorNRChange({ detail: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{colorNR.detail}</span>
+      </div>
+    </div>
+  </details>
+
+  <details class="section">
     <summary>Vignette</summary>
     <div class="sub-body">
       <div class="row">
@@ -563,6 +705,17 @@
   }
   .sub-body {
     padding-bottom: 8px;
+  }
+  .subsection-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    padding: 8px 4px 2px;
+  }
+  .subsection-label:first-child {
+    padding-top: 2px;
   }
   .static-note {
     color: var(--text-tertiary);

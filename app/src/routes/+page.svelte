@@ -78,6 +78,15 @@
     getGrain,
     upsertGrain,
     IDENTITY_GRAIN,
+    getSharpen,
+    upsertSharpen,
+    IDENTITY_SHARPEN,
+    getLumaNr,
+    upsertLumaNr,
+    IDENTITY_LUMA_NR,
+    getColorNr,
+    upsertColorNr,
+    IDENTITY_COLOR_NR,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -1060,6 +1069,38 @@
     persistTimer = setTimeout(flushEditStack, 250);
   }
 
+  // Sharpening / Noise Reduction (M3): same structured, own-getter/
+  // handler shape as Vignette/Grain above -- three independent ops.
+  let sharpen = $derived(getSharpen(editStack, IDENTITY_SHARPEN));
+
+  function handleSharpenChange(
+    /** @type {Partial<{amount: number, radius: number, detail: number, masking: number}>} */ patch,
+  ) {
+    editStack = upsertSharpen(editStack, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  let lumaNR = $derived(getLumaNr(editStack, IDENTITY_LUMA_NR));
+
+  function handleLumaNRChange(
+    /** @type {Partial<{amount: number, detail: number, contrast: number}>} */ patch,
+  ) {
+    editStack = upsertLumaNr(editStack, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  let colorNR = $derived(getColorNr(editStack, IDENTITY_COLOR_NR));
+
+  function handleColorNRChange(
+    /** @type {Partial<{amount: number, detail: number}>} */ patch,
+  ) {
+    editStack = upsertColorNr(editStack, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
   // HSL band-jump eyedropper's transient navigation target -- NOT persisted
   // edit-stack state, purely a "which band should the panel scroll to and
   // highlight" signal, self-clearing after a fixed delay rather than on
@@ -1437,6 +1478,9 @@
         {clarity}
         {vignette}
         {grain}
+        {sharpen}
+        {lumaNR}
+        {colorNR}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1479,6 +1523,12 @@
         onVignetteChange={handleVignetteChange}
         {grain}
         onGrainChange={handleGrainChange}
+        {sharpen}
+        onSharpenChange={handleSharpenChange}
+        {lumaNR}
+        onLumaNRChange={handleLumaNRChange}
+        {colorNR}
+        onColorNRChange={handleColorNRChange}
       />
     </div>
     <MaskToolStrip

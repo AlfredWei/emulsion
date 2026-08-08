@@ -1023,6 +1023,11 @@
   // its payload the generic single-scalar op model doesn't already cover.
   let dehaze = $derived(opValue(editStack, "dehaze", 0));
 
+  // Texture & Clarity (M3): same generic single-scalar op model as Dehaze
+  // above -- -100..100, no dedicated getter/handler pair needed.
+  let texture = $derived(opValue(editStack, "texture", 0));
+  let clarity = $derived(opValue(editStack, "clarity", 0));
+
   // HSL band-jump eyedropper's transient navigation target -- NOT persisted
   // edit-stack state, purely a "which band should the panel scroll to and
   // highlight" signal, self-clearing after a fixed delay rather than on
@@ -1396,6 +1401,8 @@
         {hslBands}
         {splitToning}
         {dehaze}
+        {texture}
+        {clarity}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1430,6 +1437,10 @@
         onResetRequest={() => (confirmingReset = true)}
         {dehaze}
         onDehazeChange={(v) => handleAdjustmentChange("dehaze", v)}
+        {texture}
+        onTextureChange={(v) => handleAdjustmentChange("texture", v)}
+        {clarity}
+        onClarityChange={(v) => handleAdjustmentChange("clarity", v)}
       />
     </div>
     <MaskToolStrip

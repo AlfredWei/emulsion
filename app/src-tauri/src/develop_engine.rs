@@ -442,10 +442,70 @@ fn apply_split_toning(rgb: [f32; 3], st: &SplitToning) -> [f32; 3] {
     out
 }
 
+/// Texture & Clarity (M3): local-contrast (unsharp-mask-on-luminance)
+/// sliders, real Lightroom's own "Presence" pair -- **texture -> clarity**,
+/// inserted right before Dehaze: exposure -> contrast -> saturation -> tone
+/// curve -> HSL -> split toning -> **texture -> clarity** -> dehaze. Same
+/// family as Dehaze (needs neighboring pixels' graded values, not a pure
+/// per-pixel remap), so both operate on `apply_edit_stack`'s own `graded`
+/// buffer, sequentially, before Dehaze's maps are computed from it -- by the
+/// time Dehaze reads `graded`, Texture and Clarity are already baked in,
+/// matching Lightroom's own Texture -> Clarity -> Dehaze slider order.
+///
+/// Core transform (identical shape for both, differing only in radius):
+/// blur the per-pixel luminance at `radius` via the existing
+/// `separable_mean_filter`, then push each pixel's luminance toward
+/// `luma + (luma - blurred) * (amount / 100)` (positive amount sharpens
+/// local contrast, negative smooths toward the blurred version) by adding
+/// that SAME delta to all three channels -- not by rescaling the RGB
+/// triple by a luma ratio. A design review caught a real bug in the
+/// ratio-based version: `graded` is never clamped between ops (Contrast
+/// alone already pushes near-black channels negative, see
+/// `apply_adjustments`), so a ratio `newLuma / max(luma, epsilon)` blows up
+/// and scrambles hue whenever luma is near zero or negative. The additive
+/// form has no division at all, and it's exact: `newC - newLuma == C -
+/// luma` for every channel, so chroma (each channel's distance from luma)
+/// is preserved exactly regardless of how extreme `graded`'s values are --
+/// the same additive-around-luma shape `apply_adjustments`'s own saturation
+/// step already uses, not a new idiom.
+///
+/// Radii are fixed, not user-exposed (same "fix the knob" choice Dehaze's
+/// own constants made) -- absolute pixel counts, NOT scaled to image
+/// resolution, the same named/deferred limitation Dehaze's own radii
+/// accepted: `TEXTURE_RADIUS=6` (fine detail, small window so it doesn't
+/// touch big tonal transitions), `CLARITY_RADIUS=24` (coarse "midtone
+/// contrast", the classic halo-prone Clarity look at high amounts -- a
+/// plain box-mean blur stands in for a true edge-aware filter here, same
+/// named limitation as Dehaze's own transmission refinement).
+const TEXTURE_RADIUS: i32 = 6;
+const CLARITY_RADIUS: i32 = 24;
+
+/// Applies one local-contrast pass (Texture or Clarity, selected by
+/// `radius`) to `graded` in place -- see the doc comment above for the
+/// additive-delta formula and why it was chosen over a luma-ratio rescale.
+/// `amount` is expected in -100..100; callers skip this entirely at
+/// `amount == 0.0` (exact passthrough, no wasted blur pass), same
+/// discipline `apply_edit_stack` already applies to Dehaze.
+fn apply_local_contrast(graded: &mut [[f32; 3]], width: usize, height: usize, radius: i32, amount: f32) {
+    let luma: Vec<f32> = graded
+        .iter()
+        .map(|c| c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722)
+        .collect();
+    let blurred = separable_mean_filter(&luma, width, height, radius);
+    let factor = amount / 100.0;
+    for (i, rgb) in graded.iter_mut().enumerate() {
+        let delta = (luma[i] - blurred[i]) * factor;
+        for c in rgb.iter_mut() {
+            *c += delta;
+        }
+    }
+}
+
 /// Dehaze (M3): dark-channel-prior haze removal (He et al. 2009), the
 /// pipeline's new final GLOBAL step -- exposure -> contrast -> saturation ->
-/// tone curve -> HSL -> split toning -> **dehaze** -- before any mask reads
-/// the graded `rgb` as its own accumulator base. Unlike every op above it,
+/// tone curve -> HSL -> split toning -> texture -> clarity -> **dehaze** --
+/// before any mask reads the graded `rgb` as its own accumulator base.
+/// Unlike every op above it,
 /// dark-channel-prior fundamentally needs NEIGHBORING pixels' already-graded
 /// values (a local minimum filter for the dark channel, a whole-image
 /// reduction for atmospheric light) -- it cannot be folded into the
@@ -1052,6 +1112,8 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     // for exposure/contrast/saturation -- `{op:"dehaze", value: amount}` is
     // the exact same single-scalar shape, no dedicated parser needed.
     let dehaze_amount = op_value(&stack.ops, "dehaze");
+    let texture_amount = op_value(&stack.ops, "texture");
+    let clarity_amount = op_value(&stack.ops, "clarity");
 
     let (width, height) = (image.width(), image.height());
     // Only consumed by brush masks (see Mask::weight) -- converts a dab's
@@ -1088,6 +1150,18 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         rgb = apply_hsl_bands(rgb, &bands);
         rgb = apply_split_toning(rgb, &split);
         graded[y as usize * w + x as usize] = rgb;
+    }
+
+    // Texture -> Clarity: each independently skipped at amount=0 (exact
+    // passthrough, see apply_local_contrast's own doc comment), applied
+    // sequentially so Clarity's blur sees Texture's already-adjusted
+    // luminance -- matches Lightroom's own slider order and the GPU
+    // side's pass order.
+    if texture_amount != 0.0 {
+        apply_local_contrast(&mut graded, w, h, TEXTURE_RADIUS, texture_amount);
+    }
+    if clarity_amount != 0.0 {
+        apply_local_contrast(&mut graded, w, h, CLARITY_RADIUS, clarity_amount);
     }
 
     // Passes 2-6: Dehaze's dark-channel-prior maps (see the doc comment
@@ -2103,5 +2177,90 @@ mod tests {
         for (actual, expected) in result.iter().zip(expected.iter()) {
             assert!((actual - expected).abs() < 0.001, "expected {expected}, got {actual}");
         }
+    }
+
+    /// amount=0 must be an EXACT passthrough (the additive-delta formula
+    /// makes this true even without a skip -- `delta = (luma-blurred)*0.0
+    /// == 0.0` always), and `apply_edit_stack` also skips the call
+    /// entirely at amount=0 for the same reason Dehaze does. Uses a
+    /// non-uniform image (so the blur itself is doing real, non-trivial
+    /// work) to make sure passthrough isn't just a degenerate side effect
+    /// of a uniform field.
+    #[test]
+    fn apply_local_contrast_amount_zero_is_exact_passthrough() {
+        let mut graded = vec![[0.0, 0.0, 0.0], [0.3, 0.3, 0.3], [0.9, 0.9, 0.9]];
+        let before = graded.clone();
+        apply_local_contrast(&mut graded, 3, 1, 1, 0.0);
+        assert_eq!(graded, before);
+    }
+
+    /// A perfectly uniform field's box-mean equals that same constant
+    /// everywhere (exact, not approximate), so `luma - blurred == 0` at
+    /// every pixel regardless of amount -- Texture/Clarity must leave a
+    /// flat-color image untouched at ANY amount, positive or negative.
+    #[test]
+    fn apply_local_contrast_uniform_field_is_unaffected_by_any_amount() {
+        let mut graded = vec![[0.47, 0.31, 0.16]; 9];
+        apply_local_contrast(&mut graded, 3, 3, 6, 100.0);
+        apply_local_contrast(&mut graded, 3, 3, 24, -100.0);
+        for rgb in &graded {
+            assert!((rgb[0] - 0.47).abs() < 1e-5, "{rgb:?}");
+            assert!((rgb[1] - 0.31).abs() < 1e-5, "{rgb:?}");
+            assert!((rgb[2] - 0.16).abs() < 1e-5, "{rgb:?}");
+        }
+    }
+
+    /// Hand-derived delta on a 3x1 row (radius=1, so every column's window
+    /// spans the whole row after edge-clamping -- clamped taps repeat the
+    /// boundary value, so each column's mean is a DIFFERENT weighted
+    /// average, not a plain 3-way split). Gray pixels (r=g=b) make
+    /// luma == the shared channel value exactly, sidestepping the luma
+    /// weight constants entirely.
+    ///
+    /// col0: taps (clamped) at indices 0,0,1 -> mean(0.0,0.0,0.3) = 0.1;
+    ///       luma=0.0; delta = (0.0-0.1)*1.0 = -0.1 -> expected -0.1
+    /// col1: taps at indices 0,1,2 -> mean(0.0,0.3,0.9) = 0.4;
+    ///       luma=0.3; delta = (0.3-0.4)*1.0 = -0.1 -> expected 0.2
+    /// col2: taps (clamped) at indices 1,2,2 -> mean(0.3,0.9,0.9) = 0.7;
+    ///       luma=0.9; delta = (0.9-0.7)*1.0 = 0.2 -> expected 1.1
+    #[test]
+    fn apply_local_contrast_matches_hand_derived_delta() {
+        let mut graded = vec![[0.0, 0.0, 0.0], [0.3, 0.3, 0.3], [0.9, 0.9, 0.9]];
+        apply_local_contrast(&mut graded, 3, 1, 1, 100.0);
+        let expected = [-0.1f32, 0.2, 1.1];
+        for (rgb, expected) in graded.iter().zip(expected.iter()) {
+            for c in rgb {
+                assert!((c - expected).abs() < 1e-4, "expected {expected}, got {rgb:?}");
+            }
+        }
+    }
+
+    /// Same setup as above at amount=50 -- the delta must scale linearly
+    /// with amount (factor = amount/100), confirming `amount` isn't just a
+    /// binary on/off switch.
+    #[test]
+    fn apply_local_contrast_amount_scales_delta_linearly() {
+        let mut graded = vec![[0.0, 0.0, 0.0], [0.3, 0.3, 0.3], [0.9, 0.9, 0.9]];
+        apply_local_contrast(&mut graded, 3, 1, 1, 50.0);
+        let expected = [-0.05f32, 0.25, 1.0];
+        for (rgb, expected) in graded.iter().zip(expected.iter()) {
+            for c in rgb {
+                assert!((c - expected).abs() < 1e-4, "expected {expected}, got {rgb:?}");
+            }
+        }
+    }
+
+    /// End-to-end through `apply_edit_stack` (not just the direct
+    /// `apply_local_contrast` unit above): confirms the `op_value` wiring
+    /// itself, and that a nonzero Texture/Clarity plus Dehaze all
+    /// coexisting at amount=0 for the other two still leaves the image
+    /// untouched -- the same "everything off is an exact passthrough"
+    /// contract every other op in this stack already guarantees.
+    #[test]
+    fn texture_and_clarity_amount_zero_is_exact_passthrough_through_edit_stack() {
+        let mut image = dehaze_test_image(20, 20, [176, 171, 166], [242, 242, 242]);
+        apply_edit_stack(&mut image, &stack_with(&[("texture", 0.0), ("clarity", 0.0)]));
+        assert_eq!(*image.get_pixel(19, 19), image::Rgb([176, 171, 166]));
+        assert_eq!(*image.get_pixel(0, 0), image::Rgb([242, 242, 242]));
     }
 }

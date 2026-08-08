@@ -34,6 +34,8 @@
    *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
    *   splitToning: {shadows: {hue: number, saturation: number}, highlights: {hue: number, saturation: number}, balance: number},
    *   dehaze: number,
+   *   texture: number,
+   *   clarity: number,
    * }}
    */
   let {
@@ -59,6 +61,8 @@
     hslBands,
     splitToning,
     dehaze,
+    texture,
+    clarity,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -721,6 +725,14 @@
   let meanHPipeline = null;
   /** @type {GPURenderPipeline | null} */
   let meanVPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let textureHPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let textureVPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let clarityHPipeline = null;
+  /** @type {GPURenderPipeline | null} */
+  let clarityVPipeline = null;
 
   // Intermediate textures -- all sized to match the CURRENT source
   // texture's own resolution (recreated in applyBitmapToGpu whenever that
@@ -742,6 +754,20 @@
   let transmissionTex = null;
   /** @type {GPUTexture[]} */
   let atmLightChain = [];
+  // Texture & Clarity (M3): local-contrast passes that run BEFORE Dehaze's
+  // own maps, writing their final result back into gradedTex itself (see
+  // fs_clarity_v's own doc comment) -- these three are the only NEW
+  // textures needed. textureBlurScratchTex/clarityBlurScratchTex are each
+  // dedicated to one op (not shared) even though nothing stops them from
+  // being reused sequentially -- matches every other Dehaze filter stage's
+  // own one-texture-per-stage convention, so a future pass reordering
+  // can't silently corrupt output with no validation error to catch it.
+  /** @type {GPUTexture | null} */
+  let textureBlurScratchTex = null;
+  /** @type {GPUTexture | null} */
+  let textureAdjustedTex = null;
+  /** @type {GPUTexture | null} */
+  let clarityBlurScratchTex = null;
 
   /** @type {GPUBindGroup | null} */
   let gradeBindGroup = null;
@@ -755,23 +781,37 @@
   let meanHBindGroup = null;
   /** @type {GPUBindGroup | null} */
   let meanVBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let textureHBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let textureVBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let clarityHBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let clarityVBindGroup = null;
   /** @type {GPUBindGroup[]} */
   let atmReduceBindGroups = [];
 
   // Dirty-key caching: the dark-channel/atmospheric-light/transmission
-  // passes above depend ONLY on {exposure, contrast, saturation,
-  // toneCurvePoints, hslBands, splitToning} -- NOT on masks/
-  // selectedMaskId/showMaskOverlay, which only affect the cheap final
-  // pass. A VALUE-based key (not reference equality) is required: masks/
-  // toneCurvePoints/hslBands/splitToning are all rebuilt via $derived from
-  // editStack in +page.svelte on EVERY edit-stack change regardless of
-  // which op changed, so a reference check would always report "changed"
-  // and silently defeat this cache. `null` (not computed yet) is always
-  // treated as dirty, which is what makes the very first render safe --
-  // gradedTex/darkChannelHTex/etc are guaranteed to hold real values (not
-  // uninitialized garbage) before fs_final ever reads them.
+  // passes above, PLUS Texture/Clarity's own local-contrast passes (which
+  // write their result INTO gradedTex, unlike dehaze_amount -- see
+  // writeAdjustmentsAndRender's own comment on why texture/clarity amounts
+  // belong in this key but dehaze_amount doesn't), depend on {exposure,
+  // contrast, saturation, toneCurvePoints, hslBands, splitToning, texture,
+  // clarity} -- NOT on masks/selectedMaskId/showMaskOverlay, which only
+  // affect the cheap final pass. A VALUE-based key (not reference
+  // equality) is required: masks/toneCurvePoints/hslBands/splitToning are
+  // all rebuilt via $derived from editStack in +page.svelte on EVERY
+  // edit-stack change regardless of which op changed, so a reference check
+  // would always report "changed" and silently defeat this cache. `null`
+  // (not computed yet) is always treated as dirty, which is what makes the
+  // very first render safe -- gradedTex/darkChannelHTex/etc are guaranteed
+  // to hold real values (not uninitialized garbage) before fs_final ever
+  // reads them. Named for the whole shared block it gates, not just
+  // Dehaze -- the block grew two more ops without this rename, `dehaze` in
+  // the name would have been a trap for the next person wiring one in.
   /** @type {string | null} */
-  let dehazeInputsKey = null;
+  let spatialOpsInputsKey = null;
 
   // M3 Slice 7: brush masks rasterize into a shared texture ARRAY (one
   // layer per active brush mask, sized to the same combined MAX_MASKS
@@ -848,8 +888,12 @@
       // scalar -- unlike Split Toning (5 new fields, genuinely didn't fit
       // in 3 spare floats), Dehaze's single Amount slider does.
       dehaze_amount: f32,
-      _pad1: f32,
-      _pad2: f32,
+      // Texture & Clarity (M3): -100..100 each, claiming this struct's own
+      // last two spare padding floats the same way dehaze_amount claimed
+      // its own -- see fs_texture_v/fs_clarity_v for how these are
+      // consumed.
+      texture_amount: f32,
+      clarity_amount: f32,
     };
 
     // Packed entirely into vec4-multiples (48 bytes/mask) to sidestep
@@ -1111,9 +1155,105 @@
     @group(0) @binding(10) var atmLightFinal: texture_2d<f32>;
     @group(0) @binding(11) var filterInput: texture_2d<f32>;
     @group(0) @binding(12) var transmissionTexFinal: texture_2d<f32>;
+    // Texture & Clarity (M3): lcRgbInput is rebound per pass -- gradedTex
+    // for Texture's H/V passes, textureAdjustedTex for Clarity's H/V
+    // passes (see the JS side's own bind-group list) -- lcBlurInput is the
+    // horizontal-blur scratch texture each op's own V pass reads to
+    // complete the box-mean.
+    @group(0) @binding(13) var lcRgbInput: texture_2d<f32>;
+    @group(0) @binding(14) var lcBlurInput: texture_2d<f32>;
 
     fn luma(rgb: vec3<f32>) -> f32 {
       return dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    }
+
+    // Texture & Clarity (M3): a direct WGSL port of develop_engine.rs's
+    // own apply_local_contrast -- see that function's doc comment for the
+    // additive-delta formula and why it was chosen over a luma-ratio
+    // rescale (a design review caught a real hue-scrambling bug in the
+    // ratio version whenever luma is near zero or negative, which
+    // Contrast alone already makes reachable). Fixed radii, matching the
+    // Rust twin exactly.
+    const TEXTURE_RADIUS: i32 = 6;
+    const CLARITY_RADIUS: i32 = 24;
+
+    @fragment
+    fn fs_texture_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(lcRgbInput));
+      var sum = 0.0;
+      for (var dx = -TEXTURE_RADIUS; dx <= TEXTURE_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + luma(textureLoad(lcRgbInput, vec2<i32>(sx, coord.y), 0).rgb);
+      }
+      let window = f32(2 * TEXTURE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // Vertical pass, completing Texture's blur, then folding in the
+    // apply step directly (one fewer pass than a separate step would
+    // need, matching fs_min_v's own precedent): re-reads lcRgbInput
+    // (gradedTex) at this pixel for the original rgb/luma, adds the same
+    // delta to all three channels, and writes the result to
+    // textureAdjustedTex.
+    @fragment
+    fn fs_texture_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(lcBlurInput));
+      var sum = 0.0;
+      for (var dy = -TEXTURE_RADIUS; dy <= TEXTURE_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(lcBlurInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * TEXTURE_RADIUS + 1);
+      let blurred = sum / window;
+
+      let rgb = textureLoad(lcRgbInput, coord, 0).rgb;
+      let l = luma(rgb);
+      let delta = (l - blurred) * (adj.texture_amount / 100.0);
+      return vec4<f32>(rgb + vec3<f32>(delta, delta, delta), 1.0);
+    }
+
+    @fragment
+    fn fs_clarity_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(lcRgbInput));
+      var sum = 0.0;
+      for (var dx = -CLARITY_RADIUS; dx <= CLARITY_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + luma(textureLoad(lcRgbInput, vec2<i32>(sx, coord.y), 0).rgb);
+      }
+      let window = f32(2 * CLARITY_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // Vertical pass, completing Clarity's blur + apply -- same shape as
+    // fs_texture_v, but this pass's render target (set on the JS side, not
+    // a WGSL binding) is gradedTex ITSELF: Clarity is the last of the two
+    // local-contrast ops, so its output overwrites gradedTex in place
+    // rather than needing a third "final graded" texture. Every downstream
+    // consumer of gradedTex (fs_atm_reduce's first pass, fs_min_channel,
+    // fs_final) already reads it AFTER this point in pass order, so they
+    // transparently see Texture+Clarity already baked in -- sound because
+    // WebGPU passes within one command encoder execute strictly in
+    // recorded order, the same guarantee gradedTex already relies on today
+    // (written once by fs_grade, read three times later in the frame).
+    @fragment
+    fn fs_clarity_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(lcBlurInput));
+      var sum = 0.0;
+      for (var dy = -CLARITY_RADIUS; dy <= CLARITY_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(lcBlurInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * CLARITY_RADIUS + 1);
+      let blurred = sum / window;
+
+      let rgb = textureLoad(lcRgbInput, coord, 0).rgb;
+      let l = luma(rgb);
+      let delta = (l - blurred) * (adj.clarity_amount / 100.0);
+      return vec4<f32>(rgb + vec3<f32>(delta, delta, delta), 1.0);
     }
 
     // Atmospheric-light reduction: one pass of an 8x8-block ARGMAX-BY-
@@ -1230,8 +1370,9 @@
     }
 
     // Final pass: reads the graded color back from gradedTex (not a
-    // re-sample of srcTexture -- every global op through Split Toning is
-    // already baked in), applies the Dehaze recovery + amount blend, then
+    // re-sample of srcTexture -- every global op through Texture and
+    // Clarity is already baked in, see fs_clarity_v's own doc comment),
+    // applies the Dehaze recovery + amount blend, then
     // runs the EXISTING mask loop unchanged, writing the real swapchain
     // output. Safe to read the dehaze maps unconditionally even at
     // amount=0 (the blend multiplies their contribution by 0) as long as
@@ -1477,9 +1618,33 @@
       fragment: { module, entryPoint: "fs_mean_v", targets: [{ format: "r32float" }] },
       primitive: { topology: "triangle-list" },
     });
+    textureHPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_texture_h", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    textureVPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_texture_v", targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    clarityHPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_clarity_h", targets: [{ format: "r32float" }] },
+      primitive: { topology: "triangle-list" },
+    });
+    clarityVPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_clarity_v", targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list" },
+    });
 
     uniformBuffer = device.createBuffer({
-      size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, dehaze_amount, 2x padding)
+      size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, dehaze_amount, texture_amount, clarity_amount)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     masksBuffer = device.createBuffer({
@@ -1549,7 +1714,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -1662,6 +1827,30 @@
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
+    // Texture & Clarity (M3): same "recreate whenever source resolution
+    // changes" lifecycle as every intermediate above. textureAdjustedTex
+    // is Texture's final (post-apply) output and Clarity's own input --
+    // Clarity's own final output overwrites gradedTex in place (see
+    // fs_clarity_v's doc comment), so it needs no texture of its own here.
+    textureBlurScratchTex?.destroy();
+    textureBlurScratchTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    textureAdjustedTex?.destroy();
+    textureAdjustedTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "rgba16float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    clarityBlurScratchTex?.destroy();
+    clarityBlurScratchTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "r32float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
     // Atmospheric-light reduction chain: an ARRAY of successively-smaller
     // textures (see buildAtmLightChainSizes/fs_atm_reduce's own doc
     // comment), not one texture's mip chain -- simpler to create and bind
@@ -1735,6 +1924,41 @@
       entries: [{ binding: 11, resource: transmissionHTex.createView() }],
     });
 
+    // Texture & Clarity (M3): textureHPipeline/textureVPipeline read
+    // gradedTex (binding 13, rebound per-op unlike Dehaze's filterInput
+    // rebinding pattern -- here each op gets its own bind group instead,
+    // since layout:"auto" infers a separate layout per entry point
+    // regardless); clarityHPipeline/clarityVPipeline read
+    // textureAdjustedTex instead, chaining onto Texture's own output. The
+    // V passes also need binding 2 (the Adjustments uniform, for
+    // texture_amount/clarity_amount) -- easy to miss since none of
+    // Dehaze's own H/V bind groups need it (see the design review that
+    // caught this as a real omission before it was ever written).
+    textureHBindGroup = gpuDevice.createBindGroup({
+      layout: textureHPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 13, resource: gradedTex.createView() }],
+    });
+    textureVBindGroup = gpuDevice.createBindGroup({
+      layout: textureVPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 13, resource: gradedTex.createView() },
+        { binding: 14, resource: textureBlurScratchTex.createView() },
+        { binding: 2, resource: { buffer: uniformBuffer } },
+      ],
+    });
+    clarityHBindGroup = gpuDevice.createBindGroup({
+      layout: clarityHPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 13, resource: textureAdjustedTex.createView() }],
+    });
+    clarityVBindGroup = gpuDevice.createBindGroup({
+      layout: clarityVPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 13, resource: textureAdjustedTex.createView() },
+        { binding: 14, resource: clarityBlurScratchTex.createView() },
+        { binding: 2, resource: { buffer: uniformBuffer } },
+      ],
+    });
+
     // Final pass's own bind group -- a genuinely DIFFERENT entry set than
     // before (0,2,3,4,8,10,12), NOT the old single-pass fs_main's {0-7} --
     // fs_final no longer references srcTexture/curveLut/hslBands/
@@ -1760,11 +1984,11 @@
         { binding: 12, resource: transmissionTex.createView() },
       ],
     });
-    // Every dehaze intermediate above is freshly (re)created for this
-    // bitmap -- any previously-cached dirty key belonged to a DIFFERENT
-    // image/tier's now-destroyed textures, so it must not be trusted to
-    // skip recomputing the expensive passes on the next render.
-    dehazeInputsKey = null;
+    // Every intermediate above is freshly (re)created for this bitmap --
+    // any previously-cached dirty key belonged to a DIFFERENT image/tier's
+    // now-destroyed textures, so it must not be trusted to skip
+    // recomputing the expensive passes on the next render.
+    spatialOpsInputsKey = null;
 
     if (context.canvas instanceof HTMLCanvasElement) {
       context.canvas.width = bitmap.width;
@@ -1778,7 +2002,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -1971,7 +2195,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -1992,7 +2216,7 @@
     device.queue.writeBuffer(
       uniformBuffer,
       0,
-      new Float32Array([exposure, contrast, saturation, masks.length, selectedMaskIndex, dehaze, 0, 0]),
+      new Float32Array([exposure, contrast, saturation, masks.length, selectedMaskIndex, dehaze, texture, clarity]),
     );
 
     const maskData = new Float32Array(MAX_MASKS * 12);
@@ -2048,24 +2272,38 @@
 
     const encoder = device.createCommandEncoder();
 
-    // Dehaze: the dark-channel/atmospheric-light/transmission passes
-    // depend ONLY on {exposure, contrast, saturation, toneCurvePoints,
-    // hslBands, splitToning} -- NOT masks/selectedMaskId/showMaskOverlay,
-    // which only ever affect the cheap final pass below. Without this
+    // Texture/Clarity/Dehaze: the local-contrast and dark-channel/
+    // atmospheric-light/transmission passes depend on {exposure, contrast,
+    // saturation, toneCurvePoints, hslBands, splitToning, texture,
+    // clarity} -- NOT masks/selectedMaskId/showMaskOverlay, which only
+    // ever affect the cheap final pass below, and NOT dehaze (only
+    // fs_final's own cheap blend reads dehaze_amount; none of the maps
+    // computed in this block depend on it). texture/clarity DO belong in
+    // this key, unlike dehaze -- fs_texture_v/fs_clarity_v write their
+    // result INTO gradedTex itself, inside this block, so a texture/
+    // clarity-only change must still invalidate the cache. Without this
     // check, an unthrottled mask-handle drag (handlePointerMove calling
-    // onMaskUpdated on every pointermove) would retrigger this ~9-pass
+    // onMaskUpdated on every pointermove) would retrigger this ~13-pass
     // chain every single frame. A VALUE-based key, not reference equality
-    // -- see dehazeInputsKey's own doc comment for why masks/
+    // -- see spatialOpsInputsKey's own doc comment for why masks/
     // toneCurvePoints/hslBands/splitToning being freshly rebuilt via
     // $derived on every editStack change (regardless of which op changed)
     // makes a reference check always report "changed," silently defeating
-    // this cache. `dehazeInputsKey === null` (nothing cached yet, e.g. the
-    // very first render, or right after a fresh applyBitmapToGpu) is
+    // this cache. `spatialOpsInputsKey === null` (nothing cached yet, e.g.
+    // the very first render, or right after a fresh applyBitmapToGpu) is
     // always treated as dirty.
-    const dehazeKey = JSON.stringify({ exposure, contrast, saturation, toneCurvePoints, hslBands, splitToning });
-    if (dehazeKey !== dehazeInputsKey) {
-      dehazeInputsKey = dehazeKey;
+    const spatialOpsKey = JSON.stringify({ exposure, contrast, saturation, toneCurvePoints, hslBands, splitToning, texture, clarity });
+    if (spatialOpsKey !== spatialOpsInputsKey) {
+      spatialOpsInputsKey = spatialOpsKey;
       runFullscreenPass(encoder, gradePipeline, gradeBindGroup, gradedTex.createView());
+      runFullscreenPass(encoder, textureHPipeline, textureHBindGroup, textureBlurScratchTex.createView());
+      runFullscreenPass(encoder, textureVPipeline, textureVBindGroup, textureAdjustedTex.createView());
+      runFullscreenPass(encoder, clarityHPipeline, clarityHBindGroup, clarityBlurScratchTex.createView());
+      // Overwrites gradedTex in place -- see fs_clarity_v's own doc
+      // comment for why this is sound (sequential pass execution within
+      // one command encoder) and why no third "final graded" texture is
+      // needed.
+      runFullscreenPass(encoder, clarityVPipeline, clarityVBindGroup, gradedTex.createView());
       // Captured as a local `const` for the same reason applyBitmapToGpu's
       // own gpuDevice/reducePipeline aliases are -- TS can't narrow a
       // reassignable outer `let` across a closure boundary.
@@ -2117,6 +2355,8 @@
     void hslBands;
     void splitToning;
     void dehaze;
+    void texture;
+    void clarity;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 

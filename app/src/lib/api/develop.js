@@ -535,6 +535,126 @@ export function buildGrainUniformData(
   return new Float32Array([g.amount, g.size, g.roughness, 0]);
 }
 
+// Sharpening (M3): a flat, non-nested payload -- same shape as Vignette/
+// Grain above. Global-only, applied after Noise Reduction, before
+// Vignette/Grain (see develop_engine.rs/DevelopCanvas.svelte's shared
+// pipeline-order comment). Defaults chosen so turning Amount up alone
+// produces a sensible result without also needing to tune Radius/Detail
+// first (Amount 0 -- off, matching every other amount-style op's own
+// identity-at-zero contract).
+export const IDENTITY_SHARPEN = Object.freeze({ amount: 0, radius: 25, detail: 50, masking: 0 });
+
+/** @returns {{amount: number, radius: number, detail: number, masking: number}} */
+export function getSharpen(
+  /** @type {EditStack} */ stack,
+  /** @type {typeof IDENTITY_SHARPEN} */ fallback = IDENTITY_SHARPEN,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "sharpen"));
+  if (!op) return fallback;
+  return {
+    amount: op.amount ?? 0,
+    radius: op.radius ?? 25,
+    detail: op.detail ?? 50,
+    masking: op.masking ?? 0,
+  };
+}
+
+/** Patches any subset of {amount, radius, detail, masking}, leaving the
+ * rest untouched.
+ * @returns {EditStack} */
+export function upsertSharpen(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<{amount: number, radius: number, detail: number, masking: number}>} */ patch,
+) {
+  const current = getSharpen(stack);
+  const next = { ...current, ...patch };
+  const ops = stack.ops.filter((o) => o.op !== "sharpen");
+  ops.push(/** @type {any} */ ({ op: "sharpen", ...next }));
+  return { ...stack, ops };
+}
+
+/** Packs into the exact Float32Array layout DevelopCanvas.svelte's
+ * `sharpenBuffer`/the WGSL `SharpenParams` struct expects (field order
+ * matters). */
+export function buildSharpenUniformData(
+  /** @type {ReturnType<typeof getSharpen>} */ s,
+) {
+  return new Float32Array([s.amount, s.radius, s.detail, s.masking]);
+}
+
+// Luminance Noise Reduction (M3): same flat, non-nested payload shape.
+export const IDENTITY_LUMA_NR = Object.freeze({ amount: 0, detail: 50, contrast: 0 });
+
+/** @returns {{amount: number, detail: number, contrast: number}} */
+export function getLumaNr(
+  /** @type {EditStack} */ stack,
+  /** @type {typeof IDENTITY_LUMA_NR} */ fallback = IDENTITY_LUMA_NR,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "luma_nr"));
+  if (!op) return fallback;
+  return {
+    amount: op.amount ?? 0,
+    detail: op.detail ?? 50,
+    contrast: op.contrast ?? 0,
+  };
+}
+
+/** @returns {EditStack} */
+export function upsertLumaNr(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<{amount: number, detail: number, contrast: number}>} */ patch,
+) {
+  const current = getLumaNr(stack);
+  const next = { ...current, ...patch };
+  const ops = stack.ops.filter((o) => o.op !== "luma_nr");
+  ops.push(/** @type {any} */ ({ op: "luma_nr", ...next }));
+  return { ...stack, ops };
+}
+
+/** Packs into the exact Float32Array layout DevelopCanvas.svelte's
+ * `lumaNRBuffer`/the WGSL `LumaNrParams` struct expects. */
+export function buildLumaNrUniformData(
+  /** @type {ReturnType<typeof getLumaNr>} */ n,
+) {
+  return new Float32Array([n.amount, n.detail, n.contrast, 0]);
+}
+
+// Color Noise Reduction (M3): same flat, non-nested payload shape.
+export const IDENTITY_COLOR_NR = Object.freeze({ amount: 0, detail: 50 });
+
+/** @returns {{amount: number, detail: number}} */
+export function getColorNr(
+  /** @type {EditStack} */ stack,
+  /** @type {typeof IDENTITY_COLOR_NR} */ fallback = IDENTITY_COLOR_NR,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "color_nr"));
+  if (!op) return fallback;
+  return {
+    amount: op.amount ?? 0,
+    detail: op.detail ?? 50,
+  };
+}
+
+/** @returns {EditStack} */
+export function upsertColorNr(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<{amount: number, detail: number}>} */ patch,
+) {
+  const current = getColorNr(stack);
+  const next = { ...current, ...patch };
+  const ops = stack.ops.filter((o) => o.op !== "color_nr");
+  ops.push(/** @type {any} */ ({ op: "color_nr", ...next }));
+  return { ...stack, ops };
+}
+
+/** Packs into the exact Float32Array layout DevelopCanvas.svelte's
+ * `colorNRBuffer`/the WGSL `ColorNrParams` struct expects. */
+export function buildColorNrUniformData(
+  /** @type {ReturnType<typeof getColorNr>} */ n,
+) {
+  return new Float32Array([n.amount, n.detail, 0, 0]);
+}
+
 // Eyedropper pickers (M3): the canvas's existing click-to-sample gesture
 // (DevelopCanvas.svelte's sampleSourcePixel, reused from the color-range
 // mask feature) reports a raw {r,g,b} 0-1 float sample. Every one of the

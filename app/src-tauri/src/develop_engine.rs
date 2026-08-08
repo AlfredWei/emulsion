@@ -586,6 +586,246 @@ fn grain_delta(coord: (f32, f32), g: &Grain) -> f32 {
     (noise * 2.0 - 1.0) * (g.amount / 100.0) * GRAIN_STRENGTH
 }
 
+/// Standard Rec. 709 luma weights -- the same constant this module
+/// already uses inline in half a dozen places (dehaze_atmospheric_light,
+/// apply_local_contrast, etc.), pulled into one named function for
+/// Sharpening/Noise Reduction below, which all need it repeatedly against
+/// a precomputed whole-image buffer rather than one-off per call site.
+fn luma3(c: [f32; 3]) -> f32 {
+    c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722
+}
+
+/// A cheap 4-neighbor central-difference gradient magnitude over a
+/// precomputed luma buffer -- Sharpening's Masking control needs a
+/// genuine "is this pixel NEAR an edge" spatial signal, which is subtly
+/// but really different from Detail's own "is THIS pixel's diff-from-blur
+/// amplitude large" signal (a design review caught the two being
+/// near-duplicate formulas in an earlier draft that reused the same
+/// per-pixel diff for both -- a pixel one tap away from a hard edge has
+/// small diff-from-blur itself but IS near an edge, which only a real
+/// local-gradient measure like this one distinguishes). Deliberately NOT
+/// a separate blur pass -- a plain Sobel-lite central difference is
+/// cheap enough to compute directly from the buffer already needed for
+/// the sharpen/NR blurs, no new whole-image pass required.
+fn local_gradient_magnitude(luma_buf: &[f32], width: usize, height: usize, x: usize, y: usize) -> f32 {
+    let xm = x.saturating_sub(1);
+    let xp = (x + 1).min(width - 1);
+    let ym = y.saturating_sub(1);
+    let yp = (y + 1).min(height - 1);
+    let gx = luma_buf[y * width + xp] - luma_buf[y * width + xm];
+    let gy = luma_buf[yp * width + x] - luma_buf[ym * width + x];
+    (gx * gx + gy * gy).sqrt() * 0.5
+}
+
+/// Sharpening (M3): classic unsharp masking on LUMINANCE only (never
+/// per-channel -- sharpening each RGB channel independently introduces
+/// color fringing at edges), reconstructed via the same additive-delta-
+/// preserves-chroma shape Texture/Clarity/Grain already established
+/// (`delta` added equally to all three channels).
+///
+/// Two independent `smoothstep`-based soft gates, each nudged apart by an
+/// epsilon at its own threshold (the same degenerate-equal-edges fix
+/// Vignette's own `inner`/`outer` pair already established), multiply
+/// together to scale the raw high-frequency signal:
+/// - `detail_weight`: gates by THIS PIXEL'S OWN diff-from-blur amplitude
+///   -- low Detail suppresses small-amplitude (fine-texture/noise-scale)
+///   differences from being sharpened at all; high Detail passes nearly
+///   every amplitude through.
+/// - `mask_weight`: gates by the SPATIAL local-gradient-magnitude signal
+///   above -- low Masking barely restricts where sharpening applies
+///   (near 0 threshold), high Masking confines it to strong edges only,
+///   protecting flat/noisy regions from being sharpened at all
+///   regardless of their own diff amplitude.
+///
+/// `radius` is a genuine user-controlled pixel radius (mapped from the
+/// 0-100 slider to `1..SHARPEN_MAX_RADIUS_PX`), unlike every fixed radius
+/// constant elsewhere in this module -- the WGSL twin needs a real
+/// uniform-driven loop bound for this op specifically, not a compile-time
+/// `const` the way Texture/Clarity/Dehaze's own radii are.
+const SHARPEN_MAX_RADIUS_PX: i32 = 8;
+const SHARPEN_STRENGTH: f32 = 1.6;
+const SHARPEN_DETAIL_SCALE: f32 = 0.06;
+const SHARPEN_MASK_SCALE: f32 = 0.05;
+
+struct Sharpen {
+    amount: f32,
+    radius: f32,
+    detail: f32,
+    masking: f32,
+}
+
+impl Default for Sharpen {
+    fn default() -> Self {
+        Sharpen { amount: 0.0, radius: 25.0, detail: 50.0, masking: 0.0 }
+    }
+}
+
+fn sharpen_op(ops: &[serde_json::Value]) -> Sharpen {
+    let op = ops.iter().find(|op| op.get("op").and_then(|v| v.as_str()) == Some("sharpen"));
+    let field = |key: &str, default: f32| -> f32 {
+        op.and_then(|o| o.get(key)).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
+    };
+    Sharpen {
+        amount: field("amount", 0.0),
+        radius: field("radius", 25.0),
+        detail: field("detail", 50.0),
+        masking: field("masking", 0.0),
+    }
+}
+
+/// Maps Sharpening's 0-100 Radius slider to an integer pixel radius --
+/// a coarse, NAMED mapping (only `SHARPEN_MAX_RADIUS_PX` distinct integer
+/// steps exist across the whole slider range, since `separable_mean_filter`
+/// is integer-radius-only), not an accident of reusing that primitive.
+fn sharpen_radius_px(radius_slider: f32) -> i32 {
+    let r = 1.0 + (radius_slider / 100.0) * (SHARPEN_MAX_RADIUS_PX as f32 - 1.0);
+    r.round().max(1.0) as i32
+}
+
+/// Computes the additive luma delta for one pixel. `blurred_luma` is
+/// `separable_mean_filter`'s own output at `sharpen_radius_px(radius)`,
+/// looked up by the caller (this function only does the per-pixel
+/// gate/scale math, not the whole-image blur).
+fn sharpen_delta(l: f32, blurred_luma: f32, grad_mag: f32, s: &Sharpen) -> f32 {
+    if s.amount == 0.0 {
+        return 0.0;
+    }
+    let diff = l - blurred_luma;
+    let detail_threshold = (SHARPEN_DETAIL_SCALE * (1.0 - s.detail / 100.0)).max(f32::EPSILON);
+    let detail_weight = smoothstep(0.0, detail_threshold, diff.abs());
+    let mask_threshold = (SHARPEN_MASK_SCALE * (s.masking / 100.0)).max(f32::EPSILON);
+    let mask_weight = smoothstep(0.0, mask_threshold, grad_mag);
+    diff * (s.amount / 100.0) * detail_weight * mask_weight * SHARPEN_STRENGTH
+}
+
+/// Luminance Noise Reduction (M3): edge-preserving smoothing on luma at a
+/// FIXED radius (not user-configurable, matching real Lightroom -- NR
+/// exposes Amount/Detail/Contrast, never a radius). Same additive-delta
+/// reconstruction as every other spatial op here.
+///
+/// `smooth_weight` is the OPPOSITE shape from Sharpening's `detail_weight`
+/// above (`1 - smoothstep(...)`, not `smoothstep(...)`) -- by design:
+/// sharpening ENHANCES existing signal, so its gate should INCREASE with
+/// signal amplitude; smoothing REMOVES/protects signal, so how much
+/// smoothing gets applied should DECREASE with signal amplitude (near-zero
+/// diffs, presumed noise, get smoothed; large diffs, presumed real edges,
+/// get protected). Detail shifts the threshold the same directional way
+/// Sharpening's does (low Detail -> large threshold -> smooths broadly
+/// including moderate texture; high Detail -> tiny threshold -> only
+/// near-zero diffs smoothed, matching real Lightroom's own documented
+/// "higher Detail may show more noise" behavior).
+///
+/// `contrast_restore` is a DELIBERATE, NAMED reinterpretation of real
+/// Lightroom's own (undocumented) Contrast slider: rather than a second
+/// edge-preservation gate (which would just duplicate Detail's role），
+/// it partially reintroduces some of the high-frequency signal `Amount`
+/// just removed, counteracting the flat/waxy look aggressive smoothing
+/// can leave. Scaled by `amount` too (not just `contrast`) -- Contrast
+/// restoring signal that was never removed in the first place (Amount=0)
+/// wouldn't make sense.
+const LUMA_NR_RADIUS: i32 = 3;
+const NR_DETAIL_SCALE: f32 = 0.05;
+const NR_CONTRAST_STRENGTH: f32 = 0.6;
+
+struct LumaNr {
+    amount: f32,
+    detail: f32,
+    contrast: f32,
+}
+
+impl Default for LumaNr {
+    fn default() -> Self {
+        LumaNr { amount: 0.0, detail: 50.0, contrast: 0.0 }
+    }
+}
+
+fn luma_nr_op(ops: &[serde_json::Value]) -> LumaNr {
+    let op = ops.iter().find(|op| op.get("op").and_then(|v| v.as_str()) == Some("luma_nr"));
+    let field = |key: &str, default: f32| -> f32 {
+        op.and_then(|o| o.get(key)).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
+    };
+    LumaNr {
+        amount: field("amount", 0.0),
+        detail: field("detail", 50.0),
+        contrast: field("contrast", 0.0),
+    }
+}
+
+fn luma_nr_delta(l: f32, blurred_luma: f32, n: &LumaNr) -> f32 {
+    if n.amount == 0.0 {
+        return 0.0;
+    }
+    let diff = l - blurred_luma;
+    let edge_threshold = (NR_DETAIL_SCALE * (1.0 - n.detail / 100.0)).max(f32::EPSILON);
+    let smooth_weight = 1.0 - smoothstep(0.0, edge_threshold, diff.abs());
+    let smooth_delta = -diff * (n.amount / 100.0) * smooth_weight;
+    let contrast_restore = diff * (n.contrast / 100.0) * NR_CONTRAST_STRENGTH * (n.amount / 100.0);
+    smooth_delta + contrast_restore
+}
+
+/// Color Noise Reduction (M3): blurs full RGB together at a FIXED radius
+/// (box-mean is linear per-channel, so blurring all three channels in one
+/// pass is EXACTLY equivalent to blurring them independently -- not an
+/// approximation), then reconstructs a per-channel delta from how much
+/// each channel's own OFFSET FROM LUMA changed due to blurring (its
+/// "chroma content"), not how much its raw value changed (which would
+/// also capture luminance smoothing this op deliberately doesn't want).
+///
+/// `chroma_delta[c] = d[c] - weighted_mean(d)` where `d[c]` is the raw
+/// per-channel blur delta and `weighted_mean` uses the SAME Rec. 709
+/// weights `luma3` does -- this exact construction is what makes the
+/// reconstruction preserve luminance EXACTLY (verified algebraically in
+/// this slice's own design review, not just empirically): summing
+/// `chroma_delta[c] * weights[c]` telescopes to zero by construction,
+/// since `weighted_mean(d)` IS `weights . d`, so subtracting it out
+/// before scaling removes the entire luma-changing component before any
+/// scalar `k` is ever applied.
+///
+/// **Critical invariant, easy to break by accident**: `k` (`amount/100 *
+/// color_smooth_weight`) MUST be the exact same scalar applied to R, G,
+/// AND B for one pixel -- computing `color_smooth_weight` per-channel
+/// instead of once from the joint `chroma_delta` magnitude would break
+/// the cancellation above and let luma drift.
+const COLOR_NR_RADIUS: i32 = 4;
+const COLOR_NR_DETAIL_SCALE: f32 = 0.08;
+
+struct ColorNr {
+    amount: f32,
+    detail: f32,
+}
+
+impl Default for ColorNr {
+    fn default() -> Self {
+        ColorNr { amount: 0.0, detail: 50.0 }
+    }
+}
+
+fn color_nr_op(ops: &[serde_json::Value]) -> ColorNr {
+    let op = ops.iter().find(|op| op.get("op").and_then(|v| v.as_str()) == Some("color_nr"));
+    let field = |key: &str, default: f32| -> f32 {
+        op.and_then(|o| o.get(key)).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
+    };
+    ColorNr {
+        amount: field("amount", 0.0),
+        detail: field("detail", 50.0),
+    }
+}
+
+fn color_nr_delta(orig: [f32; 3], blurred: [f32; 3], n: &ColorNr) -> [f32; 3] {
+    if n.amount == 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+    const WEIGHTS: [f32; 3] = [0.2126, 0.7152, 0.0722];
+    let d = [blurred[0] - orig[0], blurred[1] - orig[1], blurred[2] - orig[2]];
+    let weighted_mean: f32 = (0..3).map(|i| WEIGHTS[i] * d[i]).sum();
+    let chroma_delta = [d[0] - weighted_mean, d[1] - weighted_mean, d[2] - weighted_mean];
+    let mag = (chroma_delta[0].powi(2) + chroma_delta[1].powi(2) + chroma_delta[2].powi(2)).sqrt();
+    let color_threshold = (COLOR_NR_DETAIL_SCALE * (1.0 - n.detail / 100.0)).max(f32::EPSILON);
+    let color_smooth_weight = 1.0 - smoothstep(0.0, color_threshold, mag);
+    let k = (n.amount / 100.0) * color_smooth_weight;
+    [chroma_delta[0] * k, chroma_delta[1] * k, chroma_delta[2] * k]
+}
+
 /// Smoothstep(0,1,t) of the balance-shifted lightness -- C1-continuous
 /// (zero slope at both ends) so the shadow/highlight transition has no
 /// slope-kink seam on a smooth luminance gradient, same reasoning
@@ -1299,6 +1539,9 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let clarity_amount = op_value(&stack.ops, "clarity");
     let vignette = vignette_op(&stack.ops);
     let grain = grain_op(&stack.ops);
+    let sharpen = sharpen_op(&stack.ops);
+    let luma_nr = luma_nr_op(&stack.ops);
+    let color_nr = color_nr_op(&stack.ops);
 
     let (width, height) = (image.width(), image.height());
     // Only consumed by brush masks (see Mask::weight) -- converts a dab's
@@ -1349,6 +1592,47 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         apply_local_contrast(&mut graded, w, h, CLARITY_RADIUS, clarity_amount);
     }
 
+    // Sharpening / Noise Reduction blur sources: computed from `graded` at
+    // this SAME point -- the post-Texture/Clarity, pre-Dehaze-recovery
+    // snapshot Dehaze's own atmospheric-light/dark-channel maps below
+    // already read from. NAMED, ACCEPTED LIMITATION (a design review
+    // flagged this explicitly): Dehaze's recovery is a spatially-varying
+    // affine transform applied later, in the final loop, so these blurs
+    // and the edge/detail signals derived from them are measured on the
+    // pre-Dehaze image while their resulting deltas get added to the
+    // post-Dehaze pixel. Materializing Dehaze's own recovery into a real
+    // intermediate buffer first (so these could read the TRUE final
+    // pre-Sharpen/NR image) would require also adding `dehaze_amount` to
+    // every downstream cache-invalidation concern it's currently exempt
+    // from -- accepted as out of scope for this slice, the same class of
+    // "named, deferred" approximation Dehaze's own transmission
+    // refinement (a box-mean standing in for a true guided filter) and
+    // Vignette's own roundness (unimplemented) already are.
+    let graded_luma: Vec<f32> = graded.iter().map(|c| luma3(*c)).collect();
+
+    let sharpen_blur = if sharpen.amount != 0.0 {
+        Some(separable_mean_filter(&graded_luma, w, h, sharpen_radius_px(sharpen.radius)))
+    } else {
+        None
+    };
+    let luma_nr_blur = if luma_nr.amount != 0.0 {
+        Some(separable_mean_filter(&graded_luma, w, h, LUMA_NR_RADIUS))
+    } else {
+        None
+    };
+    let color_nr_blur = if color_nr.amount != 0.0 {
+        let r: Vec<f32> = graded.iter().map(|c| c[0]).collect();
+        let g: Vec<f32> = graded.iter().map(|c| c[1]).collect();
+        let b: Vec<f32> = graded.iter().map(|c| c[2]).collect();
+        Some((
+            separable_mean_filter(&r, w, h, COLOR_NR_RADIUS),
+            separable_mean_filter(&g, w, h, COLOR_NR_RADIUS),
+            separable_mean_filter(&b, w, h, COLOR_NR_RADIUS),
+        ))
+    } else {
+        None
+    };
+
     // Passes 2-6: Dehaze's dark-channel-prior maps (see the doc comment
     // above `dehaze_atmospheric_light` for the corrected algorithm and its
     // two named deviations from He et al.). Skipped entirely at amount=0 --
@@ -1384,6 +1668,32 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             for c in 0..3 {
                 let recovered = (graded_rgb[c] - a[c]) / t + a[c];
                 rgb[c] = graded_rgb[c] + (recovered - graded_rgb[c]) * (dehaze_amount / 100.0);
+            }
+        }
+
+        // Noise Reduction (luminance, then color), then Sharpening -- NR
+        // before Sharpen is deliberate: sharpening amplifies high-frequency
+        // content, so running it after denoising avoids re-amplifying
+        // noise NR would otherwise have removed. All three read the
+        // pre-Dehaze-recovery blur sources computed above (see that block's
+        // own doc comment for the named limitation this implies).
+        if let Some(blur) = &luma_nr_blur {
+            let delta = luma_nr_delta(graded_luma[idx], blur[idx], &luma_nr);
+            for c in rgb.iter_mut() {
+                *c += delta;
+            }
+        }
+        if let Some((br, bg, bb)) = &color_nr_blur {
+            let delta = color_nr_delta(graded_rgb, [br[idx], bg[idx], bb[idx]], &color_nr);
+            for c in 0..3 {
+                rgb[c] += delta[c];
+            }
+        }
+        if let Some(blur) = &sharpen_blur {
+            let grad_mag = local_gradient_magnitude(&graded_luma, w, h, x as usize, y as usize);
+            let delta = sharpen_delta(graded_luma[idx], blur[idx], grad_mag, &sharpen);
+            for c in rgb.iter_mut() {
+                *c += delta;
             }
         }
 
@@ -2603,5 +2913,187 @@ mod tests {
         let mut image = RgbImage::from_pixel(20, 20, image::Rgb([120, 80, 40]));
         apply_edit_stack(&mut image, &stack_with(&[]));
         assert_eq!(*image.get_pixel(5, 5), image::Rgb([120, 80, 40]));
+    }
+
+    /// Hand-derived: a 3x3 luma buffer with a single bright spot at the
+    /// center-right neighbor. At (1,1): xm=0,xp=2 -> gx = luma[1,2] -
+    /// luma[1,0] = 1.0 - 0.0 = 1.0; ym=0,yp=2 -> gy = luma[2,1] -
+    /// luma[0,1] = 0.0 - 0.0 = 0.0. magnitude = sqrt(1.0^2 + 0.0^2) * 0.5
+    /// = 0.5 exactly.
+    #[test]
+    fn local_gradient_magnitude_matches_hand_computed_value() {
+        #[rustfmt::skip]
+        let buf = [
+            0.0, 0.0, 0.0,
+            0.0, 0.5, 1.0,
+            0.0, 0.0, 0.0,
+        ];
+        assert!((local_gradient_magnitude(&buf, 3, 3, 1, 1) - 0.5).abs() < 1e-6);
+    }
+
+    /// A flat buffer has zero gradient everywhere, including at the
+    /// border (where clamping collapses `xm`/`xp` or `ym`/`yp` to the
+    /// same index) -- confirms the clamping doesn't introduce a phantom
+    /// gradient at the edges.
+    #[test]
+    fn local_gradient_magnitude_is_zero_on_a_flat_field_including_borders() {
+        let buf = [0.4f32; 9];
+        assert_eq!(local_gradient_magnitude(&buf, 3, 3, 0, 0), 0.0);
+        assert_eq!(local_gradient_magnitude(&buf, 3, 3, 1, 1), 0.0);
+        assert_eq!(local_gradient_magnitude(&buf, 3, 3, 2, 2), 0.0);
+    }
+
+    #[test]
+    fn sharpen_delta_amount_zero_is_an_exact_passthrough() {
+        let s = Sharpen { amount: 0.0, radius: 80.0, detail: 100.0, masking: 0.0 };
+        assert_eq!(sharpen_delta(0.7, 0.3, 2.0, &s), 0.0);
+    }
+
+    /// Hand-derived: at detail=100/masking=0, both thresholds collapse to
+    /// f32::EPSILON, so for any diff/grad_mag well above that floor both
+    /// gates saturate to ~1.0 -- the delta reduces to essentially
+    /// `diff * (amount/100) * SHARPEN_STRENGTH` with no meaningful
+    /// gating, a clean near-exact value to check against.
+    #[test]
+    fn sharpen_delta_matches_hand_derived_value_at_full_detail_and_no_masking() {
+        let s = Sharpen { amount: 100.0, radius: 50.0, detail: 100.0, masking: 0.0 };
+        let delta = sharpen_delta(0.6, 0.5, 1.0, &s);
+        let expected = 0.1 * 1.0 * SHARPEN_STRENGTH;
+        assert!((delta - expected).abs() < 1e-4, "expected ~{expected}, got {delta}");
+    }
+
+    /// `sharpen_radius_px` boundary mapping: slider=0 -> the minimum
+    /// radius (1px, since a 0px radius is meaningless), slider=100 -> the
+    /// fixed maximum.
+    #[test]
+    fn sharpen_radius_px_maps_slider_bounds_correctly() {
+        assert_eq!(sharpen_radius_px(0.0), 1);
+        assert_eq!(sharpen_radius_px(100.0), SHARPEN_MAX_RADIUS_PX);
+    }
+
+    #[test]
+    fn luma_nr_delta_amount_zero_is_an_exact_passthrough_even_at_full_contrast() {
+        let n = LumaNr { amount: 0.0, detail: 50.0, contrast: 100.0 };
+        assert_eq!(luma_nr_delta(0.6, 0.4, &n), 0.0);
+    }
+
+    /// Hand-derived: detail=0 -> edge_threshold = NR_DETAIL_SCALE exactly
+    /// (0.05, no epsilon floor needed since it's already positive).
+    /// Choosing diff = edge_threshold/2 = 0.025 gives smoothstep's own
+    /// input t = 0.5 exactly, and smoothstep(0.5) = 0.5*0.5*(3-1.0) = 0.5
+    /// exactly (the `t*t*(3-2t)` formula's own well-known value at its
+    /// midpoint) -- so smooth_weight = 1 - 0.5 = 0.5, and at amount=100/
+    /// contrast=0: smooth_delta = -0.025 * 1.0 * 0.5 = -0.0125 exactly.
+    #[test]
+    fn luma_nr_delta_matches_hand_derived_value_at_the_smoothstep_midpoint() {
+        let n = LumaNr { amount: 100.0, detail: 0.0, contrast: 0.0 };
+        let l = 0.525;
+        let blurred = 0.5; // diff = 0.025
+        let delta = luma_nr_delta(l, blurred, &n);
+        assert!((delta - (-0.0125)).abs() < 1e-5, "expected ~-0.0125, got {delta}");
+    }
+
+    /// Contrast restoration is scaled by `amount` too -- confirms it
+    /// can't fire when amount=0 even with contrast=100 (already covered
+    /// above), and separately confirms it DOES contribute a real,
+    /// independent term when amount>0: at contrast=100 the restoration
+    /// term exactly cancels part of the smoothing term (both proportional
+    /// to the same `diff`), which is itself a meaningful, checkable
+    /// property -- the combined delta must have a SMALLER magnitude than
+    /// the smoothing-only delta (contrast=0) at the same amount.
+    #[test]
+    fn luma_nr_contrast_restoration_reduces_the_net_smoothing_effect() {
+        let no_restore = LumaNr { amount: 100.0, detail: 0.0, contrast: 0.0 };
+        let with_restore = LumaNr { amount: 100.0, detail: 0.0, contrast: 100.0 };
+        let l = 0.525;
+        let blurred = 0.5;
+        let d1 = luma_nr_delta(l, blurred, &no_restore).abs();
+        let d2 = luma_nr_delta(l, blurred, &with_restore).abs();
+        assert!(d2 < d1, "expected contrast restoration to shrink the net delta: {d2} vs {d1}");
+    }
+
+    #[test]
+    fn color_nr_delta_amount_zero_is_an_exact_passthrough() {
+        let n = ColorNr { amount: 0.0, detail: 0.0 };
+        let delta = color_nr_delta([0.5, 0.3, 0.7], [0.4, 0.4, 0.6], &n);
+        assert_eq!(delta, [0.0, 0.0, 0.0]);
+    }
+
+    /// The property this slice's own design review verified algebraically
+    /// (chroma_delta's weighted sum, using luma3's own Rec.709 weights,
+    /// telescopes to exactly zero by construction): reconstructing
+    /// `orig + color_nr_delta(orig, blurred, n)` must leave `luma3`
+    /// UNCHANGED, regardless of the actual (nonzero) scalar `k` the
+    /// gating produces. Uses a near-gray pixel with a small perturbation
+    /// so `color_smooth_weight` isn't gated all the way to zero (a
+    /// trivial, uninformative pass if k happened to be exactly 0).
+    #[test]
+    fn color_nr_delta_preserves_luminance_exactly() {
+        let n = ColorNr { amount: 100.0, detail: 0.0 };
+        let orig = [0.5f32, 0.5, 0.5];
+        let blurred = [0.51f32, 0.49, 0.505];
+        let delta = color_nr_delta(orig, blurred, &n);
+        // Sanity: k must actually be nonzero for this to be a meaningful
+        // check, not a trivial all-zero-delta pass.
+        assert!(delta.iter().any(|d| d.abs() > 1e-6), "delta was trivially zero: {delta:?}");
+        let new_rgb = [orig[0] + delta[0], orig[1] + delta[1], orig[2] + delta[2]];
+        let orig_luma = luma3(orig);
+        let new_luma = luma3(new_rgb);
+        assert!(
+            (new_luma - orig_luma).abs() < 1e-5,
+            "expected luma to stay at {orig_luma}, got {new_luma} (delta {delta:?})"
+        );
+    }
+
+    /// Same invariant, checked again at a DIFFERENT amount/detail (a
+    /// different, nonzero `k`) and a different orig/blurred pair, so the
+    /// exact-cancellation property isn't only verified at one coincidental
+    /// parameter combination.
+    #[test]
+    fn color_nr_delta_preserves_luminance_exactly_at_a_different_k() {
+        let n = ColorNr { amount: 60.0, detail: 20.0 };
+        let orig = [0.2f32, 0.6, 0.35];
+        let blurred = [0.22f32, 0.58, 0.34];
+        let delta = color_nr_delta(orig, blurred, &n);
+        let new_rgb = [orig[0] + delta[0], orig[1] + delta[1], orig[2] + delta[2]];
+        assert!((luma3(new_rgb) - luma3(orig)).abs() < 1e-5);
+    }
+
+    /// End-to-end through `apply_edit_stack`, all three ops at amount=0
+    /// (the default when absent): a real image is left byte-for-byte
+    /// unchanged, the same contract every op in this stack already
+    /// guarantees.
+    #[test]
+    fn sharpen_and_nr_absent_ops_are_exact_passthrough_through_edit_stack() {
+        let mut image = RgbImage::from_pixel(24, 24, image::Rgb([140, 90, 60]));
+        apply_edit_stack(&mut image, &stack_with(&[]));
+        assert_eq!(*image.get_pixel(12, 12), image::Rgb([140, 90, 60]));
+    }
+
+    /// End-to-end: strong Sharpening on a real image with an actual edge
+    /// (a small bright patch in a uniform scene, same `dehaze_test_image`
+    /// helper used for Dehaze's own end-to-end tests) visibly boosts
+    /// contrast at the boundary -- the pixel immediately outside the
+    /// patch (x=3, adjacent to the patch's own x=2 edge column, so BOTH
+    /// the local gradient Masking reads and the wider blur Detail reads
+    /// see a real edge there) should get darker (overshoot below the
+    /// scene value) since unsharp masking always produces a halo at a
+    /// real edge.
+    #[test]
+    fn sharpen_creates_a_visible_halo_at_a_real_edge_through_edit_stack() {
+        let mut image = dehaze_test_image(30, 30, [150, 150, 150], [220, 220, 220]);
+        let before = *image.get_pixel(3, 1); // immediately outside the 3x3 bright patch, still scene-colored
+        apply_edit_stack(
+            &mut image,
+            &EditStack {
+                schema_version: 1,
+                ops: vec![serde_json::json!({ "op": "sharpen", "amount": 100.0, "radius": 20.0, "detail": 100.0, "masking": 0.0 })],
+            },
+        );
+        let after = image.get_pixel(3, 1);
+        assert!(
+            after[0] < before[0],
+            "expected a darker halo pixel near the edge, before={before:?} after={after:?}"
+        );
     }
 }

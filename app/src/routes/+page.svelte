@@ -75,6 +75,9 @@
     getVignette,
     upsertVignette,
     IDENTITY_VIGNETTE,
+    getGrain,
+    upsertGrain,
+    IDENTITY_GRAIN,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -1045,6 +1048,18 @@
     persistTimer = setTimeout(flushEditStack, 250);
   }
 
+  // Grain (M3): same structured, own-getter/handler shape as Vignette
+  // above.
+  let grain = $derived(getGrain(editStack, IDENTITY_GRAIN));
+
+  function handleGrainChange(
+    /** @type {Partial<{amount: number, size: number, roughness: number}>} */ patch,
+  ) {
+    editStack = upsertGrain(editStack, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
   // HSL band-jump eyedropper's transient navigation target -- NOT persisted
   // edit-stack state, purely a "which band should the panel scroll to and
   // highlight" signal, self-clearing after a fixed delay rather than on
@@ -1421,6 +1436,7 @@
         {texture}
         {clarity}
         {vignette}
+        {grain}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1461,6 +1477,8 @@
         onClarityChange={(v) => handleAdjustmentChange("clarity", v)}
         {vignette}
         onVignetteChange={handleVignetteChange}
+        {grain}
+        onGrainChange={handleGrainChange}
       />
     </div>
     <MaskToolStrip

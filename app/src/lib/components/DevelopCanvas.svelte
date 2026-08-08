@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildGrainUniformData } from "$lib/api/develop.js";
 
   const MAX_MASKS = 8;
 
@@ -37,6 +37,7 @@
    *   texture: number,
    *   clarity: number,
    *   vignette: {amount: number, midpoint: number, feather: number},
+   *   grain: {amount: number, size: number, roughness: number},
    * }}
    */
   let {
@@ -65,6 +66,7 @@
     texture,
     clarity,
     vignette,
+    grain,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -700,6 +702,11 @@
   // Toning did for the same reason.
   /** @type {GPUBuffer | null} */
   let vignetteBuffer = null;
+  // Grain (M3): same device-scoped, own-small-buffer treatment as
+  // Vignette above, for the same reason (3 fields, no spare Adjustments
+  // padding left).
+  /** @type {GPUBuffer | null} */
+  let grainBuffer = null;
   /** @type {GPUBindGroup | null} */
   let bindGroup = null;
   /** @type {GPUTextureFormat} */
@@ -974,6 +981,54 @@
       _pad0: f32,
     };
     @group(0) @binding(15) var<uniform> vignette: Vignette;
+
+    // Grain (M3): same flat-struct, own-buffer treatment as Vignette,
+    // same reasoning.
+    struct Grain {
+      amount: f32,    // 0..100
+      size: f32,      // 0..100, maps to lattice cell width in pixels
+      roughness: f32, // 0..100, blends smooth<->blocky noise
+      _pad0: f32,
+    };
+    @group(0) @binding(16) var<uniform> grain: Grain;
+
+    // A direct WGSL port of develop_engine.rs's own grain_hash/
+    // grain_value_noise/grain_delta -- see that module's doc comment on
+    // grain_delta for the full parameter reasoning (size's pixel-cell
+    // mapping, roughness's smooth/blocky blend, amount's additive-delta
+    // shape). Not bit-exact with the Rust twin (different underlying sin
+    // implementations), same "not byte-identical" parity bar as the rest
+    // of this shader.
+    const GRAIN_MAX_CELL_PX: f32 = 6.0;
+    const GRAIN_STRENGTH: f32 = 0.12;
+
+    fn grainHash(p: vec2<f32>) -> f32 {
+      let v = sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453123;
+      return fract(v);
+    }
+
+    fn grainValueNoise(coord: vec2<f32>) -> f32 {
+      let i = floor(coord);
+      let f = fract(coord);
+      let a = grainHash(i);
+      let b = grainHash(i + vec2<f32>(1.0, 0.0));
+      let c = grainHash(i + vec2<f32>(0.0, 1.0));
+      let d = grainHash(i + vec2<f32>(1.0, 1.0));
+      let u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    }
+
+    fn grainDelta(coord: vec2<f32>) -> f32 {
+      if (grain.amount == 0.0) {
+        return 0.0;
+      }
+      let cellPx = 1.0 + (grain.size / 100.0) * (GRAIN_MAX_CELL_PX - 1.0);
+      let scaled = coord / cellPx;
+      let smoothN = grainValueNoise(scaled);
+      let roughN = grainHash(floor(scaled));
+      let noise = mix(smoothN, roughN, clamp(grain.roughness / 100.0, 0.0, 1.0));
+      return (noise * 2.0 - 1.0) * (grain.amount / 100.0) * GRAIN_STRENGTH;
+    }
 
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
       var c = rgb * pow(2.0, exposure_ev);
@@ -1429,6 +1484,12 @@
       let vignetteFactor = 1.0 + (vignette.amount / 100.0) * vT;
       rgb = rgb * vignetteFactor;
 
+      // Grain: pure per-pixel procedural noise, applied right after
+      // Vignette -- see grainDelta's own doc comment / develop_engine.rs's
+      // grain_delta for the full reasoning.
+      let gDelta = grainDelta(vec2<f32>(coord));
+      rgb = rgb + vec3<f32>(gDelta, gDelta, gDelta);
+
       // Local adjustments layer on top of the globally-graded image,
       // matching real Lightroom's own ordering and develop_engine.rs's.
       let mask_count = i32(adj.mask_count);
@@ -1707,6 +1768,10 @@
       size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL Vignette struct
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    grainBuffer = device.createBuffer({
+      size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL Grain struct
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
   }
 
   /** Every GPU-resource-side-effect of "a decoded bitmap is now the active
@@ -1758,7 +1823,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -2004,16 +2069,17 @@
     });
 
     // Final pass's own bind group -- a genuinely DIFFERENT entry set than
-    // before (0,2,3,4,8,10,12,15), NOT the old single-pass fs_main's {0-7}
-    // -- fs_final no longer references srcTexture/curveLut/hslBands/
-    // splitToning (those moved into fs_grade), but DOES still need
-    // srcSampler(0) -- the mask loop's own pre-existing brushMasks sample
-    // uses it, unrelated to Dehaze. binding 15 (vignette) is the newest
-    // addition here -- double-checked against fs_final's own WGSL body
-    // (which reads vignette.amount/midpoint/feather directly) before
-    // adding, given this exact bind group has already missed a real
-    // binding twice before (srcSampler, then the Adjustments uniform in
-    // fs_texture_v/fs_clarity_v) per this comment's own history.
+    // before (0,2,3,4,8,10,12,15,16), NOT the old single-pass fs_main's
+    // {0-7} -- fs_final no longer references srcTexture/curveLut/
+    // hslBands/splitToning (those moved into fs_grade), but DOES still
+    // need srcSampler(0) -- the mask loop's own pre-existing brushMasks
+    // sample uses it, unrelated to Dehaze. binding 16 (grain) is the
+    // newest addition here -- double-checked against fs_final's own WGSL
+    // body (which reads grain.amount/size/roughness via grainDelta)
+    // before adding, given this exact bind group has already missed a
+    // real binding THREE times now (srcSampler, then the Adjustments
+    // uniform in fs_texture_v/fs_clarity_v, then almost a fourth time
+    // here) per this comment's own history.
     bindGroup = gpuDevice.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
@@ -2032,6 +2098,7 @@
         { binding: 10, resource: atmLightFinalTex.createView() },
         { binding: 12, resource: transmissionTex.createView() },
         { binding: 15, resource: { buffer: vignetteBuffer } },
+        { binding: 16, resource: { buffer: grainBuffer } },
       ],
     });
     // Every intermediate above is freshly (re)created for this bitmap --
@@ -2052,7 +2119,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -2245,7 +2312,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !grainBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -2256,6 +2323,7 @@
     device.queue.writeBuffer(hslBandsBuffer, 0, buildHslUniformData(hslBands));
     device.queue.writeBuffer(splitToningBuffer, 0, buildSplitToningUniformData(splitToning));
     device.queue.writeBuffer(vignetteBuffer, 0, buildVignetteUniformData(vignette));
+    device.queue.writeBuffer(grainBuffer, 0, buildGrainUniformData(grain));
 
     // Mask overlay: -1 (disabled) unless the toggle is on AND the current
     // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
@@ -2409,6 +2477,7 @@
     void texture;
     void clarity;
     void vignette;
+    void grain;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 

@@ -485,6 +485,107 @@ fn vignette_factor(uv: (f32, f32), aspect: f32, v: &Vignette) -> f32 {
     1.0 + (v.amount / 100.0) * t
 }
 
+/// Grain (M3): a flat, non-nested payload, same reasoning as Vignette's
+/// own struct. Defaults match real Lightroom's own Grain defaults exactly
+/// (Amount 0 -- off, Size 25, Roughness 50) -- Amount=0 is this op's
+/// identity, same "off by default, sensible if just turned on" contract
+/// every other amount-style op already has.
+struct Grain {
+    amount: f32,
+    size: f32,
+    roughness: f32,
+}
+
+impl Default for Grain {
+    fn default() -> Self {
+        Grain { amount: 0.0, size: 25.0, roughness: 50.0 }
+    }
+}
+
+fn grain_op(ops: &[serde_json::Value]) -> Grain {
+    let op = ops.iter().find(|op| op.get("op").and_then(|v| v.as_str()) == Some("grain"));
+    let field = |key: &str, default: f32| -> f32 {
+        op.and_then(|o| o.get(key)).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
+    };
+    Grain {
+        amount: field("amount", 0.0),
+        size: field("size", 25.0),
+        roughness: field("roughness", 50.0),
+    }
+}
+
+/// A classic GLSL/WGSL-portable pseudo-random hash: deterministic given
+/// the same input coordinate (unlike a seeded RNG, needs no state), which
+/// is exactly what a STATIC grain pattern needs -- re-evaluating this at
+/// the same pixel on every render must return the same value, or the
+/// grain would visibly "boil"/shimmer on every unrelated slider tweak
+/// instead of looking like a fixed film-grain texture. Not bit-exact
+/// across Rust's `f32::sin` and WGSL's own `sin` (different underlying
+/// implementations), but both are IEEE-754 single precision evaluating
+/// the exact same formula -- close enough for this module's own
+/// established "±2/255, not byte-identical" parity bar.
+fn grain_hash(x: f32, y: f32) -> f32 {
+    let v = (x * 12.9898 + y * 78.233).sin() * 43758.5453123;
+    v - v.floor()
+}
+
+/// Bilinear-interpolated value noise over the hash lattice above -- the
+/// "smooth" end of Roughness (organic, softly-varying grain rather than
+/// visibly blocky cells). `coord` is already scaled by grain size (see
+/// `grain_delta`'s own doc comment).
+fn grain_value_noise(coord: (f32, f32)) -> f32 {
+    let ix = coord.0.floor();
+    let iy = coord.1.floor();
+    let fx = coord.0 - ix;
+    let fy = coord.1 - iy;
+    let a = grain_hash(ix, iy);
+    let b = grain_hash(ix + 1.0, iy);
+    let c = grain_hash(ix, iy + 1.0);
+    let d = grain_hash(ix + 1.0, iy + 1.0);
+    let ux = fx * fx * (3.0 - 2.0 * fx);
+    let uy = fy * fy * (3.0 - 2.0 * fy);
+    let ab = a + (b - a) * ux;
+    let cd = c + (d - c) * ux;
+    ab + (cd - ab) * uy
+}
+
+/// Film grain (M3): a pure per-pixel procedural noise overlay -- like
+/// Vignette, no neighboring-pixel data needed, so it folds directly into
+/// the existing final per-pixel loop. Applied globally right after
+/// Vignette, before any mask (matching real Lightroom's own Effects-panel
+/// order: Post-Crop Vignette, then Grain, both above Local Adjustments).
+///
+/// `size` maps to the lattice cell width in PIXELS (fixed range 1..
+/// GRAIN_MAX_CELL_PX, same "fixed absolute pixel scale, not resolution-
+/// scaled" named limitation Dehaze/Texture/Clarity's own radii already
+/// accept) -- larger cells read as coarser, chunkier grain particles.
+/// `roughness` blends between the bilinear-interpolated value noise above
+/// (smooth, roughness=0) and the RAW lattice-cell hash with no
+/// interpolation at all (blocky/uncorrelated between adjacent cells,
+/// roughness=100) -- two ends of the same underlying hash lattice, not
+/// two unrelated noise functions. `amount` scales the resulting additive
+/// luminance delta (added equally to all three channels, same "preserve
+/// chroma via an additive delta" shape Texture/Clarity's own formula
+/// uses) -- real film grain is predominantly a luminance/density effect,
+/// not per-channel chromatic noise. `GRAIN_STRENGTH` is a fixed constant
+/// (not user-exposed) capping the visual amplitude at amount=100, the
+/// same "fix the knob" choice this module's other constants already
+/// make.
+const GRAIN_MAX_CELL_PX: f32 = 6.0;
+const GRAIN_STRENGTH: f32 = 0.12;
+
+fn grain_delta(coord: (f32, f32), g: &Grain) -> f32 {
+    if g.amount == 0.0 {
+        return 0.0;
+    }
+    let cell = 1.0 + (g.size / 100.0) * (GRAIN_MAX_CELL_PX - 1.0);
+    let scaled = (coord.0 / cell, coord.1 / cell);
+    let smooth = grain_value_noise(scaled);
+    let rough = grain_hash(scaled.0.floor(), scaled.1.floor());
+    let noise = smooth + (rough - smooth) * (g.roughness / 100.0).clamp(0.0, 1.0);
+    (noise * 2.0 - 1.0) * (g.amount / 100.0) * GRAIN_STRENGTH
+}
+
 /// Smoothstep(0,1,t) of the balance-shifted lightness -- C1-continuous
 /// (zero slope at both ends) so the shadow/highlight transition has no
 /// slope-kink seam on a smooth luminance gradient, same reasoning
@@ -1197,6 +1298,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let texture_amount = op_value(&stack.ops, "texture");
     let clarity_amount = op_value(&stack.ops, "clarity");
     let vignette = vignette_op(&stack.ops);
+    let grain = grain_op(&stack.ops);
 
     let (width, height) = (image.width(), image.height());
     // Only consumed by brush masks (see Mask::weight) -- converts a dab's
@@ -1298,6 +1400,11 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         let vf = vignette_factor(uv, aspect, &vignette);
         for c in rgb.iter_mut() {
             *c *= vf;
+        }
+
+        let gd = grain_delta((x as f32, y as f32), &grain);
+        for c in rgb.iter_mut() {
+            *c += gd;
         }
 
         if !masks.is_empty() {
@@ -2422,5 +2529,79 @@ mod tests {
         assert_eq!(*image.get_pixel(10, 10), image::Rgb([200, 150, 100]));
         let corner = image.get_pixel(0, 0);
         assert!(corner[0] < 50, "expected a near-black corner, got {corner:?}");
+    }
+
+    /// Hand-derived exact value: `sin(0.0) == 0.0` exactly, so
+    /// `grain_hash(0.0, 0.0)` collapses to `fract(0.0 * 43758.5453123) ==
+    /// 0.0` exactly -- one real closed-form point on an otherwise
+    /// opaque-looking hash function.
+    #[test]
+    fn grain_hash_at_origin_is_exactly_zero() {
+        assert_eq!(grain_hash(0.0, 0.0), 0.0);
+    }
+
+    /// amount=0 must be an EXACT passthrough regardless of coord/size/
+    /// roughness -- `grain_delta` returns exactly 0.0 without even
+    /// touching the noise lattice, same structural guarantee every other
+    /// op's identity value already gets.
+    #[test]
+    fn grain_amount_zero_is_an_exact_passthrough() {
+        let g = Grain { amount: 0.0, size: 80.0, roughness: 90.0 };
+        assert_eq!(grain_delta((123.0, 456.0), &g), 0.0);
+        assert_eq!(grain_delta((0.0, 0.0), &g), 0.0);
+    }
+
+    /// The grain pattern must be STATIC -- the same coordinate evaluated
+    /// twice (e.g. across two separate renders) returns the identical
+    /// delta, not a freshly-randomized one. `grain_delta` is a pure
+    /// function of its inputs, but this pins that contract down
+    /// explicitly rather than leaving it implicit.
+    #[test]
+    fn grain_delta_is_deterministic_for_the_same_coordinate() {
+        let g = Grain { amount: 60.0, size: 40.0, roughness: 30.0 };
+        let a = grain_delta((17.0, 42.0), &g);
+        let b = grain_delta((17.0, 42.0), &g);
+        assert_eq!(a, b);
+    }
+
+    /// At roughness=100 (pure lattice-cell hash, no bilinear
+    /// interpolation), two DIFFERENT pixel coordinates that fall in the
+    /// SAME lattice cell must produce the EXACT SAME delta -- this is
+    /// `size`'s whole visible effect (grouping pixels into same-value
+    /// blocks), and it's exactly derivable: size=100 -> cell = 1 +
+    /// 1.0*(6.0-1.0) = 6.0px, so (0,0) and (3,3) both floor-divide to
+    /// lattice cell (0,0), while (7,7) floor-divides to a different cell
+    /// (1,1).
+    #[test]
+    fn grain_size_groups_pixels_into_matching_blocky_cells_at_full_roughness() {
+        let g = Grain { amount: 100.0, size: 100.0, roughness: 100.0 };
+        let a = grain_delta((0.0, 0.0), &g);
+        let b = grain_delta((3.0, 3.0), &g);
+        let c = grain_delta((7.0, 7.0), &g);
+        assert_eq!(a, b, "same 6px lattice cell must match exactly");
+        assert_ne!(a, c, "a different lattice cell should (almost certainly) differ");
+    }
+
+    /// Roughness actually changes the result -- blending smooth
+    /// (bilinear) and rough (nearest-cell) noise at the two extremes must
+    /// generally disagree at a non-lattice-aligned point, confirming the
+    /// blend isn't a no-op.
+    #[test]
+    fn grain_roughness_zero_and_one_hundred_generally_differ() {
+        let smooth = Grain { amount: 100.0, size: 50.0, roughness: 0.0 };
+        let rough = Grain { amount: 100.0, size: 50.0, roughness: 100.0 };
+        let coord = (11.3, 27.9);
+        assert_ne!(grain_delta(coord, &smooth), grain_delta(coord, &rough));
+    }
+
+    /// End-to-end through `apply_edit_stack`: amount=0 (the default when
+    /// the op is absent entirely) leaves a real image byte-for-byte
+    /// unchanged, the same "everything off is an exact passthrough"
+    /// contract every other op in this stack already guarantees.
+    #[test]
+    fn grain_absent_op_is_exact_passthrough_through_edit_stack() {
+        let mut image = RgbImage::from_pixel(20, 20, image::Rgb([120, 80, 40]));
+        apply_edit_stack(&mut image, &stack_with(&[]));
+        assert_eq!(*image.get_pixel(5, 5), image::Rgb([120, 80, 40]));
     }
 }

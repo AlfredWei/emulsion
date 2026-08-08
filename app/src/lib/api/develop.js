@@ -492,6 +492,49 @@ export function buildVignetteUniformData(
   return new Float32Array([v.amount, v.midpoint, v.feather, 0]);
 }
 
+// Grain (M3): same flat, non-nested payload shape as Vignette above.
+// Global-only, applied after Vignette, before any mask (matching real
+// Lightroom's own Effects-panel order). Defaults match real Lightroom's
+// own Grain defaults exactly (Amount 0 -- off, Size 25, Roughness 50).
+export const IDENTITY_GRAIN = Object.freeze({ amount: 0, size: 25, roughness: 50 });
+
+/** @returns {{amount: number, size: number, roughness: number}} */
+export function getGrain(
+  /** @type {EditStack} */ stack,
+  /** @type {typeof IDENTITY_GRAIN} */ fallback = IDENTITY_GRAIN,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "grain"));
+  if (!op) return fallback;
+  return {
+    amount: op.amount ?? 0,
+    size: op.size ?? 25,
+    roughness: op.roughness ?? 50,
+  };
+}
+
+/** Patches any subset of {amount, size, roughness}, leaving the rest
+ * untouched.
+ * @returns {EditStack} */
+export function upsertGrain(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<{amount: number, size: number, roughness: number}>} */ patch,
+) {
+  const current = getGrain(stack);
+  const next = { ...current, ...patch };
+  const ops = stack.ops.filter((o) => o.op !== "grain");
+  ops.push(/** @type {any} */ ({ op: "grain", ...next }));
+  return { ...stack, ops };
+}
+
+/** Packs into the exact Float32Array layout DevelopCanvas.svelte's
+ * `grainBuffer`/the WGSL `Grain` struct expects (field order matters --
+ * must match the struct's own field order exactly). */
+export function buildGrainUniformData(
+  /** @type {ReturnType<typeof getGrain>} */ g,
+) {
+  return new Float32Array([g.amount, g.size, g.roughness, 0]);
+}
+
 // Eyedropper pickers (M3): the canvas's existing click-to-sample gesture
 // (DevelopCanvas.svelte's sampleSourcePixel, reused from the color-range
 // mask feature) reports a raw {r,g,b} 0-1 float sample. Every one of the

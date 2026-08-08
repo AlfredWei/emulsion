@@ -72,6 +72,9 @@
     upsertSplitToningBalance,
     IDENTITY_SPLIT_TONING,
     rgbToHsl,
+    getVignette,
+    upsertVignette,
+    IDENTITY_VIGNETTE,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -1028,6 +1031,20 @@
   let texture = $derived(opValue(editStack, "texture", 0));
   let clarity = $derived(opValue(editStack, "clarity", 0));
 
+  // Vignette (M3): a structured 3-field payload (amount/midpoint/feather)
+  // -- same getSplitToning/upsertX shape Split Toning already established
+  // for a global-only, non-single-scalar op, not the generic opValue
+  // model Texture/Clarity/Dehaze use.
+  let vignette = $derived(getVignette(editStack, IDENTITY_VIGNETTE));
+
+  function handleVignetteChange(
+    /** @type {Partial<{amount: number, midpoint: number, feather: number}>} */ patch,
+  ) {
+    editStack = upsertVignette(editStack, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
   // HSL band-jump eyedropper's transient navigation target -- NOT persisted
   // edit-stack state, purely a "which band should the panel scroll to and
   // highlight" signal, self-clearing after a fixed delay rather than on
@@ -1403,6 +1420,7 @@
         {dehaze}
         {texture}
         {clarity}
+        {vignette}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1441,6 +1459,8 @@
         onTextureChange={(v) => handleAdjustmentChange("texture", v)}
         {clarity}
         onClarityChange={(v) => handleAdjustmentChange("clarity", v)}
+        {vignette}
+        onVignetteChange={handleVignetteChange}
       />
     </div>
     <MaskToolStrip

@@ -446,6 +446,52 @@ export function buildSplitToningUniformData(
   ]);
 }
 
+// Vignette (M3): a flat, non-nested payload -- unlike Split Toning's
+// per-zone shape above, there's no natural per-element repetition in
+// three named fields, so this mirrors upsertSplitToningBalance's flat
+// patch-and-replace shape rather than upsertSplitToningZone's per-zone
+// one. Global-only (applied after Dehaze, before any mask -- see
+// develop_engine.rs/DevelopCanvas.svelte's shared pipeline-order
+// comment).
+export const IDENTITY_VIGNETTE = Object.freeze({ amount: 0, midpoint: 50, feather: 50 });
+
+/** @returns {{amount: number, midpoint: number, feather: number}} */
+export function getVignette(
+  /** @type {EditStack} */ stack,
+  /** @type {typeof IDENTITY_VIGNETTE} */ fallback = IDENTITY_VIGNETTE,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "vignette"));
+  if (!op) return fallback;
+  return {
+    amount: op.amount ?? 0,
+    midpoint: op.midpoint ?? 50,
+    feather: op.feather ?? 50,
+  };
+}
+
+/** Patches any subset of {amount, midpoint, feather}, leaving the rest
+ * untouched.
+ * @returns {EditStack} */
+export function upsertVignette(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<{amount: number, midpoint: number, feather: number}>} */ patch,
+) {
+  const current = getVignette(stack);
+  const next = { ...current, ...patch };
+  const ops = stack.ops.filter((o) => o.op !== "vignette");
+  ops.push(/** @type {any} */ ({ op: "vignette", ...next }));
+  return { ...stack, ops };
+}
+
+/** Packs into the exact Float32Array layout DevelopCanvas.svelte's
+ * `vignetteBuffer`/the WGSL `Vignette` struct expects (field order
+ * matters -- must match the struct's own field order exactly). */
+export function buildVignetteUniformData(
+  /** @type {ReturnType<typeof getVignette>} */ v,
+) {
+  return new Float32Array([v.amount, v.midpoint, v.feather, 0]);
+}
+
 // Eyedropper pickers (M3): the canvas's existing click-to-sample gesture
 // (DevelopCanvas.svelte's sampleSourcePixel, reused from the color-range
 // mask feature) reports a raw {r,g,b} 0-1 float sample. Every one of the

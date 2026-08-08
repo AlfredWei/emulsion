@@ -403,6 +403,88 @@ fn split_toning(ops: &[serde_json::Value]) -> SplitToning {
     }
 }
 
+/// Vignette (M3): a flat, non-nested payload (`{amount, midpoint, feather}`)
+/// -- unlike Split Toning's per-zone shape above, there's no natural
+/// per-element repetition here, so a plain struct with three named fields
+/// is simplest. Same "fall back to identity on partial/corrupt payload"
+/// contract every other structured op already establishes.
+struct Vignette {
+    amount: f32,
+    midpoint: f32,
+    feather: f32,
+}
+
+impl Default for Vignette {
+    fn default() -> Self {
+        Vignette { amount: 0.0, midpoint: 50.0, feather: 50.0 }
+    }
+}
+
+fn vignette_op(ops: &[serde_json::Value]) -> Vignette {
+    let op = ops.iter().find(|op| op.get("op").and_then(|v| v.as_str()) == Some("vignette"));
+    let field = |key: &str, default: f32| -> f32 {
+        op.and_then(|o| o.get(key)).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
+    };
+    Vignette {
+        amount: field("amount", 0.0),
+        midpoint: field("midpoint", 50.0),
+        feather: field("feather", 50.0),
+    }
+}
+
+/// GLSL/WGSL-standard smoothstep (`t*t*(3-2t)` of the clamped 0..1
+/// position between the two edges) -- Rust's std has no builtin, and this
+/// exact formula is what WGSL's own `smoothstep` computes, so the CPU and
+/// GPU vignette falloff curves match, not just approximate each other.
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Post-crop vignette (M3): a pure per-pixel radial brightness falloff --
+/// unlike Dehaze/Texture/Clarity above, this needs no neighboring-pixel
+/// data at all, so it folds directly into the existing final per-pixel
+/// loop rather than adding a new buffer pass. Applied last among the
+/// GLOBAL ops (after Dehaze, before any mask reads `rgb` as its own
+/// accumulator base) -- matches real Lightroom's own Effects-panel
+/// ordering and this pipeline's established "spatial ops go last, masks
+/// paint on top of everything" convention.
+///
+/// Shape: an ASPECT-CORRECTED ELLIPSE matching the image's own aspect
+/// ratio (so the vignette looks like a natural circular falloff, not a
+/// shape squashed to the image bounds) -- named, deferred simplification:
+/// real Lightroom's Roundness slider (blending toward a more rectangular
+/// shape) isn't implemented; every vignette here is roundness=0's natural
+/// ellipse. `midpoint` (0-100) sets the normalized radius (as a fraction
+/// of the center-to-corner distance) where the falloff begins; `feather`
+/// (0-100) widens the transition zone from there out to the corner;
+/// `amount` (-100..100) scales the resulting multiplicative brightness
+/// factor (negative darkens, positive lightens, matching Lightroom's own
+/// sign convention). `amount=0` is an exact passthrough (`vignette_factor`
+/// returns exactly 1.0, skipping the geometry entirely) -- same discipline
+/// every other op's identity value already gets.
+fn vignette_factor(uv: (f32, f32), aspect: f32, v: &Vignette) -> f32 {
+    if v.amount == 0.0 {
+        return 1.0;
+    }
+    let dx = (uv.0 - 0.5) * 2.0;
+    let dy = (uv.1 - 0.5) * 2.0 * aspect;
+    // Center-to-corner distance in this same aspect-corrected space --
+    // normalizing by it means `midpoint`/`feather` are always relative to
+    // "how far out toward the corner", regardless of the image's own
+    // aspect ratio.
+    let corner_dist = (1.0f32 + aspect * aspect).sqrt();
+    let norm_dist = (dx * dx + dy * dy).sqrt() / corner_dist;
+    // `inner`/`outer` are nudged apart by a small epsilon and clamped away
+    // from touching -- smoothstep's own definition is only well-behaved
+    // for edge0 < edge1, and midpoint=100 or feather=0 would otherwise
+    // collapse them to equal.
+    let inner = (v.midpoint / 100.0).clamp(0.0, 0.999);
+    let outer = (inner + (v.feather / 100.0).max(0.001) * (1.0 - inner)).clamp(inner + 0.001, 1.0);
+    let t = smoothstep(inner, outer, norm_dist);
+    1.0 + (v.amount / 100.0) * t
+}
+
 /// Smoothstep(0,1,t) of the balance-shifted lightness -- C1-continuous
 /// (zero slope at both ends) so the shadow/highlight transition has no
 /// slope-kink seam on a smooth luminance gradient, same reasoning
@@ -1114,6 +1196,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let dehaze_amount = op_value(&stack.ops, "dehaze");
     let texture_amount = op_value(&stack.ops, "texture");
     let clarity_amount = op_value(&stack.ops, "clarity");
+    let vignette = vignette_op(&stack.ops);
 
     let (width, height) = (image.width(), image.height());
     // Only consumed by brush masks (see Mask::weight) -- converts a dab's
@@ -1185,9 +1268,11 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         None
     };
 
-    // Pass 7 (final): Dehaze recovery + amount blend, then the existing
-    // mask loop -- reading the post-dehaze value as its own accumulator
-    // base, the same contract every mask already has with every op above.
+    // Pass 7 (final): Dehaze recovery + amount blend, then Vignette (also
+    // per-pixel, no neighbor data needed, folds directly into this same
+    // loop), then the existing mask loop -- reading the post-vignette
+    // value as its own accumulator base, the same contract every mask
+    // already has with every op above.
     for (x, y, pixel) in image.enumerate_pixels_mut() {
         let idx = y as usize * w + x as usize;
         let graded_rgb = graded[idx];
@@ -1200,15 +1285,22 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             }
         }
 
+        // Pixel-center sampling, matching how a texture lookup samples at
+        // the middle of a texel -- not required to be exact, same "not
+        // byte-identical, tested to tolerance" bar as the rest of this
+        // module. Computed unconditionally now (Vignette needs it too,
+        // not just masks).
+        let uv = (
+            (x as f32 + 0.5) / width as f32,
+            (y as f32 + 0.5) / height as f32,
+        );
+
+        let vf = vignette_factor(uv, aspect, &vignette);
+        for c in rgb.iter_mut() {
+            *c *= vf;
+        }
+
         if !masks.is_empty() {
-            // Pixel-center sampling, matching how a texture lookup samples
-            // at the middle of a texel -- not required to be exact, same
-            // "not byte-identical, tested to tolerance" bar as the rest of
-            // this module.
-            let uv = (
-                (x as f32 + 0.5) / width as f32,
-                (y as f32 + 0.5) / height as f32,
-            );
             for mask in &masks {
                 let weight = mask.weight(uv, aspect, rgb);
                 let (m_exposure, m_contrast, m_saturation) = mask.adjustments();
@@ -2262,5 +2354,73 @@ mod tests {
         apply_edit_stack(&mut image, &stack_with(&[("texture", 0.0), ("clarity", 0.0)]));
         assert_eq!(*image.get_pixel(19, 19), image::Rgb([176, 171, 166]));
         assert_eq!(*image.get_pixel(0, 0), image::Rgb([242, 242, 242]));
+    }
+
+    /// amount=0 must be an EXACT passthrough regardless of midpoint/
+    /// feather/uv -- `vignette_factor` returns exactly 1.0 without even
+    /// touching the geometry, a structural guarantee, not a numerically-
+    /// near-one one.
+    #[test]
+    fn vignette_amount_zero_is_an_exact_passthrough() {
+        let v = Vignette { amount: 0.0, midpoint: 10.0, feather: 90.0 };
+        assert_eq!(vignette_factor((0.0, 0.0), 0.6667, &v), 1.0);
+        assert_eq!(vignette_factor((0.5, 0.5), 0.6667, &v), 1.0);
+    }
+
+    /// The dead-center pixel (normDist=0) sits below ANY positive midpoint
+    /// -- smoothstep(inner, outer, 0) is exactly 0 whenever inner > 0, so
+    /// the center is fully unaffected regardless of how strong `amount`
+    /// is, matching a real vignette's own "corners only" shape.
+    #[test]
+    fn vignette_center_pixel_is_unaffected_when_midpoint_is_positive() {
+        let v = Vignette { amount: -100.0, midpoint: 50.0, feather: 50.0 };
+        assert_eq!(vignette_factor((0.5, 0.5), 0.6667, &v), 1.0);
+    }
+
+    /// Hand-derived corner case: midpoint=0, feather=100 puts `inner=0`,
+    /// `outer=1.0` exactly, and a corner pixel's normDist is EXACTLY 1.0
+    /// by `corner_dist`'s own definition (the corner IS the normalizing
+    /// distance) -- smoothstep(0,1,1)=1.0 exactly, so the factor reduces
+    /// to `1 + amount/100` with no partial falloff to account for.
+    #[test]
+    fn vignette_corner_pixel_at_full_feather_matches_hand_derived_factor() {
+        let darken = Vignette { amount: -100.0, midpoint: 0.0, feather: 100.0 };
+        let lighten = Vignette { amount: 60.0, midpoint: 0.0, feather: 100.0 };
+        let aspect = 0.6667;
+        assert!((vignette_factor((0.0, 0.0), aspect, &darken) - 0.0).abs() < 1e-4);
+        assert!((vignette_factor((1.0, 1.0), aspect, &darken) - 0.0).abs() < 1e-4);
+        assert!((vignette_factor((0.0, 0.0), aspect, &lighten) - 1.6).abs() < 1e-4);
+    }
+
+    /// A negative amount must never brighten and a positive amount must
+    /// never darken -- monotonicity of the sign, checked at a real
+    /// intermediate point (not just the corner/center extremes above).
+    #[test]
+    fn vignette_sign_of_amount_matches_darken_vs_lighten() {
+        let aspect = 0.6667;
+        let darken = Vignette { amount: -80.0, midpoint: 20.0, feather: 60.0 };
+        let lighten = Vignette { amount: 80.0, midpoint: 20.0, feather: 60.0 };
+        let uv = (0.9, 0.9);
+        assert!(vignette_factor(uv, aspect, &darken) < 1.0);
+        assert!(vignette_factor(uv, aspect, &lighten) > 1.0);
+    }
+
+    /// End-to-end through `apply_edit_stack`: a real image's corner darkens
+    /// and its dead center stays untouched with a strong negative Amount
+    /// and midpoint=0 -- the same real-image contract Dehaze's own
+    /// end-to-end test already establishes, applied to Vignette.
+    #[test]
+    fn vignette_darkens_corners_and_leaves_center_untouched_through_edit_stack() {
+        let mut image = RgbImage::from_pixel(21, 21, image::Rgb([200, 150, 100]));
+        apply_edit_stack(
+            &mut image,
+            &EditStack {
+                schema_version: 1,
+                ops: vec![serde_json::json!({ "op": "vignette", "amount": -100.0, "midpoint": 0.0, "feather": 100.0 })],
+            },
+        );
+        assert_eq!(*image.get_pixel(10, 10), image::Rgb([200, 150, 100]));
+        let corner = image.get_pixel(0, 0);
+        assert!(corner[0] < 50, "expected a near-black corner, got {corner:?}");
     }
 }

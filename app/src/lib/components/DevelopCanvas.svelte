@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData } from "$lib/api/develop.js";
 
   const MAX_MASKS = 8;
 
@@ -36,6 +36,7 @@
    *   dehaze: number,
    *   texture: number,
    *   clarity: number,
+   *   vignette: {amount: number, midpoint: number, feather: number},
    * }}
    */
   let {
@@ -63,6 +64,7 @@
     dehaze,
     texture,
     clarity,
+    vignette,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -692,6 +694,12 @@
   // hslBandsBuffer above.
   /** @type {GPUBuffer | null} */
   let splitToningBuffer = null;
+  // Vignette (M3): same device-scoped treatment -- 3 fields don't fit in
+  // Adjustments' own spare padding (already claimed by Dehaze/Texture/
+  // Clarity), so it gets its own small dedicated buffer, same as Split
+  // Toning did for the same reason.
+  /** @type {GPUBuffer | null} */
+  let vignetteBuffer = null;
   /** @type {GPUBindGroup | null} */
   let bindGroup = null;
   /** @type {GPUTextureFormat} */
@@ -954,6 +962,18 @@
       _pad2: f32,
     };
     @group(0) @binding(7) var<uniform> splitToning: SplitToning;
+
+    // Vignette (M3): a flat 3-field struct, same reasoning SplitToning's
+    // own comment gives for not using curveLut/hslBands' vec4-array shape.
+    // Padded to a full vec4 (16 bytes) per the same footgun documented
+    // above.
+    struct Vignette {
+      amount: f32,   // -100..100, negative darkens, positive lightens
+      midpoint: f32, // 0..100, normalized radius where falloff begins
+      feather: f32,  // 0..100, width of the falloff transition
+      _pad0: f32,
+    };
+    @group(0) @binding(15) var<uniform> vignette: Vignette;
 
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
       var c = rgb * pow(2.0, exposure_ev);
@@ -1372,13 +1392,17 @@
     // Final pass: reads the graded color back from gradedTex (not a
     // re-sample of srcTexture -- every global op through Texture and
     // Clarity is already baked in, see fs_clarity_v's own doc comment),
-    // applies the Dehaze recovery + amount blend, then
-    // runs the EXISTING mask loop unchanged, writing the real swapchain
-    // output. Safe to read the dehaze maps unconditionally even at
-    // amount=0 (the blend multiplies their contribution by 0) as long as
-    // they're always populated with REAL values before this ever runs --
-    // see writeAdjustmentsAndRender's dirty-key caching, which always
-    // treats "nothing cached yet" (the very first render) as dirty.
+    // applies the Dehaze recovery + amount blend, then Vignette (a direct
+    // WGSL port of develop_engine.rs's own vignette_factor -- pure
+    // per-pixel, no neighboring-pixel data needed, so it folds directly
+    // into this pass rather than adding a new buffer/pass the way Dehaze/
+    // Texture/Clarity all needed), then runs the EXISTING mask loop
+    // unchanged, writing the real swapchain output. Safe to read the
+    // dehaze maps unconditionally even at amount=0 (the blend multiplies
+    // their contribution by 0) as long as they're always populated with
+    // REAL values before this ever runs -- see writeAdjustmentsAndRender's
+    // dirty-key caching, which always treats "nothing cached yet" (the
+    // very first render) as dirty.
     @fragment
     fn fs_final(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
@@ -1388,6 +1412,22 @@
       let t = max(textureLoad(transmissionTexFinal, coord, 0).r, DEHAZE_T0);
       let recovered = (rgb - a) / t + a;
       rgb = rgb + (recovered - rgb) * (adj.dehaze_amount / 100.0);
+
+      // Vignette: aspect-corrected elliptical falloff -- see
+      // develop_engine.rs's vignette_factor doc comment for the full
+      // shape/parameter reasoning, mirrored exactly here.
+      let dims = vec2<f32>(textureDimensions(gradedTex));
+      let vAspect = dims.y / dims.x;
+      let centered = (in.uv - vec2<f32>(0.5, 0.5)) * 2.0;
+      let vDx = centered.x;
+      let vDy = centered.y * vAspect;
+      let cornerDist = sqrt(1.0 + vAspect * vAspect);
+      let normDist = sqrt(vDx * vDx + vDy * vDy) / cornerDist;
+      let vInner = clamp(vignette.midpoint / 100.0, 0.0, 0.999);
+      let vOuter = clamp(vInner + max(vignette.feather / 100.0, 0.001) * (1.0 - vInner), vInner + 0.001, 1.0);
+      let vT = smoothstep(vInner, vOuter, normDist);
+      let vignetteFactor = 1.0 + (vignette.amount / 100.0) * vT;
+      rgb = rgb * vignetteFactor;
 
       // Local adjustments layer on top of the globally-graded image,
       // matching real Lightroom's own ordering and develop_engine.rs's.
@@ -1663,6 +1703,10 @@
       size: 8 * 4, // 8 f32 (5 real fields + 3 padding), matches the WGSL SplitToning struct
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    vignetteBuffer = device.createBuffer({
+      size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL Vignette struct
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
   }
 
   /** Every GPU-resource-side-effect of "a decoded bitmap is now the active
@@ -1714,7 +1758,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -1960,11 +2004,16 @@
     });
 
     // Final pass's own bind group -- a genuinely DIFFERENT entry set than
-    // before (0,2,3,4,8,10,12), NOT the old single-pass fs_main's {0-7} --
-    // fs_final no longer references srcTexture/curveLut/hslBands/
+    // before (0,2,3,4,8,10,12,15), NOT the old single-pass fs_main's {0-7}
+    // -- fs_final no longer references srcTexture/curveLut/hslBands/
     // splitToning (those moved into fs_grade), but DOES still need
     // srcSampler(0) -- the mask loop's own pre-existing brushMasks sample
-    // uses it, unrelated to Dehaze.
+    // uses it, unrelated to Dehaze. binding 15 (vignette) is the newest
+    // addition here -- double-checked against fs_final's own WGSL body
+    // (which reads vignette.amount/midpoint/feather directly) before
+    // adding, given this exact bind group has already missed a real
+    // binding twice before (srcSampler, then the Adjustments uniform in
+    // fs_texture_v/fs_clarity_v) per this comment's own history.
     bindGroup = gpuDevice.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
@@ -1982,6 +2031,7 @@
         { binding: 8, resource: gradedTex.createView() },
         { binding: 10, resource: atmLightFinalTex.createView() },
         { binding: 12, resource: transmissionTex.createView() },
+        { binding: 15, resource: { buffer: vignetteBuffer } },
       ],
     });
     // Every intermediate above is freshly (re)created for this bitmap --
@@ -2002,7 +2052,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -2195,7 +2245,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -2205,6 +2255,7 @@
     device.queue.writeBuffer(curveLutBuffer, 0, buildToneCurveLut(toneCurvePoints));
     device.queue.writeBuffer(hslBandsBuffer, 0, buildHslUniformData(hslBands));
     device.queue.writeBuffer(splitToningBuffer, 0, buildSplitToningUniformData(splitToning));
+    device.queue.writeBuffer(vignetteBuffer, 0, buildVignetteUniformData(vignette));
 
     // Mask overlay: -1 (disabled) unless the toggle is on AND the current
     // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
@@ -2357,6 +2408,7 @@
     void dehaze;
     void texture;
     void clarity;
+    void vignette;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 

@@ -30,6 +30,8 @@
    *   onClarityChange: (value: number) => void,
    *   vignette: {amount: number, midpoint: number, feather: number},
    *   onVignetteChange: (patch: Partial<{amount: number, midpoint: number, feather: number}>) => void,
+   *   grain: {amount: number, size: number, roughness: number},
+   *   onGrainChange: (patch: Partial<{amount: number, size: number, roughness: number}>) => void,
    * }}
    */
   let {
@@ -59,6 +61,8 @@
     onClarityChange,
     vignette,
     onVignetteChange,
+    grain,
+    onGrainChange,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -73,7 +77,6 @@
 
   const STATIC_SECTIONS = [
     { title: "Detail", note: "Sharpening · noise reduction" },
-    { title: "Effects", note: "Grain" },
     { title: "Lens Corrections", note: "Profile · chromatic aberration" },
   ];
 
@@ -430,6 +433,51 @@
           oninput={(e) => onVignetteChange({ feather: Number(e.currentTarget.value) })}
         />
         <span class="val">{vignette.feather}</span>
+      </div>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>Grain</summary>
+    <div class="sub-body">
+      <div class="row">
+        <label for="grain-amount">Amount</label>
+        <input
+          id="grain-amount"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={grain.amount}
+          oninput={(e) => onGrainChange({ amount: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{grain.amount}</span>
+      </div>
+      <div class="row">
+        <label for="grain-size">Size</label>
+        <input
+          id="grain-size"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={grain.size}
+          oninput={(e) => onGrainChange({ size: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{grain.size}</span>
+      </div>
+      <div class="row">
+        <label for="grain-roughness">Roughness</label>
+        <input
+          id="grain-roughness"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={grain.roughness}
+          oninput={(e) => onGrainChange({ roughness: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{grain.roughness}</span>
       </div>
     </div>
   </details>

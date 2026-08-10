@@ -87,6 +87,9 @@
     getColorNr,
     upsertColorNr,
     IDENTITY_COLOR_NR,
+    getCrop,
+    upsertCrop,
+    IDENTITY_CROP,
   } from "$lib/api/develop.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -1101,6 +1104,52 @@
     persistTimer = setTimeout(flushEditStack, 250);
   }
 
+  // Crop & Straighten (M3): same structured, own-getter/handler shape as
+  // every other multi-field op above -- see develop_engine.rs's own
+  // `apply_crop` doc comment for why this one has no WGSL/uniform twin.
+  let crop = $derived(getCrop(editStack, IDENTITY_CROP));
+
+  function handleCropChange(
+    /** @type {Partial<{x: number, y: number, width: number, height: number, angle: number}>} */ patch,
+  ) {
+    editStack = upsertCrop(editStack, patch);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  // Aspect-ratio lock: UI-only, NOT persisted to the edit stack (real
+  // Lightroom's own crop ratio lock is a tool-state preference, not part
+  // of the photo's own edit history) -- shared between DevelopCanvas.svelte
+  // (corner-handle drag math) and MaskToolStrip.svelte (the preset
+  // buttons' own active-state display), so it has to live here, their
+  // nearest common ancestor.
+  let cropAspectLock = $state(/** @type {number | null} */ (null));
+
+  /** Reshapes the CURRENT crop rect to the given ratio, centered on its
+   * own current center and shrunk to fit within its own current bounding
+   * box (never grows past what's already selected) -- `null` just
+   * unlocks without reshaping anything ("Free"). */
+  function handleCropAspectPreset(/** @type {number | null} */ ratio) {
+    cropAspectLock = ratio;
+    if (ratio === null) return;
+    const cx = crop.x + crop.width / 2;
+    const cy = crop.y + crop.height / 2;
+    let width = crop.width;
+    let height = width / ratio;
+    if (height > crop.height) {
+      height = crop.height;
+      width = height * ratio;
+    }
+    const x = Math.min(Math.max(cx - width / 2, 0), 1 - width);
+    const y = Math.min(Math.max(cy - height / 2, 0), 1 - height);
+    handleCropChange({ x, y, width, height });
+  }
+
+  function handleCropReset() {
+    cropAspectLock = null;
+    handleCropChange(IDENTITY_CROP);
+  }
+
   // HSL band-jump eyedropper's transient navigation target -- NOT persisted
   // edit-stack state, purely a "which band should the panel scroll to and
   // highlight" signal, self-clearing after a fixed delay rather than on
@@ -1481,6 +1530,9 @@
         {sharpen}
         {lumaNR}
         {colorNR}
+        {crop}
+        onCropChange={handleCropChange}
+        {cropAspectLock}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -1547,6 +1599,11 @@
       onEraseToggle={() => (eraseMode = !eraseMode)}
       onNewBrush={() => (selectedMaskId = null)}
       onCreateLuminanceRange={handleCreateLuminanceRangeMask}
+      {crop}
+      {cropAspectLock}
+      onCropAspectPreset={handleCropAspectPreset}
+      onCropAngleChange={(v) => handleCropChange({ angle: v })}
+      onCropReset={handleCropReset}
     />
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>

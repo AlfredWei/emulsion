@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
 
   const MAX_MASKS = 8;
 
@@ -41,6 +41,9 @@
    *   sharpen: {amount: number, radius: number, detail: number, masking: number},
    *   lumaNR: {amount: number, detail: number, contrast: number},
    *   colorNR: {amount: number, detail: number},
+   *   crop: {x: number, y: number, width: number, height: number, angle: number},
+   *   onCropChange: (patch: Partial<{x: number, y: number, width: number, height: number, angle: number}>) => void,
+   *   cropAspectLock: number | null,
    * }}
    */
   let {
@@ -73,6 +76,9 @@
     sharpen,
     lumaNR,
     colorNR,
+    crop,
+    onCropChange,
+    cropAspectLock,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -116,6 +122,17 @@
   // own native scroll clamping rather than hand-rolled pan math.
   let zoomMode = $state("fit"); // "fit" | "100"
 
+  // Crop & Straighten (M3): reactive mirror of canvasEl.width/height (set
+  // once in applyBitmapToGpu, imperative and NOT itself a tracked Svelte
+  // dependency) -- needed so the committed-crop preview wrapper's own
+  // `aspect-ratio` CSS can recompute reactively whenever a new image
+  // loads. `canvasEl.width/height` themselves NEVER change for crop (see
+  // the preview wrapper's own doc comment for why that's a deliberate,
+  // review-driven design choice), so these only need to track image
+  // loads, not crop edits.
+  let sourceWidth = $state(0);
+  let sourceHeight = $state(0);
+
   // 1:1 preview tier (mirrors real Lightroom's Standard/1:1 Preview split,
   // PRD/PRD.md's own explicit phrasing): "fit" always shows the draft tier
   // (getDevelopPreview, capped to DEVELOP_PREVIEW_MAX_DIMENSION on the
@@ -156,6 +173,170 @@
   );
   /** @type {{ maskId: string, which: "start" | "end" | "center" | "radius", center?: {x:number,y:number} } | null} */
   let handleDragState = null;
+
+  // Crop & Straighten (M3): a fully separate drag system from masks above
+  // -- the crop rect always EXISTS (default full-frame) rather than being
+  // "placed" from empty space, so there's no `placingCrop`-style creation
+  // phase, only handle-drag (resize, 8 handles) and interior-drag (move).
+  // `which` doubles as both the handle identity AND the CSS class suffix
+  // for positioning (see cropHandlePos below). Corner handles respect
+  // `cropAspectLock`; edge handles are always free-form (a deliberate,
+  // named scope cut -- edge-handle-preserves-ratio math combined with
+  // bounds/min-size clamping is real, fiddly complexity real Lightroom
+  // itself also doesn't apply symmetrically).
+  /** @type {{ start: {x:number,y:number}, startRect: {x:number,y:number,width:number,height:number}, which: "nw"|"n"|"ne"|"e"|"se"|"s"|"sw"|"w"|"move" } | null} */
+  let cropDragState = null;
+  // cropAspectLock itself is a PROP (see below), not local state -- it's
+  // shared with MaskToolStrip.svelte's own aspect-preset buttons, so it
+  // has to live in +page.svelte, the nearest common ancestor.
+  const CROP_MIN_FRAC = 0.02; // normalized -- floors both crop rect dimensions, same "never let this go degenerate" reasoning CROP_MIN_SIZE_PX has in develop_engine.rs, just at the UI-drag layer instead of the Rust/pixel one
+
+  function clamp01(/** @type {number} */ v, /** @type {number} */ lo, /** @type {number} */ hi) {
+    return Math.min(Math.max(v, lo), hi);
+  }
+
+  /** Moves the whole rect by (dx,dy), clamped so it never leaves [0,1]. */
+  function moveCropRect(/** @type {{x:number,y:number,width:number,height:number}} */ start, /** @type {number} */ dx, /** @type {number} */ dy) {
+    return {
+      ...start,
+      x: clamp01(start.x + dx, 0, 1 - start.width),
+      y: clamp01(start.y + dy, 0, 1 - start.height),
+    };
+  }
+
+  /** Which corner is FIXED (diagonally opposite) and which is DRAGGED,
+   * for a given corner handle -- the fixed corner never moves during the
+   * drag, matching how every real crop tool's corner-resize behaves. */
+  function cropCornerPoints(/** @type {string} */ which, /** @type {{x:number,y:number,width:number,height:number}} */ r) {
+    const left = r.x, top = r.y, right = r.x + r.width, bottom = r.y + r.height;
+    if (which === "nw") return { fixed: [right, bottom], dragged: [left, top] };
+    if (which === "ne") return { fixed: [left, bottom], dragged: [right, top] };
+    if (which === "sw") return { fixed: [right, top], dragged: [left, bottom] };
+    return { fixed: [left, top], dragged: [right, bottom] }; // "se"
+  }
+
+  /** Corner-handle resize, with the fixed opposite corner as anchor. When
+   * `aspectLock` is set, the new size is derived from whichever axis
+   * implies the LARGER extent (so the rect grows to follow the pointer on
+   * whichever axis is actually being dragged, rather than always
+   * following just one), then the other axis is scaled to match. */
+  function resizeCropCorner(
+    /** @type {{x:number,y:number,width:number,height:number}} */ start,
+    /** @type {string} */ which,
+    /** @type {number} */ dx,
+    /** @type {number} */ dy,
+    /** @type {number | null} */ aspectLock,
+  ) {
+    const { fixed, dragged } = cropCornerPoints(which, start);
+    let newX = clamp01(dragged[0] + dx, 0, 1);
+    let newY = clamp01(dragged[1] + dy, 0, 1);
+    let width = Math.abs(newX - fixed[0]);
+    let height = Math.abs(newY - fixed[1]);
+    if (aspectLock) {
+      if (width / aspectLock >= height) {
+        height = width / aspectLock;
+      } else {
+        width = height * aspectLock;
+      }
+      const signX = newX >= fixed[0] ? 1 : -1;
+      const signY = newY >= fixed[1] ? 1 : -1;
+      newX = fixed[0] + signX * width;
+      newY = fixed[1] + signY * height;
+    }
+    width = Math.max(width, CROP_MIN_FRAC);
+    height = Math.max(height, CROP_MIN_FRAC);
+    let x = Math.min(fixed[0], newX);
+    let y = Math.min(fixed[1], newY);
+    x = clamp01(x, 0, 1 - width);
+    y = clamp01(y, 0, 1 - height);
+    return { x, y, width, height };
+  }
+
+  /** Edge-handle resize -- always free-form (see this state block's own
+   * doc comment on why aspect lock is corner-only). */
+  function resizeCropEdge(
+    /** @type {{x:number,y:number,width:number,height:number}} */ start,
+    /** @type {string} */ which,
+    /** @type {number} */ dx,
+    /** @type {number} */ dy,
+  ) {
+    let { x, y, width, height } = start;
+    if (which === "e") {
+      width = clamp01(width + dx, CROP_MIN_FRAC, 1 - x);
+    } else if (which === "w") {
+      const newX = clamp01(x + dx, 0, x + width - CROP_MIN_FRAC);
+      width = width + (x - newX);
+      x = newX;
+    } else if (which === "s") {
+      height = clamp01(height + dy, CROP_MIN_FRAC, 1 - y);
+    } else if (which === "n") {
+      const newY = clamp01(y + dy, 0, y + height - CROP_MIN_FRAC);
+      height = height + (y - newY);
+      y = newY;
+    }
+    return { x, y, width, height };
+  }
+
+  /** Screen position (as a percentage pair) for a given handle, matching
+   * the SAME normalized coordinate space the crop rect itself is drawn
+   * in. */
+  function cropHandlePos(/** @type {string} */ which, /** @type {{x:number,y:number,width:number,height:number}} */ c) {
+    const midX = c.x + c.width / 2;
+    const midY = c.y + c.height / 2;
+    const positions = /** @type {Record<string, [number, number]>} */ ({
+      nw: [c.x, c.y],
+      n: [midX, c.y],
+      ne: [c.x + c.width, c.y],
+      e: [c.x + c.width, midY],
+      se: [c.x + c.width, c.y + c.height],
+      s: [midX, c.y + c.height],
+      sw: [c.x, c.y + c.height],
+      w: [c.x, midY],
+    });
+    return positions[which];
+  }
+
+  function handleCropHandlePointerDown(/** @type {PointerEvent} */ e, /** @type {string} */ which) {
+    e.stopPropagation();
+    e.preventDefault();
+    cropDragState = {
+      start: screenToNormalized(e.clientX, e.clientY),
+      startRect: { x: crop.x, y: crop.y, width: crop.width, height: crop.height },
+      which: /** @type {any} */ (which),
+    };
+    try {
+      /** @type {HTMLElement} */ (e.currentTarget).setPointerCapture(e.pointerId);
+    } catch {
+      // Non-fatal -- see handleMaskHandlePointerDown's own identical
+      // try/catch for why.
+    }
+  }
+
+  function handleCropHandlePointerMove(/** @type {PointerEvent} */ e) {
+    if (!cropDragState) return;
+    const p = screenToNormalized(e.clientX, e.clientY);
+    const dx = p.x - cropDragState.start.x;
+    const dy = p.y - cropDragState.start.y;
+    const { which, startRect } = cropDragState;
+    let next;
+    if (which === "move") next = moveCropRect(startRect, dx, dy);
+    else if (which === "nw" || which === "ne" || which === "sw" || which === "se") {
+      next = resizeCropCorner(startRect, which, dx, dy, cropAspectLock);
+    } else {
+      next = resizeCropEdge(startRect, which, dx, dy);
+    }
+    onCropChange(next);
+  }
+
+  function handleCropHandlePointerUp(/** @type {PointerEvent} */ e) {
+    try {
+      /** @type {HTMLElement} */ (e.currentTarget).releasePointerCapture(e.pointerId);
+    } catch {
+      // Non-fatal -- see handleMaskHandlePointerDown's own identical
+      // try/catch for why.
+    }
+    cropDragState = null;
+  }
 
   // M3 Slice 8: color range's creation pattern is a fourth-and-different
   // one from every other kind -- linear/radial drag two points, luminance
@@ -2503,6 +2684,8 @@
       context.canvas.width = bitmap.width;
       context.canvas.height = bitmap.height;
     }
+    sourceWidth = bitmap.width;
+    sourceHeight = bitmap.height;
     context.configure({ device, format: presentationFormat, alphaMode: "opaque" });
     // Every remaining bitmap.width/.height read is done -- free it now
     // that both its consumers (the GPU upload and the sample-canvas draw
@@ -2906,6 +3089,21 @@
     if (status === "ready") writeAdjustmentsAndRender();
   });
 
+  // Crop & Straighten (M3): the committed-crop CSS preview (rotate +
+  // clip-via-overflow, see the markup's own doc comment) shows ONLY when
+  // nothing that depends on FULL-image coordinates might be actively
+  // happening -- not just "no tool active": every mask's own handles are
+  // ALWAYS rendered/interactive whenever the mask-overlay is shown
+  // (regardless of `activeTool`, see the `{#each masks as mask}` block),
+  // so `selectedMaskId` alone (set by clicking a mask CHIP in the tool
+  // strip, independent of `activeTool`) must also gate this -- otherwise
+  // selecting an existing mask while a crop is committed would leave its
+  // handles rendered in the wrong place (full-image coordinates) under a
+  // rotated, clipped canvas, with no way back to the interactive view.
+  let showCommittedCropPreview = $derived(
+    status === "ready" && activeTool === null && !selectedMaskId && !isCropIdentity(crop),
+  );
+
   // 1:1 tier trigger -- fires for BOTH ways zoomMode can flip to "100"
   // (the canvas click-to-zoom in handlePointerUp, and the zoom-badge
   // button's onclick both just set zoomMode directly), so neither call
@@ -2921,16 +3119,45 @@
 </script>
 
 <div class="canvas-wrap" class:zoomed={zoomMode === "100"} bind:this={wrapEl}>
-  <canvas
-    bind:this={canvasEl}
-    class:zoomed={zoomMode === "100"}
-    class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper"}
-    onpointerdown={handlePointerDown}
-    onpointermove={handlePointerMove}
-    onpointerup={handlePointerUp}
-    onpointerleave={() => (brushCursor = null)}
-  ></canvas>
-  {#if status === "ready"}
+  <!-- Crop & Straighten (M3): `.crop-clip` ALWAYS wraps the canvas (a
+       stable DOM structure, never conditionally created/destroyed around
+       the canvas element itself -- doing so would tear down and recreate
+       the WebGPU context on every tool-selection change, since a fresh
+       <canvas> node has none). `display:contents` when inactive removes
+       the wrapper from the layout tree entirely, so the canvas behaves
+       EXACTLY as before this feature existed (same offsetParent, same
+       syncOverlayPosition math) whenever the committed-crop preview isn't
+       showing. Only when `showCommittedCropPreview` is true does it
+       become a real `overflow:hidden` box sized to the CROPPED aspect
+       ratio, with the canvas absolutely positioned/sized/rotated inside
+       it via inline styles (percentages relative to THIS wrapper, not
+       the canvas's own size -- see the exact derivation in this file's
+       own module-level comment above `showCommittedCropPreview`). Named
+       scope cut: this preview always uses "fit" sizing regardless of
+       `zoomMode` -- 100%-zoom native-pixel scrolling isn't implemented
+       for the cropped view, avoiding a real complexity a design review
+       flagged (the backing store's own dimensions would otherwise need
+       to change per view mode, breaking the existing zoom-scroll math). -->
+  <div
+    class="crop-clip"
+    class:active={showCommittedCropPreview}
+    style={showCommittedCropPreview ? `aspect-ratio: ${crop.width * sourceWidth} / ${crop.height * sourceHeight};` : ""}
+  >
+    <canvas
+      bind:this={canvasEl}
+      class:zoomed={zoomMode === "100"}
+      class:cropped={showCommittedCropPreview}
+      class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper"}
+      style={showCommittedCropPreview
+        ? `width:${100 / crop.width}%; height:${100 / crop.height}%; left:${(-crop.x * 100) / crop.width}%; top:${(-crop.y * 100) / crop.height}%; transform: rotate(${crop.angle}deg);`
+        : ""}
+      onpointerdown={handlePointerDown}
+      onpointermove={handlePointerMove}
+      onpointerup={handlePointerUp}
+      onpointerleave={() => (brushCursor = null)}
+    ></canvas>
+  </div>
+  {#if status === "ready" && !showCommittedCropPreview}
     <!-- M3 Slice 5: a sibling of canvas, NOT a child of a sizing wrapper
          (see the fix note near syncOverlayPosition) -- its left/top/width/
          height are set directly in JS from canvas's own (correctly
@@ -3042,6 +3269,61 @@
           <ellipse cx="{brushCursor.x * 100}%" cy="{brushCursor.y * 100}%" rx="{brushSize * 100}%" ry="{brushCursorRyPercent()}%" />
         </svg>
       {/if}
+      {#if activeTool === "crop"}
+        <!-- Crop & Straighten (M3): the canvas is ALWAYS unrotated/full-
+             resolution while this tool is active (see the committed-crop
+             preview block's own doc comment below for why) -- handles are
+             positioned/dragged with the SAME screenToNormalized/
+             screenToNativePixel helpers every mask handle already uses,
+             safe to reuse unchanged specifically because no CSS rotation
+             transform is ever applied to the canvas in this state. Four
+             darkened bands (not a single clip-path/mask shape) spotlight
+             the crop rect -- simplest way to dim the outside-of-crop area
+             without extra CSS feature requirements. -->
+        <div class="crop-dim" style="left:0; top:0; width:100%; height:{crop.y * 100}%"></div>
+        <div class="crop-dim" style="left:0; top:{(crop.y + crop.height) * 100}%; width:100%; height:{(1 - crop.y - crop.height) * 100}%"></div>
+        <div class="crop-dim" style="left:0; top:{crop.y * 100}%; width:{crop.x * 100}%; height:{crop.height * 100}%"></div>
+        <div class="crop-dim" style="left:{(crop.x + crop.width) * 100}%; top:{crop.y * 100}%; width:{(1 - crop.x - crop.width) * 100}%; height:{crop.height * 100}%"></div>
+        <div
+          class="crop-rect"
+          style="left:{crop.x * 100}%; top:{crop.y * 100}%; width:{crop.width * 100}%; height:{crop.height * 100}%"
+          role="presentation"
+          onpointerdown={(e) => handleCropHandlePointerDown(e, "move")}
+          onpointermove={handleCropHandlePointerMove}
+          onpointerup={handleCropHandlePointerUp}
+        >
+          <svg class="crop-grid" viewBox="0 0 3 3" preserveAspectRatio="none">
+            <line x1="1" y1="0" x2="1" y2="3" />
+            <line x1="2" y1="0" x2="2" y2="3" />
+            <line x1="0" y1="1" x2="3" y2="1" />
+            <line x1="0" y1="2" x2="3" y2="2" />
+          </svg>
+        </div>
+        {#each ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as which (which)}
+          {@const pos = cropHandlePos(which, crop)}
+          <button
+            class="crop-handle crop-handle-{which}"
+            style="left:{pos[0] * 100}%; top:{pos[1] * 100}%"
+            aria-label="Crop handle ({which})"
+            onpointerdown={(e) => handleCropHandlePointerDown(e, which)}
+            onpointermove={handleCropHandlePointerMove}
+            onpointerup={handleCropHandlePointerUp}
+          ></button>
+        {/each}
+      {:else if !isCropIdentity(crop)}
+        <!-- Static, non-interactive reference outline (design-review-
+             suggested): gives spatial context for where the committed
+             crop sits while placing/editing local adjustments or using
+             the eyedropper, WITHOUT making the mask system itself
+             crop-aware -- masks stay positioned relative to the full
+             original image, exactly as before this feature existed (see
+             develop_engine.rs's own `apply_crop` doc comment for why
+             that's a deliberate, correct design choice, not a shortcut). -->
+        <div
+          class="crop-reference"
+          style="left:{crop.x * 100}%; top:{crop.y * 100}%; width:{crop.width * 100}%; height:{crop.height * 100}%"
+        ></div>
+      {/if}
     </div>
   {/if}
   {#if status === "ready"}
@@ -3096,6 +3378,33 @@
   }
   canvas.placing {
     cursor: crosshair;
+  }
+  /* Crop & Straighten (M3): inactive by default (`display:contents`
+     removes this wrapper from the layout tree entirely, so canvas's own
+     `max-width/max-height:100%; margin:auto` sizing above works exactly
+     as it did before this feature existed). `.active` makes it a real
+     positioned, clipped box -- see the markup's own doc comment for the
+     full derivation of the inline styles this pairs with. */
+  .crop-clip {
+    display: contents;
+  }
+  .crop-clip.active {
+    display: block;
+    position: relative;
+    max-width: 100%;
+    max-height: 100%;
+    margin: auto;
+    overflow: hidden;
+    border-radius: 2px;
+    box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.7);
+  }
+  canvas.cropped {
+    position: absolute;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    box-shadow: none;
+    border-radius: 0;
   }
   .mask-overlay {
     position: absolute;
@@ -3183,6 +3492,52 @@
   .mask-handle.selected {
     background: var(--accent-strong);
     border-color: var(--bg-panel);
+  }
+  .crop-dim {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+  }
+  .crop-rect {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1.5px solid rgba(255, 255, 255, 0.9);
+    cursor: move;
+    pointer-events: auto;
+  }
+  .crop-grid {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .crop-grid line {
+    stroke: rgba(255, 255, 255, 0.45);
+    stroke-width: 0.01;
+    vector-effect: non-scaling-stroke;
+  }
+  .crop-handle {
+    all: unset;
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    margin-top: -6px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1.5px solid rgba(0, 0, 0, 0.5);
+    pointer-events: auto;
+  }
+  .crop-handle-nw, .crop-handle-se { cursor: nwse-resize; }
+  .crop-handle-ne, .crop-handle-sw { cursor: nesw-resize; }
+  .crop-handle-n, .crop-handle-s { cursor: ns-resize; }
+  .crop-handle-e, .crop-handle-w { cursor: ew-resize; }
+  .crop-reference {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px dashed rgba(255, 255, 255, 0.5);
+    pointer-events: none;
   }
   .zoom-badge {
     all: unset;

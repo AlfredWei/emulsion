@@ -655,6 +655,76 @@ export function buildColorNrUniformData(
   return new Float32Array([n.amount, n.detail, 0, 0]);
 }
 
+// Crop & Straighten (M3): a flat, non-nested payload -- same shape as
+// every other structured op above. UNLIKE every other op, this has no
+// WGSL uniform/buffer twin at all -- it's deliberately kept out of the
+// GPU pipeline entirely (see DevelopCanvas.svelte's own doc comment on
+// the committed-crop CSS preview for why: canvasEl.width/height never
+// changing avoids an entire class of coordinate-system bugs a design
+// review caught in an earlier GPU-pass-based draft). The REAL pixel-level
+// rotate+crop only happens once, in Rust, shared by export and thumbnail
+// regen (see develop_engine.rs's own `crop` module).
+//
+// `x`/`y`/`width`/`height` are normalized 0-1, defined in the SAME
+// coordinate space as the canvas's own (unrotated) layout box -- CSS
+// `transform: rotate()` doesn't affect an element's own layout geometry,
+// only its visual rendering, so this coordinate space is deliberately
+// invariant to whatever rotation is applied for preview/export purposes.
+// `angle` is degrees, -45..45 (matching real Lightroom's own Straighten
+// range), POSITIVE = CLOCKWISE (matching CSS's own `rotate(Ndeg)`
+// convention exactly, so the live preview and the real Rust-rotated
+// output agree on direction -- deliberately picked and hand-tested, not
+// assumed, since a mismatched sign here would be an immediately obvious,
+// embarrassing "image un-rotates on commit" bug).
+export const IDENTITY_CROP = Object.freeze({ x: 0, y: 0, width: 1, height: 1, angle: 0 });
+
+/** @returns {{x: number, y: number, width: number, height: number, angle: number}} */
+export function getCrop(
+  /** @type {EditStack} */ stack,
+  /** @type {typeof IDENTITY_CROP} */ fallback = IDENTITY_CROP,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "crop"));
+  if (!op) return fallback;
+  return {
+    x: op.x ?? 0,
+    y: op.y ?? 0,
+    width: op.width ?? 1,
+    height: op.height ?? 1,
+    angle: op.angle ?? 0,
+  };
+}
+
+/** Patches any subset of {x, y, width, height, angle}, leaving the rest
+ * untouched.
+ * @returns {EditStack} */
+export function upsertCrop(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<{x: number, y: number, width: number, height: number, angle: number}>} */ patch,
+) {
+  const current = getCrop(stack);
+  const next = { ...current, ...patch };
+  const ops = stack.ops.filter((o) => o.op !== "crop");
+  ops.push(/** @type {any} */ ({ op: "crop", ...next }));
+  return { ...stack, ops };
+}
+
+/** True when the crop op is at (or effectively at) its identity value --
+ * used to skip the CSS committed-crop preview wrapper and the Rust
+ * rotate+crop step entirely, matching every other op's "skip when
+ * unused" discipline. A small epsilon guards against float drift from
+ * repeated aspect-ratio-preset reshaping landing at e.g. 0.0000001
+ * instead of exactly 0. */
+export function isCropIdentity(/** @type {ReturnType<typeof getCrop>} */ crop) {
+  const eps = 1e-6;
+  return (
+    Math.abs(crop.x) < eps &&
+    Math.abs(crop.y) < eps &&
+    Math.abs(crop.width - 1) < eps &&
+    Math.abs(crop.height - 1) < eps &&
+    Math.abs(crop.angle) < eps
+  );
+}
+
 // Eyedropper pickers (M3): the canvas's existing click-to-sample gesture
 // (DevelopCanvas.svelte's sampleSourcePixel, reused from the color-range
 // mask feature) reports a raw {r,g,b} 0-1 float sample. Every one of the

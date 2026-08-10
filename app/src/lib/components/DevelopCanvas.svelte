@@ -44,6 +44,7 @@
    *   crop: {x: number, y: number, width: number, height: number, angle: number},
    *   onCropChange: (patch: Partial<{x: number, y: number, width: number, height: number, angle: number}>) => void,
    *   cropAspectLock: number | null,
+   *   onSourceDimensions?: (width: number, height: number) => void,
    * }}
    */
   let {
@@ -79,6 +80,7 @@
     crop,
     onCropChange,
     cropAspectLock,
+    onSourceDimensions,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -219,24 +221,31 @@
    * `aspectLock` is set, the new size is derived from whichever axis
    * implies the LARGER extent (so the rect grows to follow the pointer on
    * whichever axis is actually being dragged, rather than always
-   * following just one), then the other axis is scaled to match. */
+   * following just one), then the other axis is scaled to match.
+   * `aspectLock` is a PIXEL aspect ratio (e.g. 1 for 1:1), but width/height
+   * here are NORMALIZED (fractions of the source image's own, generally
+   * non-square, width/height) -- so it has to be corrected by the source
+   * image's own aspect ratio before it's usable as a normalized-space
+   * ratio (same correction as handleCropAspectPreset in +page.svelte). */
   function resizeCropCorner(
     /** @type {{x:number,y:number,width:number,height:number}} */ start,
     /** @type {string} */ which,
     /** @type {number} */ dx,
     /** @type {number} */ dy,
     /** @type {number | null} */ aspectLock,
+    /** @type {number} */ imageAspect,
   ) {
     const { fixed, dragged } = cropCornerPoints(which, start);
     let newX = clamp01(dragged[0] + dx, 0, 1);
     let newY = clamp01(dragged[1] + dy, 0, 1);
     let width = Math.abs(newX - fixed[0]);
     let height = Math.abs(newY - fixed[1]);
-    if (aspectLock) {
-      if (width / aspectLock >= height) {
-        height = width / aspectLock;
+    if (aspectLock && imageAspect) {
+      const normalizedRatio = aspectLock / imageAspect;
+      if (width / normalizedRatio >= height) {
+        height = width / normalizedRatio;
       } else {
-        width = height * aspectLock;
+        width = height * normalizedRatio;
       }
       const signX = newX >= fixed[0] ? 1 : -1;
       const signY = newY >= fixed[1] ? 1 : -1;
@@ -321,7 +330,7 @@
     let next;
     if (which === "move") next = moveCropRect(startRect, dx, dy);
     else if (which === "nw" || which === "ne" || which === "sw" || which === "se") {
-      next = resizeCropCorner(startRect, which, dx, dy, cropAspectLock);
+      next = resizeCropCorner(startRect, which, dx, dy, cropAspectLock, sourceWidth / sourceHeight);
     } else {
       next = resizeCropEdge(startRect, which, dx, dy);
     }
@@ -2686,6 +2695,7 @@
     }
     sourceWidth = bitmap.width;
     sourceHeight = bitmap.height;
+    onSourceDimensions?.(sourceWidth, sourceHeight);
     context.configure({ device, format: presentationFormat, alphaMode: "opaque" });
     // Every remaining bitmap.width/.height read is done -- free it now
     // that both its consumers (the GPU upload and the sample-canvas draw

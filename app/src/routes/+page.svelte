@@ -1125,23 +1125,46 @@
   // nearest common ancestor.
   let cropAspectLock = $state(/** @type {number | null} */ (null));
 
-  /** Reshapes the CURRENT crop rect to the given ratio, centered on its
-   * own current center and shrunk to fit within its own current bounding
-   * box (never grows past what's already selected) -- `null` just
-   * unlocks without reshaping anything ("Free"). */
+  // The crop rect (crop.x/y/width/height) lives in NORMALIZED space --
+  // fractions of the source image's own width/height, which are generally
+  // NOT equal. A preset ratio like 1 (1:1) or 16/9 describes a PIXEL
+  // aspect ratio, so it has to be corrected by the image's own native
+  // aspect ratio before it's usable as a normalized width:height target --
+  // otherwise "1:1" only looks square in normalized space, which is a
+  // real square only when the source image itself happens to be square.
+  // DevelopCanvas.svelte already tracks the decoded bitmap's pixel
+  // dimensions (it needs them for the committed-crop CSS preview's own
+  // `aspect-ratio` style); it reports them up here via onSourceDimensions
+  // since this preset math needs them too.
+  let sourceWidth = $state(0);
+  let sourceHeight = $state(0);
+  function handleSourceDimensions(/** @type {number} */ width, /** @type {number} */ height) {
+    sourceWidth = width;
+    sourceHeight = height;
+  }
+
+  /** Reshapes the crop rect to the given PIXEL aspect ratio: the largest
+   * rect of that ratio centered in the full image. Deliberately NOT based
+   * on the current rect's own size -- earlier it shrunk the current rect
+   * to fit within its own previous bounding box, which (combined with the
+   * uncorrected ratio) compounded into a smaller rect on every click.
+   * Recomputing fresh from the full image each time is idempotent:
+   * clicking the same preset twice in a row is always a no-op. `null`
+   * just unlocks without reshaping anything ("Free"). */
   function handleCropAspectPreset(/** @type {number | null} */ ratio) {
     cropAspectLock = ratio;
     if (ratio === null) return;
-    const cx = crop.x + crop.width / 2;
-    const cy = crop.y + crop.height / 2;
-    let width = crop.width;
-    let height = width / ratio;
-    if (height > crop.height) {
-      height = crop.height;
-      width = height * ratio;
+    if (!sourceWidth || !sourceHeight) return;
+    const imageAspect = sourceWidth / sourceHeight;
+    const normalizedRatio = ratio / imageAspect;
+    let width = 1;
+    let height = width / normalizedRatio;
+    if (height > 1) {
+      height = 1;
+      width = height * normalizedRatio;
     }
-    const x = Math.min(Math.max(cx - width / 2, 0), 1 - width);
-    const y = Math.min(Math.max(cy - height / 2, 0), 1 - height);
+    const x = (1 - width) / 2;
+    const y = (1 - height) / 2;
     handleCropChange({ x, y, width, height });
   }
 
@@ -1533,6 +1556,7 @@
         {crop}
         onCropChange={handleCropChange}
         {cropAspectLock}
+        onSourceDimensions={handleSourceDimensions}
       />
       {#if selectedMask}
         <MaskEditorPanel

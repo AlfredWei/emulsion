@@ -32,6 +32,11 @@
    *   onEraseToggle: () => void,
    *   onNewBrush: () => void,
    *   onCreateLuminanceRange: () => void,
+   *   crop: {x: number, y: number, width: number, height: number, angle: number},
+   *   cropAspectLock: number | null,
+   *   onCropAspectPreset: (ratio: number | null) => void,
+   *   onCropAngleChange: (angle: number) => void,
+   *   onCropReset: () => void,
    * }}
    */
   let {
@@ -50,7 +55,28 @@
     onEraseToggle,
     onNewBrush,
     onCreateLuminanceRange,
+    crop,
+    cropAspectLock,
+    onCropAspectPreset,
+    onCropAngleChange,
+    onCropReset,
   } = $props();
+
+  // Crop & Straighten (M3): a fixed set of common ratios -- "Original"
+  // (locking to the source photo's own native aspect) is a real,
+  // deliberately DEFERRED option, named here rather than silently
+  // omitted: this component has no access to the source image's own
+  // dimensions (DevelopCanvas.svelte tracks that internally), and
+  // plumbing it through just for this one preset wasn't judged worth the
+  // extra prop given the other six ratios already cover the common cases.
+  const CROP_ASPECT_PRESETS = [
+    { label: "Free", ratio: null },
+    { label: "1:1", ratio: 1 },
+    { label: "16:9", ratio: 16 / 9 },
+    { label: "3:2", ratio: 3 / 2 },
+    { label: "4:3", ratio: 4 / 3 },
+    { label: "5:4", ratio: 5 / 4 },
+  ];
 
   let atCap = $derived(masks.length >= MAX_MASKS);
 
@@ -86,6 +112,20 @@
        variable-length mask-chip list all share this one row). `title`
        (native tooltip) + `aria-label` (accessible name) together replace
        the visible label that used to carry both jobs at once. -->
+  <button
+    class="tool icon"
+    class:active={activeTool === "crop"}
+    type="button"
+    title="Crop & Straighten"
+    aria-label="Crop & Straighten"
+    onclick={() => onToolToggle("crop")}
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <path d="M4 1 V12 H15" stroke="currentColor" stroke-width="1.3" />
+      <path d="M12 4 V15 H1" stroke="currentColor" stroke-width="1.3" />
+    </svg>
+  </button>
+  <div class="divider"></div>
   <button
     class="tool icon"
     class:active={activeTool === "linear_gradient"}
@@ -164,6 +204,34 @@
       <path d="M4.3 11.6 L3 14 L5.4 12.7 Z" fill="currentColor" />
     </svg>
   </button>
+
+  {#if activeTool === "crop"}
+    <div class="divider"></div>
+    <div class="brush-options">
+      {#each CROP_ASPECT_PRESETS as preset (preset.label)}
+        <button
+          class="tool small"
+          class:active={preset.ratio === cropAspectLock}
+          type="button"
+          title="Aspect ratio: {preset.label}"
+          onclick={() => onCropAspectPreset(preset.ratio)}
+        >{preset.label}</button>
+      {/each}
+      <label class="brush-option">
+        <span>Angle</span>
+        <input
+          type="range"
+          min="-45"
+          max="45"
+          step="0.1"
+          value={crop.angle}
+          oninput={(e) => onCropAngleChange(Number(e.currentTarget.value))}
+        />
+      </label>
+      <span class="crop-angle-value">{crop.angle.toFixed(1)}°</span>
+      <button class="tool small" type="button" title="Reset crop to full frame" onclick={onCropReset}>Reset</button>
+    </div>
+  {/if}
 
   {#if activeTool === "brush"}
     <div class="divider"></div>
@@ -295,6 +363,14 @@
     font-size: 10.5px;
     color: var(--text-tertiary);
     flex: none;
+  }
+  .crop-angle-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    flex: none;
+    min-width: 34px;
   }
   .brush-option input[type="range"] {
     width: 60px;

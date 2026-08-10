@@ -292,6 +292,10 @@ pub fn regenerate_edited_thumbnail(
         crate::preview_cache::ensure_develop_preview_for_hash(source_path, content_hash, previews_dir).ok()?;
     let mut decoded = image::open(&preview.path).ok()?.into_rgb8();
     crate::develop_engine::apply_edit_stack(&mut decoded, stack);
+    // Crop & Straighten (M3): same shared post-process export.rs uses --
+    // see develop_engine.rs's own doc comment on `apply_crop` for why
+    // this is deliberately separate from apply_edit_stack.
+    crate::develop_engine::apply_crop(&mut decoded, stack);
 
     let (w, h) = (decoded.width(), decoded.height());
     let resized = if w.max(h) > THUMBNAIL_MAX_DIMENSION {

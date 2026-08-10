@@ -15,7 +15,7 @@
 //! (M2 Slice 1).
 
 use crate::catalog::EditStack;
-use crate::develop_engine::apply_edit_stack;
+use crate::develop_engine::{apply_crop, apply_edit_stack};
 use crate::source_decode::{self, DecodeError};
 use image::codecs::jpeg::JpegEncoder;
 use image::RgbImage;
@@ -80,6 +80,11 @@ pub fn export_one(
         .ok_or(ExportError::BufferMismatch)?;
 
     apply_edit_stack(&mut image, stack);
+    // Crop & Straighten (M3): a pure geometric post-process, deliberately
+    // separate from apply_edit_stack -- see develop_engine.rs's own doc
+    // comment on `apply_crop`. Crop-then-resize, not resize-then-crop, so
+    // the long-edge cap below describes the DELIVERED (post-crop) image.
+    apply_crop(&mut image, stack);
 
     let image = match options.long_edge {
         Some(long_edge) if image.width().max(image.height()) > long_edge => {

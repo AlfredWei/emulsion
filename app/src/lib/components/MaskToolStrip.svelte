@@ -230,6 +230,16 @@
       </label>
       <span class="crop-angle-value">{crop.angle.toFixed(1)}°</span>
       <button class="tool small" type="button" title="Reset crop to full frame" onclick={onCropReset}>Reset</button>
+      <!-- Crop is already persisted live as it's dragged (same debounced
+           edit-stack write every other op uses) -- this button doesn't
+           "save" anything that wasn't already saved. What it actually
+           does is deselect the tool, which is what reveals the committed,
+           rotated/clipped CSS preview (see DevelopCanvas.svelte's own
+           showCommittedCropPreview doc comment) -- named "Done" rather
+           than left implicit (re-clicking the crop tool icon toggles the
+           same way) because a user reported not knowing how to "apply"
+           the crop at all. -->
+      <button class="tool small done" type="button" title="Done editing crop" onclick={() => onToolToggle("crop")}>Done</button>
     </div>
   {/if}
 
@@ -393,6 +403,11 @@
   .tool.small {
     padding: 3px 8px;
     font-size: 10.5px;
+  }
+  .tool.small.done {
+    margin-left: auto;
+    background: var(--accent-strong);
+    color: var(--bg-panel);
   }
   .mask-list {
     display: flex;

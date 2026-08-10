@@ -662,6 +662,20 @@
       tryCapturePointer(e);
       return;
     }
+    if (activeTool === "crop") {
+      // Crop's own handles/interior rect (rendered above the canvas, each
+      // with pointer-events:auto and its own stopPropagation'd handler)
+      // are the only interactive surface while this tool is active -- the
+      // dimmed area around them is deliberately pointer-events:none (so it
+      // doesn't visually block anything), which means a click there falls
+      // straight through to the canvas underneath. Without this branch
+      // that click was falling into the plain click-to-zoom/drag-to-pan
+      // logic below, same as this function's own doc comment already
+      // requires for every OTHER placing tool -- a real, reported bug
+      // ("the image breaks" when zooming/panning right after selecting
+      // Crop), not a hypothetical.
+      return;
+    }
     if (!wrapEl) return;
     e.preventDefault();
     dragState = {

@@ -135,6 +135,36 @@
   let sourceWidth = $state(0);
   let sourceHeight = $state(0);
 
+  // Crop & Straighten fix (empirically found: a committed crop rendered
+  // as a literal 0x0 box -- "the image became black"): the preview
+  // wrapper used to be sized via CSS `aspect-ratio` + `max-width/
+  // max-height:100%` alone, a PLAIN block div with no in-flow content
+  // (its only child is `position:absolute`, so it contributes nothing to
+  // the div's own intrinsic content size). Confirmed via a live
+  // getBoundingClientRect() check that this collapses to 0x0 under this
+  // app's flex-row + WebKit combination -- the SAME class of bug this
+  // file already hit once for the PLAIN (non-cropped) canvas sizing (see
+  // that fix's own comment further down), except THIS wrapper genuinely
+  // needs its own aspect ratio (different from the canvas's native one),
+  // so it can't just be "sized directly" the way canvas is. Fixed the
+  // same way syncOverlayPosition already handles the mask overlay:
+  // compute the box's pixel size in JS instead of trusting CSS
+  // auto-sizing, tracked via a ResizeObserver on the wrap element so it
+  // stays correct across window resizes.
+  let wrapWidth = $state(0);
+  let wrapHeight = $state(0);
+  $effect(() => {
+    if (!wrapEl) return;
+    const el = wrapEl;
+    const observer = new ResizeObserver(() => {
+      wrapWidth = el.clientWidth;
+      wrapHeight = el.clientHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+  const CROP_CLIP_PADDING_PX = 22; // matches .canvas-wrap's own CSS padding
+
   // 1:1 preview tier (mirrors real Lightroom's Standard/1:1 Preview split,
   // PRD/PRD.md's own explicit phrasing): "fit" always shows the draft tier
   // (getDevelopPreview, capped to DEVELOP_PREVIEW_MAX_DIMENSION on the
@@ -191,7 +221,25 @@
   // cropAspectLock itself is a PROP (see below), not local state -- it's
   // shared with MaskToolStrip.svelte's own aspect-preset buttons, so it
   // has to live in +page.svelte, the nearest common ancestor.
-  const CROP_MIN_FRAC = 0.02; // normalized -- floors both crop rect dimensions, same "never let this go degenerate" reasoning CROP_MIN_SIZE_PX has in develop_engine.rs, just at the UI-drag layer instead of the Rust/pixel one
+  // A real PIXEL floor (not a flat normalized fraction, which this used
+  // to be): a flat fraction's EFFECTIVE pixel size scales with the
+  // source image's own resolution, so on a modest source it could still
+  // floor at just a handful of pixels -- degenerate enough that the
+  // committed-crop preview's own math (which divides by crop.width/
+  // height, see cropClipSize's aspect-ratio computation) could produce a
+  // useless sliver, and the exported crop would be near-meaningless too.
+  // Named consistently with develop_engine.rs's own CROP_MIN_SIZE_PX
+  // (same value, same reasoning, just enforced at the UI-drag layer here
+  // instead of the Rust/export layer there) -- see this file's own
+  // module-level `sourceWidth`/`sourceHeight` for why those are already
+  // tracked reactively and safe to read directly here.
+  const CROP_MIN_PX = 64;
+  function cropMinFracX() {
+    return sourceWidth > 0 ? Math.min(CROP_MIN_PX / sourceWidth, 1) : 0.02;
+  }
+  function cropMinFracY() {
+    return sourceHeight > 0 ? Math.min(CROP_MIN_PX / sourceHeight, 1) : 0.02;
+  }
 
   function clamp01(/** @type {number} */ v, /** @type {number} */ lo, /** @type {number} */ hi) {
     return Math.min(Math.max(v, lo), hi);
@@ -252,8 +300,8 @@
       newX = fixed[0] + signX * width;
       newY = fixed[1] + signY * height;
     }
-    width = Math.max(width, CROP_MIN_FRAC);
-    height = Math.max(height, CROP_MIN_FRAC);
+    width = Math.max(width, cropMinFracX());
+    height = Math.max(height, cropMinFracY());
     let x = Math.min(fixed[0], newX);
     let y = Math.min(fixed[1], newY);
     x = clamp01(x, 0, 1 - width);
@@ -271,15 +319,15 @@
   ) {
     let { x, y, width, height } = start;
     if (which === "e") {
-      width = clamp01(width + dx, CROP_MIN_FRAC, 1 - x);
+      width = clamp01(width + dx, cropMinFracX(), 1 - x);
     } else if (which === "w") {
-      const newX = clamp01(x + dx, 0, x + width - CROP_MIN_FRAC);
+      const newX = clamp01(x + dx, 0, x + width - cropMinFracX());
       width = width + (x - newX);
       x = newX;
     } else if (which === "s") {
-      height = clamp01(height + dy, CROP_MIN_FRAC, 1 - y);
+      height = clamp01(height + dy, cropMinFracY(), 1 - y);
     } else if (which === "n") {
-      const newY = clamp01(y + dy, 0, y + height - CROP_MIN_FRAC);
+      const newY = clamp01(y + dy, 0, y + height - cropMinFracY());
       height = height + (y - newY);
       y = newY;
     }
@@ -3128,6 +3176,29 @@
     status === "ready" && activeTool === null && !selectedMaskId && !isCropIdentity(crop),
   );
 
+  /** object-fit:contain-style box: the largest box of the crop's own
+   * aspect ratio that fits within the wrap's padded content area,
+   * centered via the wrapper's own `margin:auto` once both dimensions
+   * are explicit (a definite width/height, unlike `aspect-ratio` alone,
+   * reliably centers via auto margins in every engine -- see
+   * wrapWidth/wrapHeight's own doc comment for why this is computed in
+   * JS at all instead of left to CSS). */
+  let cropClipSize = $derived.by(() => {
+    if (!showCommittedCropPreview || !sourceWidth || !sourceHeight || !wrapWidth || !wrapHeight) {
+      return { w: 0, h: 0 };
+    }
+    const availW = Math.max(wrapWidth - CROP_CLIP_PADDING_PX * 2, 1);
+    const availH = Math.max(wrapHeight - CROP_CLIP_PADDING_PX * 2, 1);
+    const aspect = (crop.width * sourceWidth) / (crop.height * sourceHeight);
+    let w = availW;
+    let h = w / aspect;
+    if (h > availH) {
+      h = availH;
+      w = h * aspect;
+    }
+    return { w, h };
+  });
+
   // 1:1 tier trigger -- fires for BOTH ways zoomMode can flip to "100"
   // (the canvas click-to-zoom in handlePointerUp, and the zoom-badge
   // button's onclick both just set zoomMode directly), so neither call
@@ -3165,7 +3236,7 @@
   <div
     class="crop-clip"
     class:active={showCommittedCropPreview}
-    style={showCommittedCropPreview ? `aspect-ratio: ${crop.width * sourceWidth} / ${crop.height * sourceHeight};` : ""}
+    style={showCommittedCropPreview ? `width:${cropClipSize.w}px; height:${cropClipSize.h}px;` : ""}
   >
     <canvas
       bind:this={canvasEl}
@@ -3415,6 +3486,14 @@
   .crop-clip.active {
     display: block;
     position: relative;
+    /* width/height are set inline from cropClipSize (JS-computed, see
+       that variable's own doc comment for why) -- max-width/max-height
+       stay as a defensive fallback only, for the brief window before the
+       ResizeObserver's first callback has fired. margin:auto correctly
+       centers this box in BOTH axes once width/height are explicit
+       pixel values (unlike the old aspect-ratio-only approach, which
+       left the cross axis with nothing definite for auto margins to
+       center against). */
     max-width: 100%;
     max-height: 100%;
     margin: auto;

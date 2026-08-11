@@ -91,6 +91,7 @@
     upsertCrop,
     IDENTITY_CROP,
   } from "$lib/api/develop.js";
+  import { largestCenteredCropForRatio } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
 
@@ -1154,18 +1155,9 @@
   function handleCropAspectPreset(/** @type {number | null} */ ratio) {
     cropAspectLock = ratio;
     if (ratio === null) return;
-    if (!sourceWidth || !sourceHeight) return;
-    const imageAspect = sourceWidth / sourceHeight;
-    const normalizedRatio = ratio / imageAspect;
-    let width = 1;
-    let height = width / normalizedRatio;
-    if (height > 1) {
-      height = 1;
-      width = height * normalizedRatio;
-    }
-    const x = (1 - width) / 2;
-    const y = (1 - height) / 2;
-    handleCropChange({ x, y, width, height });
+    const next = largestCenteredCropForRatio(ratio, sourceWidth, sourceHeight);
+    if (!next) return;
+    handleCropChange(next);
   }
 
   function handleCropReset() {

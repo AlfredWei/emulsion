@@ -2,6 +2,7 @@
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
+  import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox } from "$lib/cropMath.js";
 
   const MAX_MASKS = 8;
 
@@ -232,125 +233,18 @@
   // (same value, same reasoning, just enforced at the UI-drag layer here
   // instead of the Rust/export layer there) -- see this file's own
   // module-level `sourceWidth`/`sourceHeight` for why those are already
-  // tracked reactively and safe to read directly here.
+  // tracked reactively and safe to read directly here. The actual
+  // clamping/resize math itself (clamp01, moveCropRect, cropCornerPoints,
+  // resizeCropCorner, resizeCropEdge, cropHandlePos) now lives in
+  // $lib/cropMath.js -- a pure, DOM-free module, imported above -- so it
+  // has real unit test coverage (cropMath.test.js) instead of only ever
+  // being exercised through a throwaway empirical harness.
   const CROP_MIN_PX = 64;
   function cropMinFracX() {
-    return sourceWidth > 0 ? Math.min(CROP_MIN_PX / sourceWidth, 1) : 0.02;
+    return cropMinFrac(CROP_MIN_PX, sourceWidth);
   }
   function cropMinFracY() {
-    return sourceHeight > 0 ? Math.min(CROP_MIN_PX / sourceHeight, 1) : 0.02;
-  }
-
-  function clamp01(/** @type {number} */ v, /** @type {number} */ lo, /** @type {number} */ hi) {
-    return Math.min(Math.max(v, lo), hi);
-  }
-
-  /** Moves the whole rect by (dx,dy), clamped so it never leaves [0,1]. */
-  function moveCropRect(/** @type {{x:number,y:number,width:number,height:number}} */ start, /** @type {number} */ dx, /** @type {number} */ dy) {
-    return {
-      ...start,
-      x: clamp01(start.x + dx, 0, 1 - start.width),
-      y: clamp01(start.y + dy, 0, 1 - start.height),
-    };
-  }
-
-  /** Which corner is FIXED (diagonally opposite) and which is DRAGGED,
-   * for a given corner handle -- the fixed corner never moves during the
-   * drag, matching how every real crop tool's corner-resize behaves. */
-  function cropCornerPoints(/** @type {string} */ which, /** @type {{x:number,y:number,width:number,height:number}} */ r) {
-    const left = r.x, top = r.y, right = r.x + r.width, bottom = r.y + r.height;
-    if (which === "nw") return { fixed: [right, bottom], dragged: [left, top] };
-    if (which === "ne") return { fixed: [left, bottom], dragged: [right, top] };
-    if (which === "sw") return { fixed: [right, top], dragged: [left, bottom] };
-    return { fixed: [left, top], dragged: [right, bottom] }; // "se"
-  }
-
-  /** Corner-handle resize, with the fixed opposite corner as anchor. When
-   * `aspectLock` is set, the new size is derived from whichever axis
-   * implies the LARGER extent (so the rect grows to follow the pointer on
-   * whichever axis is actually being dragged, rather than always
-   * following just one), then the other axis is scaled to match.
-   * `aspectLock` is a PIXEL aspect ratio (e.g. 1 for 1:1), but width/height
-   * here are NORMALIZED (fractions of the source image's own, generally
-   * non-square, width/height) -- so it has to be corrected by the source
-   * image's own aspect ratio before it's usable as a normalized-space
-   * ratio (same correction as handleCropAspectPreset in +page.svelte). */
-  function resizeCropCorner(
-    /** @type {{x:number,y:number,width:number,height:number}} */ start,
-    /** @type {string} */ which,
-    /** @type {number} */ dx,
-    /** @type {number} */ dy,
-    /** @type {number | null} */ aspectLock,
-    /** @type {number} */ imageAspect,
-  ) {
-    const { fixed, dragged } = cropCornerPoints(which, start);
-    let newX = clamp01(dragged[0] + dx, 0, 1);
-    let newY = clamp01(dragged[1] + dy, 0, 1);
-    let width = Math.abs(newX - fixed[0]);
-    let height = Math.abs(newY - fixed[1]);
-    if (aspectLock && imageAspect) {
-      const normalizedRatio = aspectLock / imageAspect;
-      if (width / normalizedRatio >= height) {
-        height = width / normalizedRatio;
-      } else {
-        width = height * normalizedRatio;
-      }
-      const signX = newX >= fixed[0] ? 1 : -1;
-      const signY = newY >= fixed[1] ? 1 : -1;
-      newX = fixed[0] + signX * width;
-      newY = fixed[1] + signY * height;
-    }
-    width = Math.max(width, cropMinFracX());
-    height = Math.max(height, cropMinFracY());
-    let x = Math.min(fixed[0], newX);
-    let y = Math.min(fixed[1], newY);
-    x = clamp01(x, 0, 1 - width);
-    y = clamp01(y, 0, 1 - height);
-    return { x, y, width, height };
-  }
-
-  /** Edge-handle resize -- always free-form (see this state block's own
-   * doc comment on why aspect lock is corner-only). */
-  function resizeCropEdge(
-    /** @type {{x:number,y:number,width:number,height:number}} */ start,
-    /** @type {string} */ which,
-    /** @type {number} */ dx,
-    /** @type {number} */ dy,
-  ) {
-    let { x, y, width, height } = start;
-    if (which === "e") {
-      width = clamp01(width + dx, cropMinFracX(), 1 - x);
-    } else if (which === "w") {
-      const newX = clamp01(x + dx, 0, x + width - cropMinFracX());
-      width = width + (x - newX);
-      x = newX;
-    } else if (which === "s") {
-      height = clamp01(height + dy, cropMinFracY(), 1 - y);
-    } else if (which === "n") {
-      const newY = clamp01(y + dy, 0, y + height - cropMinFracY());
-      height = height + (y - newY);
-      y = newY;
-    }
-    return { x, y, width, height };
-  }
-
-  /** Screen position (as a percentage pair) for a given handle, matching
-   * the SAME normalized coordinate space the crop rect itself is drawn
-   * in. */
-  function cropHandlePos(/** @type {string} */ which, /** @type {{x:number,y:number,width:number,height:number}} */ c) {
-    const midX = c.x + c.width / 2;
-    const midY = c.y + c.height / 2;
-    const positions = /** @type {Record<string, [number, number]>} */ ({
-      nw: [c.x, c.y],
-      n: [midX, c.y],
-      ne: [c.x + c.width, c.y],
-      e: [c.x + c.width, midY],
-      se: [c.x + c.width, c.y + c.height],
-      s: [midX, c.y + c.height],
-      sw: [c.x, c.y + c.height],
-      w: [c.x, midY],
-    });
-    return positions[which];
+    return cropMinFrac(CROP_MIN_PX, sourceHeight);
   }
 
   function handleCropHandlePointerDown(/** @type {PointerEvent} */ e, /** @type {string} */ which) {
@@ -378,9 +272,9 @@
     let next;
     if (which === "move") next = moveCropRect(startRect, dx, dy);
     else if (which === "nw" || which === "ne" || which === "sw" || which === "se") {
-      next = resizeCropCorner(startRect, which, dx, dy, cropAspectLock, sourceWidth / sourceHeight);
+      next = resizeCropCorner(startRect, which, dx, dy, cropAspectLock, sourceWidth / sourceHeight, cropMinFracX(), cropMinFracY());
     } else {
-      next = resizeCropEdge(startRect, which, dx, dy);
+      next = resizeCropEdge(startRect, which, dx, dy, cropMinFracX(), cropMinFracY());
     }
     onCropChange(next);
   }
@@ -445,13 +339,34 @@
   /** CSS-pixel click position -> native canvas-backing-store pixel
    * coordinate. Reused from the zoom-to-point math (M3 Slice 3) --
    * `getBoundingClientRect()` already reflects the current scroll offset,
-   * so this needs no extra bookkeeping for panned/zoomed state. */
+   * so this needs no extra bookkeeping for panned/zoomed state.
+   *
+   * Corrected via `trueElementBox` (see that function's own doc comment
+   * for the full derivation) for a real, non-hypothetical case: while the
+   * crop tool is active with a nonzero straighten angle, the canvas has a
+   * live CSS `transform: rotate()` applied for visual feedback (see the
+   * canvas element's own inline style) -- but the crop overlay/handles
+   * this function's own callers interact with live in a FIXED, unrotated
+   * coordinate space that never rotates with the image. `rect` (the
+   * canvas's own `getBoundingClientRect()`) reflects the ROTATED visual
+   * box in that state -- strictly larger than, and offset from, the true
+   * unrotated box the overlay is actually calibrated against -- so using
+   * its width/height/left/top directly (as this used to) silently
+   * mis-scales/mis-offsets a dragged handle the moment an angle is set,
+   * NOT because the click needs "un-rotating" (it's already in the right
+   * space) but because `rect`'s own numbers are simply wrong for a space
+   * that never rotated. `trueElementBox` derives the correct box from
+   * `rect`'s reliable CENTER plus `canvasEl.offsetWidth/offsetHeight`
+   * (layout measurements a CSS transform never affects). At angle 0
+   * (every other tool/state) this is an exact no-op, verified in
+   * cropMath.test.js. */
   function screenToNativePixel(/** @type {number} */ clientX, /** @type {number} */ clientY) {
     if (!canvasEl) return { x: 0, y: 0 };
     const rect = canvasEl.getBoundingClientRect();
-    const scaleX = rect.width / canvasEl.width;
-    const scaleY = rect.height / canvasEl.height;
-    return { x: (clientX - rect.left) / scaleX, y: (clientY - rect.top) / scaleY };
+    const trueBox = trueElementBox(rect, canvasEl.offsetWidth, canvasEl.offsetHeight);
+    const scaleX = trueBox.width / canvasEl.width;
+    const scaleY = trueBox.height / canvasEl.height;
+    return { x: (clientX - trueBox.left) / scaleX, y: (clientY - trueBox.top) / scaleY };
   }
 
   /** Native pixel coordinate -> normalized (0..1) image-space coordinate,
@@ -844,11 +759,10 @@
       return;
     }
     if (!canvasEl) return;
-    const rect = canvasEl.getBoundingClientRect();
-    const scaleX = rect.width / canvasEl.width;
-    const scaleY = rect.height / canvasEl.height;
-    const nativeX = (clickPoint.x - rect.left) / scaleX;
-    const nativeY = (clickPoint.y - rect.top) / scaleY;
+    // Reuses the same helper crop-handle dragging uses (instead of
+    // duplicating the same math inline, as this used to) so both paths
+    // stay correct together.
+    const { x: nativeX, y: nativeY } = screenToNativePixel(clickPoint.x, clickPoint.y);
     // Stored normalized (0-1), not as a native-pixel point -- the point
     // itself doesn't change resolution, but the canvas's own backing-store
     // size DOES once upgradeToFullTier swaps in the 1:1 tier moments
@@ -3379,23 +3293,14 @@
              what the rotation is about to push outside the frame. A CSS
              `transform` never affects layout geometry, so this overlay and
              every handle position below stay pixel-correct on-screen
-             regardless of the live rotation.
-             Named, accepted approximation: `screenToNormalized`/
-             `screenToNativePixel` (used by handle-drag math) read
-             `canvasEl.getBoundingClientRect()`, which reflects the VISUAL
-             (rotated) bounding box, not the unrotated one those helpers
-             assume -- so at a nonzero angle, a handle drag's real-time
-             screen-to-normalized mapping is computed against the UNROTATED
-             frame while the image is visibly rotated, a small approximation
-             that grows toward the corners at larger angles. Reusing the
-             exact pre-existing risk this file's own design review already
-             named for the (larger, oversized-canvas) committed-preview case
-             -- accepted there for the same reason it's accepted here: real
-             straighten angles are typically a few degrees, and precisely
-             correct rotated-space drag math (inverse-rotating the pointer
-             around the canvas's own center before normalizing) is real,
-             non-trivial complexity deliberately not taken on for this pass.
-             Four darkened bands (not a single clip-path/mask shape)
+             regardless of the live rotation -- and `screenToNormalized`/
+             `screenToNativePixel` (handle-drag math) are correct too, via
+             `trueElementBox` (see that function's own doc comment): the
+             overlay/handles never rotate, so a click on them is already in
+             the right space, `getBoundingClientRect()`'s rotated width/
+             height/left/top were simply the wrong numbers to read for a
+             space that never rotated -- not something that needed
+             "un-rotating." Four darkened bands (not a single clip-path/mask shape)
              spotlight the crop rect -- simplest way to dim the
              outside-of-crop area without extra CSS feature requirements. -->
         <div class="crop-dim" style="left:0; top:0; width:100%; height:{crop.y * 100}%"></div>
@@ -3468,6 +3373,23 @@
     min-width: 0;
     min-height: 0;
     user-select: none;
+    /* Crop & Straighten's live rotation preview (see the canvas element's
+       own inline style) rotates the canvas around its own center via CSS
+       transform -- a rotated rectangle's bounding box is strictly LARGER
+       than the unrotated one on both axes, and this component's canvas
+       routinely fills nearly all of this wrap's own available height with
+       almost no existing slack (confirmed by measurement: at a modest
+       12.5deg angle, the rotated bounding box extended roughly 50px past
+       BOTH the top and bottom of this element). Without clipping, that
+       spillover visually bleeds into whatever sits above/below Develop's
+       canvas area (the titlebar, the filmstrip) -- confirmed as a real,
+       reported bug ("the image overlay outside of the view"), not a
+       hypothetical. `overflow: hidden` here clips it to exactly this
+       wrap's own padded content box, matching real Lightroom's own
+       straighten UX (the photo rotates within a fixed viewport, never
+       visibly extending past it).
+    */
+    overflow: hidden;
   }
   /* M3 Slice 3: overflow:auto only in "100" mode -- centering the frame
      via `margin: auto` (not align-items/justify-content on this flex

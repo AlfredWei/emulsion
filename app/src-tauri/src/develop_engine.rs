@@ -1771,12 +1771,17 @@ impl Default for Crop {
     }
 }
 
-/// A small floor on the crop rect's own pixel dimensions -- without this,
-/// a degenerate (zero-area) crop rect would panic `image::imageops::crop`
+/// A floor on the crop rect's own pixel dimensions -- without this, a
+/// degenerate (zero-area) crop rect would panic `image::imageops::crop`
 /// and `resize` downstream, not just look wrong. Chosen as an absolute
 /// pixel count (not a fraction) so it's meaningful regardless of source
-/// resolution.
-const CROP_MIN_SIZE_PX: u32 = 4;
+/// resolution. Bumped from an earlier 4px (technically non-degenerate,
+/// but a 4x4 exported crop is not a meaningfully usable photo) to match
+/// `CROP_MIN_PX` in DevelopCanvas.svelte, which enforces this same real
+/// floor during interactive drag -- keeping both layers at the same
+/// value means the live preview and the actual export/thumbnail crop
+/// agree on what "as small as this can get" means.
+const CROP_MIN_SIZE_PX: u32 = 64;
 
 pub(crate) fn crop_op(ops: &[serde_json::Value]) -> Crop {
     let op = ops.iter().find(|op| op.get("op").and_then(|v| v.as_str()) == Some("crop"));
@@ -1874,14 +1879,25 @@ fn sample_bilinear(image: &RgbImage, x: f32, y: f32) -> image::Rgb<u8> {
 
 /// Converts the normalized crop rect into a pixel rect within `(width,
 /// height)`, clamped so it never exceeds the image bounds and never
-/// collapses below `CROP_MIN_SIZE_PX` in either dimension.
+/// collapses below `CROP_MIN_SIZE_PX` in either dimension. Size is
+/// resolved BEFORE position, not the other way around: with a real
+/// (non-trivial) `CROP_MIN_SIZE_PX`, a requested position near the far
+/// edge (e.g. x=0.8 on a modest-width image) combined with flooring the
+/// requested size up to the minimum can genuinely conflict with "stay
+/// inside the image" -- computing position first and then trying to fit
+/// the floored size into whatever space was left could push `px + pw`
+/// past `width`. Resolving size first (floored, then capped at the
+/// image's own dimension so an over-large minimum on a tiny image still
+/// degrades gracefully) and THEN clamping position into the range that
+/// keeps the now-fixed size entirely on-image guarantees both invariants
+/// hold simultaneously, by construction.
 fn crop_rect_px(width: u32, height: u32, c: &Crop) -> (u32, u32, u32, u32) {
-    let px = (c.x * width as f32).round().clamp(0.0, width as f32) as u32;
-    let py = (c.y * height as f32).round().clamp(0.0, height as f32) as u32;
-    let pw = (c.width * width as f32).round().max(CROP_MIN_SIZE_PX as f32) as u32;
-    let ph = (c.height * height as f32).round().max(CROP_MIN_SIZE_PX as f32) as u32;
-    let pw = pw.min(width.saturating_sub(px)).max(CROP_MIN_SIZE_PX.min(width));
-    let ph = ph.min(height.saturating_sub(py)).max(CROP_MIN_SIZE_PX.min(height));
+    let min_w = CROP_MIN_SIZE_PX.min(width);
+    let min_h = CROP_MIN_SIZE_PX.min(height);
+    let pw = (c.width * width as f32).round().max(min_w as f32).min(width as f32) as u32;
+    let ph = (c.height * height as f32).round().max(min_h as f32).min(height as f32) as u32;
+    let px = (c.x * width as f32).round().clamp(0.0, (width - pw) as f32) as u32;
+    let py = (c.y * height as f32).round().clamp(0.0, (height - ph) as f32) as u32;
     (px, py, pw, ph)
 }
 
@@ -3322,14 +3338,17 @@ mod tests {
         assert!(ph >= CROP_MIN_SIZE_PX, "ph={ph}");
     }
 
-    /// End-to-end crop-only (no rotation): a 10x10 image with a distinct
-    /// 4x4 white square at (3,3)-(6,6), cropped to exactly that square,
-    /// must produce a uniformly white 4x4 result.
+    /// End-to-end crop-only (no rotation): a 200x200 image (large enough
+    /// that the requested region clears CROP_MIN_SIZE_PX without the
+    /// floor kicking in and changing the result -- see that constant's
+    /// own doc comment) with a distinct 80x80 white square at
+    /// (60,60)-(140,140), cropped to exactly that square, must produce a
+    /// uniformly white 80x80 result.
     #[test]
     fn apply_crop_crop_only_extracts_the_expected_region() {
-        let mut image = RgbImage::from_pixel(10, 10, image::Rgb([0, 0, 0]));
-        for y in 3..7 {
-            for x in 3..7 {
+        let mut image = RgbImage::from_pixel(200, 200, image::Rgb([0, 0, 0]));
+        for y in 60..140 {
+            for x in 60..140 {
                 image.put_pixel(x, y, image::Rgb([255, 255, 255]));
             }
         }
@@ -3340,10 +3359,21 @@ mod tests {
                 ops: vec![serde_json::json!({ "op": "crop", "x": 0.3, "y": 0.3, "width": 0.4, "height": 0.4, "angle": 0.0 })],
             },
         );
-        assert_eq!(image.width(), 4);
-        assert_eq!(image.height(), 4);
+        assert_eq!(image.width(), 80);
+        assert_eq!(image.height(), 80);
         for pixel in image.pixels() {
             assert_eq!(*pixel, image::Rgb([255, 255, 255]));
         }
+    }
+
+    #[test]
+    fn crop_rect_px_enforces_a_real_pixel_minimum_not_just_nonzero() {
+        // A tiny requested crop (2x2 out of 1000x1000, well under
+        // CROP_MIN_SIZE_PX) must be floored up to a genuinely usable
+        // size, not just "not literally zero".
+        let c = Crop { x: 0.5, y: 0.5, width: 0.002, height: 0.002, angle: 0.0 };
+        let (_, _, pw, ph) = crop_rect_px(1000, 1000, &c);
+        assert!(pw >= CROP_MIN_SIZE_PX, "pw={pw}");
+        assert!(ph >= CROP_MIN_SIZE_PX, "ph={ph}");
     }
 }

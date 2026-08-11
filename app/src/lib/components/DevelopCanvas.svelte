@@ -3245,7 +3245,9 @@
       class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper"}
       style={showCommittedCropPreview
         ? `width:${100 / crop.width}%; height:${100 / crop.height}%; left:${(-crop.x * 100) / crop.width}%; top:${(-crop.y * 100) / crop.height}%; transform: rotate(${crop.angle}deg);`
-        : ""}
+        : activeTool === "crop"
+          ? `transform: rotate(${crop.angle}deg);`
+          : ""}
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}
       onpointerup={handlePointerUp}
@@ -3365,16 +3367,37 @@
         </svg>
       {/if}
       {#if activeTool === "crop"}
-        <!-- Crop & Straighten (M3): the canvas is ALWAYS unrotated/full-
-             resolution while this tool is active (see the committed-crop
-             preview block's own doc comment below for why) -- handles are
-             positioned/dragged with the SAME screenToNormalized/
-             screenToNativePixel helpers every mask handle already uses,
-             safe to reuse unchanged specifically because no CSS rotation
-             transform is ever applied to the canvas in this state. Four
-             darkened bands (not a single clip-path/mask shape) spotlight
-             the crop rect -- simplest way to dim the outside-of-crop area
-             without extra CSS feature requirements. -->
+        <!-- Crop & Straighten (M3): the canvas's own LAYOUT box (offsetLeft/
+             Top/Width/Height, which syncOverlayPosition and this overlay's
+             own percentage-based geometry are built on) never changes while
+             this tool is active -- but a straighten angle now DOES apply a
+             live `transform: rotate()` to the canvas for real-time visual
+             feedback (see the canvas element's own inline `style` above),
+             matching real Lightroom's straighten UX: the crop boundary/grid
+             stays fixed in the viewport while the photo content visibly
+             rotates underneath it, and this dimmed overlay naturally shows
+             what the rotation is about to push outside the frame. A CSS
+             `transform` never affects layout geometry, so this overlay and
+             every handle position below stay pixel-correct on-screen
+             regardless of the live rotation.
+             Named, accepted approximation: `screenToNormalized`/
+             `screenToNativePixel` (used by handle-drag math) read
+             `canvasEl.getBoundingClientRect()`, which reflects the VISUAL
+             (rotated) bounding box, not the unrotated one those helpers
+             assume -- so at a nonzero angle, a handle drag's real-time
+             screen-to-normalized mapping is computed against the UNROTATED
+             frame while the image is visibly rotated, a small approximation
+             that grows toward the corners at larger angles. Reusing the
+             exact pre-existing risk this file's own design review already
+             named for the (larger, oversized-canvas) committed-preview case
+             -- accepted there for the same reason it's accepted here: real
+             straighten angles are typically a few degrees, and precisely
+             correct rotated-space drag math (inverse-rotating the pointer
+             around the canvas's own center before normalizing) is real,
+             non-trivial complexity deliberately not taken on for this pass.
+             Four darkened bands (not a single clip-path/mask shape)
+             spotlight the crop rect -- simplest way to dim the
+             outside-of-crop area without extra CSS feature requirements. -->
         <div class="crop-dim" style="left:0; top:0; width:100%; height:{crop.y * 100}%"></div>
         <div class="crop-dim" style="left:0; top:{(crop.y + crop.height) * 100}%; width:100%; height:{(1 - crop.y - crop.height) * 100}%"></div>
         <div class="crop-dim" style="left:0; top:{crop.y * 100}%; width:{crop.x * 100}%; height:{crop.height * 100}%"></div>

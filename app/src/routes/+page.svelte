@@ -15,6 +15,7 @@
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import Filmstrip from "$lib/components/Filmstrip.svelte";
   import DevelopInfoBar from "$lib/components/DevelopInfoBar.svelte";
+  import HistoryPanel from "$lib/components/HistoryPanel.svelte";
   import BackupPromptDialog from "$lib/components/BackupPromptDialog.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import {
@@ -43,6 +44,12 @@
   import {
     getEditStack,
     setEditStack,
+    getHistory,
+    restoreHistoryEntry,
+    addSnapshot,
+    getSnapshots,
+    restoreSnapshot,
+    deleteSnapshot,
     regenerateThumbnail,
     opValue,
     upsertOp,
@@ -182,6 +189,21 @@
   let developImagePath = $state("");
   /** @type {import('$lib/api/develop.js').EditStack} */
   let editStack = $state({ schema_version: 1, ops: [] });
+
+  // History/Undo/Snapshots (M3). `history` is the current version's full
+  // list (oldest first, matching Catalog::get_history's own ORDER BY id
+  // ASC); `historyIndex` is a plain array index into it -- NOT a value
+  // persisted anywhere -- representing "which entry does the live
+  // editStack currently match." -1 means "before the first history
+  // entry" (the version's untouched initial state, before any labeled
+  // edit has ever been recorded). Reset to "newest" on every real edit
+  // and whenever Develop (re)opens for an image; moved directly by
+  // undo/redo/History-panel-click via restoreTo. See flushEditStack's own
+  // doc comment for why no separate cursor concept needs to exist
+  // server-side.
+  let history = $state(/** @type {import('$lib/api/develop.js').HistoryEntry[]} */ ([]));
+  let historyIndex = $state(-1);
+  let snapshots = $state(/** @type {import('$lib/api/develop.js').SnapshotEntry[]} */ ([]));
   let exposure = $derived(opValue(editStack, "exposure", 0));
   let contrast = $derived(opValue(editStack, "contrast", 0));
   let saturation = $derived(opValue(editStack, "saturation", 0));
@@ -269,8 +291,7 @@
     editStack = updateMask(editStack, id, { refColor });
     colorRangeResampleTarget = null;
     activeTool = null;
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Adjust Color Range");
   }
 
   // Eyedropper pickers (M3): Tone Curve point-insert, HSL band-identify,
@@ -348,8 +369,15 @@
     // multi-shot like brush), so it correctly falls through the same
     // `!== "brush"` reset below.
     if (placement.kind !== "brush") activeTool = null;
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    const label =
+      placement.kind === "radial_gradient"
+        ? "Add Radial Gradient"
+        : placement.kind === "brush"
+          ? "Add Brush Mask"
+          : placement.kind === "color_range"
+            ? "Add Color Range Mask"
+            : "Add Linear Gradient";
+    scheduleFlush(label);
   }
 
   // Luminance range has no geometry to place, so it doesn't go through
@@ -360,21 +388,19 @@
     const mask = createLuminanceRangeMask();
     editStack = addMask(editStack, mask);
     selectedMaskId = mask.id;
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Add Luminance Range Mask");
   }
 
   function handleMaskUpdated(/** @type {string} */ id, /** @type {Record<string, unknown>} */ patch) {
     editStack = updateMask(editStack, id, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Edit Mask");
   }
 
   function handleMaskDeleted() {
     if (selectedMaskId === null) return;
     editStack = removeMask(editStack, selectedMaskId);
     selectedMaskId = null;
-    flushEditStack();
+    flushEditStack("Delete Mask");
   }
 
   // Develop panel "Reset": reverts every adjustment AND mask on the current
@@ -391,7 +417,17 @@
     selectedMaskId = null;
     activeTool = null;
     confirmingReset = false;
-    flushEditStack();
+    flushEditStack("Reset");
+  }
+
+  // History/Snapshots (M3): naming a new snapshot uses the same generic
+  // TextPromptDialog "New Collection" already uses -- no dedicated dialog
+  // needed for one text field.
+  let creatingSnapshot = $state(false);
+
+  function handleCreateSnapshotConfirmed(/** @type {string} */ name) {
+    creatingSnapshot = false;
+    handleCreateSnapshot(name);
   }
 
   // What Export would act on right now: the open Develop image, or every
@@ -429,6 +465,16 @@
   // "coalesced/debounced slider events" rule, applied to catalog writes
   // rather than the WebGPU frame loop).
   let persistTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+  // The label for whatever edit is currently sitting behind persistTimer's
+  // debounce -- set by scheduleFlush, consumed (and cleared) by the next
+  // flushEditStack call, whichever call site triggers it (the timer
+  // itself, or an early explicit flush like openDevelop's). Kept as a
+  // module-level variable rather than a flushEditStack parameter so every
+  // existing `await flushEditStack()` call site (switchModule, openDevelop,
+  // Export, window-close) keeps working unchanged: it always means "flush
+  // whatever's actually pending, under whatever label it was scheduled
+  // with -- or nothing, if nothing is pending."
+  let pendingLabel = /** @type {string | null} */ (null);
   // Tracks an in-flight (already-fired, not-yet-resolved) save separately
   // from the debounce timer -- a flush can be triggered again (e.g. by the
   // close handler below) while a previous flush's write is still in
@@ -462,19 +508,130 @@
   // writing whenever a develop image is open, regardless of whether a
   // timer happened to be pending -- harmless when nothing changed (an
   // idempotent re-write of the same stack), correct when something did.
-  function flushEditStack() {
+  // History/Undo/Snapshots (M3): `label` is the human-readable name for
+  // whatever edit is being flushed IMMEDIATELY (mask delete, Reset --
+  // callers that never go through scheduleFlush's debounce at all).
+  // Everything else (the setTimeout(flushEditStack, 250) debounce settle,
+  // and every "flush whatever's pending before doing X" call site below)
+  // omits it, falling back to `pendingLabel` -- whatever scheduleFlush
+  // last recorded, or null if nothing is actually pending, in which case
+  // this is the same harmless idempotent no-op-content rewrite it always
+  // was. Only a truthy label ever moves `historyIndex` -- a no-op flush
+  // must never disturb the undo cursor.
+  function flushEditStack(/** @type {string=} */ label) {
     if (persistTimer !== null) {
       clearTimeout(persistTimer);
       persistTimer = null;
     }
+    const effectiveLabel = label ?? pendingLabel;
+    pendingLabel = null;
     if (developVersionId !== null) {
       const versionId = developVersionId;
       const stack = editStack;
-      pendingSave = setEditStack(versionId, stack).finally(() => {
-        pendingSave = null;
-      });
+      pendingSave = setEditStack(versionId, stack, effectiveLabel ?? undefined)
+        .then((freshHistory) => {
+          history = freshHistory;
+          if (effectiveLabel) historyIndex = freshHistory.length - 1;
+        })
+        .finally(() => {
+          pendingSave = null;
+        });
     }
     return pendingSave ?? Promise.resolve();
+  }
+
+  /** Schedules a debounced, LABELED flush -- the replacement for every
+   * former `if (persistTimer) clearTimeout(persistTimer); persistTimer =
+   * setTimeout(flushEditStack, 250);` call site. Records `label` for
+   * flushEditStack to pick up whenever it actually fires (the debounce
+   * settling, or an earlier explicit flush elsewhere pre-empting it). */
+  function scheduleFlush(/** @type {string} */ label) {
+    pendingLabel = label;
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(flushEditStack, 250);
+  }
+
+  // Undo is disabled at historyIndex 0 (the version's oldest-ever labeled
+  // edit) -- there's no history row representing "before the first edit"
+  // to restore TO (edit_history only ever gains a row once a real edit
+  // happens; the version's original untouched state is never itself
+  // stored as one). A named, accepted scope cut, not a bug: the very
+  // first edit ever made to a photo simply can't be undone via Ctrl+Z,
+  // matching this session's "mid-drag undo guard" precedent of a
+  // documented limitation over unrequested complexity (a synthetic
+  // "Import" seed row, which real Lightroom itself uses for exactly this
+  // reason -- deliberately out of scope here).
+  let canUndo = $derived(historyIndex > 0);
+  let canRedo = $derived(historyIndex < history.length - 1);
+
+  /** Moves the live edit stack to `history[index]` -- undo, redo, and a
+   * History-panel row click are all this same call, just with a
+   * different `index`. See `history`/`historyIndex`'s own doc comment for
+   * why this needs no server-side cursor concept at all. */
+  async function restoreTo(/** @type {number} */ index) {
+    if (developVersionId === null || index < 0 || index >= history.length) return;
+    const versionId = developVersionId;
+    const entryId = history[index].id;
+    // A restore overwrites editStack wholesale -- cancel any debounced
+    // write still pending first, or it could fire afterward under a now-
+    // stale label and silently stomp the just-restored state.
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    pendingLabel = null;
+    editStack = await restoreHistoryEntry(versionId, entryId);
+    historyIndex = index;
+    selectedMaskId = null;
+    activeTool = null;
+    regenerateThumbnailFor(versionId);
+  }
+
+  function handleUndo() {
+    if (canUndo) restoreTo(historyIndex - 1);
+  }
+
+  function handleRedo() {
+    if (canRedo) restoreTo(historyIndex + 1);
+  }
+
+  /** Creates a named save point from whatever's CURRENTLY on screen --
+   * flushes any pending debounced edit first so the snapshot never misses
+   * the last slider tick. */
+  async function handleCreateSnapshot(/** @type {string} */ name) {
+    if (developVersionId === null) return;
+    await flushEditStack();
+    const versionId = developVersionId;
+    const snapshot = await addSnapshot(versionId, name);
+    snapshots = [...snapshots, snapshot];
+  }
+
+  /** Unlike restoreTo/restoreHistoryEntry, restoring a snapshot IS a new,
+   * undoable edit of its own (see Catalog::restore_snapshot's doc
+   * comment) -- the returned history list already includes its own
+   * "Restore Snapshot: {name}" row, so this jumps historyIndex straight
+   * to newest rather than searching for that row's position. */
+  async function handleRestoreSnapshot(/** @type {number} */ snapshotId) {
+    if (developVersionId === null) return;
+    const versionId = developVersionId;
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    pendingLabel = null;
+    const [stack, freshHistory] = await restoreSnapshot(versionId, snapshotId);
+    editStack = stack;
+    history = freshHistory;
+    historyIndex = freshHistory.length - 1;
+    selectedMaskId = null;
+    activeTool = null;
+    regenerateThumbnailFor(versionId);
+  }
+
+  async function handleDeleteSnapshot(/** @type {number} */ snapshotId) {
+    if (developVersionId === null) return;
+    await deleteSnapshot(developVersionId, snapshotId);
+    snapshots = snapshots.filter((s) => s.id !== snapshotId);
   }
 
   // Catalog backup (PRD §7.6): the close handler needs to actually wait for
@@ -830,13 +987,31 @@
       // -- confirmingRemoval/creatingCollection/creatingSmartCollection/
       // creatingCollectionWithImages are Library-only concerns, structurally
       // impossible here, not copied blindly from the Library branch below.
-      if (exportItems !== null || settingsOpen || backupPromptOpen) return;
+      if (exportItems !== null || settingsOpen || backupPromptOpen || creatingSnapshot) return;
       const target = e.target;
       if (
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         target instanceof HTMLSelectElement
       ) {
+        return;
+      }
+      // Undo/Redo (M3) -- placed BEFORE the blanket modifier-key guard
+      // below, since every other Develop shortcut deliberately requires
+      // NO modifier held (see that guard's own reasoning) and these are
+      // the one deliberate exception. Cmd+Z / Ctrl+Z undoes; Cmd+Shift+Z
+      // (Mac convention) and Ctrl+Y (Windows/Linux convention) both redo,
+      // covering both platforms' own muscle memory rather than picking
+      // just one.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        handleRedo();
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -964,7 +1139,19 @@
     if (!image) return;
     developVersionId = versionId;
     developImagePath = image.path;
-    editStack = await getEditStack(versionId);
+    // History/Snapshots (M3): re-fetched fresh on every open, not carried
+    // over from whatever the previous image's panel showed -- switching
+    // images via the filmstrip must never leave a stale History/Snapshots
+    // list on screen for a different photo.
+    const [stack, freshHistory, freshSnapshots] = await Promise.all([
+      getEditStack(versionId),
+      getHistory(versionId),
+      getSnapshots(versionId),
+    ]);
+    editStack = stack;
+    history = freshHistory;
+    historyIndex = freshHistory.length - 1;
+    snapshots = freshSnapshots;
     activeTool = null;
     selectedMaskId = null;
     activeModule = "develop";
@@ -983,10 +1170,22 @@
     activeModule = target;
   }
 
+  // Human-readable History labels for handleAdjustmentChange's generic
+  // single-scalar ops -- falls back to the raw opName (still readable
+  // enough, e.g. "vibrance") for any op added later without a mapping
+  // entry, rather than needing this list kept in lockstep with every op.
+  const ADJUSTMENT_LABELS = /** @type {Record<string, string>} */ ({
+    exposure: "Exposure",
+    contrast: "Contrast",
+    saturation: "Saturation",
+    dehaze: "Dehaze",
+    texture: "Texture",
+    clarity: "Clarity",
+  });
+
   function handleAdjustmentChange(/** @type {string} */ opName, /** @type {number} */ value) {
     editStack = upsertOp(editStack, opName, value);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush(ADJUSTMENT_LABELS[opName] ?? opName);
   }
 
   // Tone Curve (M3): a global-only adjustment (applied after exposure/
@@ -998,8 +1197,7 @@
 
   function handleToneCurveChange(/** @type {readonly {x: number, y: number}[]} */ points) {
     editStack = upsertToneCurve(editStack, points);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Tone Curve");
   }
 
   // HSL / Color Mixer (M3): same global-only, structured-payload shape as
@@ -1011,8 +1209,7 @@
     /** @type {Partial<{hue: number, saturation: number, luminance: number}>} */ patch,
   ) {
     editStack = upsertHslBand(editStack, bandName, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("HSL / Color Mixer");
   }
 
   // Split Toning (M3): same global-only shape as Tone Curve/HSL above, but
@@ -1025,14 +1222,12 @@
     /** @type {Partial<{hue: number, saturation: number}>} */ patch,
   ) {
     editStack = upsertSplitToningZone(editStack, zone, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Split Toning");
   }
 
   function handleSplitToningBalanceChange(/** @type {number} */ balance) {
     editStack = upsertSplitToningBalance(editStack, balance);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Split Toning");
   }
 
   // Dehaze (M3): a single global scalar op (dark-channel-prior haze
@@ -1057,8 +1252,7 @@
     /** @type {Partial<{amount: number, midpoint: number, feather: number}>} */ patch,
   ) {
     editStack = upsertVignette(editStack, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Vignette");
   }
 
   // Grain (M3): same structured, own-getter/handler shape as Vignette
@@ -1069,8 +1263,7 @@
     /** @type {Partial<{amount: number, size: number, roughness: number}>} */ patch,
   ) {
     editStack = upsertGrain(editStack, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Grain");
   }
 
   // Sharpening / Noise Reduction (M3): same structured, own-getter/
@@ -1081,8 +1274,7 @@
     /** @type {Partial<{amount: number, radius: number, detail: number, masking: number}>} */ patch,
   ) {
     editStack = upsertSharpen(editStack, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Sharpening");
   }
 
   let lumaNR = $derived(getLumaNr(editStack, IDENTITY_LUMA_NR));
@@ -1091,8 +1283,7 @@
     /** @type {Partial<{amount: number, detail: number, contrast: number}>} */ patch,
   ) {
     editStack = upsertLumaNr(editStack, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Luminance Noise Reduction");
   }
 
   let colorNR = $derived(getColorNr(editStack, IDENTITY_COLOR_NR));
@@ -1101,8 +1292,7 @@
     /** @type {Partial<{amount: number, detail: number}>} */ patch,
   ) {
     editStack = upsertColorNr(editStack, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Color Noise Reduction");
   }
 
   // Crop & Straighten (M3): same structured, own-getter/handler shape as
@@ -1114,8 +1304,7 @@
     /** @type {Partial<{x: number, y: number, width: number, height: number, angle: number}>} */ patch,
   ) {
     editStack = upsertCrop(editStack, patch);
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
+    scheduleFlush("Crop");
   }
 
   // Aspect-ratio lock: UI-only, NOT persisted to the edit stack (real
@@ -1189,8 +1378,7 @@
     if (target === "split_toning_shadows" || target === "split_toning_highlights") {
       const zone = target === "split_toning_shadows" ? "shadows" : "highlights";
       editStack = upsertSplitToningZone(editStack, zone, { hue: h, saturation: s * 100 });
-      if (persistTimer) clearTimeout(persistTimer);
-      persistTimer = setTimeout(flushEditStack, 250);
+      scheduleFlush("Split Toning");
       return;
     }
     if (target === "hsl_band") {
@@ -1219,8 +1407,7 @@
       const next = insertToneCurvePoint(toneCurvePoints, l, y);
       if (next !== toneCurvePoints) {
         editStack = upsertToneCurve(editStack, next);
-        if (persistTimer) clearTimeout(persistTimer);
-        persistTimer = setTimeout(flushEditStack, 250);
+        scheduleFlush("Tone Curve");
       }
     }
   }
@@ -1427,6 +1614,16 @@
     onCancel={() => (creatingSmartCollection = false)}
   />
 
+  <TextPromptDialog
+    open={creatingSnapshot}
+    title="New Snapshot"
+    label="Name"
+    placeholder="e.g. Before crop"
+    confirmLabel="Create"
+    onConfirm={handleCreateSnapshotConfirmed}
+    onCancel={() => (creatingSnapshot = false)}
+  />
+
   {#if backupPromptSettings}
     <BackupPromptDialog
       open={backupPromptOpen}
@@ -1515,6 +1712,15 @@
     </div>
   {:else if developImagePath}
     <div class="develop-body">
+      <HistoryPanel
+        {history}
+        {historyIndex}
+        {snapshots}
+        onJumpTo={restoreTo}
+        onCreateSnapshotRequest={() => (creatingSnapshot = true)}
+        onRestoreSnapshot={handleRestoreSnapshot}
+        onDeleteSnapshot={handleDeleteSnapshot}
+      />
       <DevelopCanvas
         imagePath={developImagePath}
         {exposure}

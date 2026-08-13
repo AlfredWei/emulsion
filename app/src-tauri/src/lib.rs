@@ -9,8 +9,8 @@ mod raw_decode;
 mod source_decode;
 
 use catalog::{
-    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, ImageKeywordAssignment, ImageSummary,
-    KeywordNode, KeywordRef,
+    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, HistoryEntry, ImageKeywordAssignment,
+    ImageSummary, KeywordNode, KeywordRef, SnapshotEntry,
 };
 use export::{ExportOptions, ExportResult};
 use import::ImportSummary;
@@ -443,15 +443,82 @@ fn get_edit_stack(state: State<'_, AppState>, version_id: i64) -> Result<EditSta
     catalog.get_edit_stack(version_id).map_err(|e| e.to_string())
 }
 
+/// `label` is `Some` for a real, user-attributable edit (e.g. "Exposure",
+/// "Crop") and `None` for the many flush call sites that fire
+/// unconditionally with nothing new pending (switching images, exporting,
+/// closing the window) -- see `Catalog::record_edit_stack`'s own doc
+/// comment. Returns the version's fresh history list so the frontend's
+/// History panel can refresh in the same round trip, without a second
+/// `get_history` call.
 #[tauri::command]
 fn set_edit_stack(
     state: State<'_, AppState>,
     version_id: i64,
     stack: EditStack,
-) -> Result<(), String> {
+    label: Option<String>,
+) -> Result<Vec<HistoryEntry>, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
     catalog
-        .update_edit_stack(version_id, &stack)
+        .record_edit_stack(version_id, &stack, label.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_history(state: State<'_, AppState>, version_id: i64) -> Result<Vec<HistoryEntry>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.get_history(version_id).map_err(|e| e.to_string())
+}
+
+/// Moves the live edit stack to a past history entry -- undo, redo, and
+/// jump-to-entry are all the same operation client-side (see
+/// `Catalog::restore_history_entry`'s doc comment: no persisted cursor,
+/// the client just re-derives its position from the returned stack).
+/// Deliberately does NOT itself create a new history row.
+#[tauri::command]
+fn restore_history_entry(
+    state: State<'_, AppState>,
+    version_id: i64,
+    history_id: i64,
+) -> Result<EditStack, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .restore_history_entry(version_id, history_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_snapshot(state: State<'_, AppState>, version_id: i64, name: String) -> Result<SnapshotEntry, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.add_snapshot(version_id, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_snapshots(state: State<'_, AppState>, version_id: i64) -> Result<Vec<SnapshotEntry>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.get_snapshots(version_id).map_err(|e| e.to_string())
+}
+
+/// Restoring a snapshot IS a new, undoable edit (unlike
+/// `restore_history_entry`) -- see `Catalog::restore_snapshot`'s doc
+/// comment. Returns the fresh history list alongside the restored stack
+/// for the same single-round-trip reason `set_edit_stack` does.
+#[tauri::command]
+fn restore_snapshot(
+    state: State<'_, AppState>,
+    version_id: i64,
+    snapshot_id: i64,
+) -> Result<(EditStack, Vec<HistoryEntry>), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .restore_snapshot(version_id, snapshot_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_snapshot(state: State<'_, AppState>, version_id: i64, snapshot_id: i64) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .delete_snapshot(version_id, snapshot_id)
         .map_err(|e| e.to_string())
 }
 
@@ -649,6 +716,12 @@ pub fn run() {
             get_develop_full_preview,
             get_edit_stack,
             set_edit_stack,
+            get_history,
+            restore_history_entry,
+            add_snapshot,
+            get_snapshots,
+            restore_snapshot,
+            delete_snapshot,
             regenerate_thumbnail,
             export_images,
             get_backup_settings,

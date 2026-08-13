@@ -131,14 +131,74 @@ export function getDevelopFullPreview(/** @type {string} */ path) {
   return invoke("get_develop_full_preview", { path });
 }
 
+/**
+ * @typedef {Object} HistoryEntry
+ * @property {number} id
+ * @property {string} label
+ * @property {string} created_at
+ */
+
+/**
+ * @typedef {Object} SnapshotEntry
+ * @property {number} id
+ * @property {string} name
+ * @property {string} created_at
+ */
+
 /** @returns {Promise<EditStack>} */
 export function getEditStack(/** @type {number} */ versionId) {
   return invoke("get_edit_stack", { versionId });
 }
 
+/** `label` is the human-readable name for this edit ("Exposure", "Crop",
+ * "Add Mask", ...) shown in the History panel -- omit it (or pass
+ * `undefined`) for a flush with nothing new pending (switching images,
+ * exporting, closing the window), which persists the stack without
+ * creating a history row. See `Catalog::record_edit_stack`'s doc comment.
+ * @returns {Promise<HistoryEntry[]>} the version's fresh history list */
+export function setEditStack(
+  /** @type {number} */ versionId,
+  /** @type {EditStack} */ stack,
+  /** @type {string=} */ label,
+) {
+  return invoke("set_edit_stack", { versionId, stack, label: label ?? null });
+}
+
+/** @returns {Promise<HistoryEntry[]>} */
+export function getHistory(/** @type {number} */ versionId) {
+  return invoke("get_history", { versionId });
+}
+
+/** Moves the live edit stack to a past history entry -- undo, redo, and
+ * jump-to-entry in the History panel are all this same call; the caller
+ * just picks which `historyId` to restore. Does not itself create a new
+ * history row.
+ * @returns {Promise<EditStack>} */
+export function restoreHistoryEntry(/** @type {number} */ versionId, /** @type {number} */ historyId) {
+  return invoke("restore_history_entry", { versionId, historyId });
+}
+
+/** @returns {Promise<SnapshotEntry>} */
+export function addSnapshot(/** @type {number} */ versionId, /** @type {string} */ name) {
+  return invoke("add_snapshot", { versionId, name });
+}
+
+/** @returns {Promise<SnapshotEntry[]>} */
+export function getSnapshots(/** @type {number} */ versionId) {
+  return invoke("get_snapshots", { versionId });
+}
+
+/** Restoring a snapshot IS a new, undoable edit (unlike
+ * `restoreHistoryEntry`) -- it appends its own "Restore Snapshot: {name}"
+ * history row, included in the returned list.
+ * @returns {Promise<[EditStack, HistoryEntry[]]>} */
+export function restoreSnapshot(/** @type {number} */ versionId, /** @type {number} */ snapshotId) {
+  return invoke("restore_snapshot", { versionId, snapshotId });
+}
+
 /** @returns {Promise<void>} */
-export function setEditStack(/** @type {number} */ versionId, /** @type {EditStack} */ stack) {
-  return invoke("set_edit_stack", { versionId, stack });
+export function deleteSnapshot(/** @type {number} */ versionId, /** @type {number} */ snapshotId) {
+  return invoke("delete_snapshot", { versionId, snapshotId });
 }
 
 /** Thumbnail refresh after a Develop edit -- call AFTER setEditStack has

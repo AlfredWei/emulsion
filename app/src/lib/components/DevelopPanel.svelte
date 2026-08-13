@@ -38,6 +38,12 @@
    *   onLumaNRChange: (patch: Partial<{amount: number, detail: number, contrast: number}>) => void,
    *   colorNR: {amount: number, detail: number},
    *   onColorNRChange: (patch: Partial<{amount: number, detail: number}>) => void,
+   *   presets: import('$lib/api/develop.js').PresetEntry[],
+   *   onApplyPreset: (presetId: number) => void,
+   *   onSaveCurrentAsPresetRequest: () => void,
+   *   onExportPreset: (presetId: number) => void,
+   *   onDeletePresetRequest: (presetId: number) => void,
+   *   onImportPresetRequest: () => void,
    * }}
    */
   let {
@@ -75,6 +81,12 @@
     onLumaNRChange,
     colorNR,
     onColorNRChange,
+    presets,
+    onApplyPreset,
+    onSaveCurrentAsPresetRequest,
+    onExportPreset,
+    onDeletePresetRequest,
+    onImportPresetRequest,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -624,6 +636,60 @@
     </div>
   </details>
 
+  <details class="section">
+    <summary>Presets</summary>
+    <div class="sub-body">
+      <div class="preset-actions">
+        <button type="button" class="preset-action-btn" onclick={onSaveCurrentAsPresetRequest}>
+          Save Current as Preset…
+        </button>
+        <button type="button" class="preset-action-btn" onclick={onImportPresetRequest}>Import…</button>
+      </div>
+      {#if presets.length === 0}
+        <div class="static-note">No presets yet -- save the current adjustments as one, or import a file.</div>
+      {:else}
+        <ul class="preset-list">
+          {#each presets as preset (preset.id)}
+            <li class="preset-row">
+              <button
+                type="button"
+                class="preset-name-btn"
+                onclick={() => onApplyPreset(preset.id)}
+                title="Apply {preset.name}"
+              >
+                {preset.name}
+              </button>
+              <div class="preset-row-actions">
+                <button type="button" class="preset-icon-btn" onclick={() => onExportPreset(preset.id)} title="Export">
+                  ⇩
+                </button>
+                <button
+                  type="button"
+                  class="preset-icon-btn delete"
+                  onclick={() => onDeletePresetRequest(preset.id)}
+                  title="Delete"
+                >
+                  ×
+                </button>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <!-- Known limitation (see develop.js's applyPresetOps doc comment):
+           each preset op wholly REPLACES the matching op on the target
+           image, so an HSL/Tone Curve/Split Toning-bearing preset zeroes
+           out any of the target's own untouched adjustments in that same
+           category, not just the ones the preset itself set. Surfaced
+           here rather than left as a silent, unexplained-looking data
+           loss the first time someone hits it. -->
+      <p class="preset-note">
+        Applying a preset replaces matching adjustment categories (e.g. all HSL bands) entirely -- it does not merge
+        partial changes.
+      </p>
+    </div>
+  </details>
+
   {#each STATIC_SECTIONS as section (section.title)}
     <details class="section">
       <summary>{section.title}</summary>
@@ -721,6 +787,84 @@
     color: var(--text-tertiary);
     font-size: 11px;
     padding: 4px 4px 12px;
+  }
+  .preset-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 2px 4px 8px;
+  }
+  .preset-action-btn {
+    all: unset;
+    box-sizing: border-box;
+    width: 100%;
+    cursor: pointer;
+    padding: 6px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: var(--radius-s);
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    text-align: center;
+  }
+  .preset-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .preset-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .preset-name-btn {
+    all: unset;
+    box-sizing: border-box;
+    flex: 1;
+    min-width: 0;
+    cursor: pointer;
+    padding: 5px 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border-radius: var(--radius-s);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .preset-name-btn:hover {
+    background: var(--bg-panel-raised);
+    color: var(--text-primary);
+  }
+  .preset-row-actions {
+    display: flex;
+    gap: 0;
+    flex: none;
+  }
+  .preset-icon-btn {
+    all: unset;
+    cursor: pointer;
+    padding: 3px 6px;
+    font-size: 12px;
+    line-height: 1;
+    border-radius: var(--radius-s);
+    color: var(--text-tertiary);
+  }
+  .preset-icon-btn:hover {
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+  }
+  .preset-icon-btn.delete:hover {
+    color: var(--label-red);
+  }
+  .preset-note {
+    margin: 8px 4px 0;
+    font-size: 10.5px;
+    line-height: 1.4;
+    color: var(--text-tertiary);
+    font-style: italic;
   }
   .row {
     display: flex;

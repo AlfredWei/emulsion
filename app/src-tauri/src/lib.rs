@@ -10,7 +10,7 @@ mod source_decode;
 
 use catalog::{
     BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, HistoryEntry, ImageKeywordAssignment,
-    ImageSummary, KeywordNode, KeywordRef, SnapshotEntry,
+    ImageSummary, KeywordNode, KeywordRef, PresetEntry, SnapshotEntry,
 };
 use export::{ExportOptions, ExportResult};
 use import::ImportSummary;
@@ -522,6 +522,60 @@ fn delete_snapshot(state: State<'_, AppState>, version_id: i64, snapshot_id: i64
         .map_err(|e| e.to_string())
 }
 
+/// Presets (M3): global, catalog-wide -- `stack` is expected to already
+/// be filtered to the preset-eligible op subset (JS's job, via
+/// develop.js's `PRESET_EXCLUDED_OP_NAMES`); Rust stores it as-is, same
+/// "never interprets `ops`" boundary every other edit-stack command
+/// keeps. Shared by both the direct "Save Current as Preset" flow and,
+/// after JS re-filters an imported file's ops, the import flow below.
+#[tauri::command]
+fn create_preset(state: State<'_, AppState>, name: String, stack: EditStack) -> Result<PresetEntry, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.create_preset(&name, &stack).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_presets(state: State<'_, AppState>) -> Result<Vec<PresetEntry>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.list_presets().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_preset(state: State<'_, AppState>, preset_id: i64) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.delete_preset(preset_id).map_err(|e| e.to_string())
+}
+
+/// The on-disk shape of an exported preset file -- deliberately a plain
+/// `{name, schema_version, ops}` struct, not `PresetEntry` (which carries
+/// a catalog `id`/`created_at` that are meaningless once exported to a
+/// portable file another catalog might import).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PresetFile {
+    name: String,
+    schema_version: u32,
+    ops: Vec<serde_json::Value>,
+}
+
+/// Raw file read + parse only -- no catalog write, no op-name filtering.
+/// A foreign or hand-edited file could contain `crop`/mask ops; JS is
+/// responsible for re-applying `PRESET_EXCLUDED_OP_NAMES` defensively
+/// before ever calling `create_preset` with the result (see that
+/// command's own doc comment) -- Rust never interprets `ops`, so it
+/// can't safely do this filtering itself.
+#[tauri::command]
+fn import_preset_file(path: String) -> Result<PresetFile, String> {
+    let contents = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&contents).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn export_preset_file(name: String, stack: EditStack, path: String) -> Result<(), String> {
+    let file = PresetFile { name, schema_version: stack.schema_version, ops: stack.ops };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
 /// Thumbnail refresh after a Develop edit -- called by the frontend after
 /// `set_edit_stack` has already persisted, never chained onto that same
 /// call/promise (a stale Library thumbnail is a much smaller loss than a
@@ -722,6 +776,11 @@ pub fn run() {
             get_snapshots,
             restore_snapshot,
             delete_snapshot,
+            create_preset,
+            list_presets,
+            delete_preset,
+            import_preset_file,
+            export_preset_file,
             regenerate_thumbnail,
             export_images,
             get_backup_settings,

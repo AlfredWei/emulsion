@@ -66,6 +66,21 @@ pub struct SnapshotEntry {
     pub created_at: String,
 }
 
+/// A saved Preset (M3) -- unlike `HistoryEntry`/`SnapshotEntry`, includes
+/// the full `edit_stack` inline rather than a separate fetch-on-demand:
+/// presets are global (not version-scoped), typically few in number, and
+/// every consumer (the Presets panel's "Apply" action, batch-apply from
+/// Library, export-to-file) needs the actual ops immediately, not just a
+/// label -- there's no equivalent of History/Snapshots' "list is cheap,
+/// payload is fetched only when actually restoring" split to exploit here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PresetEntry {
+    pub id: i64,
+    pub name: String,
+    pub edit_stack: EditStack,
+    pub created_at: String,
+}
+
 /// One row for the Library grid: an image plus its primary (non-virtual-copy)
 /// version's culling state. Virtual-copy-aware listing is M2+ scope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -414,6 +429,24 @@ impl Catalog {
 
             CREATE INDEX IF NOT EXISTS idx_snapshots_version
                 ON snapshots(version_id, id);
+
+            -- Presets (M3): a global, catalog-wide entity, unlike
+            -- edit_history/snapshots above -- deliberately no FK to any
+            -- image/version (same shape as `collections`), since a
+            -- preset outlives and is independent of any single photo.
+            -- `edit_stack_json` holds an EditStack-shaped JSON blob, but
+            -- only the preset-ELIGIBLE subset of ops (global tonal/color
+            -- adjustments) -- crop and every mask kind are excluded at
+            -- save time in JS (develop.js), since both carry per-image
+            -- geometry/sampled-pixel data that wouldn't transfer
+            -- meaningfully to a different photo. No UNIQUE(name): same
+            -- reasoning as snapshots' own duplicate-name allowance above.
+            CREATE TABLE IF NOT EXISTS presets (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                edit_stack_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             ",
         )?;
 
@@ -1266,6 +1299,43 @@ impl Catalog {
             "DELETE FROM snapshots WHERE id = ?1 AND version_id = ?2",
             params![snapshot_id, version_id],
         )?;
+        Ok(())
+    }
+
+    /// Presets (M3): global, catalog-wide entities -- deliberately not
+    /// version-scoped like `record_edit_stack`/snapshots above. `stack`
+    /// is expected to already be filtered to the preset-eligible op
+    /// subset (JS's job, via develop.js's `PRESET_EXCLUDED_OP_NAMES`) --
+    /// this method stores whatever it's given as-is, same "Rust never
+    /// interprets `ops`" boundary every other edit-stack method here
+    /// keeps. Used by both the direct "Save Current as Preset" flow and
+    /// (after JS-side re-filtering, defensively) importing a preset file.
+    pub fn create_preset(&self, name: &str, stack: &EditStack) -> Result<PresetEntry> {
+        let json = serde_json::to_string(stack).expect("EditStack is always serializable");
+        self.conn.execute(
+            "INSERT INTO presets (name, edit_stack_json) VALUES (?1, ?2)",
+            params![name, json],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        let created_at: String =
+            self.conn
+                .query_row("SELECT created_at FROM presets WHERE id = ?1", params![id], |row| row.get(0))?;
+        Ok(PresetEntry { id, name: name.to_string(), edit_stack: stack.clone(), created_at })
+    }
+
+    pub fn list_presets(&self) -> Result<Vec<PresetEntry>> {
+        let mut stmt = self.conn.prepare("SELECT id, name, edit_stack_json, created_at FROM presets ORDER BY id ASC")?;
+        let rows = stmt.query_map([], |row| {
+            let json: String = row.get(2)?;
+            let edit_stack: EditStack =
+                serde_json::from_str(&json).expect("stored edit stacks are always valid JSON");
+            Ok(PresetEntry { id: row.get(0)?, name: row.get(1)?, edit_stack, created_at: row.get(3)? })
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_preset(&self, preset_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM presets WHERE id = ?1", params![preset_id])?;
         Ok(())
     }
 
@@ -2278,5 +2348,64 @@ mod tests {
             .unwrap();
         assert_eq!(history_count, 0);
         assert_eq!(snapshot_count, 0);
+    }
+
+    // -- M3 Presets --------------------------------------------------
+
+    #[test]
+    fn create_preset_round_trips_the_edit_stack() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let stack = stack_with("vignette", 0.4);
+
+        let preset = catalog.create_preset("Moody", &stack).unwrap();
+
+        assert_eq!(preset.name, "Moody");
+        assert_eq!(preset.edit_stack, stack);
+        assert!(preset.id > 0);
+    }
+
+    #[test]
+    fn list_presets_orders_oldest_first_and_includes_every_row() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.create_preset("First", &stack_with("exposure", 0.1)).unwrap();
+        catalog.create_preset("Second", &stack_with("contrast", 10.0)).unwrap();
+
+        let presets = catalog.list_presets().unwrap();
+
+        assert_eq!(presets.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["First", "Second"]);
+    }
+
+    #[test]
+    fn presets_allow_duplicate_names() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.create_preset("Duplicate", &EditStack::empty()).unwrap();
+        catalog.create_preset("Duplicate", &EditStack::empty()).unwrap();
+
+        assert_eq!(catalog.list_presets().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn delete_preset_removes_it() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let preset = catalog.create_preset("Temp", &EditStack::empty()).unwrap();
+
+        catalog.delete_preset(preset.id).unwrap();
+
+        assert_eq!(catalog.list_presets().unwrap(), vec![]);
+    }
+
+    #[test]
+    fn presets_are_not_affected_by_image_removal() {
+        // Presets are global, catalog-wide entities with no FK to any
+        // image/version -- unlike edit_history/snapshots (cascade-deleted
+        // above), removing every image in the catalog must leave presets
+        // completely untouched.
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog.add_image("/a.CR3").unwrap();
+        catalog.create_preset("Survives", &stack_with("clarity", 20.0)).unwrap();
+
+        catalog.remove_images(&[image_id]).unwrap();
+
+        assert_eq!(catalog.list_presets().unwrap().len(), 1);
     }
 }

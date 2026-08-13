@@ -201,6 +201,88 @@ export function deleteSnapshot(/** @type {number} */ versionId, /** @type {numbe
   return invoke("delete_snapshot", { versionId, snapshotId });
 }
 
+/**
+ * @typedef {Object} PresetEntry
+ * @property {number} id
+ * @property {string} name
+ * @property {EditStack} edit_stack
+ * @property {string} created_at
+ */
+
+/** Keeps only the preset-eligible ops from an edit stack (see
+ * `PRESET_EXCLUDED_OP_NAMES`'s own doc comment for why crop/masks are
+ * excluded) -- the ONLY place this filtering happens for the "Save
+ * Current as Preset" path. Also re-applied defensively when importing a
+ * preset file, since a hand-edited or foreign file could contain a
+ * crop/mask op that would otherwise sail through undetected (Rust's
+ * `import_preset_file` command does no filtering of its own -- it just
+ * reads+parses the file, on the same "Rust never interprets ops"
+ * boundary every edit-stack command keeps).
+ * @returns {EditStack} */
+export function presetEligibleOps(/** @type {EditStack} */ stack) {
+  return { schema_version: stack.schema_version, ops: stack.ops.filter((o) => !PRESET_EXCLUDED_OP_NAMES.includes(o.op)) };
+}
+
+/** Applies a preset's ops onto a target edit stack -- a per-op upsert by
+ * `op` name (same filter-then-push idiom `upsertOp`/`upsertToneCurve`/etc.
+ * already use individually, generalized here since a preset's ops are
+ * name-only and don't need per-op semantic knowledge to merge). Crop and
+ * every mask on `target` are left completely untouched, since presets
+ * never carry those op names in the first place (see `presetEligibleOps`).
+ *
+ * KNOWN LIMITATION, surfaced in the Presets UI: each preset op REPLACES
+ * the matching op on `target` wholesale, not a partial/per-field merge.
+ * For `hsl`/`split_toning`/`tone_curve` specifically, this means applying
+ * a preset that touches even one HSL band replaces the target's ENTIRE
+ * `hsl` op (all 8 bands) -- any of the target's own HSL/Split Toning/Tone
+ * Curve adjustments on fields the preset itself left at identity are
+ * silently zeroed, not preserved. A real, accepted v1 scope cut (per-field
+ * merging would need to know each op's own field structure, breaking the
+ * "merge is name-only, no semantic knowledge needed" simplicity this
+ * function relies on) -- not a bug, but real enough to warn about in the UI
+ * rather than let a user discover it as unexplained data loss.
+ * @returns {EditStack} */
+export function applyPresetOps(/** @type {EditStack} */ target, /** @type {EditStack} */ presetStack) {
+  let ops = target.ops;
+  for (const presetOp of presetStack.ops) {
+    ops = [...ops.filter((o) => o.op !== presetOp.op), presetOp];
+  }
+  return { schema_version: target.schema_version, ops };
+}
+
+/** @returns {Promise<PresetEntry>} */
+export function createPreset(/** @type {string} */ name, /** @type {EditStack} */ stack) {
+  return invoke("create_preset", { name, stack });
+}
+
+/** @returns {Promise<PresetEntry[]>} */
+export function listPresets() {
+  return invoke("list_presets");
+}
+
+/** @returns {Promise<void>} */
+export function deletePreset(/** @type {number} */ presetId) {
+  return invoke("delete_preset", { presetId });
+}
+
+/** Raw file read + parse ONLY -- does not filter ops or write to the
+ * catalog. Callers MUST run the result's `ops` through `presetEligibleOps`
+ * before ever calling `createPreset` with it (see that function's own doc
+ * comment for why).
+ * @returns {Promise<{name: string, schema_version: number, ops: Array<EditOp | Mask>}>} */
+export function importPresetFile(/** @type {string} */ path) {
+  return invoke("import_preset_file", { path });
+}
+
+/** @returns {Promise<void>} */
+export function exportPresetFile(
+  /** @type {string} */ name,
+  /** @type {EditStack} */ stack,
+  /** @type {string} */ path,
+) {
+  return invoke("export_preset_file", { name, stack, path });
+}
+
 /** Thumbnail refresh after a Develop edit -- call AFTER setEditStack has
  * already resolved, never chained onto that same call, so a slow/failed
  * regen can never delay the edit save or app quit. Resolves to `null`
@@ -884,6 +966,18 @@ const MASK_OP_NAMES = [
   "luminance_range_mask",
   "color_range_mask",
 ];
+
+// Presets (M3): op names a preset must NEVER capture -- `crop` and every
+// mask kind. `linear_gradient_mask`/`radial_gradient_mask`/`brush_mask`/
+// `color_range_mask` carry per-image geometry or a sampled pixel value
+// tied to the exact photo they were created on; `crop` is normalized
+// geometry tied to that photo's own framing. `luminance_range_mask` is
+// the one exception worth naming explicitly: it's a pure tone-threshold
+// (rangeMin/rangeMax/feather) with no geometry or sampled-pixel data at
+// all, actually as portable as the global ops below -- excluded anyway
+// for v1 scope simplicity (one exclusion list, not "masks except this
+// one"), not because it's tied to the source image like the other four.
+export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop"];
 
 // Mask kinds with no on-canvas geometry to show (brush's painted region,
 // luminance range's pixel-value-based selection) get a toggleable colored

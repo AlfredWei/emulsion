@@ -1,6 +1,6 @@
 <script>
   import "$lib/styles/tokens.css";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { open, save } from "@tauri-apps/plugin-dialog";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import LibraryGrid from "$lib/components/LibraryGrid.svelte";
@@ -50,6 +50,13 @@
     getSnapshots,
     restoreSnapshot,
     deleteSnapshot,
+    presetEligibleOps,
+    applyPresetOps,
+    createPreset,
+    listPresets,
+    deletePreset,
+    importPresetFile,
+    exportPresetFile,
     regenerateThumbnail,
     opValue,
     upsertOp,
@@ -135,8 +142,18 @@
   let allImageKeywords = $state(/** @type {import('$lib/api/catalog.js').ImageKeywordAssignment[]} */ ([]));
   let keywordIdsByImage = $derived(buildKeywordIdsByImage(allImageKeywords));
 
+  // Presets (M3): global, catalog-wide, same "fetch once at startup, keep
+  // in sync locally" shape as `collections` above -- NOT re-fetched per
+  // image the way history/snapshots are, since presets have no relation
+  // to whichever photo happens to be open.
+  let presets = $state(/** @type {import('$lib/api/develop.js').PresetEntry[]} */ ([]));
+
   async function refreshCollections() {
     collections = await listCollections();
+  }
+
+  async function refreshPresets() {
+    presets = await listPresets();
   }
 
   async function loadManualMembership(/** @type {number} */ collectionId) {
@@ -428,6 +445,127 @@
   function handleCreateSnapshotConfirmed(/** @type {string} */ name) {
     creatingSnapshot = false;
     handleCreateSnapshot(name);
+  }
+
+  // Presets (M3): same TextPromptDialog/ConfirmDialog reuse as Collections/
+  // Snapshots above -- no new dialog components needed.
+  let creatingPreset = $state(false);
+  let confirmingDeletePresetId = $state(/** @type {number | null} */ (null));
+  // Guards the Library "Apply Preset to Selection" dropdown while a batch
+  // apply is in flight -- narrow but real mitigation for the one residual
+  // race a design review flagged: double-clicking into Develop on one of
+  // the targeted images before its own invoke() in the batch has resolved.
+  let applyingPreset = $state(false);
+
+  function handleSaveCurrentAsPresetRequest() {
+    creatingPreset = true;
+  }
+
+  async function handleCreatePresetConfirmed(/** @type {string} */ name) {
+    creatingPreset = false;
+    const preset = await createPreset(name, presetEligibleOps(editStack));
+    presets = [...presets, preset];
+  }
+
+  /** Applying a preset to the currently open Develop image is an
+   * immediate, discrete action (like Reset/mask-delete), not a debounced
+   * slider drag -- flushes right away under its own label. */
+  function handleApplyPreset(/** @type {number} */ presetId) {
+    if (developVersionId === null) return;
+    const preset = presets.find((p) => p.id === presetId);
+    if (!preset) return;
+    editStack = applyPresetOps(editStack, preset.edit_stack);
+    flushEditStack(`Apply Preset: ${preset.name}`);
+  }
+
+  async function handleExportPreset(/** @type {number} */ presetId) {
+    const preset = presets.find((p) => p.id === presetId);
+    if (!preset) return;
+    const path = await save({
+      defaultPath: `${preset.name}.json`,
+      filters: [{ name: "Preset", extensions: ["json"] }],
+    });
+    if (!path) return; // user cancelled
+    try {
+      await exportPresetFile(preset.name, preset.edit_stack, path);
+      statusMessage = `Exported "${preset.name}"`;
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Export preset failed: ${e}`;
+    }
+  }
+
+  async function handleImportPresetRequest() {
+    const path = await open({ multiple: false, filters: [{ name: "Preset", extensions: ["json"] }] });
+    if (!path || Array.isArray(path)) return;
+    try {
+      const raw = await importPresetFile(path);
+      // Defensive re-filter -- a hand-edited or foreign file could
+      // contain a crop/mask op that would otherwise sail straight
+      // through undetected (see importPresetFile's own doc comment).
+      const filtered = presetEligibleOps({ schema_version: raw.schema_version, ops: raw.ops });
+      const preset = await createPreset(raw.name, filtered);
+      presets = [...presets, preset];
+      statusMessage = `Imported "${raw.name}"`;
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Import preset failed: ${e}`;
+    }
+  }
+
+  function handleDeletePresetRequest(/** @type {number} */ presetId) {
+    confirmingDeletePresetId = presetId;
+  }
+
+  async function handleDeletePresetConfirmed() {
+    if (confirmingDeletePresetId === null) return;
+    const presetId = confirmingDeletePresetId;
+    confirmingDeletePresetId = null;
+    await deletePreset(presetId);
+    presets = presets.filter((p) => p.id !== presetId);
+  }
+
+  /** Library batch-apply -- version_id-targeted (NOT image_id: virtual
+   * copies are separate versions with independent edit stacks, so
+   * image_id would silently under-apply whenever one is selected
+   * alongside its original). Each target is an independent getEditStack
+   * -> merge -> setEditStack -> regenerateThumbnail round trip, same
+   * non-atomic-across-the-batch shape rating/flag/color-label changes
+   * already use -- a partial failure here is no worse than a partial
+   * failure there. If the image currently open in Develop is among the
+   * targets, its in-memory editStack is explicitly re-synced afterward
+   * (see the comment below) so a later flush can't silently clobber the
+   * just-applied preset with the stale pre-apply stack. */
+  async function handleApplyPresetToSelection(/** @type {string} */ value) {
+    if (!value) return;
+    const preset = presets.find((p) => p.id === Number(value));
+    if (!preset) return;
+    const targets = [...selectedIds];
+    if (targets.length === 0) return;
+    applyingPreset = true;
+    try {
+      await Promise.all(
+        targets.map(async (versionId) => {
+          const current = await getEditStack(versionId);
+          const merged = applyPresetOps(current, preset.edit_stack);
+          await setEditStack(versionId, merged, `Apply Preset: ${preset.name}`);
+          const path = await regenerateThumbnail(versionId);
+          if (path) patchLocal(versionId, { thumbnail_path: path });
+        }),
+      );
+      // Re-sync: developVersionId's in-memory editStack was NOT touched
+      // by the loop above (it writes straight to the catalog), so if the
+      // image currently open in Develop was also a batch target, refetch
+      // it now -- otherwise a later flush (window close, switching
+      // images) would still hold the stale pre-apply stack and silently
+      // overwrite what this batch just wrote.
+      if (developVersionId !== null && targets.includes(developVersionId)) {
+        editStack = await getEditStack(developVersionId);
+      }
+      statusMessage = `Applied "${preset.name}" to ${targets.length} photo${targets.length === 1 ? "" : "s"}`;
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Apply preset failed: ${e}`;
+    } finally {
+      applyingPreset = false;
+    }
   }
 
   // What Export would act on right now: the open Develop image, or every
@@ -987,7 +1125,16 @@
       // -- confirmingRemoval/creatingCollection/creatingSmartCollection/
       // creatingCollectionWithImages are Library-only concerns, structurally
       // impossible here, not copied blindly from the Library branch below.
-      if (exportItems !== null || settingsOpen || backupPromptOpen || creatingSnapshot) return;
+      if (
+        exportItems !== null ||
+        settingsOpen ||
+        backupPromptOpen ||
+        creatingSnapshot ||
+        creatingPreset ||
+        confirmingDeletePresetId !== null
+      ) {
+        return;
+      }
       const target = e.target;
       if (
         target instanceof HTMLInputElement ||
@@ -1433,6 +1580,7 @@
     // import's own refresh() races against its own background trigger.
     refresh().then(pollUntilThumbnailsReady);
     refreshCollections();
+    refreshPresets();
     listAllImageKeywords().then((assignments) => (allImageKeywords = assignments));
 
     // M1 Slice 6 (crash-safety): flush a pending debounced edit before the
@@ -1542,6 +1690,20 @@
       {/each}
       <option value="__new__">New Collection…</option>
     </select>
+    <select
+      class="add-to-collection-select"
+      value=""
+      disabled={activeModule !== "library" || selectedIds.size === 0 || applyingPreset}
+      onchange={(e) => {
+        handleApplyPresetToSelection(e.currentTarget.value);
+        e.currentTarget.value = "";
+      }}
+    >
+      <option value="" disabled>{applyingPreset ? "Applying…" : "Apply Preset…"}</option>
+      {#each presets as preset (preset.id)}
+        <option value={preset.id}>{preset.name}</option>
+      {/each}
+    </select>
     <button
       class="remove-btn"
       onclick={() => (confirmingRemoval = true)}
@@ -1622,6 +1784,25 @@
     confirmLabel="Create"
     onConfirm={handleCreateSnapshotConfirmed}
     onCancel={() => (creatingSnapshot = false)}
+  />
+
+  <TextPromptDialog
+    open={creatingPreset}
+    title="New Preset"
+    label="Name"
+    placeholder="e.g. Moody B&W"
+    confirmLabel="Save"
+    onConfirm={handleCreatePresetConfirmed}
+    onCancel={() => (creatingPreset = false)}
+  />
+
+  <ConfirmDialog
+    open={confirmingDeletePresetId !== null}
+    title="Delete preset"
+    message="Delete this preset? This can't be undone."
+    confirmLabel="Delete"
+    onConfirm={handleDeletePresetConfirmed}
+    onCancel={() => (confirmingDeletePresetId = null)}
   />
 
   {#if backupPromptSettings}
@@ -1803,6 +1984,12 @@
         onLumaNRChange={handleLumaNRChange}
         {colorNR}
         onColorNRChange={handleColorNRChange}
+        {presets}
+        onApplyPreset={handleApplyPreset}
+        onSaveCurrentAsPresetRequest={handleSaveCurrentAsPresetRequest}
+        onExportPreset={handleExportPreset}
+        onDeletePresetRequest={handleDeletePresetRequest}
+        onImportPresetRequest={handleImportPresetRequest}
       />
     </div>
     <MaskToolStrip

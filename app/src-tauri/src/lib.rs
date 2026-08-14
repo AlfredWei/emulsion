@@ -3,6 +3,7 @@ mod develop_engine;
 mod export;
 mod import;
 mod jpeg_decode;
+mod lens_profile;
 mod metadata;
 mod preview_cache;
 mod raw_decode;
@@ -443,6 +444,31 @@ fn get_edit_stack(state: State<'_, AppState>, version_id: i64) -> Result<EditSta
     catalog.get_edit_stack(version_id).map_err(|e| e.to_string())
 }
 
+/// Matches a photo's camera+lens EXIF against the bundled lens-correction
+/// database (M3: Lens Corrections). Takes the metadata directly (not an
+/// image_id) -- the frontend already holds every field on the
+/// `ImageSummary` it fetched for the Library grid/Develop, so there's no
+/// need for a second catalog round trip just to re-fetch what's already
+/// in memory. `None` covers "no match" for any reason (missing metadata,
+/// no equipment match, matched equipment with no usable calibration data)
+/// -- see `lens_profile::match_profile`'s own doc comment.
+#[tauri::command]
+fn lookup_lens_profile(
+    camera_make: Option<String>,
+    camera_model: Option<String>,
+    lens_model: Option<String>,
+    focal_length: Option<f32>,
+    aperture: Option<f32>,
+) -> Option<lens_profile::LensProfileMatch> {
+    lens_profile::match_profile(
+        camera_make.as_deref(),
+        camera_model.as_deref(),
+        lens_model.as_deref(),
+        focal_length,
+        aperture,
+    )
+}
+
 /// `label` is `Some` for a real, user-attributable edit (e.g. "Exposure",
 /// "Crop") and `None` for the many flush call sites that fire
 /// unconditionally with nothing new pending (switching images, exporting,
@@ -770,6 +796,7 @@ pub fn run() {
             get_develop_full_preview,
             get_edit_stack,
             set_edit_stack,
+            lookup_lens_profile,
             get_history,
             restore_history_entry,
             add_snapshot,

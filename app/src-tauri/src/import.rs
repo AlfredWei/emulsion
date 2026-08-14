@@ -291,6 +291,9 @@ pub fn regenerate_edited_thumbnail(
     let preview =
         crate::preview_cache::ensure_develop_preview_for_hash(source_path, content_hash, previews_dir).ok()?;
     let mut decoded = image::open(&preview.path).ok()?.into_rgb8();
+    // Lens Corrections (M3): same ordering export.rs uses -- see
+    // develop_engine.rs's own header comment on `apply_lens_correction`.
+    crate::develop_engine::apply_lens_correction(&mut decoded, stack);
     crate::develop_engine::apply_edit_stack(&mut decoded, stack);
     // Crop & Straighten (M3): same shared post-process export.rs uses --
     // see develop_engine.rs's own doc comment on `apply_crop` for why

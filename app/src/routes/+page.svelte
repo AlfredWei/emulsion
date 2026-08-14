@@ -104,6 +104,11 @@
     getCrop,
     upsertCrop,
     IDENTITY_CROP,
+    getLensCorrection,
+    upsertLensCorrection,
+    setLensProfile,
+    IDENTITY_LENS_CORRECTION,
+    lookupLensProfile,
   } from "$lib/api/develop.js";
   import { largestCenteredCropForRatio } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
@@ -1302,6 +1307,29 @@
     activeTool = null;
     selectedMaskId = null;
     activeModule = "develop";
+
+    // Lens Corrections (M3): re-resolved fresh on every open, matching
+    // History/Snapshots' own "never carry over the previous photo's data"
+    // discipline above -- this photo's own EXIF, not whatever the last
+    // photo's profile happened to be. A no-op (same value already baked,
+    // or no match either time) skips the write entirely rather than
+    // idempotently re-flushing on every single open. NOT run through
+    // scheduleFlush/a history label -- this is resolved equipment data,
+    // not a user-facing edit (see develop.js's own doc comment on
+    // `setLensProfile`); `flushEditStack()` with no label is the same
+    // silent, unlabeled persist its own doc comment already documents for
+    // exactly this "idempotent no-op-content rewrite" case.
+    const profile = await lookupLensProfile({
+      cameraMake: image.camera_make,
+      cameraModel: image.camera_model,
+      lensModel: image.lens_model,
+      focalLength: image.focal_length,
+      aperture: image.aperture,
+    });
+    if (developVersionId === versionId && JSON.stringify(profile) !== JSON.stringify(lensCorrection.profile)) {
+      editStack = setLensProfile(editStack, profile);
+      flushEditStack();
+    }
   }
 
   async function switchModule(/** @type {string} */ target) {
@@ -1400,6 +1428,20 @@
   ) {
     editStack = upsertVignette(editStack, patch);
     scheduleFlush("Vignette");
+  }
+
+  // Lens Corrections (M3): same structured, own-getter/handler shape as
+  // Vignette/Grain above, PLUS a separate profile-baking step (below,
+  // called from openDevelop) -- see develop.js's own doc comment on
+  // `setLensProfile` for why that's not a user-facing "change" at all,
+  // and doesn't go through this handler or scheduleFlush's history label.
+  let lensCorrection = $derived(getLensCorrection(editStack, IDENTITY_LENS_CORRECTION));
+
+  function handleLensCorrectionChange(
+    /** @type {Partial<{profile_enabled: boolean, distortion_amount: number, vignette_amount: number, ca_amount: number, manual_distortion: number, manual_ca: number}>} */ patch,
+  ) {
+    editStack = upsertLensCorrection(editStack, patch);
+    scheduleFlush("Lens Corrections");
   }
 
   // Grain (M3): same structured, own-getter/handler shape as Vignette
@@ -1928,6 +1970,7 @@
         {texture}
         {clarity}
         {vignette}
+        {lensCorrection}
         {grain}
         {sharpen}
         {lumaNR}
@@ -1976,6 +2019,8 @@
         onClarityChange={(v) => handleAdjustmentChange("clarity", v)}
         {vignette}
         onVignetteChange={handleVignetteChange}
+        {lensCorrection}
+        onLensCorrectionChange={handleLensCorrectionChange}
         {grain}
         onGrainChange={handleGrainChange}
         {sharpen}

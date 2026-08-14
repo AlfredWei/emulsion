@@ -677,6 +677,172 @@ export function buildGrainUniformData(
   return new Float32Array([g.amount, g.size, g.roughness, 0]);
 }
 
+// Lens Corrections (M3): the one op in this file with a nested `profile`
+// payload -- see develop_engine.rs's own header comment on this op for
+// the full Profile/Manual split rationale (real Lightroom's own tab
+// split; manual vignette is deliberately NOT a separate control, since
+// it's the same radial-gain formula the existing `vignette` op above
+// already exposes). `profile` is baked in a SEPARATE step
+// (`setLensProfile`, called once per Develop-open from a
+// `lookup_lens_profile` Tauri result) rather than through slider
+// upserts -- it's resolved equipment data, not a user-dragged value.
+// Amounts default to 100 (not 0), matching develop_engine.rs's own
+// `LensCorrection::default()` and its documented reasoning: once a
+// profile is enabled, real Lightroom's sliders start at full correction.
+/** @typedef {Object} LensCorrectionState
+ * @property {boolean} profile_enabled
+ * @property {number} distortion_amount
+ * @property {number} vignette_amount
+ * @property {number} ca_amount
+ * @property {number} manual_distortion
+ * @property {number} manual_ca
+ * @property {LensProfileMatch | null} profile
+ */
+
+export const IDENTITY_LENS_CORRECTION = /** @type {LensCorrectionState} */ (
+  Object.freeze({
+    profile_enabled: false,
+    distortion_amount: 100,
+    vignette_amount: 100,
+    ca_amount: 100,
+    manual_distortion: 0,
+    manual_ca: 0,
+    profile: null,
+  })
+);
+
+/** @returns {LensCorrectionState} */
+export function getLensCorrection(
+  /** @type {EditStack} */ stack,
+  /** @type {LensCorrectionState} */ fallback = IDENTITY_LENS_CORRECTION,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "lens_correction"));
+  if (!op) return fallback;
+  return {
+    profile_enabled: op.profile_enabled ?? false,
+    distortion_amount: op.distortion_amount ?? 100,
+    vignette_amount: op.vignette_amount ?? 100,
+    ca_amount: op.ca_amount ?? 100,
+    manual_distortion: op.manual_distortion ?? 0,
+    manual_ca: op.manual_ca ?? 0,
+    profile: op.profile ?? null,
+  };
+}
+
+/** Patches any subset of the flat fields (profile_enabled/amounts/manual
+ * sliders), leaving `profile` and everything else untouched -- use
+ * `setLensProfile` to replace the baked profile block itself.
+ * @returns {EditStack} */
+export function upsertLensCorrection(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<LensCorrectionState>} */ patch,
+) {
+  const current = getLensCorrection(stack);
+  const next = { ...current, ...patch };
+  const ops = stack.ops.filter((o) => o.op !== "lens_correction");
+  ops.push(/** @type {any} */ ({ op: "lens_correction", ...next }));
+  return { ...stack, ops };
+}
+
+/** Bakes (or clears, via `null`) the matched camera+lens profile into the
+ * op -- the ONLY way `profile` itself changes; every other lens-
+ * correction field goes through `upsertLensCorrection` instead.
+ * @returns {EditStack} */
+export function setLensProfile(
+  /** @type {EditStack} */ stack,
+  /** @type {LensProfileMatch | null} */ profile,
+) {
+  return upsertLensCorrection(stack, { profile });
+}
+
+/** Packs into the exact Float32Array layout DevelopCanvas.svelte's
+ * `lensCorrectionBuffer`/the WGSL `LensCorrectionParams` struct expects
+ * (field order matters -- must match the struct's own field order
+ * exactly). A missing/null `profile` or a missing distortion/tca/
+ * vignetting sub-block naturally uploads as "model 0" / all-zero
+ * coefficients, which the shader treats as a no-op -- there's no
+ * separate "has a profile" flag to keep in sync. */
+export function buildLensCorrectionUniformData(
+  /** @type {ReturnType<typeof getLensCorrection>} */ lc,
+) {
+  const p = lc.profile;
+  const d = /** @type {any} */ (p?.distortion ?? null);
+  const t = /** @type {any} */ (p?.tca ?? null);
+  const v = p?.vignetting ?? null;
+
+  const distortionModel = !d ? 0 : d.model === "poly3" ? 1 : d.model === "poly5" ? 2 : d.model === "ptlens" ? 3 : 0;
+  const [dc0, dc1, dc2] = !d
+    ? [0, 0, 0]
+    : d.model === "poly3"
+      ? [d.k1, 0, 0]
+      : d.model === "poly5"
+        ? [d.k1, d.k2, 0]
+        : [d.a, d.b, d.c]; // ptlens
+
+  const tcaModel = !t ? 0 : t.model === "linear" ? 1 : t.model === "poly3" ? 2 : 0;
+  const [tr0, tr1, tr2, tb0, tb1, tb2] = !t
+    ? [0, 0, 0, 0, 0, 0]
+    : t.model === "linear"
+      ? [t.kr, 0, 0, t.kb, 0, 0]
+      : [t.red[0], t.red[1], t.red[2], t.blue[0], t.blue[1], t.blue[2]]; // poly3
+
+  return new Float32Array([
+    lc.profile_enabled ? 1 : 0,
+    lc.distortion_amount,
+    lc.vignette_amount,
+    lc.ca_amount,
+    lc.manual_distortion,
+    lc.manual_ca,
+    p?.crop_factor ?? 1,
+    p?.real_focal ?? 50,
+    p?.lens_center_x ?? 0,
+    p?.lens_center_y ?? 0,
+    distortionModel,
+    dc0,
+    dc1,
+    dc2,
+    tcaModel,
+    tr0,
+    tr1,
+    tr2,
+    tb0,
+    tb1,
+    tb2,
+    v?.k1 ?? 0,
+    v?.k2 ?? 0,
+    v?.k3 ?? 0,
+  ]);
+}
+
+/** @typedef {Object} LensProfileMatch
+ * @property {string} camera
+ * @property {string} lens
+ * @property {number} crop_factor
+ * @property {number} real_focal
+ * @property {number} lens_center_x
+ * @property {number} lens_center_y
+ * @property {({model: "poly3", k1: number} | {model: "poly5", k1: number, k2: number} | {model: "ptlens", a: number, b: number, c: number}) | null} distortion
+ * @property {({model: "linear", kr: number, kb: number} | {model: "poly3", red: [number, number, number], blue: [number, number, number]}) | null} tca
+ * @property {{k1: number, k2: number, k3: number} | null} vignetting
+ */
+
+/** `null` when no camera+lens match is found in the bundled lensfun
+ * database (missing/unrecognized EXIF, or genuinely no profile for that
+ * equipment) -- callers show "no matching profile" rather than treating
+ * this as an error.
+ * @returns {Promise<LensProfileMatch | null>} */
+export function lookupLensProfile(
+  /** @type {{cameraMake?: string | null, cameraModel?: string | null, lensModel?: string | null, focalLength?: number | null, aperture?: number | null}} */ params,
+) {
+  return invoke("lookup_lens_profile", {
+    cameraMake: params.cameraMake ?? null,
+    cameraModel: params.cameraModel ?? null,
+    lensModel: params.lensModel ?? null,
+    focalLength: params.focalLength ?? null,
+    aperture: params.aperture ?? null,
+  });
+}
+
 // Sharpening (M3): a flat, non-nested payload -- same shape as Vignette/
 // Grain above. Global-only, applied after Noise Reduction, before
 // Vignette/Grain (see develop_engine.rs/DevelopCanvas.svelte's shared
@@ -977,7 +1143,7 @@ const MASK_OP_NAMES = [
 // all, actually as portable as the global ops below -- excluded anyway
 // for v1 scope simplicity (one exclusion list, not "masks except this
 // one"), not because it's tied to the source image like the other four.
-export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop"];
+export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop", "lens_correction"];
 
 // Mask kinds with no on-canvas geometry to show (brush's painted region,
 // luminance range's pixel-value-based selection) get a toggleable colored

@@ -30,6 +30,16 @@
    *   onClarityChange: (value: number) => void,
    *   vignette: {amount: number, midpoint: number, feather: number},
    *   onVignetteChange: (patch: Partial<{amount: number, midpoint: number, feather: number}>) => void,
+   *   lensCorrection: {
+   *     profile_enabled: boolean,
+   *     distortion_amount: number,
+   *     vignette_amount: number,
+   *     ca_amount: number,
+   *     manual_distortion: number,
+   *     manual_ca: number,
+   *     profile: {camera: string, lens: string} | null,
+   *   },
+   *   onLensCorrectionChange: (patch: Partial<{profile_enabled: boolean, distortion_amount: number, vignette_amount: number, ca_amount: number, manual_distortion: number, manual_ca: number}>) => void,
    *   grain: {amount: number, size: number, roughness: number},
    *   onGrainChange: (patch: Partial<{amount: number, size: number, roughness: number}>) => void,
    *   sharpen: {amount: number, radius: number, detail: number, masking: number},
@@ -73,6 +83,8 @@
     onClarityChange,
     vignette,
     onVignetteChange,
+    lensCorrection,
+    onLensCorrectionChange,
     grain,
     onGrainChange,
     sharpen,
@@ -99,9 +111,7 @@
     }
   });
 
-  const STATIC_SECTIONS = [
-    { title: "Lens Corrections", note: "Profile · chromatic aberration" },
-  ];
+  const STATIC_SECTIONS = [];
 
   function bandLabel(/** @type {string} */ name) {
     return name[0].toUpperCase() + name.slice(1);
@@ -690,12 +700,98 @@
     </div>
   </details>
 
-  {#each STATIC_SECTIONS as section (section.title)}
-    <details class="section">
-      <summary>{section.title}</summary>
-      <div class="sub-body static-note">{section.note}</div>
-    </details>
-  {/each}
+  <details class="section">
+    <summary>Lens Corrections</summary>
+    <div class="sub-body">
+      {#if lensCorrection.profile}
+        <div class="static-note">Profile found: {lensCorrection.profile.camera} + {lensCorrection.profile.lens}</div>
+      {:else}
+        <div class="static-note">No matching lens profile found for this photo's camera/lens metadata.</div>
+      {/if}
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          checked={lensCorrection.profile_enabled}
+          onchange={(e) => onLensCorrectionChange({ profile_enabled: e.currentTarget.checked })}
+        />
+        Enable Profile Corrections
+      </label>
+      <div class="row">
+        <label for="lens-distortion-amount">Distortion</label>
+        <input
+          id="lens-distortion-amount"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          disabled={!lensCorrection.profile_enabled}
+          value={lensCorrection.distortion_amount}
+          oninput={(e) => onLensCorrectionChange({ distortion_amount: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{lensCorrection.distortion_amount}</span>
+      </div>
+      <div class="row">
+        <label for="lens-vignette-amount">Vignetting</label>
+        <input
+          id="lens-vignette-amount"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          disabled={!lensCorrection.profile_enabled}
+          value={lensCorrection.vignette_amount}
+          oninput={(e) => onLensCorrectionChange({ vignette_amount: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{lensCorrection.vignette_amount}</span>
+      </div>
+      <div class="row">
+        <label for="lens-ca-amount">Chromatic Aberration</label>
+        <input
+          id="lens-ca-amount"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          disabled={!lensCorrection.profile_enabled}
+          value={lensCorrection.ca_amount}
+          oninput={(e) => onLensCorrectionChange({ ca_amount: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{lensCorrection.ca_amount}</span>
+      </div>
+      <div class="subsection-label">Manual</div>
+      <div class="row">
+        <label for="lens-manual-distortion">Distortion</label>
+        <input
+          id="lens-manual-distortion"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={lensCorrection.manual_distortion}
+          oninput={(e) => onLensCorrectionChange({ manual_distortion: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{lensCorrection.manual_distortion}</span>
+      </div>
+      <div class="row">
+        <label for="lens-manual-ca">Chromatic Aberration</label>
+        <input
+          id="lens-manual-ca"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={lensCorrection.manual_ca}
+          oninput={(e) => onLensCorrectionChange({ manual_ca: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{lensCorrection.manual_ca}</span>
+      </div>
+      <!-- No manual vignette control here on purpose -- it would be the
+           exact same radial-gain formula the Vignette section above
+           already exposes (see develop_engine.rs's own doc comment on
+           this op for the full reasoning). -->
+      <p class="preset-note">For manual vignette correction, use the Vignette section above.</p>
+    </div>
+  </details>
 </div>
 
 <style>
@@ -779,6 +875,15 @@
     text-transform: uppercase;
     color: var(--text-tertiary);
     padding: 8px 4px 2px;
+  }
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 4px 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
   }
   .subsection-label:first-child {
     padding-top: 2px;

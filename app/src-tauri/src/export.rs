@@ -15,7 +15,7 @@
 //! (M2 Slice 1).
 
 use crate::catalog::EditStack;
-use crate::develop_engine::{apply_crop, apply_edit_stack};
+use crate::develop_engine::{apply_crop, apply_edit_stack, apply_lens_correction};
 use crate::source_decode::{self, DecodeError};
 use image::codecs::jpeg::JpegEncoder;
 use image::RgbImage;
@@ -79,6 +79,12 @@ pub fn export_one(
     let mut image = RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
         .ok_or(ExportError::BufferMismatch)?;
 
+    // Lens Corrections (M3): runs FIRST, before grading -- the user is
+    // grading/cropping the corrected image, not the raw lens-distorted
+    // one, matching real Lightroom. See develop_engine.rs's own header
+    // comment on this op for why it's a separate resample step, not part
+    // of apply_edit_stack's per-pixel loop.
+    apply_lens_correction(&mut image, stack);
     apply_edit_stack(&mut image, stack);
     // Crop & Straighten (M3): a pure geometric post-process, deliberately
     // separate from apply_edit_stack -- see develop_engine.rs's own doc

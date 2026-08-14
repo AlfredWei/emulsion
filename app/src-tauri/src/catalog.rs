@@ -218,6 +218,75 @@ pub enum BackupError {
     IntegrityCheckFailed(String),
 }
 
+/// Seeded once into every catalog's `presets` table by `Catalog::migrate`
+/// (see the seeding block there for the idempotency gate). A small starter
+/// set (13, not Lightroom's own ~100-strong marketing-scale library) --
+/// each one hand-authored against this app's own op inventory, matching
+/// this project's "smallest real instance first" practice rather than
+/// trying to match a commercial preset library's scale. Plain data, not
+/// specially protected: a user who deletes one gets the same experience as
+/// deleting any preset they made themselves -- it doesn't come back.
+/// Every op name/value here must stay inside the same ranges
+/// `DevelopPanel.svelte`'s own sliders enforce (see that file for the
+/// authoritative min/max per control) since these bypass the UI entirely.
+const DEFAULT_PRESETS: &[(&str, &str)] = &[
+    // -- Color --
+    (
+        "Warm Glow",
+        r#"{"schema_version":1,"ops":[{"op":"exposure","value":0.2},{"op":"contrast","value":5},{"op":"saturation","value":8},{"op":"split_toning","shadows":{"hue":210,"saturation":5},"highlights":{"hue":45,"saturation":18},"balance":15}]}"#,
+    ),
+    (
+        "Cool Blue",
+        r#"{"schema_version":1,"ops":[{"op":"exposure","value":-0.1},{"op":"contrast","value":5},{"op":"saturation","value":-5},{"op":"split_toning","shadows":{"hue":220,"saturation":15},"highlights":{"hue":200,"saturation":8},"balance":-10}]}"#,
+    ),
+    (
+        "Golden Hour",
+        r#"{"schema_version":1,"ops":[{"op":"exposure","value":0.3},{"op":"contrast","value":8},{"op":"hsl","bands":{"orange":{"hue":0,"saturation":15,"luminance":8},"yellow":{"hue":0,"saturation":12,"luminance":5}}},{"op":"split_toning","shadows":{"hue":230,"saturation":6},"highlights":{"hue":40,"saturation":25},"balance":20},{"op":"vignette","amount":-10,"midpoint":60,"feather":60}]}"#,
+    ),
+    (
+        "Teal & Orange",
+        r#"{"schema_version":1,"ops":[{"op":"contrast","value":12},{"op":"saturation","value":5},{"op":"split_toning","shadows":{"hue":195,"saturation":25},"highlights":{"hue":35,"saturation":20},"balance":0},{"op":"hsl","bands":{"blue":{"hue":-10,"saturation":10,"luminance":0},"orange":{"hue":0,"saturation":15,"luminance":0}}}]}"#,
+    ),
+    // -- Creative --
+    (
+        "Punch",
+        r#"{"schema_version":1,"ops":[{"op":"contrast","value":20},{"op":"clarity","value":25},{"op":"saturation","value":12},{"op":"vignette","amount":-15,"midpoint":55,"feather":50}]}"#,
+    ),
+    (
+        "Faded Film",
+        r#"{"schema_version":1,"ops":[{"op":"contrast","value":-15},{"op":"saturation","value":-10},{"op":"tone_curve","points":[{"x":0,"y":0.08},{"x":0.5,"y":0.5},{"x":1,"y":0.95}]},{"op":"grain","amount":15,"size":30,"roughness":40}]}"#,
+    ),
+    (
+        "Moody",
+        r#"{"schema_version":1,"ops":[{"op":"exposure","value":-0.3},{"op":"contrast","value":18},{"op":"saturation","value":-15},{"op":"vignette","amount":-25,"midpoint":45,"feather":55},{"op":"split_toning","shadows":{"hue":220,"saturation":10},"highlights":{"hue":0,"saturation":0},"balance":-15}]}"#,
+    ),
+    (
+        "Dreamy Soft",
+        r#"{"schema_version":1,"ops":[{"op":"exposure","value":0.25},{"op":"contrast","value":-10},{"op":"texture","value":-20},{"op":"clarity","value":-15},{"op":"tone_curve","points":[{"x":0,"y":0.05},{"x":0.5,"y":0.55},{"x":1,"y":1}]}]}"#,
+    ),
+    (
+        "Vintage",
+        r#"{"schema_version":1,"ops":[{"op":"contrast","value":-8},{"op":"saturation","value":-20},{"op":"split_toning","shadows":{"hue":45,"saturation":12},"highlights":{"hue":50,"saturation":15},"balance":5},{"op":"grain","amount":20,"size":35,"roughness":45},{"op":"vignette","amount":-15,"midpoint":50,"feather":65}]}"#,
+    ),
+    // -- B&W --
+    (
+        "Classic B&W",
+        r#"{"schema_version":1,"ops":[{"op":"saturation","value":-100},{"op":"contrast","value":10}]}"#,
+    ),
+    (
+        "High Contrast B&W",
+        r#"{"schema_version":1,"ops":[{"op":"saturation","value":-100},{"op":"contrast","value":35},{"op":"clarity","value":15}]}"#,
+    ),
+    (
+        "Soft B&W",
+        r#"{"schema_version":1,"ops":[{"op":"saturation","value":-100},{"op":"contrast","value":-10},{"op":"tone_curve","points":[{"x":0,"y":0.05},{"x":0.5,"y":0.5},{"x":1,"y":0.95}]}]}"#,
+    ),
+    (
+        "B&W + Grain",
+        r#"{"schema_version":1,"ops":[{"op":"saturation","value":-100},{"op":"contrast","value":15},{"op":"grain","amount":25,"size":30,"roughness":50},{"op":"vignette","amount":-20,"midpoint":50,"feather":60}]}"#,
+    ),
+];
+
 impl Catalog {
     /// Test-only: an ephemeral catalog with nothing on disk. Production
     /// code always persists to a real file via `open()` (ADR-0005) — this
@@ -231,7 +300,12 @@ impl Catalog {
         // debug_assert would panic every debug-build test. The FK pragma
         // is the part that must match production behavior in tests.
         Self::enable_foreign_keys(&conn)?;
-        Self::migrate(&conn)?;
+        // `seed_defaults: false` -- every test in this module that touches
+        // presets wants a clean, empty starting table (a real, deliberate
+        // choice, not an oversight -- see `default_presets_are_seeded_...`
+        // below for the one test that opts back in via a real file-backed
+        // `open()` instead).
+        Self::migrate(&conn, false)?;
         Ok(Self { conn })
     }
 
@@ -280,11 +354,11 @@ impl Catalog {
         let conn = Connection::open(path)?;
         Self::harden(&conn)?;
         Self::enable_foreign_keys(&conn)?;
-        Self::migrate(&conn)?;
+        Self::migrate(&conn, true)?;
         Ok(Self { conn })
     }
 
-    fn migrate(conn: &Connection) -> Result<()> {
+    fn migrate(conn: &Connection, seed_defaults: bool) -> Result<()> {
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS images (
@@ -468,6 +542,39 @@ impl Catalog {
                 ('backup_optimize', '0');
             ",
         )?;
+
+        // Default presets (M3), seeded once. `presets` has no UNIQUE(name)
+        // to key an `INSERT OR IGNORE` off (by design -- see the table's
+        // own schema comment above), so the gate is a dedicated settings
+        // flag instead, same "runs every open(), real no-op after the
+        // first" shape as the backup defaults just above. A user who
+        // deletes some or all of these afterward doesn't get them back --
+        // the flag stays set, matching how real Lightroom's own default
+        // presets don't reappear once removed. Gated on `seed_defaults` so
+        // `open_in_memory()`'s test fixtures stay a clean, empty table --
+        // see that function's own doc comment.
+        if seed_defaults {
+            let default_presets_seeded: bool = conn
+                .query_row(
+                    "SELECT 1 FROM settings WHERE key = 'default_presets_seeded'",
+                    [],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !default_presets_seeded {
+                for (name, edit_stack_json) in DEFAULT_PRESETS {
+                    conn.execute(
+                        "INSERT INTO presets (name, edit_stack_json) VALUES (?1, ?2)",
+                        params![name, edit_stack_json],
+                    )?;
+                }
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES ('default_presets_seeded', '1')",
+                    [],
+                )?;
+            }
+        }
 
         // M2 Slice 2: the columns above were added to the CREATE TABLE text
         // after real catalogs already existed with the pre-Slice-2 schema --
@@ -1938,7 +2045,7 @@ mod tests {
         )
         .unwrap();
 
-        Catalog::migrate(&conn).expect("migrate must succeed against a pre-Slice-2 catalog");
+        Catalog::migrate(&conn, false).expect("migrate must succeed against a pre-Slice-2 catalog");
         let catalog = Catalog { conn };
 
         let images = catalog.list_images().unwrap();
@@ -2010,7 +2117,7 @@ mod tests {
                 last_backup_at: Some("2026-01-01 00:00:00".to_string()),
             })
             .unwrap();
-        Catalog::migrate(&catalog.conn).unwrap();
+        Catalog::migrate(&catalog.conn, false).unwrap();
         let settings = catalog.get_backup_settings().unwrap();
         assert_eq!(settings.frequency, "daily");
         assert_eq!(settings.folder, Some("/some/folder".to_string()));
@@ -2407,5 +2514,89 @@ mod tests {
         catalog.remove_images(&[image_id]).unwrap();
 
         assert_eq!(catalog.list_presets().unwrap().len(), 1);
+    }
+
+    // -- M3 Default presets ------------------------------------------
+
+    fn default_presets_test_path(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("emulsion-default-presets-test-{name}.sqlite"));
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+        }
+        path
+    }
+
+    #[test]
+    fn open_in_memory_does_not_seed_default_presets() {
+        // `open_in_memory()` is the fixture every other preset test above
+        // relies on starting from an empty table -- a deliberate choice
+        // (see that function's own doc comment), pinned here as its own
+        // test rather than left as an unstated assumption.
+        let catalog = Catalog::open_in_memory().unwrap();
+        assert_eq!(catalog.list_presets().unwrap(), vec![]);
+    }
+
+    #[test]
+    fn open_seeds_the_default_presets_exactly_once() {
+        let path = default_presets_test_path("seed-once");
+
+        let seeded = Catalog::open(&path).unwrap().list_presets().unwrap();
+        assert_eq!(seeded.len(), DEFAULT_PRESETS.len());
+        for (name, _) in DEFAULT_PRESETS {
+            assert!(seeded.iter().any(|p| p.name == *name), "missing default preset {name:?}");
+        }
+
+        // Reopening -- same idempotency shape already established for
+        // backup settings above -- must not duplicate them.
+        assert_eq!(Catalog::open(&path).unwrap().list_presets().unwrap().len(), DEFAULT_PRESETS.len());
+
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+        }
+    }
+
+    #[test]
+    fn deleting_a_default_preset_and_reopening_does_not_bring_it_back() {
+        let path = default_presets_test_path("delete-stays-deleted");
+
+        let catalog = Catalog::open(&path).unwrap();
+        let removed = catalog.list_presets().unwrap().remove(0);
+        catalog.delete_preset(removed.id).unwrap();
+        drop(catalog);
+
+        let after_reopen = Catalog::open(&path).unwrap().list_presets().unwrap();
+        assert_eq!(after_reopen.len(), DEFAULT_PRESETS.len() - 1);
+        assert!(!after_reopen.iter().any(|p| p.id == removed.id));
+
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+        }
+    }
+
+    #[test]
+    fn every_default_preset_is_valid_json_and_carries_no_crop_or_mask_ops() {
+        // Hand-typed JSON literals get no compiler checking -- this is the
+        // regression guard: a typo'd field name would otherwise silently
+        // become a no-op adjustment (unknown keys are just ignored) rather
+        // than a build failure. Also re-asserts the preset-eligibility
+        // contract PRESET_EXCLUDED_OP_NAMES documents in develop.js, since
+        // these bypass presetEligibleOps entirely (inserted directly by
+        // Rust, not filtered client-side).
+        for (name, json) in DEFAULT_PRESETS {
+            let stack: EditStack =
+                serde_json::from_str(json).unwrap_or_else(|e| panic!("preset {name:?}: invalid EditStack JSON: {e}"));
+            assert_eq!(stack.schema_version, 1, "preset {name:?}");
+            assert!(!stack.ops.is_empty(), "preset {name:?} has no ops");
+            for op in &stack.ops {
+                let op_name = op
+                    .get("op")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| panic!("preset {name:?} has an op missing its \"op\" field"));
+                assert!(
+                    op_name != "crop" && !op_name.ends_with("_mask"),
+                    "preset {name:?} carries a crop/mask op ({op_name}), which presets must never contain"
+                );
+            }
+        }
     }
 }

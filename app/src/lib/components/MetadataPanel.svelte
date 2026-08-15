@@ -6,6 +6,7 @@
     getImageKeywords,
     listKeywords,
   } from "$lib/api/catalog.js";
+  import LibraryHistogram from "$lib/components/LibraryHistogram.svelte";
 
   /**
    * `targetImageIds` is who a newly-typed keyword gets assigned to --
@@ -145,6 +146,7 @@
   {#if !image}
     <p class="empty">Select a photo to see its details.</p>
   {:else}
+    <LibraryHistogram thumbnailPath={image.thumbnail_path} />
     <div class="section-label">Metadata</div>
     <div class="row"><span class="row-label">Camera</span><span>{cameraLine}</span></div>
     <div class="row"><span class="row-label">Lens</span><span>{lensLine}</span></div>

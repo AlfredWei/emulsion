@@ -1291,6 +1291,11 @@
     if (!image) return;
     developVersionId = versionId;
     developImagePath = image.path;
+    // Cleared, not left stale, on every open -- the new image's own real
+    // histogram arrives shortly via DevelopCanvas's own GPU readback, but
+    // showing the PREVIOUS image's histogram in the meantime would be
+    // actively misleading, not just momentarily stale.
+    histogramData = null;
     // History/Snapshots (M3): re-fetched fresh on every open, not carried
     // over from whatever the previous image's panel showed -- switching
     // images via the filmstrip must never leave a stale History/Snapshots
@@ -1534,6 +1539,17 @@
   function handleSourceDimensions(/** @type {number} */ width, /** @type {number} */ height) {
     sourceWidth = width;
     sourceHeight = height;
+  }
+
+  // Develop histogram: fed live from DevelopCanvas's own GPU readback
+  // (see that component's onHistogramUpdate/readHistogramIfIdle) --
+  // deliberately NOT derived from editStack/exposure/etc. here, since the
+  // actual graded pixel values (masks, curves, every spatial op) aren't
+  // reproducible from JS-side state alone; DevelopCanvas is the only
+  // place that ever sees the real rendered output.
+  let histogramData = $state(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array} | null} */ (null));
+  function handleHistogramUpdate(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array}} */ data) {
+    histogramData = data;
   }
 
   /** Reshapes the crop rect to the given PIXEL aspect ratio: the largest
@@ -1996,6 +2012,7 @@
         onCropChange={handleCropChange}
         {cropAspectLock}
         onSourceDimensions={handleSourceDimensions}
+        onHistogramUpdate={handleHistogramUpdate}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -2010,6 +2027,7 @@
         />
       {/if}
       <DevelopPanel
+        {histogramData}
         {exposure}
         {contrast}
         {saturation}

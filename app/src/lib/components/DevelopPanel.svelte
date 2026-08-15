@@ -1,9 +1,11 @@
 <script>
   import ToneCurveEditor from "$lib/components/ToneCurveEditor.svelte";
+  import Histogram from "$lib/components/Histogram.svelte";
   import { HSL_BAND_NAMES, HSL_BAND_CENTERS_DEG, IDENTITY_HSL_BANDS } from "$lib/api/develop.js";
 
   /**
    * @type {{
+   *   histogramData: {r: Uint32Array, g: Uint32Array, b: Uint32Array} | null,
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
@@ -57,6 +59,7 @@
    * }}
    */
   let {
+    histogramData,
     exposure,
     contrast,
     saturation,
@@ -139,6 +142,7 @@
     <span class="panel-title">Edit</span>
     <button class="reset-btn" type="button" disabled={!hasEdits} onclick={onResetRequest}>Reset</button>
   </div>
+  <Histogram data={histogramData} />
   <details class="section" open>
     <summary>Basic</summary>
     <div class="sub-body">

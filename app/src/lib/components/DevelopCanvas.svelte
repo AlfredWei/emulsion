@@ -3,6 +3,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
   import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, nativeCropClipSize, scrollTargetForNativeFocus } from "$lib/cropMath.js";
+  import { binHistogramPixels } from "$lib/histogramMath.js";
 
   const MAX_MASKS = 8;
 
@@ -55,6 +56,7 @@
    *   onCropChange: (patch: Partial<{x: number, y: number, width: number, height: number, angle: number}>) => void,
    *   cropAspectLock: number | null,
    *   onSourceDimensions?: (width: number, height: number) => void,
+   *   onHistogramUpdate?: (data: {r: Uint32Array, g: Uint32Array, b: Uint32Array}) => void,
    * }}
    */
   let {
@@ -92,6 +94,7 @@
     onCropChange,
     cropAspectLock,
     onSourceDimensions,
+    onHistogramUpdate,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -933,6 +936,23 @@
   let bindGroup = null;
   /** @type {GPUTextureFormat} */
   let presentationFormat = "bgra8unorm";
+
+  // Histogram: a fixed 256x256 target, device-scoped (created once in
+  // initGpu, unlike every per-image texture above) since a histogram is a
+  // statistical sample of the graded output, not something that needs
+  // full source resolution -- see readHistogramIfIdle's own doc comment
+  // for the full reasoning on why 256x256 specifically. Rendered into
+  // using fs_final's OWN existing `pipeline`/`bindGroup` a second time
+  // (see writeAdjustmentsAndRender), so no new WGSL entry point, pipeline,
+  // or bind group is needed at all -- the GPU's own hardware bilinear
+  // sampling naturally downsamples the exact same graded pixels the main
+  // canvas shows, just at a smaller output resolution.
+  const HISTOGRAM_SIZE = 256;
+  /** @type {GPUTexture | null} */
+  let histogramTex = null;
+  /** @type {GPUBuffer | null} */
+  let histogramReadbackBuffer = null;
+  let histogramReadInFlight = false;
 
   // Dehaze (M3): the first op in this pipeline needing a real multi-pass
   // render graph (dark-channel-prior haze removal genuinely needs
@@ -2610,6 +2630,26 @@
       size: 4 * 4, // 4 f32 (2 real fields + 2 padding), matches the WGSL ColorNrParams struct
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+
+    // Histogram: RENDER_ATTACHMENT so fs_final can draw into it (see
+    // writeAdjustmentsAndRender), COPY_SRC so its contents can be copied
+    // out to histogramReadbackBuffer below. Same presentationFormat as the
+    // canvas itself -- a render pass's color attachment format must
+    // exactly match the pipeline it's used with, and `pipeline` (fs_final)
+    // was already created with that target format.
+    histogramTex = device.createTexture({
+      size: [HISTOGRAM_SIZE, HISTOGRAM_SIZE],
+      format: presentationFormat,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    });
+    // bytesPerRow (256 texels x 4 bytes/texel = 1024) is already a
+    // multiple of 256 -- WebGPU's own copyTextureToBuffer alignment
+    // requirement -- so no row padding is needed here, unlike a
+    // less-conveniently-sized readback would require.
+    histogramReadbackBuffer = device.createBuffer({
+      size: HISTOGRAM_SIZE * 4 * HISTOGRAM_SIZE,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
   }
 
   /** Every GPU-resource-side-effect of "a decoded bitmap is now the active
@@ -2653,6 +2693,38 @@
     p.setBindGroup(0, bg);
     p.draw(3);
     p.end();
+  }
+
+  /** Reads back `histogramTex` (rendered as part of writeAdjustmentsAndRender,
+   * see that function's own doc comment) and reports 256-bin R/G/B counts
+   * via `onHistogramUpdate`. `GPUBuffer.mapAsync` can't be awaited inline
+   * inside the render loop without stalling it, so this runs detached,
+   * guarded by `histogramReadInFlight` -- both because a buffer that's
+   * currently mapped can't be written to again (the render function skips
+   * re-copying into it while a read is in flight, see there) and because
+   * overlapping reads should simply be DROPPED, not queued: a live
+   * histogram only needs to reflect a RECENT frame, not every single one,
+   * and queuing would only fall further behind under sustained rapid
+   * input (e.g. dragging a slider faster than one readback completes). */
+  async function readHistogramIfIdle() {
+    if (histogramReadInFlight || !histogramReadbackBuffer || !onHistogramUpdate) return;
+    histogramReadInFlight = true;
+    try {
+      await histogramReadbackBuffer.mapAsync(GPUMapMode.READ);
+      // Copied out via slice(0) BEFORE unmap() -- the ArrayBuffer
+      // getMappedRange() returns is detached (zero-length) the instant
+      // unmap() runs, so onHistogramUpdate's caller can't be handed a
+      // view over it directly.
+      const data = new Uint8Array(histogramReadbackBuffer.getMappedRange().slice(0));
+      histogramReadbackBuffer.unmap();
+      onHistogramUpdate(binHistogramPixels(data, presentationFormat.startsWith("bgra") ? "bgra" : "rgba"));
+    } catch {
+      // A stale/aborted map (e.g. the device was torn down mid-await, on
+      // unmount) isn't user-visible -- the next render's own call simply
+      // tries again.
+    } finally {
+      histogramReadInFlight = false;
+    }
   }
 
   async function applyBitmapToGpu(/** @type {ImageBitmap} */ bitmap) {
@@ -3434,7 +3506,28 @@
     }
 
     runFullscreenPass(encoder, pipeline, bindGroup, context.getCurrentTexture().createView());
+
+    // Histogram: fs_final's OWN pipeline/bindGroup, unchanged, drawn a
+    // SECOND time into the small fixed-size histogramTex -- the GPU's own
+    // hardware bilinear sampling naturally downsamples the exact same
+    // graded pixels the canvas above just got, so this needs no separate
+    // WGSL entry point or bind group (see histogramTex's own doc comment).
+    // Skipped while a previous readback is still in flight -- a buffer
+    // that's currently mapped (see readHistogramIfIdle) can't be copied
+    // into again without a validation error, and the next render (there
+    // will be one shortly, since this fires on every relevant UI change)
+    // will naturally catch up once that map resolves.
+    if (histogramTex && histogramReadbackBuffer && !histogramReadInFlight) {
+      runFullscreenPass(encoder, pipeline, bindGroup, histogramTex.createView());
+      encoder.copyTextureToBuffer(
+        { texture: histogramTex },
+        { buffer: histogramReadbackBuffer, bytesPerRow: HISTOGRAM_SIZE * 4 },
+        { width: HISTOGRAM_SIZE, height: HISTOGRAM_SIZE },
+      );
+    }
+
     device.queue.submit([encoder.finish()]);
+    readHistogramIfIdle();
   }
 
   $effect(() => {

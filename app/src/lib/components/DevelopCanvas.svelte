@@ -57,6 +57,8 @@
    *   cropAspectLock: number | null,
    *   onSourceDimensions?: (width: number, height: number) => void,
    *   onHistogramUpdate?: (data: {r: Uint32Array, g: Uint32Array, b: Uint32Array}) => void,
+   *   showClippingOverlay?: boolean,
+   *   onHoverPixel?: (rgb: {r: number, g: number, b: number} | null) => void,
    * }}
    */
   let {
@@ -95,6 +97,8 @@
     cropAspectLock,
     onSourceDimensions,
     onHistogramUpdate,
+    showClippingOverlay = false,
+    onHoverPixel,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -388,6 +392,38 @@
     if (!canvasEl) return { x: 0, y: 0 };
     const p = screenToNativePixel(clientX, clientY);
     return { x: p.x / canvasEl.width, y: p.y / canvasEl.height };
+  }
+
+  /** Reports the graded RGB value under the cursor to `onHoverPixel`, for
+   * the histogram panel's own "value under cursor" readout. Reuses
+   * `lastHistogramPixels` -- the SAME 256x256 downsampled readback the
+   * live histogram itself is built from (see `readHistogramIfIdle`) --
+   * rather than a fresh per-pixel GPU read, so this is just an index
+   * lookup, not a new readback path. This means the reported value is a
+   * bilinear-downsampled sample near the cursor, not the exact
+   * full-resolution pixel -- an acceptable, named approximation for a
+   * "roughly what's under the cursor" readout, consistent with the
+   * histogram it's paired with already being a 256-bucket sample rather
+   * than exact per-pixel data. */
+  function reportHoverPixel(/** @type {number} */ clientX, /** @type {number} */ clientY) {
+    if (!onHoverPixel) return;
+    if (!lastHistogramPixels) {
+      onHoverPixel(null);
+      return;
+    }
+    const { x, y } = screenToNormalized(clientX, clientY);
+    if (x < 0 || x > 1 || y < 0 || y > 1) {
+      onHoverPixel(null);
+      return;
+    }
+    const col = Math.min(HISTOGRAM_SIZE - 1, Math.max(0, Math.floor(x * HISTOGRAM_SIZE)));
+    const row = Math.min(HISTOGRAM_SIZE - 1, Math.max(0, Math.floor(y * HISTOGRAM_SIZE)));
+    const i = (row * HISTOGRAM_SIZE + col) * 4;
+    const bgra = presentationFormat.startsWith("bgra");
+    const r = lastHistogramPixels[bgra ? i + 2 : i];
+    const g = lastHistogramPixels[i + 1];
+    const b = lastHistogramPixels[bgra ? i : i + 2];
+    onHoverPixel({ r, g, b });
   }
 
   /** Scrolls `wrapEl` so a focus point given in FULL-IMAGE native-pixel
@@ -692,6 +728,7 @@
   }
 
   function handlePointerMove(/** @type {PointerEvent} */ e) {
+    reportHoverPixel(e.clientX, e.clientY);
     if (placingMask?.kind === "linear_gradient") {
       placingMask = { ...placingMask, end: screenToNormalized(e.clientX, e.clientY) };
       return;
@@ -953,6 +990,22 @@
   /** @type {GPUBuffer | null} */
   let histogramReadbackBuffer = null;
   let histogramReadInFlight = false;
+  // The most recent histogramTex readback's raw bytes -- kept around
+  // (not just its binned form) so hover-RGB lookups (see
+  // reportHoverPixel) can index directly into it without a second GPU
+  // round-trip. An approximate (256x256, not full-resolution) but
+  // genuinely GRADED sample -- unlike sampleSourcePixel's own SOURCE-only
+  // sampling, see that function's doc comment for why a true graded
+  // readback was previously deferred; this reuses the exact same texture
+  // the histogram itself already reads back every render, so no
+  // additional GPU work is needed for this feature at all.
+  /** @type {Uint8Array | null} */
+  let lastHistogramPixels = null;
+
+  // Clipping-overlay toggle: device-scoped, same tiny-padded-uniform
+  // treatment as Vignette/Grain/etc.'s own small buffers.
+  /** @type {GPUBuffer | null} */
+  let clippingBuffer = null;
 
   // Dehaze (M3): the first op in this pipeline needing a real multi-pass
   // render graph (dark-channel-prior haze removal genuinely needs
@@ -2190,6 +2243,22 @@
       return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
     }
 
+    // Histogram clipping-overlay toggle (own tiny padded-uniform buffer,
+    // same treatment as Vignette/Grain above) -- used only by fs_final,
+    // see the overlay logic near that function's own return. Declared
+    // here, ahead of fs_final's own @fragment attribute, since WGSL
+    // attributes bind to the very next declaration -- a struct/binding
+    // pair inserted between @fragment and fs_final's own fn declaration
+    // would silently detach @fragment from the function it's meant to
+    // mark as the pipeline's entry point.
+    struct Clipping {
+      show_clipping: f32, // 0 or 1
+      _pad0: f32,
+      _pad1: f32,
+      _pad2: f32,
+    };
+    @group(0) @binding(26) var<uniform> clipping: Clipping;
+
     // Final pass: reads the graded color back from gradedTex (not a
     // re-sample of srcTexture -- every global op through Texture and
     // Clarity is already baked in, see fs_clarity_v's own doc comment),
@@ -2411,6 +2480,28 @@
       }
 
       rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+
+      // Clipping-overlay toggle (Develop histogram): blue over pixels
+      // clipped to pure/near-black, red over pixels clipped to
+      // pure/near-white -- the standard shadow/highlight clip-warning
+      // convention. Deliberately a simplified ALL-channels-near-extreme
+      // check (true black/white), not real Lightroom's own more nuanced
+      // per-channel-color-coded overlay (which channel(s) clipped) --
+      // named scope cut, avoids a noisier overlay that would light up on
+      // any single saturated channel (e.g. a normal warm shadow with a
+      // near-zero blue channel) rather than genuine highlight/shadow
+      // detail loss.
+      if (clipping.show_clipping > 0.5) {
+        let CLIP_EPS = 0.004; // ~1/255
+        let mx = max(rgb.r, max(rgb.g, rgb.b));
+        let mn = min(rgb.r, min(rgb.g, rgb.b));
+        if (mx <= CLIP_EPS) {
+          rgb = vec3<f32>(0.15, 0.45, 1.0);
+        } else if (mn >= 1.0 - CLIP_EPS) {
+          rgb = vec3<f32>(1.0, 0.15, 0.15);
+        }
+      }
+
       return vec4<f32>(rgb, 1.0);
     }
   `;
@@ -2650,6 +2741,10 @@
       size: HISTOGRAM_SIZE * 4 * HISTOGRAM_SIZE,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
+    clippingBuffer = device.createBuffer({
+      size: 4 * 4, // 4 f32 (1 real field + 3 padding), matches the WGSL Clipping struct
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
   }
 
   /** Every GPU-resource-side-effect of "a decoded bitmap is now the active
@@ -2707,7 +2802,7 @@
    * and queuing would only fall further behind under sustained rapid
    * input (e.g. dragging a slider faster than one readback completes). */
   async function readHistogramIfIdle() {
-    if (histogramReadInFlight || !histogramReadbackBuffer || !onHistogramUpdate) return;
+    if (histogramReadInFlight || !histogramReadbackBuffer) return;
     histogramReadInFlight = true;
     try {
       await histogramReadbackBuffer.mapAsync(GPUMapMode.READ);
@@ -2717,7 +2812,12 @@
       // view over it directly.
       const data = new Uint8Array(histogramReadbackBuffer.getMappedRange().slice(0));
       histogramReadbackBuffer.unmap();
-      onHistogramUpdate(binHistogramPixels(data, presentationFormat.startsWith("bgra") ? "bgra" : "rgba"));
+      // Kept around (not just passed to onHistogramUpdate) so the pointer
+      // hover-readout below can map a screen position to the SAME 256x256
+      // downsampled sample the histogram itself is drawn from, without a
+      // second GPU round-trip -- see reportHoverPixel.
+      lastHistogramPixels = data;
+      if (onHistogramUpdate) onHistogramUpdate(binHistogramPixels(data, presentationFormat.startsWith("bgra") ? "bgra" : "rgba"));
     } catch {
       // A stale/aborted map (e.g. the device was torn down mid-await, on
       // unmount) isn't user-visible -- the next render's own call simply
@@ -2733,7 +2833,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer) return;
+    if (!device || !context || !pipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -3120,6 +3220,7 @@
         { binding: 22, resource: sharpenBlurTex.createView() },
         { binding: 23, resource: lumaNRBlurTex.createView() },
         { binding: 24, resource: colorNRBlurTex.createView() },
+        { binding: 26, resource: { buffer: clippingBuffer } },
       ],
     });
     // Every intermediate above is freshly (re)created for this bitmap --
@@ -3143,7 +3244,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer) return;
+    if (!device || !context || !pipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -3341,7 +3442,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !lensCorrectPipeline || !lensCorrectBindGroup || !lensCorrectedTex || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !lensCorrectPipeline || !lensCorrectBindGroup || !lensCorrectedTex || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -3357,6 +3458,7 @@
     device.queue.writeBuffer(sharpenBuffer, 0, buildSharpenUniformData(sharpen));
     device.queue.writeBuffer(lumaNRBuffer, 0, buildLumaNrUniformData(lumaNR));
     device.queue.writeBuffer(colorNRBuffer, 0, buildColorNrUniformData(colorNR));
+    device.queue.writeBuffer(clippingBuffer, 0, new Float32Array([showClippingOverlay ? 1 : 0, 0, 0, 0]));
 
     // Mask overlay: -1 (disabled) unless the toggle is on AND the current
     // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
@@ -3571,6 +3673,7 @@
     void sharpen;
     void lumaNR;
     void colorNR;
+    void showClippingOverlay;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 
@@ -3684,7 +3787,10 @@
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}
       onpointerup={handlePointerUp}
-      onpointerleave={() => (brushCursor = null)}
+      onpointerleave={() => {
+        brushCursor = null;
+        onHoverPixel?.(null);
+      }}
     ></canvas>
   </div>
   {#if status === "ready" && !showCommittedCropPreview}

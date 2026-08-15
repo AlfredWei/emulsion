@@ -6,6 +6,9 @@
   /**
    * @type {{
    *   histogramData: {r: Uint32Array, g: Uint32Array, b: Uint32Array} | null,
+   *   showClippingOverlay?: boolean,
+   *   onToggleClippingOverlay?: () => void,
+   *   hoverPixel?: {r: number, g: number, b: number} | null,
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
@@ -60,6 +63,9 @@
    */
   let {
     histogramData,
+    showClippingOverlay = false,
+    onToggleClippingOverlay,
+    hoverPixel = null,
     exposure,
     contrast,
     saturation,
@@ -142,7 +148,7 @@
     <span class="panel-title">Edit</span>
     <button class="reset-btn" type="button" disabled={!hasEdits} onclick={onResetRequest}>Reset</button>
   </div>
-  <Histogram data={histogramData} />
+  <Histogram data={histogramData} {showClippingOverlay} {onToggleClippingOverlay} {hoverPixel} />
   <details class="section" open>
     <summary>Basic</summary>
     <div class="sub-body">

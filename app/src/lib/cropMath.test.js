@@ -12,6 +12,7 @@ import {
   cropMinFrac,
   normalizedAspectRatio,
   largestCenteredCropForRatio,
+  inscribedCropForAngle,
   moveCropRect,
   cropCornerPoints,
   resizeCropCorner,
@@ -104,6 +105,101 @@ describe("largestCenteredCropForRatio", () => {
 
   it("returns null when source dimensions aren't known yet", () => {
     expect(largestCenteredCropForRatio(1, 0, 0)).toBeNull();
+  });
+});
+
+describe("inscribedCropForAngle", () => {
+  it("at angle 0 is identical to largestCenteredCropForRatio, for any ratio/source", () => {
+    const cases = [
+      [1, 2048, 1536],
+      [16 / 9, 2048, 1536],
+      [4 / 3, 4032, 3024],
+      [3 / 2, 6000, 4000],
+    ];
+    for (const [ratio, w, h] of cases) {
+      expect(inscribedCropForAngle(ratio, w, h, 0)).toEqual(largestCenteredCropForRatio(ratio, w, h));
+    }
+  });
+
+  it("shrinks a full-frame square image's 1:1 crop to side 1/sqrt(2) at 45deg", () => {
+    // Textbook "largest axis-aligned square inscribed in a square rotated
+    // 45deg" result: side = 1/sqrt(2) of the original -- exact enough to
+    // pin down the trig, not just "it shrank".
+    const rect = inscribedCropForAngle(1, 1000, 1000, 45);
+    if (!rect) throw new Error("expected a rect");
+    expect(rect.width).toBeCloseTo(1 / Math.sqrt(2), 6);
+    expect(rect.height).toBeCloseTo(1 / Math.sqrt(2), 6);
+    expect(rect.x).toBeCloseTo((1 - rect.width) / 2, 10);
+    expect(rect.y).toBeCloseTo((1 - rect.height) / 2, 10);
+  });
+
+  it("shrinks strictly monotonically as the angle grows away from 0 (within a quadrant)", () => {
+    const angles = [0, 5, 15, 30, 44];
+    let prevWidth = Infinity;
+    for (const angle of angles) {
+      const rect = inscribedCropForAngle(4 / 3, 2048, 1536, angle);
+      if (!rect) throw new Error("expected a rect");
+      expect(rect.width).toBeLessThanOrEqual(prevWidth);
+      prevWidth = rect.width;
+    }
+    expect(prevWidth).toBeLessThan(1);
+  });
+
+  it("is symmetric in the sign of the angle (straightening left or right shrinks the same amount)", () => {
+    const pos = inscribedCropForAngle(3 / 2, 2048, 1536, 12);
+    const neg = inscribedCropForAngle(3 / 2, 2048, 1536, -12);
+    expect(pos).toEqual(neg);
+  });
+
+  it("every corner of the inscribed rect, once rotated back by the image, stays within the source bounds", () => {
+    // Direct empirical check of the geometric property this function
+    // exists to guarantee: rotate the CROP rect's own corners by -angle
+    // (undoing the image's rotation) and confirm every one lands inside
+    // the true, unrotated source rectangle -- i.e. no corner would sample
+    // the rotated image's blanked-out (black) area.
+    const sizes = [
+      [2048, 1536],
+      [4032, 3024],
+      [1000, 1000],
+    ];
+    const ratios = [1, 16 / 9, 4 / 3, 3 / 2];
+    const angles = [0, 3, 10, 22.5, 40, -18];
+    for (const [w, h] of sizes) {
+      for (const ratio of ratios) {
+        for (const angle of angles) {
+          const rect = inscribedCropForAngle(ratio, w, h, angle);
+          if (!rect) throw new Error("expected a rect");
+          const rad = (angle * Math.PI) / 180;
+          const sin = Math.sin(rad);
+          const cos = Math.cos(rad);
+          const cx = w / 2;
+          const cy = h / 2;
+          const corners = [
+            [rect.x * w, rect.y * h],
+            [(rect.x + rect.width) * w, rect.y * h],
+            [rect.x * w, (rect.y + rect.height) * h],
+            [(rect.x + rect.width) * w, (rect.y + rect.height) * h],
+          ];
+          for (const [px, py] of corners) {
+            const dx = px - cx;
+            const dy = py - cy;
+            // Same inverse-rotation mapping as rotate_image in
+            // develop_engine.rs: source = center + R(-theta) * (p - center).
+            const sx = cx + dx * cos + dy * sin;
+            const sy = cy - dx * sin + dy * cos;
+            expect(sx).toBeGreaterThanOrEqual(-1e-6);
+            expect(sx).toBeLessThanOrEqual(w + 1e-6);
+            expect(sy).toBeGreaterThanOrEqual(-1e-6);
+            expect(sy).toBeLessThanOrEqual(h + 1e-6);
+          }
+        }
+      }
+    }
+  });
+
+  it("returns null when source dimensions or ratio aren't known yet", () => {
+    expect(inscribedCropForAngle(1, 0, 0, 15)).toBeNull();
+    expect(inscribedCropForAngle(0, 2048, 1536, 15)).toBeNull();
   });
 });
 

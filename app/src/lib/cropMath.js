@@ -71,6 +71,58 @@ export function largestCenteredCropForRatio(
   return { x: (1 - width) / 2, y: (1 - height) / 2, width, height };
 }
 
+/** The largest CENTERED rect of a given PIXEL aspect ratio that stays
+ * entirely inside the image once it's rotated by `angleDeg` about its own
+ * center -- i.e. the inner-fit region a straighten/rotate needs so the
+ * fixed on-screen crop viewport never exposes the rotated image's
+ * blanked-out corners (see `rotate_image` in develop_engine.rs, which
+ * fills out-of-bounds samples with black; both sides rotate about the
+ * same image-center pivot, verified in that file's own test suite).
+ *
+ * Derived from the standard "axis-aligned rect inscribed in a rotated
+ * rect" support-function argument, done in PIXEL space (not normalized --
+ * the two axes scale differently whenever the source isn't square, the
+ * same trap `normalizedAspectRatio` exists to avoid elsewhere in this
+ * file): for a centered rect with pixel half-extents (a, b) to stay inside
+ * a `sourceWidth` x `sourceHeight` rect rotated by `angleDeg`, every one
+ * of its 4 corners must land back inside the unrotated source once
+ * rotated by `-angleDeg`, which reduces (by the symmetry of |sin|/|cos|
+ * across quadrants) to two linear constraints:
+ *   a*cos + b*sin <= sourceWidth/2
+ *   a*sin + b*cos <= sourceHeight/2
+ * Substituting `b = a / pixelRatio` and solving each for `a` gives the two
+ * candidate bounds; the tighter one is the answer. At angle 0 this
+ * degenerates to exactly `largestCenteredCropForRatio`'s own result (sin=0,
+ * cos=1 leaves only the `a <= sourceWidth/2` / `a <= sourceHeight/2 *
+ * pixelRatio` pair) -- kept as a separate function anyway since callers
+ * that already know they're at angle 0 (e.g. this file's own unit tests)
+ * shouldn't have to thread a redundant `0` through every call site.
+ *
+ * Deliberately CENTERED-only, same named scope cut as this file's other
+ * angle-unaware helpers: an off-center crop's own maximal inscribed bound
+ * needs the same per-corner argument repeated at an arbitrary offset --
+ * real added complexity this function's only caller (recentering the crop
+ * whenever the straighten angle itself changes) doesn't need to solve.
+ * @returns {CropRect | null} */
+export function inscribedCropForAngle(
+  /** @type {number} */ pixelRatio,
+  /** @type {number} */ sourceWidth,
+  /** @type {number} */ sourceHeight,
+  /** @type {number} */ angleDeg,
+) {
+  if (!pixelRatio || sourceWidth <= 0 || sourceHeight <= 0) return null;
+  const rad = (Math.abs(angleDeg) * Math.PI) / 180;
+  const sin = Math.abs(Math.sin(rad));
+  const cos = Math.abs(Math.cos(rad));
+  const aFromWidth = sourceWidth / 2 / (cos + sin / pixelRatio);
+  const aFromHeight = sourceHeight / 2 / (sin + cos / pixelRatio);
+  const aPx = Math.min(aFromWidth, aFromHeight);
+  const bPx = aPx / pixelRatio;
+  const width = clamp01((2 * aPx) / sourceWidth, 0, 1);
+  const height = clamp01((2 * bPx) / sourceHeight, 0, 1);
+  return { x: (1 - width) / 2, y: (1 - height) / 2, width, height };
+}
+
 /** Moves the whole rect by (dx,dy), clamped so it never leaves [0,1].
  * @returns {CropRect} */
 export function moveCropRect(/** @type {CropRect} */ start, /** @type {number} */ dx, /** @type {number} */ dy) {

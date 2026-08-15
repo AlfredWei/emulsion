@@ -21,16 +21,34 @@
   // independent of the surrounding UI's own color scheme, the same way a
   // color picker's own hue wheel never adapts to the app's theme either.
 
+  import { computeHistogramStats } from "$lib/histogramMath.js";
+
   /**
    * @type {{
    *   data: {r: Uint32Array, g: Uint32Array, b: Uint32Array} | null,
+   *   showClippingOverlay?: boolean,
+   *   onToggleClippingOverlay?: () => void,
+   *   hoverPixel?: {r: number, g: number, b: number} | null,
    * }}
    */
-  let { data } = $props();
+  let { data, showClippingOverlay = false, onToggleClippingOverlay, hoverPixel = null } = $props();
 
   const BUCKETS = 256;
   const VIEW_W = 256;
   const VIEW_H = 72;
+
+  // Tone-zone dividers: static (no slider-linkage, purely visual)
+  // shadow/darks/lights/highlight boundary markers at the same quarter
+  // points Lightroom's own histogram uses -- 25/50/75% of the tonal
+  // range, not tied to any of this app's own actual shadow/highlight
+  // sliders (which use a different, non-quartile range internally).
+  const TONE_ZONE_X = [0.25, 0.5, 0.75].map((f) => f * VIEW_W);
+
+  // A pixel counts as "clipped" once it's within ~1/255 of pure
+  // black/white -- matching the same CLIP_EPS threshold DevelopCanvas.svelte's
+  // own WGSL clipping-overlay uses (fs_final's Clipping-gated blend), so
+  // the corner triangles agree with what the overlay itself would paint.
+  const CLIP_BUCKET_MARGIN = 1;
 
   /** @returns {string} an SVG polygon `points` string tracing the
    * log-scaled outline of one channel, closed along the bottom edge. */
@@ -57,22 +75,97 @@
   let rPath = $derived(data ? channelPath(data.r, maxLog) : "");
   let gPath = $derived(data ? channelPath(data.g, maxLog) : "");
   let bPath = $derived(data ? channelPath(data.b, maxLog) : "");
+
+  /** Sums counts across all three channels within the first/last
+   * `CLIP_BUCKET_MARGIN` buckets, so a warning triangle lights up even
+   * if clipping shows in only one channel (e.g. a pure-red highlight). */
+  function hasClipping(/** @type {Uint32Array[]} */ channels, /** @type {number[]} */ buckets) {
+    for (const counts of channels) {
+      for (const i of buckets) {
+        if (counts[i] > 0) return true;
+      }
+    }
+    return false;
+  }
+
+  let shadowClipped = $derived(
+    data ? hasClipping([data.r, data.g, data.b], Array.from({ length: CLIP_BUCKET_MARGIN }, (_, i) => i)) : false,
+  );
+  let highlightClipped = $derived(
+    data
+      ? hasClipping(
+          [data.r, data.g, data.b],
+          Array.from({ length: CLIP_BUCKET_MARGIN }, (_, i) => 255 - i),
+        )
+      : false,
+  );
+
+  let stats = $derived(data ? computeHistogramStats(data) : null);
+
+  /** @param {number} v */
+  function pct(v) {
+    return `${Math.round((v / 255) * 100)}%`;
+  }
 </script>
 
-<div class="histogram" class:empty={!data}>
-  {#if data}
-    <svg viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="none" aria-label="Histogram">
-      <polygon points={rPath} class="ch ch-r" />
-      <polygon points={gPath} class="ch ch-g" />
-      <polygon points={bPath} class="ch ch-b" />
-    </svg>
+<div class="histogram-panel">
+  <div class="histogram" class:empty={!data}>
+    {#if data}
+      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="none" aria-label="Histogram">
+        {#each TONE_ZONE_X as x (x)}
+          <line x1={x} y1="0" x2={x} y2={VIEW_H} class="tone-zone" />
+        {/each}
+        <polygon points={rPath} class="ch ch-r" />
+        <polygon points={gPath} class="ch ch-g" />
+        <polygon points={bPath} class="ch ch-b" />
+      </svg>
+      <button
+        type="button"
+        class="clip-warning clip-shadow"
+        class:active={shadowClipped}
+        class:toggled={showClippingOverlay}
+        onclick={() => onToggleClippingOverlay?.()}
+        title={showClippingOverlay ? "Hide shadow clipping overlay" : "Show shadow clipping overlay"}
+        aria-label="Toggle shadow clipping overlay"
+        aria-pressed={showClippingOverlay}
+      >
+        <svg viewBox="0 0 10 10"><polygon points="0,0 10,0 0,10" /></svg>
+      </button>
+      <button
+        type="button"
+        class="clip-warning clip-highlight"
+        class:active={highlightClipped}
+        class:toggled={showClippingOverlay}
+        onclick={() => onToggleClippingOverlay?.()}
+        title={showClippingOverlay ? "Hide highlight clipping overlay" : "Show highlight clipping overlay"}
+        aria-label="Toggle highlight clipping overlay"
+        aria-pressed={showClippingOverlay}
+      >
+        <svg viewBox="0 0 10 10"><polygon points="10,0 10,10 0,0" /></svg>
+      </button>
+    {/if}
+  </div>
+  {#if data && stats}
+    <div class="info-row">
+      <span class="stat" title="Tonal range (min-max)">{pct(stats.min)}–{pct(stats.max)}</span>
+      <span class="stat" title="Mean brightness">avg {pct(stats.mean)}</span>
+      {#if hoverPixel}
+        <span class="hover-rgb">
+          <span class="swatch" style="background: rgb({hoverPixel.r}, {hoverPixel.g}, {hoverPixel.b})"></span>
+          R{hoverPixel.r} G{hoverPixel.g} B{hoverPixel.b}
+        </span>
+      {/if}
+    </div>
   {/if}
 </div>
 
 <style>
-  .histogram {
-    height: 72px;
+  .histogram-panel {
     margin: 10px 10px 4px;
+  }
+  .histogram {
+    position: relative;
+    height: 72px;
     border-radius: var(--radius-s, 4px);
     border: 1px solid var(--border-subtle);
     background: var(--bg-panel-raised);
@@ -104,5 +197,75 @@
   }
   .ch-b {
     fill: rgba(64, 128, 255, 0.85);
+  }
+  .tone-zone {
+    stroke: rgba(255, 255, 255, 0.14);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .clip-warning {
+    position: absolute;
+    top: 0;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    opacity: 0.28;
+    transition: opacity 0.12s ease;
+  }
+  .clip-warning.active {
+    opacity: 0.85;
+  }
+  .clip-warning:hover {
+    opacity: 1;
+  }
+  .clip-warning.toggled {
+    opacity: 1;
+    outline: 1px solid rgba(255, 255, 255, 0.4);
+    outline-offset: -1px;
+  }
+  .clip-warning svg {
+    width: 100%;
+    height: 100%;
+    mix-blend-mode: normal;
+  }
+  .clip-shadow {
+    left: 0;
+  }
+  .clip-shadow polygon {
+    fill: #4a90ff;
+  }
+  .clip-highlight {
+    right: 0;
+  }
+  .clip-highlight polygon {
+    fill: #ff4a4a;
+  }
+
+  .info-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+    padding: 0 2px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  }
+  .hover-rgb {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+  }
+  .swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid var(--border-subtle);
   }
 </style>

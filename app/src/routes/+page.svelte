@@ -1296,6 +1296,8 @@
     // showing the PREVIOUS image's histogram in the meantime would be
     // actively misleading, not just momentarily stale.
     histogramData = null;
+    hoverPixel = null;
+    showClippingOverlay = false;
     // History/Snapshots (M3): re-fetched fresh on every open, not carried
     // over from whatever the previous image's panel showed -- switching
     // images via the filmstrip must never leave a stale History/Snapshots
@@ -1550,6 +1552,23 @@
   let histogramData = $state(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array} | null} */ (null));
   function handleHistogramUpdate(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array}} */ data) {
     histogramData = data;
+  }
+
+  // Histogram clipping-overlay toggle: purely a display preference (not
+  // part of the edit stack), reset on openDevelop like histogramData
+  // itself since it's meaningless outside a Develop session.
+  let showClippingOverlay = $state(false);
+  function handleToggleClippingOverlay() {
+    showClippingOverlay = !showClippingOverlay;
+  }
+
+  // Histogram "value under cursor" readout, fed live from DevelopCanvas's
+  // own pointer handling (see reportHoverPixel there) -- same
+  // GPU-readback-can't-be-reproduced-from-JS-state reasoning as
+  // histogramData above.
+  let hoverPixel = $state(/** @type {{r: number, g: number, b: number} | null} */ (null));
+  function handleHoverPixel(/** @type {{r: number, g: number, b: number} | null} */ rgb) {
+    hoverPixel = rgb;
   }
 
   /** Reshapes the crop rect to the given PIXEL aspect ratio: the largest
@@ -2013,6 +2032,8 @@
         {cropAspectLock}
         onSourceDimensions={handleSourceDimensions}
         onHistogramUpdate={handleHistogramUpdate}
+        {showClippingOverlay}
+        onHoverPixel={handleHoverPixel}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -2028,6 +2049,9 @@
       {/if}
       <DevelopPanel
         {histogramData}
+        {showClippingOverlay}
+        onToggleClippingOverlay={handleToggleClippingOverlay}
+        {hoverPixel}
         {exposure}
         {contrast}
         {saturation}

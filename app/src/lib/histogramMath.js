@@ -38,3 +38,39 @@ export function binHistogramPixels(/** @type {Uint8Array} */ data, /** @type {"b
   }
   return { r, g, b };
 }
+
+/**
+ * @typedef {Object} HistogramStats
+ * @property {number} min - lowest bucket index (0..255) with any pixel, across all three channels
+ * @property {number} max - highest bucket index (0..255) with any pixel, across all three channels
+ * @property {number} mean - count-weighted average bucket index, across all three channels
+ */
+
+/** Summarizes a binned histogram into the tonal-range numbers the Develop
+ * histogram's info readout shows: the overall min/max tonal value present
+ * anywhere in the image, and the mean brightness. Deliberately combines
+ * all three channels into one min/max/mean rather than three separate
+ * triples -- this mirrors what the eye reads off a histogram's own
+ * left/right extent (a single overall tonal range), not a per-channel
+ * breakdown the UI doesn't otherwise show elsewhere.
+ * @param {HistogramData} data
+ * @returns {HistogramStats} */
+export function computeHistogramStats(/** @type {HistogramData} */ data) {
+  const channels = [data.r, data.g, data.b];
+  let totalCount = 0;
+  let weightedSum = 0;
+  let min = 255;
+  let max = 0;
+  for (const counts of channels) {
+    for (let i = 0; i < 256; i++) {
+      const count = counts[i];
+      if (count === 0) continue;
+      totalCount += count;
+      weightedSum += i * count;
+      if (i < min) min = i;
+      if (i > max) max = i;
+    }
+  }
+  if (totalCount === 0) return { min: 0, max: 0, mean: 0 };
+  return { min, max, mean: weightedSum / totalCount };
+}

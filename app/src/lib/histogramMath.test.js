@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { binHistogramPixels } from "./histogramMath.js";
+import { binHistogramPixels, computeHistogramStats } from "./histogramMath.js";
 
 /** Builds a raw RGBA8 pixel buffer from a list of [r,g,b] triples, in the
  * given channel order, alpha fixed at 255 (unused by binHistogramPixels
@@ -96,5 +96,50 @@ describe("binHistogramPixels", () => {
     const h1 = binHistogramPixels(data1, "rgba");
     const h2 = binHistogramPixels(data2, "rgba");
     expect(h1.r[5]).toBe(h2.r[5]);
+  });
+});
+
+describe("computeHistogramStats", () => {
+  /** @returns {{r: Uint32Array, g: Uint32Array, b: Uint32Array}} */
+  function emptyData() {
+    return { r: new Uint32Array(256), g: new Uint32Array(256), b: new Uint32Array(256) };
+  }
+
+  it("returns all-zero stats for an empty histogram", () => {
+    expect(computeHistogramStats(emptyData())).toEqual({ min: 0, max: 0, mean: 0 });
+  });
+
+  it("reports min/max/mean for a single-bucket single-channel histogram", () => {
+    const data = emptyData();
+    data.r[100] = 5;
+    expect(computeHistogramStats(data)).toEqual({ min: 100, max: 100, mean: 100 });
+  });
+
+  it("finds the overall min/max across all three channels, not just one", () => {
+    const data = emptyData();
+    data.r[10] = 1;
+    data.g[200] = 1;
+    data.b[128] = 1;
+    const stats = computeHistogramStats(data);
+    expect(stats.min).toBe(10);
+    expect(stats.max).toBe(200);
+  });
+
+  it("weights the mean by count, not just distinct buckets", () => {
+    const data = emptyData();
+    data.r[0] = 9; // nine pixels at 0
+    data.r[100] = 1; // one pixel at 100
+    // mean = (0*9 + 100*1) / 10 = 10
+    expect(computeHistogramStats(data).mean).toBe(10);
+  });
+
+  it("ignores empty buckets between the min and max", () => {
+    const data = emptyData();
+    data.r[0] = 1;
+    data.r[255] = 1;
+    const stats = computeHistogramStats(data);
+    expect(stats.min).toBe(0);
+    expect(stats.max).toBe(255);
+    expect(stats.mean).toBe(127.5);
   });
 });

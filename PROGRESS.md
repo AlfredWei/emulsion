@@ -2,6 +2,11 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Fix: histogram narrower than it needed to be (2026-08-15)
+
+Direct follow-on to the enlarge-height change above: "should be also wider." `Histogram.svelte`'s own `.histogram-panel` carried a 10px left/right margin on top of the surrounding panel's existing 12px padding (`DevelopPanel.svelte`/`MetadataPanel.svelte`'s shared `.panel { padding: 14px 12px; }`), insetting the histogram an extra 20px total inside a 240px-wide rail while every other row/section in both panels already sits close to that same 12px edge. Dropped the side margins to 0 — the histogram now uses the panel's full content width like everything else in it, with no change to the panel's own width or any other control's layout.
+- **Verification**: `npm run check` clean across 243 files, 64/64 Vitest (unaffected, pure CSS), 192/192 Rust (unaffected, run for regression). **Not verified this session**: interactively confirming the wider histogram against a real photo in the live GPU window — same documented environment gap as every fix above (no native macOS window driver available here).
+
 ## Histogram: enlarged + added to Library mode (2026-08-15)
 
 User request: "enlarge histogram area, and the histogram should also shown in library mode." Two independent pieces on top of the just-shipped clipping/tone/info work.

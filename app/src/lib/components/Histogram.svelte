@@ -171,7 +171,11 @@
 
 <style>
   .histogram-panel {
-    margin: 10px 10px 4px;
+    /* Flush with the surrounding panel's own left/right padding (unlike
+       the 10px side margins this used to carry) -- widens the histogram
+       to the panel's full content width instead of inset within it, the
+       same "wider" every other panel row/section already uses. */
+    margin: 10px 0 4px;
   }
   .histogram {
     position: relative;

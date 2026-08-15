@@ -18,6 +18,8 @@ import {
   resizeCropEdge,
   cropHandlePos,
   trueElementBox,
+  nativeCropClipSize,
+  scrollTargetForNativeFocus,
 } from "./cropMath.js";
 
 describe("clamp01", () => {
@@ -341,5 +343,61 @@ describe("crop + rotate combination (integration)", () => {
         expect(rect.y + rect.height).toBeLessThanOrEqual(1.0000001);
       }
     }
+  });
+});
+
+describe("nativeCropClipSize", () => {
+  it("converts a normalized crop rect to true pixel dimensions", () => {
+    const crop = { x: 0.125, y: 0, width: 0.75, height: 1 };
+    expect(nativeCropClipSize(crop, 2048, 1536)).toEqual({ w: 1536, h: 1536 });
+  });
+
+  it("is the full source size for an identity crop", () => {
+    const crop = { x: 0, y: 0, width: 1, height: 1 };
+    expect(nativeCropClipSize(crop, 4032, 3024)).toEqual({ w: 4032, h: 3024 });
+  });
+});
+
+describe("scrollTargetForNativeFocus", () => {
+  // Fix: after committing a crop, 100%-zoom stopped doing anything visible
+  // -- the committed-crop CSS preview's own inline sizing ignored
+  // `zoomMode` entirely (see `cropClipSize`'s own doc comment). Once that
+  // was fixed, the scrollable box in the cropped case became `.crop-clip`,
+  // not the canvas element itself -- its own origin sits `crop.x *
+  // sourceWidth` / `crop.y * sourceHeight` native pixels away from the
+  // canvas's (0,0), so a focus point given in full-image coordinates has
+  // to be re-based before it's a valid scroll target. These tests pin
+  // down that offset correction directly.
+  const crop = { x: 0.25, y: 0.1, width: 0.5, height: 0.6 };
+  const sourceWidth = 2000;
+  const sourceHeight = 1000;
+
+  it("scrolls straight to the focus point, uncorrected, when no crop is committed", () => {
+    const result = scrollTargetForNativeFocus(800, 400, false, crop, sourceWidth, sourceHeight, 600, 400);
+    expect(result).toEqual({ scrollLeft: 800 - 300, scrollTop: 400 - 200 });
+  });
+
+  it("re-bases the focus point onto the crop's own origin when a crop is committed", () => {
+    // crop.x*sourceWidth = 500, crop.y*sourceHeight = 100 -- the offset
+    // between the canvas's own (0,0) and `.crop-clip`'s (0,0).
+    const result = scrollTargetForNativeFocus(800, 400, true, crop, sourceWidth, sourceHeight, 600, 400);
+    expect(result).toEqual({ scrollLeft: 800 - 500 - 300, scrollTop: 400 - 100 - 200 });
+  });
+
+  it("centers exactly on the crop's own top-left when the focus point IS the crop's top-left", () => {
+    // A focus point sitting exactly at the crop's own origin (in
+    // full-image coordinates) must re-base to (0,0) in crop-clip space --
+    // the defining property of the offset correction.
+    const focusX = crop.x * sourceWidth;
+    const focusY = crop.y * sourceHeight;
+    const result = scrollTargetForNativeFocus(focusX, focusY, true, crop, sourceWidth, sourceHeight, 600, 400);
+    expect(result).toEqual({ scrollLeft: -300, scrollTop: -200 });
+  });
+
+  it("the crop and non-crop cases agree exactly for an identity crop (x=0,y=0)", () => {
+    const identity = { x: 0, y: 0, width: 1, height: 1 };
+    const cropped = scrollTargetForNativeFocus(800, 400, true, identity, sourceWidth, sourceHeight, 600, 400);
+    const uncropped = scrollTargetForNativeFocus(800, 400, false, identity, sourceWidth, sourceHeight, 600, 400);
+    expect(cropped).toEqual(uncropped);
   });
 });

@@ -277,3 +277,58 @@ export function trueElementBox(
   const centerY = rect.top + rect.height / 2;
   return { left: centerX - trueWidth / 2, top: centerY - trueHeight / 2, width: trueWidth, height: trueHeight };
 }
+
+/** The committed-crop CSS preview's `.crop-clip` wrapper, sized to the
+ * crop rect's own NATIVE PIXEL dimensions -- what a 100%-zoom view needs
+ * so the canvas (percentage-positioned inside it, see
+ * DevelopCanvas.svelte's own markup doc comment) renders at true 1:1
+ * scale: canvas CSS width = `(100/crop.width)%` of this box's width =
+ * `(1/crop.width) * crop.width * sourceWidth` = `sourceWidth`, exactly
+ * matching the canvas's own backing-store width. Trivial arithmetic, but
+ * pulled out as its own named function (not inlined at the one call site)
+ * so the "why 100% zoom works here at all" reasoning above has one place
+ * to live and one place to be tested, matching every other piece of this
+ * feature's coordinate math.
+ * @returns {{w: number, h: number}} */
+export function nativeCropClipSize(
+  /** @type {CropRect} */ crop,
+  /** @type {number} */ sourceWidth,
+  /** @type {number} */ sourceHeight,
+) {
+  return { w: crop.width * sourceWidth, h: crop.height * sourceHeight };
+}
+
+/** Where to scroll a zoomed viewport so a given point stays centered,
+ * correcting for the committed-crop preview's own coordinate offset.
+ *
+ * `nativeX`/`nativeY` are a focus point in the FULL image's native-pixel
+ * space (e.g. from `screenToNativePixel` against the canvas element,
+ * which always reports coordinates relative to the whole source image --
+ * see that function's own doc comment: it doesn't know or care whether a
+ * crop is committed). When a crop IS committed, though, the scrollable
+ * box is `.crop-clip` -- NOT the canvas itself -- and `.crop-clip`'s own
+ * origin sits `crop.x * sourceWidth` / `crop.y * sourceHeight` native
+ * pixels away from the canvas's own (0,0), because the canvas is
+ * positioned inside it via a `left: -crop.x*100/crop.width%` offset (see
+ * DevelopCanvas.svelte's markup): the crop's own top-left, not the full
+ * image's, is what lands at `.crop-clip`'s (0,0). A focus point given in
+ * full-image coordinates therefore has to be re-based onto `.crop-clip`'s
+ * own origin before it means anything as a scroll target -- skipping this
+ * correction (using `nativeX`/`nativeY` directly, as the plain uncropped
+ * case correctly does) silently scrolls to the wrong place by exactly
+ * that offset the moment a crop is committed.
+ * @returns {{scrollLeft: number, scrollTop: number}} */
+export function scrollTargetForNativeFocus(
+  /** @type {number} */ nativeX,
+  /** @type {number} */ nativeY,
+  /** @type {boolean} */ isCropped,
+  /** @type {CropRect} */ crop,
+  /** @type {number} */ sourceWidth,
+  /** @type {number} */ sourceHeight,
+  /** @type {number} */ viewportWidth,
+  /** @type {number} */ viewportHeight,
+) {
+  const targetX = isCropped ? nativeX - crop.x * sourceWidth : nativeX;
+  const targetY = isCropped ? nativeY - crop.y * sourceHeight : nativeY;
+  return { scrollLeft: targetX - viewportWidth / 2, scrollTop: targetY - viewportHeight / 2 };
+}

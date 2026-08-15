@@ -123,6 +123,53 @@ export function inscribedCropForAngle(
   return { x: (1 - width) / 2, y: (1 - height) / 2, width, height };
 }
 
+/** Whether every corner of `rect` (normalized [0,1] coordinates, in the
+ * SAME rotate-in-place frame `inscribedCropForAngle` and
+ * `develop_engine.rs`'s `rotate_image`/`crop_rect_px` use) samples real
+ * source pixels once the image is rotated by `angleDeg` about its own
+ * center, rather than the blanked-out (black-filled) corners
+ * `rotate_image` leaves behind. Off-center rects are real inputs here
+ * (unlike `inscribedCropForAngle`, which only ever proposes a CENTERED
+ * replacement) -- this is the general per-corner check that drag/resize
+ * needs to REJECT a move/resize that would push an existing, possibly
+ * off-center rect into that blanked region, not just to compute a fresh
+ * centered one. Uses the exact inverse mapping `rotate_image` samples
+ * with (`source = center + R_cw(-theta) * (output - center)`, hand-
+ * verified against CSS `rotate(deg)` in that function's own test) so a
+ * rect this reports valid is GUARANTEED to exclude every black pixel
+ * `rotate_image` would produce, not just approximately so. At angle 0
+ * this is trivially true for any in-bounds rect (sin=0, cos=1 reduces the
+ * mapping to the identity).
+ * @returns {boolean} */
+export function cropRectFitsRotatedBounds(
+  /** @type {CropRect} */ rect,
+  /** @type {number} */ sourceWidth,
+  /** @type {number} */ sourceHeight,
+  /** @type {number} */ angleDeg,
+) {
+  if (sourceWidth <= 0 || sourceHeight <= 0) return false;
+  if (!angleDeg) return true;
+  const rad = (angleDeg * Math.PI) / 180;
+  const sin = Math.sin(rad);
+  const cos = Math.cos(rad);
+  const cx = sourceWidth / 2;
+  const cy = sourceHeight / 2;
+  const corners = [
+    [rect.x * sourceWidth, rect.y * sourceHeight],
+    [(rect.x + rect.width) * sourceWidth, rect.y * sourceHeight],
+    [rect.x * sourceWidth, (rect.y + rect.height) * sourceHeight],
+    [(rect.x + rect.width) * sourceWidth, (rect.y + rect.height) * sourceHeight],
+  ];
+  const eps = 1e-3;
+  return corners.every(([ox, oy]) => {
+    const dx = ox - cx;
+    const dy = oy - cy;
+    const sx = cx + dx * cos + dy * sin;
+    const sy = cy - dx * sin + dy * cos;
+    return sx >= -eps && sx <= sourceWidth + eps && sy >= -eps && sy <= sourceHeight + eps;
+  });
+}
+
 /** Moves the whole rect by (dx,dy), clamped so it never leaves [0,1].
  * @returns {CropRect} */
 export function moveCropRect(/** @type {CropRect} */ start, /** @type {number} */ dx, /** @type {number} */ dy) {

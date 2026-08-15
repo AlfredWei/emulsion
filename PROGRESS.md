@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Fix: crop+rotate could produce a crop rect that samples blank corners (2026-08-15)
+
+User report: "the cropped image and its thumbnail is wrong" — a photo cropped with a straighten angle applied rendered (both in the Develop canvas and its regenerated thumbnail) with a diagonal black wedge cut into it, not a clean rectangle.
+
+Root-caused with the real, currently-saved edit stack for the affected photo (queried directly from `catalog.sqlite`, not reproduced from a guess): `{angle: 19.7, x: 0.124, y: 0.036, width: 0.591, height: 0.871}` — an OFF-CENTER rect, not something `inscribedCropForAngle` (which is deliberately centered-only) would ever itself produce. Hand-verified against `develop_engine.rs`'s own `rotate_image` inverse-sampling math (in Python, independent of any app code) that two of this rect's four corners map to source coordinates outside the image bounds — i.e. `sample_bilinear`'s documented black-fill path, not a rendering bug in either the CSS preview or the Rust export; both correctly, consistently show black exactly where this rect is genuinely invalid for a 19.7° rotation.
+
+The actual gap: `handleCropChange` (`+page.svelte`) already re-fits the crop to a valid, centered, inscribed rect whenever the ANGLE itself changes (`fix/m3-crop-rotate-inscribe`, prior session) — but a subsequent plain drag/resize of that already-fitted rect (moving or enlarging it via the corner/edge handles) was never re-validated against the SAME constraint, so a user could drag a rect that was valid at commit-time right back into the blanked-out corners.
+
+- **New `cropRectFitsRotatedBounds(rect, sourceWidth, sourceHeight, angleDeg)`** in `cropMath.js` — the general per-corner counterpart to `inscribedCropForAngle`: checks an ARBITRARY (possibly off-center) rect's 4 corners against the exact same inverse-rotation mapping `rotate_image` uses, rather than proposing a fresh centered replacement.
+- **`DevelopCanvas.svelte`'s `handleCropHandlePointerMove`** now rejects (silently ignores) any move/resize whose result fails that check against the crop's current angle — freezing the drag at the last valid rect instead of committing an invalid one. This is the actual interactive-path fix.
+- **`+page.svelte`'s `handleCropChange`** gained the same check as a last-resort guard on every caller, not just the interactive drag path.
+- **Verification**: 5 new Vitest tests in `cropMath.test.js`, including a regression test using the user's own real (verified-invalid) crop values. 69/69 Vitest total, `npm run check` clean across 243 files, 192/192 Rust tests (untouched, run for regression — no Rust changes this slice, the bug and fix are both JS-side). **Not verified interactively against the live app this session** — dragging a crop rect past the rotated-valid boundary and confirming it now stops there, on the user's own machine/photo, is still open.
+
 ## Fix: histogram narrower than it needed to be (2026-08-15)
 
 Direct follow-on to the enlarge-height change above: "should be also wider." `Histogram.svelte`'s own `.histogram-panel` carried a 10px left/right margin on top of the surrounding panel's existing 12px padding (`DevelopPanel.svelte`/`MetadataPanel.svelte`'s shared `.panel { padding: 14px 12px; }`), insetting the histogram an extra 20px total inside a 240px-wide rail while every other row/section in both panels already sits close to that same 12px edge. Dropped the side margins to 0 — the histogram now uses the panel's full content width like everything else in it, with no change to the panel's own width or any other control's layout.

@@ -110,7 +110,7 @@
     IDENTITY_LENS_CORRECTION,
     lookupLensProfile,
   } from "$lib/api/develop.js";
-  import { largestCenteredCropForRatio, inscribedCropForAngle } from "$lib/cropMath.js";
+  import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
 
@@ -1512,6 +1512,17 @@
       const pixelRatio = sourceWidth > 0 && sourceHeight > 0 ? (crop.width * sourceWidth) / (crop.height * sourceHeight) : null;
       const inscribed = pixelRatio ? inscribedCropForAngle(pixelRatio, sourceWidth, sourceHeight, patch.angle) : null;
       if (inscribed) next = { ...inscribed, angle: patch.angle };
+    }
+    // Last-resort guard against ever committing a rect that exposes the
+    // rotated image's blanked-out corners (see DevelopCanvas.svelte's own
+    // matching drag-time check, which is what actually stops this in the
+    // interactive path -- this is the safety net for every OTHER caller of
+    // handleCropChange, e.g. a future one that doesn't go through that
+    // drag code at all). Falls back to the full merged rect against
+    // `crop`, since `next` may be a partial patch.
+    const merged = { x: crop.x, y: crop.y, width: crop.width, height: crop.height, angle: crop.angle, ...next };
+    if (sourceWidth > 0 && sourceHeight > 0 && !cropRectFitsRotatedBounds(merged, sourceWidth, sourceHeight, merged.angle)) {
+      return;
     }
     editStack = upsertCrop(editStack, next);
     scheduleFlush("Crop");

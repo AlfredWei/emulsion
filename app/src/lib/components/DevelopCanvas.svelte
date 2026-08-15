@@ -2,7 +2,7 @@
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
-  import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, nativeCropClipSize, scrollTargetForNativeFocus } from "$lib/cropMath.js";
+  import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, nativeCropClipSize, scrollTargetForNativeFocus, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { binHistogramPixels } from "$lib/histogramMath.js";
 
   const MAX_MASKS = 8;
@@ -293,6 +293,20 @@
     } else {
       next = resizeCropEdge(startRect, which, dx, dy, cropMinFracX(), cropMinFracY());
     }
+    // Reject a move/resize that would push the rect into the blanked-out
+    // corners a nonzero straighten angle reveals (see
+    // cropRectFitsRotatedBounds's own doc comment) -- otherwise nothing
+    // stops a drag from re-exposing exactly the black wedges
+    // `inscribedCropForAngle`'s own angle-change recenter exists to avoid
+    // in the first place, since a plain move/resize never re-runs that
+    // check. Freezing at the last valid rect (silently ignoring this one
+    // pointermove) rather than clamping to the nearest valid position is a
+    // real, named scope cut -- a full "slide back to the boundary" clamp
+    // needs the same off-center inscribed-rect solve `inscribedCropForAngle`
+    // deliberately doesn't attempt; simply not moving further in an invalid
+    // direction is correct, if slightly less smooth, and never lets an
+    // invalid rect reach the edit stack.
+    if (!cropRectFitsRotatedBounds(next, sourceWidth, sourceHeight, crop.angle)) return;
     onCropChange(next);
   }
 

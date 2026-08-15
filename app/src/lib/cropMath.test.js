@@ -13,6 +13,7 @@ import {
   normalizedAspectRatio,
   largestCenteredCropForRatio,
   inscribedCropForAngle,
+  cropRectFitsRotatedBounds,
   moveCropRect,
   cropCornerPoints,
   resizeCropCorner,
@@ -202,6 +203,40 @@ describe("inscribedCropForAngle", () => {
   it("returns null when source dimensions or ratio aren't known yet", () => {
     expect(inscribedCropForAngle(1, 0, 0, 15)).toBeNull();
     expect(inscribedCropForAngle(0, 2048, 1536, 15)).toBeNull();
+  });
+});
+
+describe("cropRectFitsRotatedBounds", () => {
+  it("accepts any in-bounds rect at angle 0", () => {
+    expect(cropRectFitsRotatedBounds({ x: 0, y: 0, width: 1, height: 1 }, 2048, 1536, 0)).toBe(true);
+    expect(cropRectFitsRotatedBounds({ x: 0.9, y: 0.9, width: 0.1, height: 0.1 }, 2048, 1536, 0)).toBe(true);
+  });
+
+  it("accepts what inscribedCropForAngle itself proposes, for every angle it was verified against", () => {
+    for (const angle of [5, 15, 30, 44]) {
+      const rect = inscribedCropForAngle(4 / 3, 2048, 1536, angle);
+      if (!rect) throw new Error("expected a rect");
+      expect(cropRectFitsRotatedBounds(rect, 2048, 1536, angle)).toBe(true);
+    }
+  });
+
+  it("rejects the full-frame rect once any nonzero angle reveals blanked corners", () => {
+    expect(cropRectFitsRotatedBounds({ x: 0, y: 0, width: 1, height: 1 }, 2048, 1536, 10)).toBe(false);
+  });
+
+  // Regression: this is the exact real-world crop (an off-center rect an
+  // angle-triggered recenter, then a subsequent manual drag, together
+  // produced) that motivated adding this function at all -- two of its
+  // four corners land outside the rotated source, independently verified
+  // by hand against the same inverse-rotation math `rotate_image` uses in
+  // develop_engine.rs.
+  it("rejects a real off-center rect whose corners sample outside the rotated source", () => {
+    const rect = { x: 0.12444006023522242, y: 0.035564135564135624, width: 0.5911804295795853, height: 0.8707269884620092 };
+    expect(cropRectFitsRotatedBounds(rect, 6720, 4480, 19.7)).toBe(false);
+  });
+
+  it("accepts a small, well-centered rect at a steep angle", () => {
+    expect(cropRectFitsRotatedBounds({ x: 0.4, y: 0.4, width: 0.2, height: 0.2 }, 2048, 1536, 45)).toBe(true);
   });
 });
 

@@ -3864,7 +3864,19 @@
        centers this box in BOTH axes once width/height are explicit
        pixel values (unlike the old aspect-ratio-only approach, which
        left the cross axis with nothing definite for auto margins to
-       center against). */
+       center against). `flex-shrink: 0` -- this box is a flex item of
+       `.canvas-wrap` (`display:flex`, default row axis), and a plain
+       `<div>` has no INTRINSIC aspect ratio the way a replaced element
+       (`<canvas>`, `<img>`) does: flexbox's default `flex-shrink: 1`
+       squishes only the WIDTH (the main-axis flex-basis) down to fit the
+       row when this box's content doesn't fit, leaving the explicit
+       HEIGHT untouched -- a real, reported non-uniform stretch once
+       `cropClipSize`'s 100%-zoom native-pixel size (see that variable's
+       own doc comment) exceeds the wrap's available width. The canvas
+       element itself never had this problem (a replaced element's own
+       flex-shrink preserves its intrinsic aspect ratio), which is why
+       this only ever showed up for the cropped view. */
+    flex-shrink: 0;
     max-width: 100%;
     max-height: 100%;
     margin: auto;

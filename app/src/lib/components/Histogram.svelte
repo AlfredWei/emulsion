@@ -35,7 +35,7 @@
 
   const BUCKETS = 256;
   const VIEW_W = 256;
-  const VIEW_H = 72;
+  const VIEW_H = 140;
 
   // Tone-zone dividers: static (no slider-linkage, purely visual)
   // shadow/darks/lights/highlight boundary markers at the same quarter
@@ -124,8 +124,13 @@
         class="clip-warning clip-shadow"
         class:active={shadowClipped}
         class:toggled={showClippingOverlay}
+        disabled={!onToggleClippingOverlay}
         onclick={() => onToggleClippingOverlay?.()}
-        title={showClippingOverlay ? "Hide shadow clipping overlay" : "Show shadow clipping overlay"}
+        title={onToggleClippingOverlay
+          ? showClippingOverlay
+            ? "Hide shadow clipping overlay"
+            : "Show shadow clipping overlay"
+          : "Shadow clipping"}
         aria-label="Toggle shadow clipping overlay"
         aria-pressed={showClippingOverlay}
       >
@@ -136,8 +141,13 @@
         class="clip-warning clip-highlight"
         class:active={highlightClipped}
         class:toggled={showClippingOverlay}
+        disabled={!onToggleClippingOverlay}
         onclick={() => onToggleClippingOverlay?.()}
-        title={showClippingOverlay ? "Hide highlight clipping overlay" : "Show highlight clipping overlay"}
+        title={onToggleClippingOverlay
+          ? showClippingOverlay
+            ? "Hide highlight clipping overlay"
+            : "Show highlight clipping overlay"
+          : "Highlight clipping"}
         aria-label="Toggle highlight clipping overlay"
         aria-pressed={showClippingOverlay}
       >
@@ -165,7 +175,7 @@
   }
   .histogram {
     position: relative;
-    height: 72px;
+    height: 140px;
     border-radius: var(--radius-s, 4px);
     border: 1px solid var(--border-subtle);
     background: var(--bg-panel-raised);
@@ -221,6 +231,15 @@
   }
   .clip-warning:hover {
     opacity: 1;
+  }
+  .clip-warning:disabled {
+    cursor: default;
+  }
+  .clip-warning:disabled:hover {
+    opacity: 0.28;
+  }
+  .clip-warning:disabled.active:hover {
+    opacity: 0.85;
   }
   .clip-warning.toggled {
     opacity: 1;

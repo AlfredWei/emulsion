@@ -110,7 +110,7 @@
     IDENTITY_LENS_CORRECTION,
     lookupLensProfile,
   } from "$lib/api/develop.js";
-  import { largestCenteredCropForRatio } from "$lib/cropMath.js";
+  import { largestCenteredCropForRatio, inscribedCropForAngle } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
 
@@ -1489,10 +1489,24 @@
   // `apply_crop` doc comment for why this one has no WGSL/uniform twin.
   let crop = $derived(getCrop(editStack, IDENTITY_CROP));
 
+  /** Ordinary field patches (drag/resize handles) pass through unchanged.
+   * An ANGLE-only patch (the straighten slider, see `onCropAngleChange`
+   * below) is special-cased: real Lightroom re-fits the crop rect to the
+   * largest inner-fit box of the SAME aspect ratio for the new angle,
+   * recentered on the image, rather than leaving the old rect in place to
+   * expose the newly-rotated image's blanked-out corners (see
+   * `inscribedCropForAngle`'s own doc comment for the geometry and its
+   * "centered-only" scope cut -- this is that function's one caller). */
   function handleCropChange(
     /** @type {Partial<{x: number, y: number, width: number, height: number, angle: number}>} */ patch,
   ) {
-    editStack = upsertCrop(editStack, patch);
+    let next = patch;
+    if (typeof patch.angle === "number" && patch.angle !== crop.angle && crop.width > 0 && crop.height > 0) {
+      const pixelRatio = sourceWidth > 0 && sourceHeight > 0 ? (crop.width * sourceWidth) / (crop.height * sourceHeight) : null;
+      const inscribed = pixelRatio ? inscribedCropForAngle(pixelRatio, sourceWidth, sourceHeight, patch.angle) : null;
+      if (inscribed) next = { ...inscribed, angle: patch.angle };
+    }
+    editStack = upsertCrop(editStack, next);
     scheduleFlush("Crop");
   }
 
@@ -1523,9 +1537,12 @@
   }
 
   /** Reshapes the crop rect to the given PIXEL aspect ratio: the largest
-   * rect of that ratio centered in the full image. Deliberately NOT based
-   * on the current rect's own size -- earlier it shrunk the current rect
-   * to fit within its own previous bounding box, which (combined with the
+   * rect of that ratio centered in the full image, INNER-FIT to the
+   * current straighten angle (see `inscribedCropForAngle`'s doc comment --
+   * at angle 0 it's identical to `largestCenteredCropForRatio`, so this
+   * covers that case too without a branch). Deliberately NOT based on the
+   * current rect's own size -- earlier it shrunk the current rect to fit
+   * within its own previous bounding box, which (combined with the
    * uncorrected ratio) compounded into a smaller rect on every click.
    * Recomputing fresh from the full image each time is idempotent:
    * clicking the same preset twice in a row is always a no-op. `null`
@@ -1533,9 +1550,9 @@
   function handleCropAspectPreset(/** @type {number | null} */ ratio) {
     cropAspectLock = ratio;
     if (ratio === null) return;
-    const next = largestCenteredCropForRatio(ratio, sourceWidth, sourceHeight);
+    const next = inscribedCropForAngle(ratio, sourceWidth, sourceHeight, crop.angle);
     if (!next) return;
-    handleCropChange(next);
+    handleCropChange({ ...next, angle: crop.angle });
   }
 
   function handleCropReset() {

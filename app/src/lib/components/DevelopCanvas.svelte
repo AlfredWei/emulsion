@@ -2,7 +2,7 @@
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
-  import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox } from "$lib/cropMath.js";
+  import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, nativeCropClipSize, scrollTargetForNativeFocus } from "$lib/cropMath.js";
 
   const MAX_MASKS = 8;
 
@@ -385,6 +385,34 @@
     if (!canvasEl) return { x: 0, y: 0 };
     const p = screenToNativePixel(clientX, clientY);
     return { x: p.x / canvasEl.width, y: p.y / canvasEl.height };
+  }
+
+  /** Scrolls `wrapEl` so a focus point given in FULL-IMAGE native-pixel
+   * coordinates (e.g. from `screenToNativePixel`, or `lastZoomFocus`
+   * re-applied against the current tier's dimensions) is centered --
+   * correctly whether or not a crop is currently committed, via
+   * `scrollTargetForNativeFocus` (see that function's own doc comment for
+   * why the committed-crop case needs its own coordinate offset: the
+   * scrollable box in that state is `.crop-clip`, whose own origin sits
+   * away from the canvas's, not the canvas element itself). The one
+   * shared call site both this component's own zoom-in-on-click
+   * (`handlePointerUp`) and its 1:1-tier re-center
+   * (`upgradeToFullTier`) now go through, so the two can't drift apart
+   * the way two independent inline copies of this math eventually would. */
+  function scrollToNativeFocus(/** @type {number} */ nativeX, /** @type {number} */ nativeY) {
+    if (!wrapEl || !canvasEl) return;
+    const { scrollLeft, scrollTop } = scrollTargetForNativeFocus(
+      nativeX,
+      nativeY,
+      showCommittedCropPreview,
+      crop,
+      canvasEl.width,
+      canvasEl.height,
+      wrapEl.clientWidth,
+      wrapEl.clientHeight,
+    );
+    wrapEl.scrollLeft = scrollLeft;
+    wrapEl.scrollTop = scrollTop;
   }
 
   // M3 Slice 8: retained sampleable pixel data, drawn once per image load
@@ -784,9 +812,7 @@
 
     zoomMode = "100";
     await tick(); // required: $state-triggered DOM patches (the new canvas size) land on a microtask
-    if (!wrapEl) return;
-    wrapEl.scrollLeft = nativeX - wrapEl.clientWidth / 2;
-    wrapEl.scrollTop = nativeY - wrapEl.clientHeight / 2;
+    scrollToNativeFocus(nativeX, nativeY);
   }
 
   /** Dragging an existing mask's handle -- separate from the canvas's own
@@ -3097,11 +3123,16 @@
       activeTier = "full";
       // Re-center on the same normalized focus point now that the
       // canvas's native size has just changed out from under any earlier
-      // scroll position -- see lastZoomFocus's own doc comment.
-      if (wrapEl && canvasEl) {
-        wrapEl.scrollLeft = lastZoomFocus.x * canvasEl.width - wrapEl.clientWidth / 2;
-        wrapEl.scrollTop = lastZoomFocus.y * canvasEl.height - wrapEl.clientHeight / 2;
-      }
+      // scroll position -- see lastZoomFocus's own doc comment. In the
+      // committed-crop case `.crop-clip`'s own size is a reactive
+      // `$derived` style binding (`cropClipSize`), not a direct DOM
+      // mutation like the canvas's own backing store -- `tick()` first so
+      // the wrapper has actually resized before `scrollToNativeFocus`
+      // reads/sets scroll position against it (otherwise the browser
+      // clamps the new scrollLeft/scrollTop against the STALE, still
+      // fit-sized box).
+      await tick();
+      if (canvasEl) scrollToNativeFocus(lastZoomFocus.x * canvasEl.width, lastZoomFocus.y * canvasEl.height);
       writeAdjustmentsAndRender();
     })();
     try {
@@ -3465,17 +3496,31 @@
     status === "ready" && activeTool === null && !selectedMaskId && !isCropIdentity(crop),
   );
 
-  /** object-fit:contain-style box: the largest box of the crop's own
-   * aspect ratio that fits within the wrap's padded content area,
-   * centered via the wrapper's own `margin:auto` once both dimensions
-   * are explicit (a definite width/height, unlike `aspect-ratio` alone,
-   * reliably centers via auto margins in every engine -- see
-   * wrapWidth/wrapHeight's own doc comment for why this is computed in
-   * JS at all instead of left to CSS). */
+  /** `.crop-clip`'s own box size. Two modes, switched on `zoomMode`:
+   * "fit" is an object-fit:contain-style box, the largest box of the
+   * crop's own aspect ratio that fits within the wrap's padded content
+   * area, centered via the wrapper's own `margin:auto` once both
+   * dimensions are explicit (a definite width/height, unlike
+   * `aspect-ratio` alone, reliably centers via auto margins in every
+   * engine -- see wrapWidth/wrapHeight's own doc comment for why this is
+   * computed in JS at all instead of left to CSS). "100" uses
+   * `nativeCropClipSize` instead -- see that function's own doc comment
+   * for why sizing the wrapper to the crop's true pixel dimensions is
+   * exactly what makes the canvas's existing percentage-based inline
+   * positioning (unchanged either way -- see the markup's own doc
+   * comment) land on a true 1:1 scale. `.crop-clip.active.zoomed`'s own
+   * CSS rule (`max-width/max-height: none`) is what lets this box actually
+   * exceed the wrap's available area so `.canvas-wrap`'s existing
+   * `overflow: auto` (already toggled by the SAME `zoomMode === "100"`
+   * condition, see that class binding) has something real to scroll. */
   let cropClipSize = $derived.by(() => {
-    if (!showCommittedCropPreview || !sourceWidth || !sourceHeight || !wrapWidth || !wrapHeight) {
+    if (!showCommittedCropPreview || !sourceWidth || !sourceHeight) {
       return { w: 0, h: 0 };
     }
+    if (zoomMode === "100") {
+      return nativeCropClipSize(crop, sourceWidth, sourceHeight);
+    }
+    if (!wrapWidth || !wrapHeight) return { w: 0, h: 0 };
     const availW = Math.max(wrapWidth - CROP_CLIP_PADDING_PX * 2, 1);
     const availH = Math.max(wrapHeight - CROP_CLIP_PADDING_PX * 2, 1);
     const aspect = (crop.width * sourceWidth) / (crop.height * sourceHeight);
@@ -3516,15 +3561,21 @@
        ratio, with the canvas absolutely positioned/sized/rotated inside
        it via inline styles (percentages relative to THIS wrapper, not
        the canvas's own size -- see the exact derivation in this file's
-       own module-level comment above `showCommittedCropPreview`). Named
-       scope cut: this preview always uses "fit" sizing regardless of
-       `zoomMode` -- 100%-zoom native-pixel scrolling isn't implemented
-       for the cropped view, avoiding a real complexity a design review
-       flagged (the backing store's own dimensions would otherwise need
-       to change per view mode, breaking the existing zoom-scroll math). -->
+       own module-level comment above `showCommittedCropPreview`). That
+       percentage-based canvas positioning is scale-invariant -- it works
+       out to true 1:1 native-pixel scale whenever THIS wrapper itself is
+       sized to the crop's own native pixel dimensions, not just when it's
+       fit-scaled -- so `cropClipSize`'s own `zoomMode` branch (see that
+       variable's doc comment) is the ONLY piece that needed to change to
+       support 100%-zoom scrolling in the cropped view; `class:zoomed`
+       here pairs with `.crop-clip.active.zoomed`'s own CSS rule to let
+       the box actually grow past the wrap's available area so there's
+       something for `.canvas-wrap`'s own `overflow:auto` (same
+       `zoomMode` condition) to scroll. -->
   <div
     class="crop-clip"
     class:active={showCommittedCropPreview}
+    class:zoomed={zoomMode === "100"}
     style={showCommittedCropPreview ? `width:${cropClipSize.w}px; height:${cropClipSize.h}px;` : ""}
   >
     <canvas
@@ -3820,6 +3871,18 @@
     overflow: hidden;
     border-radius: 2px;
     box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.7);
+  }
+  /* 100%-zoom override: `cropClipSize` sizes this box to the crop's own
+     native pixel dimensions in this mode (see that variable's own doc
+     comment), which routinely EXCEEDS the wrap's available area -- the
+     entire point, since that's what makes something worth scrolling. The
+     base rule's `max-width/max-height: 100%` above would otherwise clamp
+     it right back down to fit, silently undoing the native sizing (the
+     same `max-width:none`/`max-height:none` override `canvas.zoomed`
+     already applies to the canvas element itself, one rule down). */
+  .crop-clip.active.zoomed {
+    max-width: none;
+    max-height: none;
   }
   canvas.cropped {
     position: absolute;

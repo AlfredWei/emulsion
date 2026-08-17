@@ -44,7 +44,9 @@
           ? "Luminance Range"
           : mask.op === "color_range_mask"
             ? "Color Range"
-            : "Linear Gradient",
+            : mask.op === "spot_mask"
+              ? "Spot Removal"
+              : "Linear Gradient",
   );
 </script>
 
@@ -54,45 +56,70 @@
     <button class="close" type="button" title="Deselect" onclick={onClose}>×</button>
   </div>
 
-  <div class="row">
-    <label for="mask-exposure">Exposure</label>
-    <input
-      id="mask-exposure"
-      type="range"
-      min="-5"
-      max="5"
-      step="0.05"
-      value={mask.exposure}
-      oninput={(e) => onChange({ exposure: Number(e.currentTarget.value) })}
-    />
-    <span class="val">{mask.exposure >= 0 ? "+" : ""}{mask.exposure.toFixed(2)}</span>
-  </div>
-  <div class="row">
-    <label for="mask-contrast">Contrast</label>
-    <input
-      id="mask-contrast"
-      type="range"
-      min="-100"
-      max="100"
-      step="1"
-      value={mask.contrast}
-      oninput={(e) => onChange({ contrast: Number(e.currentTarget.value) })}
-    />
-    <span class="val">{mask.contrast >= 0 ? "+" : ""}{mask.contrast}</span>
-  </div>
-  <div class="row">
-    <label for="mask-saturation">Saturation</label>
-    <input
-      id="mask-saturation"
-      type="range"
-      min="-100"
-      max="100"
-      step="1"
-      value={mask.saturation}
-      oninput={(e) => onChange({ saturation: Number(e.currentTarget.value) })}
-    />
-    <span class="val">{mask.saturation >= 0 ? "+" : ""}{mask.saturation}</span>
-  </div>
+  {#if mask.op === "spot_mask"}
+    <!-- No Exposure/Contrast/Saturation for a spot mask -- it copies pixel
+         CONTENT, it doesn't gate a parametric adjustment (see SpotMask's
+         own doc comment in develop.js). Mode replaces those rows instead:
+         Clone is a direct offset sample, Heal additionally shifts the
+         sampled patch to match the destination area's local mean color
+         (a simplified stand-in for true seamless blending, computed
+         server-side in develop_engine.rs's compute_heal_shift). -->
+    <div class="row">
+      <label for="mask-spot-mode">Mode</label>
+      <div class="mode-toggle" id="mask-spot-mode">
+        <button
+          type="button"
+          class:active={mask.mode === "heal"}
+          onclick={() => onChange({ mode: "heal" })}
+        >Heal</button>
+        <button
+          type="button"
+          class:active={mask.mode === "clone"}
+          onclick={() => onChange({ mode: "clone" })}
+        >Clone</button>
+      </div>
+    </div>
+  {:else}
+    <div class="row">
+      <label for="mask-exposure">Exposure</label>
+      <input
+        id="mask-exposure"
+        type="range"
+        min="-5"
+        max="5"
+        step="0.05"
+        value={mask.exposure}
+        oninput={(e) => onChange({ exposure: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.exposure >= 0 ? "+" : ""}{mask.exposure.toFixed(2)}</span>
+    </div>
+    <div class="row">
+      <label for="mask-contrast">Contrast</label>
+      <input
+        id="mask-contrast"
+        type="range"
+        min="-100"
+        max="100"
+        step="1"
+        value={mask.contrast}
+        oninput={(e) => onChange({ contrast: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.contrast >= 0 ? "+" : ""}{mask.contrast}</span>
+    </div>
+    <div class="row">
+      <label for="mask-saturation">Saturation</label>
+      <input
+        id="mask-saturation"
+        type="range"
+        min="-100"
+        max="100"
+        step="1"
+        value={mask.saturation}
+        oninput={(e) => onChange({ saturation: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.saturation >= 0 ? "+" : ""}{mask.saturation}</span>
+    </div>
+  {/if}
   {#if mask.op !== "brush_mask" && mask.op !== "luminance_range_mask" && mask.op !== "color_range_mask"}
     <div class="row">
       <label for="mask-feather">Feather</label>
@@ -236,10 +263,17 @@
     </label>
   {/if}
 
-  <label class="invert-row">
-    <input type="checkbox" checked={mask.invert} onchange={(e) => onChange({ invert: e.currentTarget.checked })} />
-    <span>Invert</span>
-  </label>
+  {#if mask.op !== "spot_mask"}
+    <!-- No Invert for a spot mask: replacing pixel content everywhere
+         EXCEPT a small circle would never be a sensible spot-removal
+         operation (see spot_mask_weight's own doc comment in
+         develop_engine.rs), unlike every other kind's region-gated
+         adjustment, which inverting meaningfully flips. -->
+    <label class="invert-row">
+      <input type="checkbox" checked={mask.invert} onchange={(e) => onChange({ invert: e.currentTarget.checked })} />
+      <span>Invert</span>
+    </label>
+  {/if}
 
   <button class="delete" type="button" onclick={onDelete}>Delete {title}</button>
 </div>
@@ -341,6 +375,27 @@
     color: var(--text-primary);
   }
   .resample.active {
+    color: var(--accent-strong);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .mode-toggle {
+    flex: 1;
+    display: flex;
+    gap: 4px;
+  }
+  .mode-toggle button {
+    all: unset;
+    flex: 1;
+    text-align: center;
+    cursor: pointer;
+    padding: 4px 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-s);
+  }
+  .mode-toggle button.active {
     color: var(--accent-strong);
     border-color: var(--accent);
     background: var(--accent-soft);

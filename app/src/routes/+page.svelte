@@ -70,6 +70,7 @@
     createBrushMask,
     createLuminanceRangeMask,
     createColorRangeMask,
+    createSpotMask,
     OVERLAY_CAPABLE_MASK_OPS,
     getToneCurvePoints,
     upsertToneCurve,
@@ -364,6 +365,7 @@
      *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
      *   | { kind: "brush", id: string }
      *   | { kind: "color_range", refColor: {r:number,g:number,b:number} }
+     *   | { kind: "spot", dest: {x:number,y:number}, radius: number }
      * } */ placement,
   ) {
     // Every kind gets its own explicit branch before the final
@@ -380,15 +382,17 @@
           ? createBrushMask(placement.id)
           : placement.kind === "color_range"
             ? createColorRangeMask(placement.refColor)
-            : createLinearGradientMask(placement.start, placement.end);
+            : placement.kind === "spot"
+              ? createSpotMask(placement.dest, placement.radius)
+              : createLinearGradientMask(placement.start, placement.end);
     editStack = addMask(editStack, mask);
     selectedMaskId = mask.id;
     // Real Lightroom drops back to selection after placing a gradient, but
     // a brush stroke should keep the Brush tool active (painting is
     // inherently multi-stroke -- see DevelopCanvas.svelte's brush-state
     // doc comment) rather than force a re-click of the tool for every dab.
-    // Color range is a one-shot placement like linear/radial (not
-    // multi-shot like brush), so it correctly falls through the same
+    // Color range and spot are one-shot placements like linear/radial (not
+    // multi-shot like brush), so they correctly fall through the same
     // `!== "brush"` reset below.
     if (placement.kind !== "brush") activeTool = null;
     const label =
@@ -398,7 +402,9 @@
           ? "Add Brush Mask"
           : placement.kind === "color_range"
             ? "Add Color Range Mask"
-            : "Add Linear Gradient";
+            : placement.kind === "spot"
+              ? "Add Spot Removal"
+              : "Add Linear Gradient";
     scheduleFlush(label);
   }
 

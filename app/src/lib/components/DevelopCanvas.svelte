@@ -26,6 +26,7 @@
    *     | { kind: "radial_gradient", center: {x: number, y: number}, radiusX: number, radiusY: number }
    *     | { kind: "brush", id: string }
    *     | { kind: "color_range", refColor: {r: number, g: number, b: number} }
+   *     | { kind: "spot", dest: {x: number, y: number}, radius: number }
    *   ) => void,
    *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onMaskSelected: (id: string) => void,
@@ -218,10 +219,11 @@
     /** @type {
      *   | { kind: "linear_gradient", start: {x:number,y:number}, end: {x:number,y:number} }
      *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
+     *   | { kind: "spot", dest: {x:number,y:number}, radius: number }
      *   | null
      * } */ (null),
   );
-  /** @type {{ maskId: string, which: "start" | "end" | "center" | "radius", center?: {x:number,y:number} } | null} */
+  /** @type {{ maskId: string, which: "start" | "end" | "center" | "radius" | "dest" | "source" | "spot_radius", center?: {x:number,y:number} } | null} */
   let handleDragState = null;
 
   // Crop & Straighten (M3): a fully separate drag system from masks above
@@ -529,6 +531,16 @@
     return brushSize * (canvasEl.width / canvasEl.height) * 100;
   }
 
+  /** Same aspect correction as `brushCursorRyPercent`, generalized to an
+   * arbitrary width-normalized radius -- SpotMask's own `radius` (a single
+   * value, fraction of image width, matching `dab_falloff`'s convention in
+   * both develop_engine.rs and the WGSL shader) needs the same height-
+   * relative ry percentage to render as a true on-screen circle. */
+  function spotRyPercent(/** @type {number} */ radius) {
+    if (!canvasEl || !canvasEl.height) return radius * 100;
+    return radius * (canvasEl.width / canvasEl.height) * 100;
+  }
+
   /** Clips the INFINITE line through `p` in direction `dir` (need not be
    * unit length) against the [0,1]x[0,1] normalized-uv box, via
    * Liang-Barsky. Returns the clipped segment's two endpoints, or `null`
@@ -687,6 +699,13 @@
       tryCapturePointer(e);
       return;
     }
+    if (activeTool === "spot") {
+      e.preventDefault();
+      const dest = screenToNormalized(e.clientX, e.clientY);
+      placingMask = { kind: "spot", dest, radius: 0 };
+      tryCapturePointer(e);
+      return;
+    }
     if (activeTool === "eyedropper") {
       e.preventDefault();
       eyedropperClickStart = { x: e.clientX, y: e.clientY };
@@ -751,6 +770,14 @@
       placingMask = { ...placingMask, ...radiusFromDrag(placingMask.center, e.clientX, e.clientY) };
       return;
     }
+    if (placingMask?.kind === "spot") {
+      // Single width-normalized radius (matches SpotMask's own shape,
+      // unlike radial's independent radiusX/radiusY) -- radiusFromDrag's
+      // radiusX is already "native-pixel distance / canvas width", exactly
+      // that convention.
+      placingMask = { ...placingMask, radius: radiusFromDrag(placingMask.dest, e.clientX, e.clientY).radiusX };
+      return;
+    }
     if (activeTool === "brush") {
       const p = screenToNormalized(e.clientX, e.clientY);
       brushCursor = p; // shown on hover too, not just while painting
@@ -792,6 +819,14 @@
       // (accidental click) must be rejected, not committed -- it would
       // corrupt the frame with Inf/NaN.
       if (radiusX > 0.01 && radiusY > 0.01) onMaskCreated({ kind: "radial_gradient", center, radiusX, radiusY });
+      return;
+    }
+    if (placingMask?.kind === "spot") {
+      const { dest, radius } = placingMask;
+      placingMask = null;
+      // Same minimum-radius guard as radial -- radius divides into the
+      // WGSL/Rust weight formulas on both sides.
+      if (radius > 0.01) onMaskCreated({ kind: "spot", dest, radius });
       return;
     }
     if (colorRangeClickStart) {
@@ -880,7 +915,7 @@
   function handleMaskHandlePointerDown(
     /** @type {PointerEvent} */ e,
     /** @type {string} */ maskId,
-    /** @type {"start" | "end" | "center" | "radius"} */ which,
+    /** @type {"start" | "end" | "center" | "radius" | "dest" | "source" | "spot_radius"} */ which,
     /** @type {{x:number,y:number}=} */ center,
   ) {
     e.stopPropagation();
@@ -910,6 +945,13 @@
     const { maskId, which, center } = handleDragState;
     if (which === "radius" && center) {
       onMaskUpdated(maskId, radiusFromDrag(center, e.clientX, e.clientY));
+      return;
+    }
+    if (which === "spot_radius" && center) {
+      // Single width-normalized radius, unlike radial's radiusX/radiusY
+      // pair -- see the analogous note in handlePointerMove's own spot
+      // branch.
+      onMaskUpdated(maskId, { radius: radiusFromDrag(center, e.clientX, e.clientY).radiusX });
       return;
     }
     onMaskUpdated(maskId, { [which]: screenToNormalized(e.clientX, e.clientY) });
@@ -985,6 +1027,21 @@
   let colorNRBuffer = null;
   /** @type {GPUBindGroup | null} */
   let bindGroup = null;
+  // M4 Slice 1 (Healing/Clone brush): the fs_premask pass's own
+  // pipeline/bind group, plus preMaskTex itself -- see preMaskTex's WGSL-
+  // side doc comment for the full split reasoning. preMaskTex is
+  // per-image (recreated alongside gradedTex, same size), the pipeline/
+  // bind-group-SHAPE is device-scoped (created once in initGpu, like
+  // `pipeline` itself), but preMaskBindGroup still needs recreating per
+  // image since it references preMaskTex's own view target indirectly
+  // via the textures it reads (gradedTex etc, same lifecycle as
+  // `bindGroup` above).
+  /** @type {GPURenderPipeline | null} */
+  let preMaskPipeline = null;
+  /** @type {GPUBindGroup | null} */
+  let preMaskBindGroup = null;
+  /** @type {GPUTexture | null} */
+  let preMaskTex = null;
   /** @type {GPUTextureFormat} */
   let presentationFormat = "bgra8unorm";
 
@@ -1282,13 +1339,18 @@
     // WGSL's vec2/vec3-in-array uniform alignment footguns -- array stride
     // in the uniform address space must be a multiple of 16 bytes, and an
     // all-vec4 struct is trivially aligned with no implicit padding.
-    // params.w holds the brush mask's own texture-array layer index (as a
-    // float, cast to i32 at sample time) -- brush is the only kind that
-    // needs a fourth scalar; every other kind leaves it at 0.
+    // params.w holds the brush mask's own texture-array layer index for
+    // kind=2 (as a float, cast to i32 at sample time) -- for kind=5
+    // (spot, M4 Slice 1) the SAME scalar instead holds the spot's radius
+    // (a normalized fraction of image width, no texture layer needed).
+    // adjustments is entirely unused for spot (no exposure/contrast/
+    // saturation channel -- it copies pixel CONTENT, see Mask::local_color
+    // in develop_engine.rs) except adjustments.x, repurposed to carry
+    // mode (0=clone, 1=heal).
     struct Mask {
-      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100); color range: xyz=refColor (0-1), w=range (0-100)
-      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1, z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range), w = brush texture-array layer
-      adjustments: vec4<f32>, // x = exposure_ev, y = contrast, z = saturation, w unused
+      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100); color range: xyz=refColor (0-1), w=range (0-100); spot: xy=dest, zw=source
+      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1 (unused for spot), z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range, 5=spot), w = brush texture-array layer OR spot radius
+      adjustments: vec4<f32>, // x = exposure_ev (spot: mode, 0=clone/1=heal), y = contrast (unused for spot), z = saturation (unused for spot), w unused
     };
     const MAX_MASKS = 8;
 
@@ -2273,22 +2335,61 @@
     };
     @group(0) @binding(26) var<uniform> clipping: Clipping;
 
-    // Final pass: reads the graded color back from gradedTex (not a
-    // re-sample of srcTexture -- every global op through Texture and
-    // Clarity is already baked in, see fs_clarity_v's own doc comment),
-    // applies the Dehaze recovery + amount blend, then Vignette (a direct
-    // WGSL port of develop_engine.rs's own vignette_factor -- pure
-    // per-pixel, no neighboring-pixel data needed, so it folds directly
-    // into this pass rather than adding a new buffer/pass the way Dehaze/
-    // Texture/Clarity all needed), then runs the EXISTING mask loop
-    // unchanged, writing the real swapchain output. Safe to read the
-    // dehaze maps unconditionally even at amount=0 (the blend multiplies
-    // their contribution by 0) as long as they're always populated with
-    // REAL values before this ever runs -- see writeAdjustmentsAndRender's
-    // dirty-key caching, which always treats "nothing cached yet" (the
-    // very first render) as dirty.
+    // Healing/Clone brush (M4 Slice 1): a spot mask's local_color needs
+    // to read some OTHER pixel's fully-graded value (its source point)
+    // while computing dest's -- fusing that into fs_final's own single
+    // pass would make the result depend on which of source/dest the GPU
+    // happens to shade first (undefined for a fragment shader, unlike the
+    // Rust CPU path's explicit raster-scan order, but the SAME underlying
+    // hazard graded's own doc comment in develop_engine.rs already
+    // names for Dehaze). preMaskTex is exactly develop_engine.rs's
+    // pre_mask buffer: everything through Grain, written by the new
+    // fs_premask pass (the old fs_final body, minus the mask loop),
+    // read back here by fs_mask (the new final pass) at both the
+    // current pixel AND, for spot masks, an offset pixel.
+    @group(0) @binding(27) var preMaskTex: texture_2d<f32>;
+
+    const HEAL_RING_SAMPLES: i32 = 12;
+    const HEAL_RING_FACTOR: f32 = 1.15;
+
+    // Average preMaskTex color on a ring just outside radius around
+    // center (image-pixel-space center/radius, not normalized UV --
+    // callers already have dims/aspect on hand). A cheaper cousin of
+    // develop_engine.rs's own sample_ring_mean: 12 samples instead of
+    // 24 (interactive-preview budget, not export quality) and no
+    // out-of-bounds skip (textureLoad's own coordinate clamp below stands
+    // in for it) -- same "not byte-identical, tolerance-tested" parity
+    // bar as every other CPU/GPU pair in this file.
+    fn healRingMean(centerPx: vec2<f32>, radiusPx: f32, dims: vec2<i32>) -> vec3<f32> {
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      let r = radiusPx * HEAL_RING_FACTOR;
+      for (var i = 0; i < HEAL_RING_SAMPLES; i = i + 1) {
+        let theta = (f32(i) / f32(HEAL_RING_SAMPLES)) * 6.28318530718;
+        let p = centerPx + vec2<f32>(cos(theta), sin(theta)) * r;
+        let coord = clamp(vec2<i32>(p), vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+        sum = sum + textureLoad(preMaskTex, coord, 0).rgb;
+      }
+      return sum / f32(HEAL_RING_SAMPLES);
+    }
+
+    // Pre-mask pass (M4 Slice 1: split out of what used to be one single
+    // "fs_final" pass -- see preMaskTex's own doc comment for why):
+    // reads the graded color back from gradedTex (not a re-sample of
+    // srcTexture -- every global op through Texture and Clarity is
+    // already baked in, see fs_clarity_v's own doc comment), applies the
+    // Dehaze recovery + amount blend, then Vignette (a direct WGSL port
+    // of develop_engine.rs's own vignette_factor -- pure per-pixel, no
+    // neighboring-pixel data needed, so it folds directly into this pass
+    // rather than adding a new buffer/pass the way Dehaze/Texture/Clarity
+    // all needed), then Grain, writing into preMaskTex -- NOT the real
+    // swapchain output; fs_mask below does that, after the mask loop.
+    // Safe to read the dehaze maps unconditionally even at amount=0 (the
+    // blend multiplies their contribution by 0) as long as they're always
+    // populated with REAL values before this ever runs -- see
+    // writeAdjustmentsAndRender's dirty-key caching, which always treats
+    // "nothing cached yet" (the very first render) as dirty.
     @fragment
-    fn fs_final(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_premask(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       var rgb = textureLoad(gradedTex, coord, 0).rgb;
 
@@ -2373,6 +2474,23 @@
       let gDelta = grainDelta(vec2<f32>(coord));
       rgb = rgb + vec3<f32>(gDelta, gDelta, gDelta);
 
+      return vec4<f32>(rgb, 1.0);
+    }
+
+    // Final pass: reads preMaskTex (this pass's own predecessor's output,
+    // NOT gradedTex -- Dehaze/NR/Sharpen/Vignette/Grain are all already
+    // baked in, see fs_premask's own doc comment above for why those
+    // needed to be a separate pass this slice), runs the mask loop, then
+    // the clipping-overlay toggle, writing the real swapchain output.
+    // Split out of what used to be fs_final's own single pass specifically
+    // so a spot mask (kind=5, M4 Slice 1) can read some OTHER pixel's
+    // fully-graded value without a scan-order hazard -- see preMaskTex's
+    // own doc comment for the full reasoning.
+    @fragment
+    fn fs_mask(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      var rgb = textureLoad(preMaskTex, coord, 0).rgb;
+
       // Local adjustments layer on top of the globally-graded image,
       // matching real Lightroom's own ordering and develop_engine.rs's.
       let mask_count = i32(adj.mask_count);
@@ -2448,14 +2566,14 @@
           let falling = (range_max + feather_width - luma) / denom;
           weight = clamp(min(rising, falling), 0.0, 1.0);
           if (m.params.y > 0.5) { weight = 1.0 - weight; }
-        } else {
-          // Color range (4), and any future kind >= 4: also reads the
-          // mutating rgb accumulator, same order-dependence as luminance
-          // range. One reference color and one tolerance rather than two
-          // edges, so this is a SINGLE-sided falloff (closer to radial's
-          // inside/outside shape, but in RGB-distance space) rather than
-          // luminance's two-sided min(rising,falling) band. start_end.xyz
-          // holds refColor (0-1, matching this shader's own texture-sample
+        } else if (kind < 4.5) {
+          // Color range (4): also reads the mutating rgb accumulator,
+          // same order-dependence as luminance range. One reference color
+          // and one tolerance rather than two edges, so this is a
+          // SINGLE-sided falloff (closer to radial's inside/outside
+          // shape, but in RGB-distance space) rather than luminance's
+          // two-sided min(rising,falling) band. start_end.xyz holds
+          // refColor (0-1, matching this shader's own texture-sample
           // convention), start_end.w holds range (0-100).
           //
           // The exact-match pixel must get weight=1 regardless of how
@@ -2475,20 +2593,73 @@
           let denom = max(feather_width, 0.001);
           weight = clamp((threshold - dist) / denom + 1.0, 0.0, 1.0);
           if (m.params.y > 0.5) { weight = 1.0 - weight; }
+        } else {
+          // Spot (5, M4 Slice 1, Healing/Clone brush), and any future
+          // kind >= 5: structurally unlike every kind above -- it doesn't
+          // gate a parametric adjustment, it copies pixel CONTENT from
+          // source into dest (see SpotMask's own doc comment in
+          // develop_engine.rs). Plain aspect-corrected circular falloff
+          // (same shape as dab_falloff's own true-circle distance, with
+          // radial_mask_weight's feather-band formula), always "inside"
+          // semantics -- no invert (m.params.y unused here).
+          let dims = vec2<i32>(textureDimensions(preMaskTex));
+          let aspect = f32(dims.y) / f32(dims.x);
+          let dest = m.start_end.xy;
+          let source = m.start_end.zw;
+          let radius = max(m.params.w, 0.0001);
+          let feather = m.params.x;
+          let sdx = in.uv.x - dest.x;
+          let sdy = (in.uv.y - dest.y) * aspect;
+          let d = sqrt(sdx * sdx + sdy * sdy) / radius;
+          let softness = clamp(feather / 100.0, 0.0, 0.999);
+          let denom = max(2.0 * softness, 0.001);
+          weight = clamp((1.0 + softness - d) / denom, 0.0, 1.0);
+
+          let offset = source - dest;
+          let sampleUv = in.uv + offset;
+          let dimsF = vec2<f32>(dims);
+          let sampleCoord = clamp(vec2<i32>(sampleUv * dimsF), vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+          var sampled = textureLoad(preMaskTex, sampleCoord, 0).rgb;
+
+          // Heal (mode = adjustments.x > 0.5): shift the sampled patch by
+          // the destination surround's mean color minus the source
+          // surround's -- see healRingMean's own doc comment. Gated on
+          // weight > 0 so the ring-sampling cost only lands on pixels
+          // actually near this spot (a small circle in practice), not
+          // every pixel in the image -- GPUs handle a spatially-clustered
+          // branch like this reasonably (most warps near a compact circle
+          // are either fully in or fully out), unlike a data-dependent
+          // branch scattered across the whole frame.
+          if (m.adjustments.x > 0.5 && weight > 0.001) {
+            let destPx = dest * dimsF;
+            let sourcePx = source * dimsF;
+            let radiusPx = radius * dimsF.x;
+            let destMean = healRingMean(destPx, radiusPx, dims);
+            let sourceMean = healRingMean(sourcePx, radiusPx, dims);
+            sampled = clamp(sampled + (destMean - sourceMean), vec3<f32>(0.0), vec3<f32>(1.0));
+          }
+
+          rgb = mix(rgb, sampled, weight);
         }
-        rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
+        if (kind < 4.5) {
+          rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
+        }
 
         // Selected-mask overlay (soft colored fill, toggleable): every
-        // no-geometry kind (brush, luminance range, color range -- kind >=
-        // 2) -- linear/radial deliberately excluded, preserving the prior
-        // explicit scope decision that they keep their existing
+        // no-geometry kind (brush, luminance range, color range -- kind
+        // 2..4) -- linear/radial deliberately excluded, preserving the
+        // prior explicit scope decision that they keep their existing
         // dashed-outline-only feedback (PROGRESS.md,
-        // mask-overlay-feather-indicators slice). Reuses the weight just
-        // computed above for THIS mask -- already invert-adjusted, already
-        // evaluated against the correct (pre-this-mask) rgb state -- so no
-        // separate re-sample-and-re-invert step is needed regardless of
-        // kind, unlike the brush-only texture-based mechanism this replaces.
-        if (kind > 1.5 && i == i32(adj.selected_mask_index)) {
+        // mask-overlay-feather-indicators slice); spot (5) is ALSO
+        // excluded -- it always shows a real destination/source circle
+        // pair (drawn in the DOM overlay, not here), matching linear/
+        // radial's own "has geometry, no colored-fill overlay" precedent,
+        // not brush's. Reuses the weight just computed above for THIS
+        // mask -- already invert-adjusted, already evaluated against the
+        // correct (pre-this-mask) rgb state -- so no separate
+        // re-sample-and-re-invert step is needed regardless of kind,
+        // unlike the brush-only texture-based mechanism this replaces.
+        if (kind > 1.5 && kind < 4.5 && i == i32(adj.selected_mask_index)) {
           rgb = mix(rgb, vec3<f32>(1.0, 0.24, 0.24), weight * 0.55);
         }
       }
@@ -2579,7 +2750,16 @@
     pipeline = device.createRenderPipeline({
       layout: "auto",
       vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_final", targets: [{ format: presentationFormat }] },
+      fragment: { module, entryPoint: "fs_mask", targets: [{ format: presentationFormat }] },
+      primitive: { topology: "triangle-list" },
+    });
+    // M4 Slice 1 (Healing/Clone brush): writes preMaskTex, fs_mask's own
+    // input -- see preMaskTex's WGSL-side doc comment for why this had to
+    // become its own pass rather than staying fused into fs_final.
+    preMaskPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_premask", targets: [{ format: "rgba16float" }] },
       primitive: { topology: "triangle-list" },
     });
     lensCorrectPipeline = device.createRenderPipeline({
@@ -2847,7 +3027,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
+    if (!device || !context || !pipeline || !preMaskPipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -2940,6 +3120,18 @@
       format: "rgba16float",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
     });
+
+    // M4 Slice 1 (Healing/Clone brush): same lifecycle/format/size as
+    // gradedTex above -- see preMaskTex's own WGSL-side doc comment for
+    // why this exists as a real texture rather than staying fused into
+    // fs_final's own single pass.
+    preMaskTex?.destroy();
+    preMaskTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "rgba16float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
     minChannelTex?.destroy();
     minChannelTex = device.createTexture({
       size: [bitmap.width, bitmap.height],
@@ -3195,34 +3387,14 @@
       entries: [{ binding: 18, resource: colorNRBlurHTex.createView() }],
     });
 
-    // Final pass's own bind group -- a genuinely DIFFERENT entry set than
-    // before (0,2,3,4,8,10,12,15,16), NOT the old single-pass fs_main's
-    // {0-7} -- fs_final no longer references srcTexture/curveLut/
-    // hslBands/splitToning (those moved into fs_grade), but DOES still
-    // need srcSampler(0) -- the mask loop's own pre-existing brushMasks
-    // sample uses it, unrelated to Dehaze. binding 16 (grain) is the
-    // newest additions here -- double-checked against fs_final's own WGSL
-    // body (which reads sharpenParams/lumaNrParams/colorNrParams and
-    // samples sharpenBlurFinal/lumaNrBlurFinal/colorNrBlurFinal directly)
-    // before adding, given this exact bind group has already missed a
-    // real binding THREE times now (srcSampler, then the Adjustments
-    // uniform in fs_texture_v/fs_clarity_v, then almost a fourth time for
-    // Grain) per this comment's own history -- six new bindings in one
-    // slice is exactly the kind of change most likely to repeat it.
-    bindGroup = gpuDevice.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
+    // Pre-mask pass's own bind group (M4 Slice 1): exactly the entry set
+    // the OLD single-pass fs_final's own bind group used to carry for its
+    // Dehaze/NR/Sharpen/Vignette/Grain half (0,2,3,4,26 removed -- those
+    // are mask-loop/clipping-only, now fs_mask's job below).
+    preMaskBindGroup = gpuDevice.createBindGroup({
+      layout: preMaskPipeline.getBindGroupLayout(0),
       entries: [
-        // binding 0 (srcSampler) IS still needed here -- fs_final's mask
-        // loop (copied unchanged from the old fs_main) samples brushMasks
-        // via textureSampleLevel(brushMasks, srcSampler, ...), a real
-        // dependency this bind group's entry list missed on the first
-        // pass (assumed fs_final needed none of the original 0/1/5/6/7
-        // bindings, but the mask loop's OWN pre-existing srcSampler use
-        // doesn't go away just because Dehaze was inserted above it).
-        { binding: 0, resource: sampler },
         { binding: 2, resource: { buffer: uniformBuffer } },
-        { binding: 3, resource: { buffer: masksBuffer } },
-        { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
         { binding: 8, resource: gradedTex.createView() },
         { binding: 10, resource: atmLightFinalTex.createView() },
         { binding: 12, resource: transmissionTex.createView() },
@@ -3234,7 +3406,26 @@
         { binding: 22, resource: sharpenBlurTex.createView() },
         { binding: 23, resource: lumaNRBlurTex.createView() },
         { binding: 24, resource: colorNRBlurTex.createView() },
+      ],
+    });
+
+    // Final pass's own bind group -- pruned down (M4 Slice 1) to just
+    // what fs_mask itself references now that Dehaze/NR/Sharpen/Vignette/
+    // Grain moved into fs_premask above: srcSampler(0, still needed --
+    // the mask loop's own brushMasks sample uses it, unrelated to
+    // Dehaze), the Adjustments uniform(2, for mask_count/
+    // selected_mask_index), masks(3), brushMasks(4), clipping(26), and
+    // the NEW preMaskTex(27) -- fs_mask's own input, replacing the direct
+    // gradedTex/atmLightFinal/etc. reads this bind group used to carry.
+    bindGroup = gpuDevice.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: sampler },
+        { binding: 2, resource: { buffer: uniformBuffer } },
+        { binding: 3, resource: { buffer: masksBuffer } },
+        { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
         { binding: 26, resource: { buffer: clippingBuffer } },
+        { binding: 27, resource: preMaskTex.createView() },
       ],
     });
     // Every intermediate above is freshly (re)created for this bitmap --
@@ -3258,7 +3449,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
+    if (!device || !context || !pipeline || !preMaskPipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -3456,7 +3647,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !lensCorrectPipeline || !lensCorrectBindGroup || !lensCorrectedTex || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !preMaskPipeline || !preMaskBindGroup || !preMaskTex || !lensCorrectPipeline || !lensCorrectBindGroup || !lensCorrectedTex || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
     syncBrushRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
@@ -3512,6 +3703,25 @@
         maskData[o + 3] = m.range;
         maskData[o + 4] = m.feather;
         maskData[o + 6] = 4; // kind = color range
+      } else if (m.op === "spot_mask") {
+        // M4 Slice 1 (Healing/Clone brush): structurally unlike every
+        // kind above -- no exposure/contrast/saturation (see SpotMask's
+        // own doc comment in develop.js), so this branch is the ONLY one
+        // that must ALSO set offset 8 (adjustments.x, repurposed as
+        // mode) itself, and skip the trailing common exposure/contrast/
+        // saturation writes below (guarded by the `m.op !== "spot_mask"`
+        // check right after this if/else chain) -- those would otherwise
+        // read `m.exposure` etc as `undefined`, which Float32Array
+        // silently coerces to NaN, corrupting the mode field they'd
+        // overwrite.
+        maskData[o + 0] = m.dest.x;
+        maskData[o + 1] = m.dest.y;
+        maskData[o + 2] = m.source.x;
+        maskData[o + 3] = m.source.y;
+        maskData[o + 4] = m.feather;
+        maskData[o + 6] = 5; // kind = spot
+        maskData[o + 7] = m.radius;
+        maskData[o + 8] = m.mode === "heal" ? 1 : 0;
       } else {
         // linear_gradient_mask -- the only kind left once the four
         // explicit branches above are exhausted, given MASK_OP_NAMES
@@ -3531,10 +3741,12 @@
         maskData[o + 4] = m.feather;
         maskData[o + 6] = 0; // kind = linear
       }
-      maskData[o + 5] = m.invert ? 1 : 0;
-      maskData[o + 8] = m.exposure;
-      maskData[o + 9] = m.contrast;
-      maskData[o + 10] = m.saturation;
+      if (m.op !== "spot_mask") {
+        maskData[o + 5] = m.invert ? 1 : 0;
+        maskData[o + 8] = m.exposure;
+        maskData[o + 9] = m.contrast;
+        maskData[o + 10] = m.saturation;
+      }
     });
     device.queue.writeBuffer(masksBuffer, 0, maskData);
 
@@ -3620,6 +3832,15 @@
       runFullscreenPass(encoder, meanHPipeline, meanHBindGroup, transmissionHTex.createView());
       runFullscreenPass(encoder, meanVPipeline, meanVBindGroup, transmissionTex.createView());
     }
+
+    // Pre-mask pass (M4 Slice 1): unconditional every render, same as the
+    // old single-pass fs_final always was -- Dehaze amount/Vignette/Grain/
+    // NR are all cheap per-pixel blends read fresh from their own uniform
+    // buffers every frame (unlike the expensive spatialOpsKey-gated block
+    // above), so this can't be folded into that gate without breaking
+    // live response to those sliders. Must run BEFORE fs_mask below --
+    // preMaskTex is fs_mask's own input, see that pass's own doc comment.
+    runFullscreenPass(encoder, preMaskPipeline, preMaskBindGroup, preMaskTex.createView());
 
     runFullscreenPass(encoder, pipeline, bindGroup, context.getCurrentTexture().createView());
 
@@ -3792,7 +4013,7 @@
       bind:this={canvasEl}
       class:zoomed={zoomMode === "100"}
       class:cropped={showCommittedCropPreview}
-      class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper"}
+      class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper" || activeTool === "spot"}
       style={showCommittedCropPreview
         ? `width:${100 / crop.width}%; height:${100 / crop.height}%; left:${(-crop.x * 100) / crop.width}%; top:${(-crop.y * 100) / crop.height}%; transform: rotate(${crop.angle}deg);`
         : activeTool === "crop"
@@ -3899,6 +4120,57 @@
             onpointermove={handleMaskHandlePointerMove}
             onpointerup={handleMaskHandlePointerUp}
           ></button>
+        {:else if mask.op === "spot_mask"}
+          <!-- M4 Slice 1 (Healing/Clone brush): a dashed line + matching
+               dashed circle at `source` shows exactly what region the
+               solid `dest` circle will be filled from -- both circles use
+               `spotRyPercent` so they render as true circles regardless of
+               canvas aspect, same convention `radiusFromDrag` already
+               established for radial gradients. -->
+          <svg class="mask-ellipse spot" class:selected={mask.id === selectedMaskId}>
+            <line
+              x1="{mask.dest.x * 100}%"
+              y1="{mask.dest.y * 100}%"
+              x2="{mask.source.x * 100}%"
+              y2="{mask.source.y * 100}%"
+              class="spot-link"
+            />
+            <ellipse cx="{mask.dest.x * 100}%" cy="{mask.dest.y * 100}%" rx="{mask.radius * 100}%" ry="{spotRyPercent(mask.radius)}%" />
+            <ellipse
+              cx="{mask.source.x * 100}%"
+              cy="{mask.source.y * 100}%"
+              rx="{mask.radius * 100}%"
+              ry="{spotRyPercent(mask.radius)}%"
+              class="spot-source"
+            />
+          </svg>
+          <button
+            class="mask-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{mask.dest.x * 100}%; top:{mask.dest.y * 100}%"
+            aria-label="Spot destination"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "dest")}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
+          <button
+            class="mask-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{(mask.dest.x + mask.radius) * 100}%; top:{mask.dest.y * 100}%"
+            aria-label="Spot radius"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "spot_radius", mask.dest)}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
+          <button
+            class="mask-handle spot-source-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{mask.source.x * 100}%; top:{mask.source.y * 100}%"
+            aria-label="Spot source"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "source")}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
         {/if}
       {/each}
       {#if placingMask?.kind === "linear_gradient"}
@@ -3908,6 +4180,15 @@
       {:else if placingMask?.kind === "radial_gradient"}
         <svg class="mask-ellipse placing">
           <ellipse cx="{placingMask.center.x * 100}%" cy="{placingMask.center.y * 100}%" rx="{placingMask.radiusX * 100}%" ry="{placingMask.radiusY * 100}%" />
+        </svg>
+      {:else if placingMask?.kind === "spot"}
+        <svg class="mask-ellipse placing">
+          <ellipse
+            cx="{placingMask.dest.x * 100}%"
+            cy="{placingMask.dest.y * 100}%"
+            rx="{placingMask.radius * 100}%"
+            ry="{spotRyPercent(placingMask.radius)}%"
+          />
         </svg>
       {/if}
       {#if activeTool === "brush" && brushCursor}
@@ -4172,6 +4453,21 @@
   .mask-ellipse.placing ellipse {
     stroke: var(--accent-strong);
   }
+  .mask-ellipse.spot .spot-source {
+    stroke: rgba(255, 255, 255, 0.35);
+    stroke-dasharray: 3 3;
+  }
+  .mask-ellipse.spot.selected .spot-source {
+    stroke: var(--accent);
+  }
+  .mask-ellipse.spot .spot-link {
+    stroke: rgba(255, 255, 255, 0.3);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+  }
+  .mask-ellipse.spot.selected .spot-link {
+    stroke: var(--accent);
+  }
   .brush-cursor {
     position: absolute;
     inset: 0;
@@ -4203,6 +4499,16 @@
   .mask-handle.selected {
     background: var(--accent-strong);
     border-color: var(--bg-panel);
+  }
+  .mask-handle.spot-source-handle {
+    width: 9px;
+    height: 9px;
+    margin-left: -4.5px;
+    margin-top: -4.5px;
+    background: rgba(255, 255, 255, 0.55);
+  }
+  .mask-handle.spot-source-handle.selected {
+    background: var(--accent);
   }
   .crop-dim {
     position: absolute;

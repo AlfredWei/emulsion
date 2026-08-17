@@ -1443,6 +1443,132 @@ fn color_mask_weight(rgb: [f32; 3], mask: &ColorRangeMask) -> f32 {
     weight
 }
 
+/// A `spot_mask` op (M4 Slice 1, Healing/Clone brush) -- structurally
+/// unlike every mask kind above: those all GATE a parametric adjustment
+/// (exposure/contrast/saturation) within a region; a spot mask instead
+/// COPIES pixel CONTENT from `source` into `dest`, so it carries no
+/// exposure/contrast/saturation/invert fields at all. `radius` is a
+/// fraction of image WIDTH, same single-scalar convention as a brush dab's
+/// own `radius` (see `dab_falloff`'s doc comment) -- a true circle in pixel
+/// space once `aspect`-corrected, not an ellipse like radial gradient's
+/// independent `radius_x`/`radius_y`. `heal_shift` is NOT parsed from the
+/// op JSON -- it's computed once per `apply_edit_stack` call, after the
+/// fully-graded pre-mask buffer exists (see `compute_heal_shift`), and
+/// left at its zeroed default for `mode: "clone"` masks (an unshifted
+/// sample IS a plain clone).
+struct SpotMask {
+    dest: (f32, f32),
+    radius: f32,
+    feather: f32,
+    source: (f32, f32),
+    heal: bool,
+    heal_shift: [f32; 3],
+}
+
+fn parse_spot_mask(op: &serde_json::Value) -> Option<SpotMask> {
+    let dest = op.get("dest")?;
+    let source = op.get("source")?;
+    Some(SpotMask {
+        dest: (dest.get("x")?.as_f64()? as f32, dest.get("y")?.as_f64()? as f32),
+        radius: op.get("radius")?.as_f64()? as f32,
+        feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        source: (
+            source.get("x")?.as_f64()? as f32,
+            source.get("y")?.as_f64()? as f32,
+        ),
+        heal: op.get("mode").and_then(|v| v.as_str()) == Some("heal"),
+        heal_shift: [0.0, 0.0, 0.0],
+    })
+}
+
+/// Same aspect-corrected true-circle distance as `dab_falloff`, but with
+/// `radial_mask_weight`'s feather-band formula (a spot is a plain circle,
+/// not a hardness-stepped brush dab) -- always "inside" semantics, no
+/// `invert`: replacing pixel content everywhere EXCEPT a small circle
+/// would never be a sensible spot-removal operation, unlike the other mask
+/// kinds where inverting a region-gated adjustment is meaningful.
+fn spot_mask_weight(uv: (f32, f32), mask: &SpotMask, aspect: f32) -> f32 {
+    if mask.radius <= 0.0 {
+        return 0.0;
+    }
+    let dx = uv.0 - mask.dest.0;
+    let dy = (uv.1 - mask.dest.1) * aspect;
+    let d = (dx * dx + dy * dy).sqrt();
+    let normalized_d = d / mask.radius;
+    let softness = (mask.feather / 100.0).clamp(0.0, 0.999);
+    let denom = (2.0 * softness).max(0.001);
+    ((1.0 + softness - normalized_d) / denom).clamp(0.0, 1.0)
+}
+
+const HEAL_RING_SAMPLES: usize = 24;
+const HEAL_RING_FACTOR: f32 = 1.15;
+
+/// Average color of `HEAL_RING_SAMPLES` points on a ring just outside
+/// `radius` around `center`, read from `pre_mask` (nearest-pixel, not
+/// bilinear -- a small simplification consistent with this module's
+/// existing "not byte-exact, tolerance-tested" bar). Points that land
+/// outside `[0,1]` UV (a spot near the frame edge) are skipped rather than
+/// clamped into the image -- clamping would bias the mean toward the edge
+/// pixel's own color, repeated many times over. Same aspect-correction
+/// inverse of `spot_mask_weight`'s own `dy * aspect`: here the angle's
+/// pixel-space y-component is divided BY `aspect` to get back to
+/// normalized UV.
+fn sample_ring_mean(
+    center: (f32, f32),
+    radius: f32,
+    pre_mask: &[[f32; 3]],
+    width: usize,
+    height: usize,
+    aspect: f32,
+) -> [f32; 3] {
+    let mut sum = [0.0f32; 3];
+    let mut count = 0.0f32;
+    let r = radius * HEAL_RING_FACTOR;
+    for i in 0..HEAL_RING_SAMPLES {
+        let theta = (i as f32 / HEAL_RING_SAMPLES as f32) * std::f32::consts::TAU;
+        let ux = center.0 + theta.cos() * r;
+        let uy = center.1 + (theta.sin() * r) / aspect;
+        if !(0.0..=1.0).contains(&ux) || !(0.0..=1.0).contains(&uy) {
+            continue;
+        }
+        let sx = ((ux * width as f32) as i64).clamp(0, width as i64 - 1) as usize;
+        let sy = ((uy * height as f32) as i64).clamp(0, height as i64 - 1) as usize;
+        let c = pre_mask[sy * width + sx];
+        sum[0] += c[0];
+        sum[1] += c[1];
+        sum[2] += c[2];
+        count += 1.0;
+    }
+    if count == 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+    [sum[0] / count, sum[1] / count, sum[2] / count]
+}
+
+/// The simplified stand-in for true seamless (Poisson) blending this
+/// slice ships with Heal mode: shift the ENTIRE sampled source patch by
+/// one constant per-channel delta (destination surround mean minus source
+/// surround mean), rather than smoothly varying the shift across the
+/// patch. Cheap (one ring sample per spot mask, not per pixel) and fixes
+/// the common case (a uniformish destination area with a different
+/// average tone/color than the source) without attempting true gradient-
+/// domain blending, which is out of scope for this slice.
+fn compute_heal_shift(
+    m: &SpotMask,
+    pre_mask: &[[f32; 3]],
+    width: usize,
+    height: usize,
+    aspect: f32,
+) -> [f32; 3] {
+    let dest_mean = sample_ring_mean(m.dest, m.radius, pre_mask, width, height, aspect);
+    let source_mean = sample_ring_mean(m.source, m.radius, pre_mask, width, height, aspect);
+    [
+        dest_mean[0] - source_mean[0],
+        dest_mean[1] - source_mean[1],
+        dest_mean[2] - source_mean[2],
+    ]
+}
+
 /// Wraps either mask kind so `parse_masks` can preserve the edit stack's
 /// TRUE op order across mixed kinds -- the frontend's `masks` array (built
 /// from one unfiltered pass over `stack.ops`, see `develop.js`'s
@@ -1457,17 +1583,18 @@ enum Mask {
     Brush(BrushMask),
     LuminanceRange(LuminanceRangeMask),
     ColorRange(ColorRangeMask),
+    Spot(SpotMask),
 }
 
 impl Mask {
-    /// `aspect` (image height/width) is only consumed by `Brush`; `rgb` is
-    /// only consumed by `LuminanceRange` -- the first mask kind whose
-    /// weight depends on pixel VALUE, not just position. Because `rgb` is
-    /// the same mutating accumulator `apply_edit_stack`'s pixel loop
-    /// threads through every mask in stack order, a luminance-range mask's
-    /// effective selection now depends on which masks precede it in the
-    /// stack (their adjustments have already been blended into `rgb` by
-    /// the time this mask's own weight is evaluated) -- the correct
+    /// `aspect` (image height/width) is consumed by `Brush` and `Spot`;
+    /// `rgb` is only consumed by `LuminanceRange` -- the first mask kind
+    /// whose weight depends on pixel VALUE, not just position. Because
+    /// `rgb` is the same mutating accumulator `apply_edit_stack`'s pixel
+    /// loop threads through every mask in stack order, a luminance-range
+    /// mask's effective selection now depends on which masks precede it in
+    /// the stack (their adjustments have already been blended into `rgb`
+    /// by the time this mask's own weight is evaluated) -- the correct
     /// WYSIWYG behavior (select pixels as currently graded, matching what
     /// the user sees), not an oversight; see the parity test exercising
     /// this explicitly below.
@@ -1478,16 +1605,54 @@ impl Mask {
             Mask::Brush(m) => brush_mask_weight(uv, m, aspect),
             Mask::LuminanceRange(m) => luminance_mask_weight(rgb, m),
             Mask::ColorRange(m) => color_mask_weight(rgb, m),
+            Mask::Spot(m) => spot_mask_weight(uv, m, aspect),
         }
     }
 
-    fn adjustments(&self) -> (f32, f32, f32) {
+    /// The color this mask would fully replace `rgb` with at `uv`, before
+    /// `weight` blends it in -- every parametric mask kind computes this
+    /// via `apply_adjustments` on the CURRENT pixel's own color (unchanged
+    /// from before this method existed, just renamed from the old
+    /// `adjustments()` + inline `apply_adjustments` call at the one call
+    /// site). `Spot` is the odd one out: its "local" color comes from
+    /// sampling a DIFFERENT pixel (`source` offset from `dest`) in the
+    /// fully-graded `pre_mask` buffer, not from adjusting this pixel's own
+    /// `rgb` -- see `apply_edit_stack`'s own doc comment for why that
+    /// requires `pre_mask` to already be complete (a two-pass split, not
+    /// the single fused loop every other mask kind is compatible with).
+    fn local_color(
+        &self,
+        uv: (f32, f32),
+        rgb: [f32; 3],
+        pre_mask: &[[f32; 3]],
+        width: usize,
+        height: usize,
+    ) -> [f32; 3] {
         match self {
-            Mask::Linear(m) => (m.exposure, m.contrast, m.saturation),
-            Mask::Radial(m) => (m.exposure, m.contrast, m.saturation),
-            Mask::Brush(m) => (m.exposure, m.contrast, m.saturation),
-            Mask::LuminanceRange(m) => (m.exposure, m.contrast, m.saturation),
-            Mask::ColorRange(m) => (m.exposure, m.contrast, m.saturation),
+            Mask::Spot(m) => {
+                let offset = (m.source.0 - m.dest.0, m.source.1 - m.dest.1);
+                let sample_uv = (uv.0 + offset.0, uv.1 + offset.1);
+                let sx = ((sample_uv.0 * width as f32) as i64).clamp(0, width as i64 - 1) as usize;
+                let sy =
+                    ((sample_uv.1 * height as f32) as i64).clamp(0, height as i64 - 1) as usize;
+                let sampled = pre_mask[sy * width + sx];
+                [
+                    (sampled[0] + m.heal_shift[0]).clamp(0.0, 1.0),
+                    (sampled[1] + m.heal_shift[1]).clamp(0.0, 1.0),
+                    (sampled[2] + m.heal_shift[2]).clamp(0.0, 1.0),
+                ]
+            }
+            _ => {
+                let (exposure, contrast, saturation) = match self {
+                    Mask::Linear(m) => (m.exposure, m.contrast, m.saturation),
+                    Mask::Radial(m) => (m.exposure, m.contrast, m.saturation),
+                    Mask::Brush(m) => (m.exposure, m.contrast, m.saturation),
+                    Mask::LuminanceRange(m) => (m.exposure, m.contrast, m.saturation),
+                    Mask::ColorRange(m) => (m.exposure, m.contrast, m.saturation),
+                    Mask::Spot(_) => unreachable!(),
+                };
+                apply_adjustments(rgb, exposure, contrast, saturation)
+            }
         }
     }
 }
@@ -1500,6 +1665,7 @@ fn parse_masks(ops: &[serde_json::Value]) -> Vec<Mask> {
             Some("brush_mask") => parse_brush_mask(op).map(Mask::Brush),
             Some("luminance_range_mask") => parse_luminance_range_mask(op).map(Mask::LuminanceRange),
             Some("color_range_mask") => parse_color_range_mask(op).map(Mask::ColorRange),
+            Some("spot_mask") => parse_spot_mask(op).map(Mask::Spot),
             _ => None,
         })
         .collect()
@@ -1524,7 +1690,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let exposure_ev = op_value(&stack.ops, "exposure");
     let contrast = op_value(&stack.ops, "contrast");
     let saturation = op_value(&stack.ops, "saturation");
-    let masks = parse_masks(&stack.ops);
+    let mut masks = parse_masks(&stack.ops);
     // Built once per call, not per pixel -- see build_curve_lut's own doc
     // comment for why this must be the same discretized LUT the WGSL
     // shader consumes, not an exact per-pixel spline evaluation.
@@ -1654,12 +1820,23 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         None
     };
 
-    // Pass 7 (final): Dehaze recovery + amount blend, then Vignette (also
-    // per-pixel, no neighbor data needed, folds directly into this same
-    // loop), then the existing mask loop -- reading the post-vignette
-    // value as its own accumulator base, the same contract every mask
-    // already has with every op above.
-    for (x, y, pixel) in image.enumerate_pixels_mut() {
+    // Pass 7: Dehaze recovery + amount blend, then Noise Reduction,
+    // Sharpening, Vignette, Grain -- all per-pixel, no CROSS-pixel reads
+    // besides the blur sources already fully materialized above -- written
+    // into `pre_mask`, NOT `image` directly. This is the same
+    // "neighbor read needs its own buffer pass" reasoning `graded`'s own
+    // doc comment gives for Dehaze, extended one step further: a `Spot`
+    // mask (M4 Slice 1, Healing/Clone brush) needs to read some OTHER
+    // pixel's fully-graded value (its `source` point) while computing
+    // `dest`'s -- fusing that into this same single loop would make the
+    // result depend on raster scan order (whichever of `source`/`dest`
+    // happens to be visited first would see a stale, not-yet-graded
+    // neighbor), exactly the race `graded` was already introduced to
+    // avoid. Every mask kind before Spot has no such cross-pixel
+    // dependency and would have been fine fused into this loop -- the
+    // split exists entirely for Spot's sake.
+    let mut pre_mask = vec![[0.0f32; 3]; w * h];
+    for (x, y, _) in image.enumerate_pixels() {
         let idx = y as usize * w + x as usize;
         let graded_rgb = graded[idx];
         let mut rgb = graded_rgb;
@@ -1700,8 +1877,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         // Pixel-center sampling, matching how a texture lookup samples at
         // the middle of a texel -- not required to be exact, same "not
         // byte-identical, tested to tolerance" bar as the rest of this
-        // module. Computed unconditionally now (Vignette needs it too,
-        // not just masks).
+        // module.
         let uv = (
             (x as f32 + 0.5) / width as f32,
             (y as f32 + 0.5) / height as f32,
@@ -1717,11 +1893,41 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             *c += gd;
         }
 
+        pre_mask[idx] = rgb;
+    }
+
+    // `heal_shift` depends only on each Spot mask's own (dest, radius,
+    // source) geometry, not on any per-pixel state, so it's computed once
+    // per mask here rather than once per pixel inside Pass 8's loop --
+    // same "precompute what doesn't vary per pixel" discipline as
+    // `curve_lut`/`bands`/`vignette`/`grain` above. Needs `pre_mask` to
+    // exist first (see this mask kind's own doc comment on `heal_shift`).
+    for mask in &mut masks {
+        if let Mask::Spot(m) = mask {
+            if m.heal {
+                m.heal_shift = compute_heal_shift(m, &pre_mask, w, h, aspect);
+            }
+        }
+    }
+
+    // Pass 8 (final): the mask loop, reading `pre_mask` as its accumulator
+    // base instead of continuing to mutate an in-loop `rgb` from Pass 7 --
+    // required so `Spot`'s `local_color` can look up a DIFFERENT pixel's
+    // `pre_mask` entry (see `Mask::local_color`'s own doc comment) and
+    // have it already be the true final pre-mask value, not a
+    // scan-order-dependent partial one.
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        let idx = y as usize * w + x as usize;
+        let mut rgb = pre_mask[idx];
+        let uv = (
+            (x as f32 + 0.5) / width as f32,
+            (y as f32 + 0.5) / height as f32,
+        );
+
         if !masks.is_empty() {
             for mask in &masks {
                 let weight = mask.weight(uv, aspect, rgb);
-                let (m_exposure, m_contrast, m_saturation) = mask.adjustments();
-                let local = apply_adjustments(rgb, m_exposure, m_contrast, m_saturation);
+                let local = mask.local_color(uv, rgb, &pre_mask, w, h);
                 for c in 0..3 {
                     rgb[c] += (local[c] - rgb[c]) * weight;
                 }
@@ -4163,5 +4369,131 @@ mod tests {
             ..LensCorrection::default()
         }));
         assert!(!lens_correction_is_identity(&LensCorrection { manual_distortion: 5.0, ..LensCorrection::default() }));
+    }
+
+    // M4 Slice 1 (Healing/Clone brush). Every case below builds a flat
+    // two-tone image (x < SPOT_TEST_SIZE/2 is LEFT gray, the rest is RIGHT
+    // gray) and places `dest`/`source` deep enough inside their own half
+    // that even the heal ring (`radius * HEAL_RING_FACTOR`) never crosses
+    // the LEFT/RIGHT boundary -- so `sample_ring_mean` always reads a
+    // single flat color on each side, keeping every expected value exactly
+    // hand-derivable rather than approximate.
+    const SPOT_TEST_SIZE: u32 = 40;
+    const SPOT_TEST_LEFT: u8 = 40;
+    const SPOT_TEST_RIGHT: u8 = 200;
+
+    fn spot_test_image() -> RgbImage {
+        RgbImage::from_fn(SPOT_TEST_SIZE, SPOT_TEST_SIZE, |x, _y| {
+            if x < SPOT_TEST_SIZE / 2 {
+                image::Rgb([SPOT_TEST_LEFT; 3])
+            } else {
+                image::Rgb([SPOT_TEST_RIGHT; 3])
+            }
+        })
+    }
+
+    /// `dest_px`/`source_px` are given as pixel INDICES, converted to
+    /// pixel-center UV (`(px + 0.5) / SPOT_TEST_SIZE`) the same way
+    /// `apply_edit_stack`'s own Pass 8 derives `uv` from `(x, y)` -- so a
+    /// radius expressed as a whole number of pixels (e.g. `1.0 /
+    /// SPOT_TEST_SIZE as f32`) lands exactly on a pixel boundary, not
+    /// somewhere between two pixel centers.
+    fn spot_mask_op(dest_px: (u32, u32), source_px: (u32, u32), radius: f32, feather: f32, mode: &str) -> serde_json::Value {
+        let to_uv = |p: (u32, u32)| ((p.0 as f32 + 0.5) / SPOT_TEST_SIZE as f32, (p.1 as f32 + 0.5) / SPOT_TEST_SIZE as f32);
+        let d = to_uv(dest_px);
+        let s = to_uv(source_px);
+        serde_json::json!({
+            "op": "spot_mask",
+            "id": "test-spot-mask",
+            "dest": { "x": d.0, "y": d.1 },
+            "source": { "x": s.0, "y": s.1 },
+            "radius": radius,
+            "feather": feather,
+            "mode": mode,
+        })
+    }
+
+    /// `radius = 1px` (`1.0 / SPOT_TEST_SIZE`) with `feather = 0` selects
+    /// ONLY the exact `dest` pixel at full weight: at its immediate
+    /// neighbor, `normalized_d = 1.0` exactly, and `spot_mask_weight`'s
+    /// `(1.0 - 1.0) / 0.001` clamps to exactly 0 (see that function's own
+    /// doc comment on the `feather=0` near-hard-edge case) -- a hand-
+    /// verifiable single-pixel replacement, not an approximate blend.
+    #[test]
+    fn spot_mask_clone_copies_exact_pixel_with_hard_edge_selection() {
+        let mut image = spot_test_image();
+        let op = spot_mask_op((8, 20), (32, 20), 1.0 / SPOT_TEST_SIZE as f32, 0.0, "clone");
+        apply_edit_stack(&mut image, &EditStack { schema_version: 1, ops: vec![op] });
+        assert_eq!(
+            image.get_pixel(8, 20).0,
+            [SPOT_TEST_RIGHT; 3],
+            "dest pixel should be fully replaced by the source pixel's content"
+        );
+        assert_eq!(
+            image.get_pixel(7, 20).0,
+            [SPOT_TEST_LEFT; 3],
+            "one pixel outside the selection radius must be left untouched"
+        );
+    }
+
+    /// Same dest/source placement as the clone test above, but `mode:
+    /// "heal"`: `compute_heal_shift` samples a ring around `dest` (all
+    /// LEFT) and around `source` (all RIGHT), so `heal_shift = LEFT -
+    /// RIGHT` exactly cancels the tone difference the raw clone would
+    /// otherwise introduce -- the healed pixel ends up matching its own
+    /// LEFT surroundings instead of visibly showing RIGHT content, unlike
+    /// the plain-clone case just above.
+    #[test]
+    fn spot_mask_heal_matches_surrounding_tone_instead_of_the_source_tone() {
+        let mut image = spot_test_image();
+        let op = spot_mask_op((8, 20), (32, 20), 1.0 / SPOT_TEST_SIZE as f32, 0.0, "heal");
+        apply_edit_stack(&mut image, &EditStack { schema_version: 1, ops: vec![op] });
+        let dest = image.get_pixel(8, 20).0;
+        for (actual, expected) in dest.iter().zip([SPOT_TEST_LEFT as i32; 3].iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected healed pixel ~{expected:?} (matching LEFT surroundings), got {dest:?}"
+            );
+        }
+    }
+
+    /// `radius = 4px`, `feather = 40` -- at the exact boundary pixel
+    /// (`normalized_d = 1.0`), `spot_mask_weight`'s formula reduces to
+    /// `softness / (2*softness) = 0.5` for ANY `feather > 0` (the same
+    /// feather-independent "midpoint of the transition band" fact
+    /// `color_range_mask_feathered_edge_blends_halfway` already
+    /// establishes for color-range masks) -- so this pixel's own original
+    /// LEFT value (40) and the fully-cloned RIGHT content (200) blend at
+    /// an exact 50/50 midpoint: `(40 + 200) / 2 = 120`, with no rounding
+    /// ambiguity.
+    #[test]
+    fn spot_mask_feathered_edge_blends_halfway() {
+        let mut image = spot_test_image();
+        let op = spot_mask_op((8, 20), (32, 20), 4.0 / SPOT_TEST_SIZE as f32, 40.0, "clone");
+        apply_edit_stack(&mut image, &EditStack { schema_version: 1, ops: vec![op] });
+        assert_eq!(image.get_pixel(12, 20).0, [120; 3], "boundary pixel should blend exactly halfway between its own value and the sampled content");
+    }
+
+    /// A spot mask reads `pre_mask` (the fully-graded buffer written by
+    /// Pass 7), not the raw source pixel -- this is the entire reason
+    /// `apply_edit_stack` splits its final loop into two passes (see Pass
+    /// 7's own doc comment). A preceding `+1.0EV` exposure op doubles the
+    /// source pixel's raw gray=80 to a graded 160 BEFORE the clone samples
+    /// it; if this mask instead sampled the raw, ungraded pixel, the dest
+    /// pixel would end up at 80, not 160 -- a real, distinguishable
+    /// regression this test would catch.
+    #[test]
+    fn spot_mask_clone_samples_the_graded_source_not_the_raw_pixel() {
+        let mut image = RgbImage::from_pixel(10, 10, image::Rgb([80, 80, 80]));
+        let exposure_op = serde_json::json!({ "op": "exposure", "value": 1.0 });
+        let spot_op = spot_mask_op((2, 5), (7, 5), 1.0 / 10.0, 0.0, "clone");
+        apply_edit_stack(&mut image, &EditStack { schema_version: 1, ops: vec![exposure_op, spot_op] });
+        let dest = image.get_pixel(2, 5).0;
+        for (actual, expected) in dest.iter().zip([160i32; 3].iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected dest ~{expected:?} (graded source, 80 doubled to 160), got {dest:?}"
+            );
+        }
     }
 }

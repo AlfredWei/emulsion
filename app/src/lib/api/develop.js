@@ -108,7 +108,33 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} saturation
  */
 
-/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask} Mask */
+/**
+ * @typedef {Object} SpotMask
+ * @property {"spot_mask"} op
+ * @property {string} id
+ * @property {"clone" | "heal"} mode
+ * @property {{x: number, y: number}} dest - the destination circle's
+ *   center (what the user sees/drags).
+ * @property {number} radius - normalized fraction of image WIDTH, same
+ *   single-scalar "true circle in pixel space" convention as a brush
+ *   dab's own `radius` (see `Dab`'s own doc comment) -- NOT radiusX/
+ *   radiusY like radial masks, since a spot is always a plain circle.
+ * @property {number} feather - 0-100, same edge-softness scale as linear/
+ *   radial's own `feather`.
+ * @property {{x: number, y: number}} source - the content SOURCE
+ *   circle's center, independently draggable from `dest` (same
+ *   two-independent-points precedent as `LinearGradientMask`'s `start`/
+ *   `end`). Auto-placed on creation, not user-chosen up front the way
+ *   Photoshop's Option/Alt-click convention works -- see
+ *   `createSpotMask`'s own doc comment.
+ *
+ * Deliberately has NO `invert`/`exposure`/`contrast`/`saturation` fields,
+ * unlike every other mask kind: a spot mask doesn't gate a parametric
+ * adjustment, it copies pixel CONTENT from `source` into `dest` -- there
+ * is no "settings" channel to invert or dial in.
+ */
+
+/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask | SpotMask} Mask */
 
 /**
  * @typedef {Object} EditStack
@@ -1131,6 +1157,7 @@ const MASK_OP_NAMES = [
   "brush_mask",
   "luminance_range_mask",
   "color_range_mask",
+  "spot_mask",
 ];
 
 // Presets (M3): op names a preset must NEVER capture -- `crop` and every
@@ -1258,6 +1285,39 @@ export function createColorRangeMask(/** @type {{r: number, g: number, b: number
     exposure: 0,
     contrast: 0,
     saturation: 0,
+  };
+}
+
+/** M4 Slice 1 (Healing/Clone brush): created from a click-drag on the
+ * canvas (see DevelopCanvas.svelte's spot mask pointer handling), which
+ * supplies `dest` and `radius` directly -- this factory's own job is just
+ * picking a `source`. Real Photoshop asks the user to Option/Alt-click a
+ * source FIRST; this app instead auto-places one a fixed offset away
+ * (`SPOT_SOURCE_OFFSET_FACTOR`x the diameter, horizontally, flipped to
+ * the other side if that would land outside the frame) and leaves it
+ * immediately draggable via its own handle -- a named, simpler scope cut
+ * vs. Lightroom's own content-aware auto-placement heuristic. Defaults to
+ * `mode: "heal"` (the more generally useful default over a plain "clone"
+ * copy, matching Lightroom's own Spot Removal tool default).
+ * @returns {SpotMask} */
+export function createSpotMask(
+  /** @type {{x: number, y: number}} */ dest,
+  /** @type {number} */ radius,
+) {
+  const SPOT_SOURCE_OFFSET_FACTOR = 2.5;
+  const offsetX = radius * 2 * SPOT_SOURCE_OFFSET_FACTOR;
+  const sourceX = dest.x + offsetX + radius <= 1 ? dest.x + offsetX : dest.x - offsetX;
+  return {
+    op: "spot_mask",
+    id: crypto.randomUUID(),
+    mode: "heal",
+    dest,
+    radius,
+    feather: 20,
+    source: {
+      x: Math.min(1, Math.max(0, sourceX)),
+      y: dest.y,
+    },
   };
 }
 

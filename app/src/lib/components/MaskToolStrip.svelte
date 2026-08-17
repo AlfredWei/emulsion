@@ -94,12 +94,14 @@
     let brushCount = 0;
     let rangeCount = 0;
     let colorCount = 0;
+    let spotCount = 0;
     return new Map(
       masks.map((mask) => {
         if (mask.op === "radial_gradient_mask") return [mask.id, `Radial ${++radialCount}`];
         if (mask.op === "brush_mask") return [mask.id, `Brush ${++brushCount}`];
         if (mask.op === "luminance_range_mask") return [mask.id, `Range ${++rangeCount}`];
         if (mask.op === "color_range_mask") return [mask.id, `Color ${++colorCount}`];
+        if (mask.op === "spot_mask") return [mask.id, `Spot ${++spotCount}`];
         return [mask.id, `Gradient ${++gradientCount}`];
       }),
     );
@@ -202,6 +204,20 @@
       <line x1="14" y1="2.3" x2="10.7" y2="5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
       <line x1="10.5" y1="5.4" x2="4.3" y2="11.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
       <path d="M4.3 11.6 L3 14 L5.4 12.7 Z" fill="currentColor" />
+    </svg>
+  </button>
+  <button
+    class="tool icon"
+    class:active={activeTool === "spot"}
+    type="button"
+    disabled={atCap && activeTool !== "spot"}
+    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Spot Removal (Healing/Clone) -- click-drag to size a circle over a blemish"}
+    aria-label="Spot Removal"
+    onclick={() => onToolToggle("spot")}
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <circle cx="9.5" cy="6.5" r="4" stroke="currentColor" stroke-width="1.3" />
+      <circle cx="3.6" cy="12.4" r="1.6" stroke="currentColor" stroke-width="1.1" stroke-dasharray="1.6 1.4" />
     </svg>
   </button>
 

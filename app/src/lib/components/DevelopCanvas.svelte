@@ -1040,6 +1040,30 @@
     onSpotBrushSizeChange(next);
   }
 
+  // A trackpad pinch over the canvas doesn't dispatch `wheel` at all -- in
+  // WebKit (this app's webview on macOS) it's a separate, nonstandard
+  // `gesturestart`/`gesturechange` event pair that natively zooms the whole
+  // page unless prevented, which is what a user doing a pinch-style gesture
+  // while trying to resize the spot brush would hit: `handleWheel` above
+  // never even fires, so its own `preventDefault()` can't help. These
+  // aren't part of the DOM standard (no TS lib types, no Svelte `on*`
+  // prop), so they're bound imperatively here rather than as a template
+  // attribute like `onwheel`.
+  $effect(() => {
+    if (!canvasEl) return;
+    const el = canvasEl;
+    /** @param {Event} e */
+    const preventIfSpot = (e) => {
+      if (activeTool === "spot") e.preventDefault();
+    };
+    el.addEventListener("gesturestart", preventIfSpot);
+    el.addEventListener("gesturechange", preventIfSpot);
+    return () => {
+      el.removeEventListener("gesturestart", preventIfSpot);
+      el.removeEventListener("gesturechange", preventIfSpot);
+    };
+  });
+
   /** Dragging an existing mask's handle -- separate from the canvas's own
    * pointer handlers above (these fire on the handle button itself, which
    * sits visually on top, so the canvas never sees them). `start`/`end`

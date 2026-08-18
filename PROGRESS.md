@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Fix: trackpad pinch-zoom hijacked spot brush wheel-resize (2026-08-18)
+
+User report: "the mouse wheel to adjust brush size function is broken.." — clarified via follow-up questions that the symptom was the page/canvas scrolling or zooming instead of the brush resizing, and that the user wasn't sure whether they were on a fresh build.
+
+- **Root cause**: `handleWheel` (added in M4 Slice 3, below) only listens for the standard `wheel` event, which covers a plain mouse wheel or a trackpad two-finger scroll. A trackpad **pinch** gesture is different — in WebKit (this app's macOS webview) it never fires `wheel` at all; it's a separate, nonstandard `gesturestart`/`gesturechange` event pair that natively zooms the whole page unless explicitly prevented. A user instinctively pinching to resize the brush (a very natural motion on a trackpad) hit exactly this gap: `handleWheel`'s `preventDefault()` never even ran, since its event never fired.
+- **Fix**: bind `gesturestart`/`gesturechange` listeners directly on the canvas element (imperatively, via a small `$effect` — these events have no Svelte template prop or TS type, unlike `onwheel`) and call `preventDefault()` on them whenever `activeTool === "spot"`, blocking the native pinch-zoom without turning pinch into an alternate resize input (kept in scope with the original "mouse wheel" request).
+- Confirmed via `PASSIVE_EVENTS` in Svelte's own compiler source that `wheel` is not one of the events Svelte defaults to a passive listener for (only `touchstart`/`touchmove` are) — ruling out a passive-listener explanation for the plain-scroll case.
+- Also worth noting for this report specifically: PR #69 (which contains the entire wheel-resize feature) was still unmerged at the time of the report, so a build running off `main` or another branch would show plain, unmodified browser scroll/zoom behavior with no feature present at all — a real possibility given the user's own uncertainty about their build.
+- **Verification**: `npm run check` clean across 243 files. 197/197 Rust tests, 69/69 Vitest (both unchanged, run for regression — no Rust or test-covered logic touched). Real Tauri dev app built and launched cleanly, no startup panic. **Not verified interactively** — actually pinching on a trackpad over the canvas — same documented environment gap as every prior slice.
+
 ## M4 Slice 3 — Spot brush UX fixes: wheel sizing, before/after label, hotkey-focus bug, space-pan (2026-08-18)
 
 User feedback on M4 Slice 2, four items: (1) spot brush size should respond to the mouse wheel, (2) pressing the before/after hotkey should show an on-image label so it's clear which state you're in, (3) a real bug — "after adjust feather, hot-key, the effect applied failed", and (4) add a Space hotkey for temporary pan while zoomed in.

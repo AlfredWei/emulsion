@@ -2,7 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
-## M4 Slice 2 — Brush-like spot removal + hide overlays + before/after preview (2026-08-18)
+## Fix: dragging a spot mask's move handle didn't reapply the effect at the new position (2026-08-18)
+
+User report: "move spot does not reapply effect."
+
+Root cause: `syncMaskRasterization`'s dirty-check in `DevelopCanvas.svelte` was built entirely around the assumption that a mask's `dabs` array only ever grows (painting appends dabs) — it redraws when `dabs.length` changes, or (for spot masks) when `feather` changes, tracked via `dabsDrawn`/`featherDrawn`. But M4 Slice 2's "move" handle (introduced when Spot Removal became a brush-like stroke) translates every EXISTING dab's x/y in place, keeping the same count — completely invisible to that check. The GPU texture layer kept showing the stroke rasterized at its OLD position, so the actual heal/clone weight mask never followed the drag; only the DOM overlay (handles, dashed source circle) visually moved.
+
+- **Fix**: track each spot mask's `dabs[0]` position (`firstDabX`/`firstDabY`) alongside the existing `featherDrawn`, and treat a change there as another trigger for the existing full clear-and-redraw path (the same one feather changes already use). A move translates the WHOLE stroke by one uniform delta, so checking any single dab is a valid, cheap proxy — no need to hash or compare every dab.
+- **Verification**: `npm run check` clean across 243 files. 197/197 Rust tests, 69/69 Vitest (both unchanged — pure JS-side fix, no Rust or shader touched, run for regression). `naga` not needed (confirmed via diff — no WGSL touched). Real Tauri dev app built and launched cleanly, no startup panic — needed one extra round after a stray leftover `vite dev`/`emulsion` process from an earlier verification pass in this same session was still squatting on port 1420 (killed, then rebuilt cleanly).
+- **Not verified interactively this session** — actually dragging an existing spot mask's move handle and watching the heal effect follow it live — same documented environment gap as every prior slice (no native macOS window driver available here).
+
+## M4 Slice 3 — Spot brush UX fixes: wheel sizing, before/after label, hotkey-focus bug, space-pan (2026-08-18)
 
 User feedback on M4 Slice 1: "change circle base spot removal to brush like experience, the user can drag and move the brushed spot" + "the UI pivot points will block user's review... add hide/view mode" + "add hot-key to let user quickly preview pre-edit/after-edit image". Three changes to the just-shipped Spot Removal tool, all in one slice.
 

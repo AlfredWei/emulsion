@@ -252,6 +252,29 @@
   let brushHardness = $state(70);
   let brushFlow = $state(1);
   let eraseMode = $state(false);
+  // M4 Slice 2: spot removal's own brush-size TOOL option -- same "plain
+  // view state, never persisted, survives across strokes/masks within one
+  // session" treatment as brushSize above, kept separate (not shared with
+  // brushSize) since a user's preferred adjustment-brush size and preferred
+  // spot-removal size are independent preferences.
+  let spotBrushSize = $state(0.02);
+  // M4 Slice 2: hides every mask's overlay chrome (handles, pins, link
+  // lines, brush/spot cursors) so a user can review the actual graded
+  // result underneath without edit-tool UI in the way -- per explicit user
+  // request ("the UI pivot points will block user's review"). Distinct
+  // from `showMaskOverlay` below (that one only toggles the SELECTED
+  // mask's own soft colored highlight fill); this one is a global
+  // visibility switch for every mask's interactive chrome, toggleable via
+  // MaskToolStrip's eye-icon button or the H hotkey (handleGlobalKeydown).
+  let maskOverlaysVisible = $state(true);
+  // M4 Slice 2: before/after preview -- when true, DevelopCanvas shows the
+  // image as it would look with NO edits applied (skips the masks pass
+  // entirely) instead of the live graded result, toggleable via the \
+  // hotkey (handleGlobalKeydown) for a quick before/after comparison,
+  // matching real Lightroom's own \ convention. Deliberately a toggle, not
+  // a press-and-hold -- simpler and more reliable to implement correctly,
+  // and matches Lightroom's own default behavior for this exact key.
+  let showOriginal = $state(false);
   // Mask UI polish: soft colored overlay for the SELECTED no-geometry mask
   // (brush, luminance range), toggleable via a MaskEditorPanel checkbox or
   // the "O" hotkey. Grouped with the brush TOOL options above, not with
@@ -365,7 +388,7 @@
      *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
      *   | { kind: "brush", id: string }
      *   | { kind: "color_range", refColor: {r:number,g:number,b:number} }
-     *   | { kind: "spot", dest: {x:number,y:number}, radius: number }
+     *   | { kind: "spot", id: string, initialDab: {x:number,y:number,radius:number} }
      * } */ placement,
   ) {
     // Every kind gets its own explicit branch before the final
@@ -383,7 +406,7 @@
           : placement.kind === "color_range"
             ? createColorRangeMask(placement.refColor)
             : placement.kind === "spot"
-              ? createSpotMask(placement.dest, placement.radius)
+              ? createSpotMask(placement.initialDab, placement.id)
               : createLinearGradientMask(placement.start, placement.end);
     editStack = addMask(editStack, mask);
     selectedMaskId = mask.id;
@@ -391,10 +414,10 @@
     // a brush stroke should keep the Brush tool active (painting is
     // inherently multi-stroke -- see DevelopCanvas.svelte's brush-state
     // doc comment) rather than force a re-click of the tool for every dab.
-    // Color range and spot are one-shot placements like linear/radial (not
-    // multi-shot like brush), so they correctly fall through the same
-    // `!== "brush"` reset below.
-    if (placement.kind !== "brush") activeTool = null;
+    // Spot removal is now also a painted stroke (M4 Slice 2), so it stays
+    // active the same way; only color range and the gradients are one-shot
+    // placements that fall through the `!== "brush"` reset below.
+    if (placement.kind !== "brush" && placement.kind !== "spot") activeTool = null;
     const label =
       placement.kind === "radial_gradient"
         ? "Add Radial Gradient"
@@ -1176,6 +1199,23 @@
       if (e.key.toLowerCase() === "o" && OVERLAY_CAPABLE_MASK_OPS.includes(selectedMask?.op ?? "")) {
         e.preventDefault();
         showMaskOverlay = !showMaskOverlay;
+        return;
+      }
+      // M4 Slice 2: H hides/shows every mask's overlay chrome (not gated
+      // on a selected mask -- unlike "o" above, this is a blanket review
+      // toggle, matching real Lightroom's own H convention for exactly
+      // this purpose).
+      if (e.key.toLowerCase() === "h") {
+        e.preventDefault();
+        maskOverlaysVisible = !maskOverlaysVisible;
+        return;
+      }
+      // M4 Slice 2: \ toggles a quick before/after preview, matching real
+      // Lightroom's own \ convention.
+      if (e.key === "\\") {
+        e.preventDefault();
+        showOriginal = !showOriginal;
+        return;
       }
       return;
     }
@@ -2026,6 +2066,9 @@
         {brushFlow}
         {eraseMode}
         {showMaskOverlay}
+        {spotBrushSize}
+        {maskOverlaysVisible}
+        {showOriginal}
         onMaskCreated={handleMaskCreated}
         onMaskUpdated={handleMaskUpdated}
         onMaskSelected={(id) => (selectedMaskId = id)}
@@ -2121,6 +2164,8 @@
       {brushHardness}
       {brushFlow}
       {eraseMode}
+      {spotBrushSize}
+      {maskOverlaysVisible}
       onToolToggle={(tool) => (activeTool = activeTool === tool ? null : tool)}
       onMaskSelect={(id) => (selectedMaskId = id)}
       onBrushSizeChange={(v) => (brushSize = v)}
@@ -2128,6 +2173,9 @@
       onBrushFlowChange={(v) => (brushFlow = v)}
       onEraseToggle={() => (eraseMode = !eraseMode)}
       onNewBrush={() => (selectedMaskId = null)}
+      onSpotBrushSizeChange={(v) => (spotBrushSize = v)}
+      onNewSpot={() => (selectedMaskId = null)}
+      onToggleMaskOverlaysVisible={() => (maskOverlaysVisible = !maskOverlaysVisible)}
       onCreateLuminanceRange={handleCreateLuminanceRangeMask}
       {crop}
       {cropAspectLock}

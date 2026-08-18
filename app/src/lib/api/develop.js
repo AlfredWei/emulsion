@@ -109,29 +109,45 @@ import { invoke } from "@tauri-apps/api/core";
  */
 
 /**
+ * @typedef {Object} SpotDab
+ * @property {number} x
+ * @property {number} y
+ * @property {number} radius - normalized fraction of image WIDTH only,
+ *   same convention as a brush `Dab`'s own `radius` (see `Dab`'s own doc
+ *   comment) -- unlike `Dab`, a spot dab carries no `hardness`/`flow`/
+ *   `mode`, since a spot mask's edge softness comes from the mask's own
+ *   single `feather` (applied identically to every dab), not a per-dab
+ *   hardness/flow the way brush painting's "build up opacity" model works.
+ */
+
+/**
  * @typedef {Object} SpotMask
  * @property {"spot_mask"} op
  * @property {string} id
  * @property {"clone" | "heal"} mode
- * @property {{x: number, y: number}} dest - the destination circle's
- *   center (what the user sees/drags).
- * @property {number} radius - normalized fraction of image WIDTH, same
- *   single-scalar "true circle in pixel space" convention as a brush
- *   dab's own `radius` (see `Dab`'s own doc comment) -- NOT radiusX/
- *   radiusY like radial masks, since a spot is always a plain circle.
+ * @property {SpotDab[]} dabs - the painted stroke (M4 Slice 2: a click-drag
+ *   paints a sequence of dabs along the path, same brush-stroke model as
+ *   `BrushMask`'s own `dabs`, replacing the original single dest-circle
+ *   model per explicit user request for a brush-like interaction). Every
+ *   dab shares this mask's own `feather`/`sourceOffset` -- there is no
+ *   per-dab softness or per-dab source.
  * @property {number} feather - 0-100, same edge-softness scale as linear/
- *   radial's own `feather`.
- * @property {{x: number, y: number}} source - the content SOURCE
- *   circle's center, independently draggable from `dest` (same
- *   two-independent-points precedent as `LinearGradientMask`'s `start`/
- *   `end`). Auto-placed on creation, not user-chosen up front the way
- *   Photoshop's Option/Alt-click convention works -- see
- *   `createSpotMask`'s own doc comment.
+ *   radial's own `feather`, applied identically to every dab in `dabs`.
+ * @property {{dx: number, dy: number}} sourceOffset - the SAME (dx, dy)
+ *   delta applied to every dab when sampling content (real Photoshop
+ *   clone-stamp behavior: one offset for the whole stroke, not a
+ *   per-dab source point) -- also what makes "drag to move the whole
+ *   spot" trivial: translating every dab's (x, y) by an equal delta
+ *   leaves `sourceOffset` correct with no recomputation (see
+ *   DevelopCanvas.svelte's `spot_move` handle). Auto-placed on creation
+ *   from the first dab, not user-chosen up front the way Photoshop's
+ *   Option/Alt-click convention works -- see `createSpotMask`'s own doc
+ *   comment.
  *
  * Deliberately has NO `invert`/`exposure`/`contrast`/`saturation` fields,
  * unlike every other mask kind: a spot mask doesn't gate a parametric
- * adjustment, it copies pixel CONTENT from `source` into `dest` -- there
- * is no "settings" channel to invert or dial in.
+ * adjustment, it copies pixel CONTENT from a source offset into `dabs` --
+ * there is no "settings" channel to invert or dial in.
  */
 
 /** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask | SpotMask} Mask */
@@ -1288,11 +1304,13 @@ export function createColorRangeMask(/** @type {{r: number, g: number, b: number
   };
 }
 
-/** M4 Slice 1 (Healing/Clone brush): created from a click-drag on the
- * canvas (see DevelopCanvas.svelte's spot mask pointer handling), which
- * supplies `dest` and `radius` directly -- this factory's own job is just
- * picking a `source`. Real Photoshop asks the user to Option/Alt-click a
- * source FIRST; this app instead auto-places one a fixed offset away
+/** M4 Slice 1/2 (Healing/Clone brush): created from the FIRST dab of a
+ * click-drag paint stroke on the canvas (see DevelopCanvas.svelte's spot
+ * mask pointer handling, mirroring the Brush tool's own
+ * create-on-first-dab/append-on-subsequent-strokes pattern) -- this
+ * factory's own job is just picking an initial `sourceOffset` from that
+ * one dab. Real Photoshop asks the user to Option/Alt-click a source
+ * FIRST; this app instead auto-places one a fixed offset away
  * (`SPOT_SOURCE_OFFSET_FACTOR`x the diameter, horizontally, flipped to
  * the other side if that would land outside the frame) and leaves it
  * immediately draggable via its own handle -- a named, simpler scope cut
@@ -1300,24 +1318,17 @@ export function createColorRangeMask(/** @type {{r: number, g: number, b: number
  * `mode: "heal"` (the more generally useful default over a plain "clone"
  * copy, matching Lightroom's own Spot Removal tool default).
  * @returns {SpotMask} */
-export function createSpotMask(
-  /** @type {{x: number, y: number}} */ dest,
-  /** @type {number} */ radius,
-) {
+export function createSpotMask(/** @type {SpotDab} */ initialDab, /** @type {string=} */ id) {
   const SPOT_SOURCE_OFFSET_FACTOR = 2.5;
-  const offsetX = radius * 2 * SPOT_SOURCE_OFFSET_FACTOR;
-  const sourceX = dest.x + offsetX + radius <= 1 ? dest.x + offsetX : dest.x - offsetX;
+  const offsetX = initialDab.radius * 2 * SPOT_SOURCE_OFFSET_FACTOR;
+  const dx = initialDab.x + offsetX + initialDab.radius <= 1 ? offsetX : -offsetX;
   return {
     op: "spot_mask",
-    id: crypto.randomUUID(),
+    id: id ?? crypto.randomUUID(),
     mode: "heal",
-    dest,
-    radius,
+    dabs: [initialDab],
     feather: 20,
-    source: {
-      x: Math.min(1, Math.max(0, sourceX)),
-      y: dest.y,
-    },
+    sourceOffset: { dx, dy: 0 },
   };
 }
 

@@ -19,14 +19,17 @@
    *   brushSize: number,
    *   brushHardness: number,
    *   brushFlow: number,
+   *   spotBrushSize: number,
    *   eraseMode: boolean,
    *   showMaskOverlay: boolean,
+   *   maskOverlaysVisible: boolean,
+   *   showOriginal: boolean,
    *   onMaskCreated: (placement:
    *     | { kind: "linear_gradient", start: {x: number, y: number}, end: {x: number, y: number} }
    *     | { kind: "radial_gradient", center: {x: number, y: number}, radiusX: number, radiusY: number }
    *     | { kind: "brush", id: string }
    *     | { kind: "color_range", refColor: {r: number, g: number, b: number} }
-   *     | { kind: "spot", dest: {x: number, y: number}, radius: number }
+   *     | { kind: "spot", id: string, initialDab: import('$lib/api/develop.js').SpotDab }
    *   ) => void,
    *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onMaskSelected: (id: string) => void,
@@ -73,8 +76,11 @@
     brushSize,
     brushHardness,
     brushFlow,
+    spotBrushSize,
     eraseMode,
     showMaskOverlay,
+    maskOverlaysVisible = true,
+    showOriginal = false,
     onMaskCreated,
     onMaskUpdated,
     onMaskSelected,
@@ -219,11 +225,15 @@
     /** @type {
      *   | { kind: "linear_gradient", start: {x:number,y:number}, end: {x:number,y:number} }
      *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
-     *   | { kind: "spot", dest: {x:number,y:number}, radius: number }
      *   | null
      * } */ (null),
   );
-  /** @type {{ maskId: string, which: "start" | "end" | "center" | "radius" | "dest" | "source" | "spot_radius", center?: {x:number,y:number} } | null} */
+  /** @type {{
+   *   maskId: string,
+   *   which: "start" | "end" | "center" | "radius" | "spot_move" | "spot_source_offset",
+   *   center?: {x:number,y:number},
+   *   dabs?: import('$lib/api/develop.js').SpotDab[],
+   * } | null} */
   let handleDragState = null;
 
   // Crop & Straighten (M3): a fully separate drag system from masks above
@@ -347,27 +357,33 @@
   /** @type {{x:number,y:number} | null} */
   let eyedropperClickStart = null;
 
-  // M3 Slice 7: brush painting. Deliberately transient, per-stroke state --
-  // no persistent "which mask am I painting into" tracking survives past
+  // M3 Slice 7 (brush) / M4 Slice 2 (spot removal, brush-like per explicit
+  // user request): both tools paint a stroke the SAME way, so they share
+  // this one set of transient, per-stroke state variables -- safe since
+  // `activeTool` can't change mid-drag. Deliberately transient: no
+  // persistent "which mask am I painting into" tracking survives past
   // pointerup. Instead, EVERY pointerdown re-derives the paint target from
-  // `selectedMaskId`: if it currently points at a brush mask, this stroke
-  // APPENDS to it (real Lightroom's own multi-stroke-per-mask model,
-  // matching PROGRESS.md's design note); otherwise this stroke creates a
-  // fresh brush mask and selects it. A "New Brush" tool-strip button
-  // achieves "start fresh" simply by deselecting (selectedMaskId = null)
-  // -- no separate reset signal needs to reach this component at all.
+  // `selectedMaskId`: if it currently points at a mask of the SAME kind as
+  // the active tool, this stroke APPENDS to it (real Lightroom's own
+  // multi-stroke-per-mask model, matching PROGRESS.md's design note);
+  // otherwise this stroke creates a fresh mask and selects it. "New Brush"/
+  // "New Spot" tool-strip buttons achieve "start fresh" simply by
+  // deselecting (selectedMaskId = null) -- no separate reset signal needs
+  // to reach this component at all.
   /** @type {string | null} */
   let paintingMaskId = null;
-  /** @type {import('$lib/api/develop.js').Dab[]} */
+  /** @type {(import('$lib/api/develop.js').Dab | import('$lib/api/develop.js').SpotDab)[]} */
   let strokeDabs = [];
   /** @type {{x: number, y: number} | null} */
-  let lastBrushPoint = null;
+  let lastPaintPoint = null;
   // Live brush-size cursor preview (SVG ellipse in the mask-overlay, drawn
   // as a true on-screen circle via the same width/height aspect correction
   // radiusFromDrag already uses for radial masks) -- shown on hover, not
   // just while actively painting, so size is visible before committing a
-  // stroke.
+  // stroke. Separate state per tool (not shared) since a Brush cursor and a
+  // Spot cursor are sized from different props (brushSize/spotBrushSize).
   let brushCursor = $state(/** @type {{x:number,y:number} | null} */ (null));
+  let spotCursor = $state(/** @type {{x:number,y:number} | null} */ (null));
 
   /** CSS-pixel click position -> native canvas-backing-store pixel
    * coordinate. Reused from the zoom-to-point math (M3 Slice 3) --
@@ -658,7 +674,7 @@
    * enough relative to brush size at speed. Returns [] (places nothing)
    * if the move was smaller than one spacing unit, so slow/jittery
    * movement doesn't flood the dab list with near-duplicate points --
-   * `lastBrushPoint` is only advanced when dabs are actually placed (see
+   * `lastPaintPoint` is only advanced when dabs are actually placed (see
    * the pointermove handler), so distance keeps accumulating across
    * sub-threshold moves until it clears the bar. */
   function interpolatedDabs(/** @type {{x:number,y:number}} */ from, /** @type {{x:number,y:number}} */ to) {
@@ -676,6 +692,54 @@
       dabs.push(makeDab({ x: from.x + dx * t, y: from.y + dy * t }));
     }
     return dabs;
+  }
+
+  /** M4 Slice 2: a spot dab, mirroring `makeDab` -- no `hardness`/`flow`/
+   * `mode`, since a spot mask's edge softness comes from the mask's own
+   * single `feather` (set via MaskEditorPanel), not per-dab like brush
+   * painting. */
+  function makeSpotDab(/** @type {{x:number,y:number}} */ p) {
+    return { x: p.x, y: p.y, radius: spotBrushSize };
+  }
+
+  /** Same spacing/interpolation logic as `interpolatedDabs`, parametrized
+   * on `spotBrushSize` instead of `brushSize` -- kept as a separate
+   * function (not a shared helper both call) since the two dab shapes
+   * (`Dab` vs `SpotDab`) and their paint-time-settings differ enough that
+   * factoring out the shared 5 lines of spacing math would cost more
+   * indirection than it saves. */
+  function interpolatedSpotDabs(/** @type {{x:number,y:number}} */ from, /** @type {{x:number,y:number}} */ to) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dist = Math.hypot(dx, dy);
+    const spacing = Math.max(spotBrushSize * 0.25, 0.0008);
+    if (dist < spacing) return [];
+    const steps = Math.min(Math.floor(dist / spacing), 200);
+    const dabs = [];
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      dabs.push(makeSpotDab({ x: from.x + dx * t, y: from.y + dy * t }));
+    }
+    return dabs;
+  }
+
+  /** Unweighted centroid of a spot mask's dabs, plus their average radius
+   * -- mirrors `develop_engine.rs`'s own `spot_centroid_and_radius`
+   * exactly, since both sides need the SAME representative point (this
+   * one drives the move/source-offset handle positions and the WGSL
+   * heal-ring sampling via the mask-data buffer; the Rust one drives
+   * export-time heal-ring sampling). */
+  function spotCentroidAndRadius(/** @type {import('$lib/api/develop.js').SpotDab[]} */ dabs) {
+    if (dabs.length === 0) return { x: 0, y: 0, avgRadius: 0 };
+    let sx = 0;
+    let sy = 0;
+    let sr = 0;
+    for (const d of dabs) {
+      sx += d.x;
+      sy += d.y;
+      sr += d.radius;
+    }
+    return { x: sx / dabs.length, y: sy / dabs.length, avgRadius: sr / dabs.length };
   }
 
   function handlePointerDown(/** @type {PointerEvent} */ e) {
@@ -696,13 +760,6 @@
     if (activeTool === "color_range") {
       e.preventDefault();
       colorRangeClickStart = { x: e.clientX, y: e.clientY };
-      tryCapturePointer(e);
-      return;
-    }
-    if (activeTool === "spot") {
-      e.preventDefault();
-      const dest = screenToNormalized(e.clientX, e.clientY);
-      placingMask = { kind: "spot", dest, radius: 0 };
       tryCapturePointer(e);
       return;
     }
@@ -729,9 +786,33 @@
         onMaskCreated({ kind: "brush", id: newId });
       }
       strokeDabs.push(makeDab(p));
-      lastBrushPoint = p;
+      lastPaintPoint = p;
       brushCursor = p;
       onMaskUpdated(/** @type {string} */ (paintingMaskId), { dabs: [...strokeDabs] });
+      tryCapturePointer(e);
+      return;
+    }
+    if (activeTool === "spot") {
+      // M4 Slice 2: paints a stroke, exactly mirroring the Brush tool's own
+      // pointerdown above (per explicit user request for a brush-like spot
+      // removal interaction, replacing the original single click-drag
+      // circle) -- see the shared paint-session state's own doc comment.
+      e.preventDefault();
+      const p = screenToNormalized(e.clientX, e.clientY);
+      const existing = masks.find((m) => m.id === selectedMaskId && m.op === "spot_mask");
+      const dab = makeSpotDab(p);
+      if (existing) {
+        paintingMaskId = selectedMaskId;
+        strokeDabs = [.../** @type {any} */ (existing).dabs, dab];
+        onMaskUpdated(/** @type {string} */ (paintingMaskId), { dabs: [...strokeDabs] });
+      } else {
+        const newId = crypto.randomUUID();
+        paintingMaskId = newId;
+        strokeDabs = [dab];
+        onMaskCreated({ kind: "spot", id: newId, initialDab: dab });
+      }
+      lastPaintPoint = p;
+      spotCursor = p;
       tryCapturePointer(e);
       return;
     }
@@ -770,22 +851,27 @@
       placingMask = { ...placingMask, ...radiusFromDrag(placingMask.center, e.clientX, e.clientY) };
       return;
     }
-    if (placingMask?.kind === "spot") {
-      // Single width-normalized radius (matches SpotMask's own shape,
-      // unlike radial's independent radiusX/radiusY) -- radiusFromDrag's
-      // radiusX is already "native-pixel distance / canvas width", exactly
-      // that convention.
-      placingMask = { ...placingMask, radius: radiusFromDrag(placingMask.dest, e.clientX, e.clientY).radiusX };
-      return;
-    }
     if (activeTool === "brush") {
       const p = screenToNormalized(e.clientX, e.clientY);
       brushCursor = p; // shown on hover too, not just while painting
-      if (paintingMaskId && lastBrushPoint) {
-        const newDabs = interpolatedDabs(lastBrushPoint, p);
+      if (paintingMaskId && lastPaintPoint) {
+        const newDabs = interpolatedDabs(lastPaintPoint, p);
         if (newDabs.length > 0) {
           strokeDabs.push(...newDabs);
-          lastBrushPoint = p;
+          lastPaintPoint = p;
+          onMaskUpdated(paintingMaskId, { dabs: [...strokeDabs] });
+        }
+      }
+      return;
+    }
+    if (activeTool === "spot") {
+      const p = screenToNormalized(e.clientX, e.clientY);
+      spotCursor = p; // shown on hover too, not just while painting
+      if (paintingMaskId && lastPaintPoint) {
+        const newDabs = interpolatedSpotDabs(lastPaintPoint, p);
+        if (newDabs.length > 0) {
+          strokeDabs.push(...newDabs);
+          lastPaintPoint = p;
           onMaskUpdated(paintingMaskId, { dabs: [...strokeDabs] });
         }
       }
@@ -819,14 +905,6 @@
       // (accidental click) must be rejected, not committed -- it would
       // corrupt the frame with Inf/NaN.
       if (radiusX > 0.01 && radiusY > 0.01) onMaskCreated({ kind: "radial_gradient", center, radiusX, radiusY });
-      return;
-    }
-    if (placingMask?.kind === "spot") {
-      const { dest, radius } = placingMask;
-      placingMask = null;
-      // Same minimum-radius guard as radial -- radius divides into the
-      // WGSL/Rust weight formulas on both sides.
-      if (radius > 0.01) onMaskCreated({ kind: "spot", dest, radius });
       return;
     }
     if (colorRangeClickStart) {
@@ -865,14 +943,14 @@
       }
       return;
     }
-    if (activeTool === "brush") {
+    if (activeTool === "brush" || activeTool === "spot") {
       // Stroke ends, but deliberately does NOT clear selectedMaskId in the
       // parent -- a subsequent stroke (new pointerdown, tool still active)
       // re-derives paintingMaskId from selectedMaskId and continues
       // appending to the SAME mask, giving multi-stroke-per-mask painting
       // "for free" with no persistent state here.
       paintingMaskId = null;
-      lastBrushPoint = null;
+      lastPaintPoint = null;
       return;
     }
     if (!dragState) return;
@@ -915,8 +993,9 @@
   function handleMaskHandlePointerDown(
     /** @type {PointerEvent} */ e,
     /** @type {string} */ maskId,
-    /** @type {"start" | "end" | "center" | "radius" | "dest" | "source" | "spot_radius"} */ which,
+    /** @type {"start" | "end" | "center" | "radius" | "spot_move" | "spot_source_offset"} */ which,
     /** @type {{x:number,y:number}=} */ center,
+    /** @type {import('$lib/api/develop.js').SpotDab[]=} */ dabs,
   ) {
     e.stopPropagation();
     e.preventDefault();
@@ -931,7 +1010,7 @@
     // pointer exits the button's small hit area mid-drag -- a nice-to-have,
     // not a strict requirement, so a failure to acquire it shouldn't break
     // the drag itself.
-    handleDragState = { maskId, which, center };
+    handleDragState = { maskId, which, center, dabs };
     onMaskSelected(maskId);
     try {
       /** @type {HTMLElement} */ (e.currentTarget).setPointerCapture(e.pointerId);
@@ -942,16 +1021,35 @@
 
   function handleMaskHandlePointerMove(/** @type {PointerEvent} */ e) {
     if (!handleDragState) return;
-    const { maskId, which, center } = handleDragState;
+    const { maskId, which, center, dabs } = handleDragState;
     if (which === "radius" && center) {
       onMaskUpdated(maskId, radiusFromDrag(center, e.clientX, e.clientY));
       return;
     }
-    if (which === "spot_radius" && center) {
-      // Single width-normalized radius, unlike radial's radiusX/radiusY
-      // pair -- see the analogous note in handlePointerMove's own spot
-      // branch.
-      onMaskUpdated(maskId, { radius: radiusFromDrag(center, e.clientX, e.clientY).radiusX });
+    if (which === "spot_move" && center && dabs) {
+      // M4 Slice 2: "drag to move the whole brushed spot" -- translates
+      // EVERY dab by the delta from the ORIGINAL centroid (captured at
+      // drag-start, in `center`) to the current pointer, applied to the
+      // ORIGINAL dab snapshot (also captured at drag-start, in `dabs`),
+      // not the live mask -- recomputing from the original snapshot each
+      // move (rather than incrementally offsetting the already-moved
+      // dabs) avoids double-applying the delta. `sourceOffset` needs no
+      // change at all: it's a (dx, dy) delta, not an absolute point, so it
+      // stays correct automatically once every dab moves by the same
+      // amount -- the whole reason this mask shape (SpotMask's own doc
+      // comment) was chosen over the original per-dest-point model.
+      const p = screenToNormalized(e.clientX, e.clientY);
+      const dx = p.x - center.x;
+      const dy = p.y - center.y;
+      onMaskUpdated(maskId, { dabs: dabs.map((d) => ({ ...d, x: d.x + dx, y: d.y + dy })) });
+      return;
+    }
+    if (which === "spot_source_offset" && center) {
+      // `center` is the stroke's own (unchanging, since only sourceOffset
+      // is being edited) centroid -- the new offset is simply the current
+      // pointer's delta from it.
+      const p = screenToNormalized(e.clientX, e.clientY);
+      onMaskUpdated(maskId, { sourceOffset: { dx: p.x - center.x, dy: p.y - center.y } });
       return;
     }
     onMaskUpdated(maskId, { [which]: screenToNormalized(e.clientX, e.clientY) });
@@ -978,6 +1076,13 @@
   let context = null;
   /** @type {GPURenderPipeline | null} */
   let pipeline = null;
+  /** M4 Slice 2: before/after preview's own dedicated pass (fs_original) --
+   * see that WGSL function's own doc comment for why this is a separate
+   * pipeline rather than a branch inside `pipeline` (fs_mask). */
+  /** @type {GPURenderPipeline | null} */
+  let originalPipeline = null;
+  /** @type {GPUBindGroup | null} */
+  let originalBindGroup = null;
   /** @type {GPUTexture | null} */
   let sourceTexture = null;
   /** @type {GPUBuffer | null} */
@@ -1264,12 +1369,12 @@
   let brushTextureArray = null;
   /** Per-mask persistent rasterization state, keyed by mask id. Each
    * OffscreenCanvas is NEVER cleared once created -- only newly-added dabs
-   * are drawn onto it (see syncBrushRasterization) -- so a long stroke's
+   * are drawn onto it (see syncMaskRasterization) -- so a long stroke's
    * per-move cost stays bound by texture resolution/upload cost, not by
    * re-rendering the whole dab list from scratch every time. Reset
    * entirely on every image change (loadImage), since a canvas sized for
    * one image's resolution is meaningless for another.
-   * @type {Map<string, { canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D, layer: number, dabsDrawn: number }>} */
+   * @type {Map<string, { canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D, layer: number, dabsDrawn: number, featherDrawn: number }>} */
   let brushRasterState = new Map();
   /** @type {number[]} */
   let freeBrushLayers = [];
@@ -1339,23 +1444,39 @@
     // WGSL's vec2/vec3-in-array uniform alignment footguns -- array stride
     // in the uniform address space must be a multiple of 16 bytes, and an
     // all-vec4 struct is trivially aligned with no implicit padding.
-    // params.w holds the brush mask's own texture-array layer index for
-    // kind=2 (as a float, cast to i32 at sample time) -- for kind=5
-    // (spot, M4 Slice 1) the SAME scalar instead holds the spot's radius
-    // (a normalized fraction of image width, no texture layer needed).
+    // params.w holds a texture-array layer index for BOTH kind=2 (brush)
+    // and kind=5 (spot, M4 Slice 2: spot dabs rasterize into the SAME
+    // shared texture array brush masks already use, since both are now
+    // dab-stroke masks -- see syncMaskRasterization's own doc comment).
     // adjustments is entirely unused for spot (no exposure/contrast/
     // saturation channel -- it copies pixel CONTENT, see Mask::local_color
     // in develop_engine.rs) except adjustments.x, repurposed to carry
     // mode (0=clone, 1=heal).
     struct Mask {
-      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100); color range: xyz=refColor (0-1), w=range (0-100); spot: xy=dest, zw=source
-      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1 (unused for spot), z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range, 5=spot), w = brush texture-array layer OR spot radius
+      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100); color range: xyz=refColor (0-1), w=range (0-100); spot: xy=sourceOffset(dx,dy), zw=dabs centroid (for heal-ring sampling only)
+      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1 (unused for brush/spot; spot repurposes this for dabs' average radius, also for heal-ring sampling), z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range, 5=spot), w = texture-array layer (brush AND spot)
       adjustments: vec4<f32>, // x = exposure_ev (spot: mode, 0=clone/1=heal), y = contrast (unused for spot), z = saturation (unused for spot), w unused
     };
     const MAX_MASKS = 8;
 
     @group(0) @binding(0) var srcSampler: sampler;
     @group(0) @binding(1) var srcTexture: texture_2d<f32>;
+
+    // M4 Slice 2: before/after preview -- a dedicated pass, entirely
+    // separate from fs_grade/fs_premask/fs_mask's whole global-grade +
+    // local-mask pipeline, that just samples the RAW decoded source
+    // straight to the swapchain with zero edits applied. Deliberately its
+    // own pass rather than a branch inside fs_mask: fs_mask's own inferred
+    // bind-group layout only includes preMaskTex/masks/etc (whatever IT
+    // references), not srcTexture, so a "skip everything" branch there
+    // would need its own separate binding anyway -- a whole separate
+    // pipeline+bind-group (see originalPipeline/originalBindGroup) is no
+    // more code and keeps fs_mask's own already-complex body untouched.
+    @fragment
+    fn fs_original(in: VertexOut) -> @location(0) vec4<f32> {
+      return vec4<f32>(textureSampleLevel(srcTexture, srcSampler, in.uv, 0.0).rgb, 1.0);
+    }
+
     @group(0) @binding(2) var<uniform> adj: Adjustments;
     @group(0) @binding(3) var<uniform> masks: array<Mask, MAX_MASKS>;
     // Brush masks rasterize CPU-side (OffscreenCanvas, luminance-as-weight)
@@ -2594,46 +2715,49 @@
           weight = clamp((threshold - dist) / denom + 1.0, 0.0, 1.0);
           if (m.params.y > 0.5) { weight = 1.0 - weight; }
         } else {
-          // Spot (5, M4 Slice 1, Healing/Clone brush), and any future
+          // Spot (5, M4 Slice 1/2, Healing/Clone brush), and any future
           // kind >= 5: structurally unlike every kind above -- it doesn't
-          // gate a parametric adjustment, it copies pixel CONTENT from
-          // source into dest (see SpotMask's own doc comment in
-          // develop_engine.rs). Plain aspect-corrected circular falloff
-          // (same shape as dab_falloff's own true-circle distance, with
-          // radial_mask_weight's feather-band formula), always "inside"
-          // semantics -- no invert (m.params.y unused here).
-          let dims = vec2<i32>(textureDimensions(preMaskTex));
-          let aspect = f32(dims.y) / f32(dims.x);
-          let dest = m.start_end.xy;
-          let source = m.start_end.zw;
-          let radius = max(m.params.w, 0.0001);
-          let feather = m.params.x;
-          let sdx = in.uv.x - dest.x;
-          let sdy = (in.uv.y - dest.y) * aspect;
-          let d = sqrt(sdx * sdx + sdy * sdy) / radius;
-          let softness = clamp(feather / 100.0, 0.0, 0.999);
-          let denom = max(2.0 * softness, 0.001);
-          weight = clamp((1.0 + softness - d) / denom, 0.0, 1.0);
+          // gate a parametric adjustment, it copies pixel CONTENT from a
+          // source offset into its dabs (see SpotMask's own doc comment in
+          // develop_engine.rs). M4 Slice 2 (brush-like spot removal, per
+          // explicit user request) made this a dab-stroke mask just like
+          // Brush (2): weight comes from its OWN texture-array layer
+          // (rasterized CPU-side by syncMaskRasterization/rasterizeSpotDab,
+          // matching spot_mask_weight's feather formula per dab, then
+          // max-accumulated across dabs the same way Brush's own texture
+          // already accumulates its Add dabs), not an inline analytic
+          // circle the way the original single-dest-circle design used.
+          let layer = i32(m.params.w);
+          weight = textureSampleLevel(brushMasks, srcSampler, in.uv, layer, 0.0).r;
 
-          let offset = source - dest;
+          let offset = m.start_end.xy;
           let sampleUv = in.uv + offset;
+          let dims = vec2<i32>(textureDimensions(preMaskTex));
           let dimsF = vec2<f32>(dims);
           let sampleCoord = clamp(vec2<i32>(sampleUv * dimsF), vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
           var sampled = textureLoad(preMaskTex, sampleCoord, 0).rgb;
 
           // Heal (mode = adjustments.x > 0.5): shift the sampled patch by
           // the destination surround's mean color minus the source
-          // surround's -- see healRingMean's own doc comment. Gated on
-          // weight > 0 so the ring-sampling cost only lands on pixels
-          // actually near this spot (a small circle in practice), not
-          // every pixel in the image -- GPUs handle a spatially-clustered
-          // branch like this reasonably (most warps near a compact circle
-          // are either fully in or fully out), unlike a data-dependent
-          // branch scattered across the whole frame.
+          // surround's -- see healRingMean's own doc comment. A whole
+          // stroke shares ONE shift, anchored to the dabs' own centroid
+          // (start_end.zw) and average radius (params.y) -- mirroring
+          // develop_engine.rs's compute_heal_shift/spot_centroid_and_radius
+          // exactly, same "simplified, not true Poisson blending" scope as
+          // before, just now anchored to a representative point for the
+          // whole stroke instead of a single dest circle. Gated on weight
+          // > 0 so the ring-sampling cost only lands on pixels actually
+          // near this spot (a small circle in practice), not every pixel
+          // in the image -- GPUs handle a spatially-clustered branch like
+          // this reasonably (most warps near a compact circle are either
+          // fully in or fully out), unlike a data-dependent branch
+          // scattered across the whole frame.
           if (m.adjustments.x > 0.5 && weight > 0.001) {
-            let destPx = dest * dimsF;
-            let sourcePx = source * dimsF;
-            let radiusPx = radius * dimsF.x;
+            let centroid = m.start_end.zw;
+            let avgRadius = m.params.y;
+            let destPx = centroid * dimsF;
+            let sourcePx = (centroid + offset) * dimsF;
+            let radiusPx = avgRadius * dimsF.x;
             let destMean = healRingMean(destPx, radiusPx, dims);
             let sourceMean = healRingMean(sourcePx, radiusPx, dims);
             sampled = clamp(sampled + (destMean - sourceMean), vec3<f32>(0.0), vec3<f32>(1.0));
@@ -2651,10 +2775,11 @@
         // prior explicit scope decision that they keep their existing
         // dashed-outline-only feedback (PROGRESS.md,
         // mask-overlay-feather-indicators slice); spot (5) is ALSO
-        // excluded -- it always shows a real destination/source circle
-        // pair (drawn in the DOM overlay, not here), matching linear/
-        // radial's own "has geometry, no colored-fill overlay" precedent,
-        // not brush's. Reuses the weight just computed above for THIS
+        // excluded -- it always shows a real source-circle/move/
+        // source-offset handle set (drawn in the DOM overlay, not here),
+        // matching linear/radial's own "has geometry, no colored-fill
+        // overlay" precedent, not brush's. Reuses the weight just computed
+        // above for THIS
         // mask -- already invert-adjusted, already evaluated against the
         // correct (pre-this-mask) rgb state -- so no separate
         // re-sample-and-re-invert step is needed regardless of kind,
@@ -2751,6 +2876,13 @@
       layout: "auto",
       vertex: { module, entryPoint: "vs_main" },
       fragment: { module, entryPoint: "fs_mask", targets: [{ format: presentationFormat }] },
+      primitive: { topology: "triangle-list" },
+    });
+    // M4 Slice 2: before/after preview (see fs_original's own doc comment).
+    originalPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_original", targets: [{ format: presentationFormat }] },
       primitive: { topology: "triangle-list" },
     });
     // M4 Slice 1 (Healing/Clone brush): writes preMaskTex, fs_mask's own
@@ -3266,6 +3398,14 @@
         { binding: 25, resource: { buffer: lensCorrectionBuffer } },
       ],
     });
+    // M4 Slice 2: before/after preview (see fs_original's own doc comment).
+    originalBindGroup = gpuDevice.createBindGroup({
+      layout: /** @type {GPURenderPipeline} */ (originalPipeline).getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: sampler },
+        { binding: 1, resource: sourceTexture.createView() },
+      ],
+    });
     gradeBindGroup = gpuDevice.createBindGroup({
       layout: gradePipeline.getBindGroupLayout(0),
       entries: [
@@ -3574,23 +3714,78 @@
     ctx.fill();
   }
 
-  /** Ensures every brush mask in `masks` has a rasterized texture-array
-   * layer, drawing only newly-added dabs onto each mask's own persistent
-   * OffscreenCanvas -- never re-rasterizing dabs already drawn, which is
-   * what keeps a long stroke's per-move cost O(1) (bound by texture
-   * resolution/upload cost, not stroke length). Releases layers for brush
-   * masks no longer present (deleted). Called at the top of
-   * writeAdjustmentsAndRender, so it runs both on every mask-list change
-   * and once per freshly loaded image (loadImage's initial call re-
-   * rasterizes any brush masks already in that image's saved edit stack,
-   * since a canvas sized for a DIFFERENT image's resolution is meaningless
-   * here -- loadImage resets brushRasterState/freeBrushLayers before this
-   * runs). */
-  function syncBrushRasterization() {
+  /** M4 Slice 2: a spot dab's own weight shape, rasterized to MATCH
+   * `develop_engine.rs`'s `spot_mask_weight` formula exactly (full weight
+   * out to `(1-softness)*radius`, linearly fading to 0 at
+   * `(1+softness)*radius`) rather than reusing `rasterizeDab`'s
+   * hardness/flow model, which has different feather semantics (fades
+   * INSIDE the dab's own radius, not beyond it). Unlike brush dabs, EVERY
+   * spot dab in a stroke shares one softness (the mask's own `feather`,
+   * not a per-dab setting baked in at paint time), so this needs to be
+   * passed in explicitly rather than read off the dab itself -- see
+   * `syncMaskRasterization`'s own `featherDrawn` tracking for why a
+   * feather change forces a full re-rasterization of every dab, unlike
+   * brush's append-only dabs. Always "add" (`lighter`) compositing -- spot
+   * removal has no erase-mode concept. */
+  function rasterizeSpotDab(
+    /** @type {OffscreenCanvasRenderingContext2D} */ ctx,
+    /** @type {number} */ canvasWidth,
+    /** @type {number} */ canvasHeight,
+    /** @type {import('$lib/api/develop.js').SpotDab} */ dab,
+    /** @type {number} */ feather,
+  ) {
+    const cx = dab.x * canvasWidth;
+    const cy = dab.y * canvasHeight;
+    const r = dab.radius * canvasWidth;
+    const softness = Math.min(Math.max(feather / 100, 0), 0.999);
+    const innerR = Math.max(r * (1 - softness), 0);
+    const outerR = Math.max(r * (1 + softness), innerR + 0.5);
+
+    ctx.globalCompositeOperation = "lighter";
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+    const gradient = ctx.createRadialGradient(cx, cy, innerR, cx, cy, outerR);
+    gradient.addColorStop(0, "rgb(255,255,255)");
+    gradient.addColorStop(1, "rgb(0,0,0)");
+    ctx.fillStyle = gradient;
+    ctx.fill();
+  }
+
+  /** Ensures every brush/spot mask in `masks` has a rasterized texture-
+   * array layer, drawing only newly-added dabs onto each mask's own
+   * persistent OffscreenCanvas -- never re-rasterizing dabs already drawn,
+   * which is what keeps a long stroke's per-move cost O(1) (bound by
+   * texture resolution/upload cost, not stroke length). Shared between the
+   * two mask kinds (M4 Slice 2 generalized this from brush-only) since
+   * both are dab-stroke masks that need the exact same texture-array
+   * plumbing, drawing into the SAME shared texture array/layer pool -- the
+   * combined MAX_MASKS budget already caps total masks at 8 regardless of
+   * kind, so there's always enough room for every dab-stroke mask
+   * (brush or spot) to get its own layer.
+   *
+   * Spot masks have one wrinkle brush masks don't: a spot mask's edge
+   * softness is a single mask-level `feather` (not baked per-dab at paint
+   * time the way brush's hardness/flow are), so changing it on an
+   * EXISTING mask (via MaskEditorPanel's Feather slider) must
+   * re-rasterize every already-drawn dab, not just newly-appended ones --
+   * `featherDrawn` tracks the feather value last baked into each spot
+   * entry's canvas, reusing the same "dabs shrank -> full clear and
+   * redraw" path a genuine dab-list shrink (not expected, but handled
+   * defensively) already needed.
+   *
+   * Releases layers for masks no longer present (deleted). Called at the
+   * top of writeAdjustmentsAndRender, so it runs both on every mask-list
+   * change and once per freshly loaded image (loadImage's initial call
+   * re-rasterizes any brush/spot masks already in that image's saved edit
+   * stack, since a canvas sized for a DIFFERENT image's resolution is
+   * meaningless here -- loadImage resets brushRasterState/freeBrushLayers
+   * before this runs). */
+  function syncMaskRasterization() {
     if (!device || !brushTextureArray) return;
     const presentIds = new Set();
     for (const mask of masks) {
-      if (mask.op !== "brush_mask") continue;
+      const isSpot = mask.op === "spot_mask";
+      if (mask.op !== "brush_mask" && !isSpot) continue;
       presentIds.add(mask.id);
       let entry = brushRasterState.get(mask.id);
       if (!entry) {
@@ -3602,31 +3797,40 @@
         const canvas = new OffscreenCanvas(brushTextureArray.width, brushTextureArray.height);
         const ctx = /** @type {OffscreenCanvasRenderingContext2D} */ (canvas.getContext("2d"));
         // Opaque black init (NOT the canvas's default transparent) --
-        // required for "multiply" erase compositing to correctly no-op
-        // over never-painted areas. Against a transparent destination,
-        // Porter-Duff "multiply" lets the erase gradient's own color show
-        // through directly (since there's no destination alpha to
-        // constrain it), which would incorrectly paint weight into
-        // untouched regions. Against opaque black (alpha=1, color=0),
-        // multiply always yields black regardless of the erase color, so
-        // erasing over nothing stays nothing.
+        // required for brush's "multiply" erase compositing to correctly
+        // no-op over never-painted areas (spot never uses "multiply", but
+        // shares this same init for one consistent starting state).
+        // Against a transparent destination, Porter-Duff "multiply" lets
+        // the erase gradient's own color show through directly (since
+        // there's no destination alpha to constrain it), which would
+        // incorrectly paint weight into untouched regions. Against opaque
+        // black (alpha=1, color=0), multiply always yields black
+        // regardless of the erase color, so erasing over nothing stays
+        // nothing.
         ctx.fillStyle = "black";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        entry = { canvas, ctx, layer, dabsDrawn: 0 };
+        entry = { canvas, ctx, layer, dabsDrawn: 0, featherDrawn: 0 };
         brushRasterState.set(mask.id, entry);
       }
       const dabs = /** @type {any} */ (mask).dabs;
-      if (dabs.length < entry.dabsDrawn) {
-        // Dab list shrank -- not expected in this design (dabs only ever
-        // get appended), but handled defensively rather than leaving
-        // stale strokes visible.
+      const featherChanged = isSpot && /** @type {any} */ (mask).feather !== entry.featherDrawn;
+      if (dabs.length < entry.dabsDrawn || featherChanged) {
+        // Dab list shrank (not expected in this design, dabs only ever get
+        // appended, but handled defensively rather than leaving stale
+        // strokes visible) OR a spot mask's shared feather changed (every
+        // dab needs the new softness baked in, not just new ones).
         entry.ctx.fillStyle = "black";
         entry.ctx.fillRect(0, 0, entry.canvas.width, entry.canvas.height);
         entry.dabsDrawn = 0;
       }
       for (let i = entry.dabsDrawn; i < dabs.length; i++) {
-        rasterizeDab(entry.ctx, entry.canvas.width, entry.canvas.height, dabs[i]);
+        if (isSpot) {
+          rasterizeSpotDab(entry.ctx, entry.canvas.width, entry.canvas.height, dabs[i], /** @type {any} */ (mask).feather);
+        } else {
+          rasterizeDab(entry.ctx, entry.canvas.width, entry.canvas.height, dabs[i]);
+        }
       }
+      if (isSpot) entry.featherDrawn = /** @type {any} */ (mask).feather;
       if (dabs.length !== entry.dabsDrawn) {
         entry.dabsDrawn = dabs.length;
         const imageData = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height);
@@ -3648,7 +3852,24 @@
 
   function writeAdjustmentsAndRender() {
     if (!device || !context || !pipeline || !bindGroup || !preMaskPipeline || !preMaskBindGroup || !preMaskTex || !lensCorrectPipeline || !lensCorrectBindGroup || !lensCorrectedTex || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
-    syncBrushRasterization();
+
+    // M4 Slice 2: before/after preview -- skips the ENTIRE global-grade +
+    // local-mask pipeline below (not just the mask loop) and draws the raw
+    // decoded source straight to the swapchain via fs_original, matching
+    // real Lightroom's own \ behavior (show the photo exactly as it was
+    // before any edits, not just "with local adjustments hidden"). Returns
+    // before touching histogram/mask-rasterization state so toggling back
+    // off simply re-renders the live graded result on the very next call,
+    // no state to reconcile.
+    if (showOriginal) {
+      if (!originalPipeline || !originalBindGroup) return;
+      const encoder = device.createCommandEncoder();
+      runFullscreenPass(encoder, originalPipeline, originalBindGroup, context.getCurrentTexture().createView());
+      device.queue.submit([encoder.finish()]);
+      return;
+    }
+
+    syncMaskRasterization();
 
     // Tone curve: rebuilt from the current control points and rewritten
     // every render, same "cheap enough to just always redo" treatment as
@@ -3704,7 +3925,7 @@
         maskData[o + 4] = m.feather;
         maskData[o + 6] = 4; // kind = color range
       } else if (m.op === "spot_mask") {
-        // M4 Slice 1 (Healing/Clone brush): structurally unlike every
+        // M4 Slice 1/2 (Healing/Clone brush): structurally unlike every
         // kind above -- no exposure/contrast/saturation (see SpotMask's
         // own doc comment in develop.js), so this branch is the ONLY one
         // that must ALSO set offset 8 (adjustments.x, repurposed as
@@ -3713,14 +3934,19 @@
         // check right after this if/else chain) -- those would otherwise
         // read `m.exposure` etc as `undefined`, which Float32Array
         // silently coerces to NaN, corrupting the mode field they'd
-        // overwrite.
-        maskData[o + 0] = m.dest.x;
-        maskData[o + 1] = m.dest.y;
-        maskData[o + 2] = m.source.x;
-        maskData[o + 3] = m.source.y;
+        // overwrite. M4 Slice 2: same texture-array-layer packing as
+        // brush_mask above (o+7), plus the dabs' own centroid/average
+        // radius (o+2/o+3, o+5) for heal-ring sampling -- see the WGSL
+        // Mask struct's own doc comment for the full field-repurposing map.
+        const c = spotCentroidAndRadius(m.dabs);
+        maskData[o + 0] = m.sourceOffset.dx;
+        maskData[o + 1] = m.sourceOffset.dy;
+        maskData[o + 2] = c.x;
+        maskData[o + 3] = c.y;
         maskData[o + 4] = m.feather;
+        maskData[o + 5] = c.avgRadius;
         maskData[o + 6] = 5; // kind = spot
-        maskData[o + 7] = m.radius;
+        maskData[o + 7] = brushRasterState.get(m.id)?.layer ?? 0;
         maskData[o + 8] = m.mode === "heal" ? 1 : 0;
       } else {
         // linear_gradient_mask -- the only kind left once the four
@@ -3909,6 +4135,7 @@
     void lumaNR;
     void colorNR;
     void showClippingOverlay;
+    void showOriginal;
     if (status === "ready") writeAdjustmentsAndRender();
   });
 
@@ -4038,6 +4265,13 @@
          pan/zoom/placement drags meant for the canvas beneath it -- only
          the individual handle buttons opt back in. -->
     <div class="mask-overlay" bind:this={overlayEl}>
+      <!-- M4 Slice 2: `maskOverlaysVisible` gates every piece of mask chrome
+           (outlines, handles, pins, cursors) so a user can review the
+           actual graded result without edit-tool UI in the way, toggled via
+           MaskToolStrip's eye button or the H hotkey. Deliberately doesn't
+           gate the crop grid below (a different tool's own overlay, shown
+           only while actively cropping, not a persistent mask pin). -->
+      {#if maskOverlaysVisible}
       {#each masks as mask (mask.id)}
         {#if mask.op === "linear_gradient_mask"}
           {@const fl = linearFeatherLines(mask)}
@@ -4121,53 +4355,40 @@
             onpointerup={handleMaskHandlePointerUp}
           ></button>
         {:else if mask.op === "spot_mask"}
-          <!-- M4 Slice 1 (Healing/Clone brush): a dashed line + matching
-               dashed circle at `source` shows exactly what region the
-               solid `dest` circle will be filled from -- both circles use
-               `spotRyPercent` so they render as true circles regardless of
-               canvas aspect, same convention `radiusFromDrag` already
-               established for radial gradients. -->
+          <!-- M4 Slice 2 (brush-like spot removal, replacing the original
+               single dest-circle model): the painted stroke itself has no
+               persistent outline overlay -- same precedent as `brush_mask`
+               above, which shows no outline either once a stroke is
+               committed (a multi-dab union has no simple SVG shape the way
+               one circle did). Instead: a dashed circle at the stroke's
+               centroid + `sourceOffset` (approximating, at the dabs'
+               average radius, what content the WHOLE stroke samples from)
+               plus a link line to the stroke's own centroid, a "move"
+               handle at the centroid (drag to translate every dab -- see
+               `handleMaskHandlePointerMove`'s own `spot_move` doc comment),
+               and a source-offset handle. -->
+          {@const c = spotCentroidAndRadius(mask.dabs)}
+          {@const sx = c.x + mask.sourceOffset.dx}
+          {@const sy = c.y + mask.sourceOffset.dy}
           <svg class="mask-ellipse spot" class:selected={mask.id === selectedMaskId}>
-            <line
-              x1="{mask.dest.x * 100}%"
-              y1="{mask.dest.y * 100}%"
-              x2="{mask.source.x * 100}%"
-              y2="{mask.source.y * 100}%"
-              class="spot-link"
-            />
-            <ellipse cx="{mask.dest.x * 100}%" cy="{mask.dest.y * 100}%" rx="{mask.radius * 100}%" ry="{spotRyPercent(mask.radius)}%" />
-            <ellipse
-              cx="{mask.source.x * 100}%"
-              cy="{mask.source.y * 100}%"
-              rx="{mask.radius * 100}%"
-              ry="{spotRyPercent(mask.radius)}%"
-              class="spot-source"
-            />
+            <line x1="{c.x * 100}%" y1="{c.y * 100}%" x2="{sx * 100}%" y2="{sy * 100}%" class="spot-link" />
+            <ellipse cx="{sx * 100}%" cy="{sy * 100}%" rx="{c.avgRadius * 100}%" ry="{spotRyPercent(c.avgRadius)}%" class="spot-source" />
           </svg>
           <button
-            class="mask-handle"
+            class="mask-handle spot-move-handle"
             class:selected={mask.id === selectedMaskId}
-            style="left:{mask.dest.x * 100}%; top:{mask.dest.y * 100}%"
-            aria-label="Spot destination"
-            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "dest")}
-            onpointermove={handleMaskHandlePointerMove}
-            onpointerup={handleMaskHandlePointerUp}
-          ></button>
-          <button
-            class="mask-handle"
-            class:selected={mask.id === selectedMaskId}
-            style="left:{(mask.dest.x + mask.radius) * 100}%; top:{mask.dest.y * 100}%"
-            aria-label="Spot radius"
-            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "spot_radius", mask.dest)}
+            style="left:{c.x * 100}%; top:{c.y * 100}%"
+            aria-label="Move spot"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "spot_move", { x: c.x, y: c.y }, mask.dabs)}
             onpointermove={handleMaskHandlePointerMove}
             onpointerup={handleMaskHandlePointerUp}
           ></button>
           <button
             class="mask-handle spot-source-handle"
             class:selected={mask.id === selectedMaskId}
-            style="left:{mask.source.x * 100}%; top:{mask.source.y * 100}%"
+            style="left:{sx * 100}%; top:{sy * 100}%"
             aria-label="Spot source"
-            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "source")}
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "spot_source_offset", { x: c.x, y: c.y })}
             onpointermove={handleMaskHandlePointerMove}
             onpointerup={handleMaskHandlePointerUp}
           ></button>
@@ -4181,15 +4402,6 @@
         <svg class="mask-ellipse placing">
           <ellipse cx="{placingMask.center.x * 100}%" cy="{placingMask.center.y * 100}%" rx="{placingMask.radiusX * 100}%" ry="{placingMask.radiusY * 100}%" />
         </svg>
-      {:else if placingMask?.kind === "spot"}
-        <svg class="mask-ellipse placing">
-          <ellipse
-            cx="{placingMask.dest.x * 100}%"
-            cy="{placingMask.dest.y * 100}%"
-            rx="{placingMask.radius * 100}%"
-            ry="{spotRyPercent(placingMask.radius)}%"
-          />
-        </svg>
       {/if}
       {#if activeTool === "brush" && brushCursor}
         <!-- M3 Slice 7: live brush-size cursor, shown on hover (not just
@@ -4199,6 +4411,15 @@
         <svg class="brush-cursor" class:erasing={eraseMode}>
           <ellipse cx="{brushCursor.x * 100}%" cy="{brushCursor.y * 100}%" rx="{brushSize * 100}%" ry="{brushCursorRyPercent()}%" />
         </svg>
+      {/if}
+      {#if activeTool === "spot" && spotCursor}
+        <!-- M4 Slice 2: live spot-brush-size cursor, mirroring the Brush
+             tool's own cursor above -- shown on hover, not just while
+             painting, so size is visible before committing a stroke. -->
+        <svg class="brush-cursor">
+          <ellipse cx="{spotCursor.x * 100}%" cy="{spotCursor.y * 100}%" rx="{spotBrushSize * 100}%" ry="{spotRyPercent(spotBrushSize)}%" />
+        </svg>
+      {/if}
       {/if}
       {#if activeTool === "crop"}
         <!-- Crop & Straighten (M3): the canvas's own LAYOUT box (offsetLeft/
@@ -4509,6 +4730,13 @@
   }
   .mask-handle.spot-source-handle.selected {
     background: var(--accent);
+  }
+  .mask-handle.spot-move-handle {
+    /* Same size/look as the default `.mask-handle` -- distinguished from
+       the smaller `.spot-source-handle` by cursor only, matching the
+       `move` cursor convention `.crop-rect` already uses for its own
+       whole-shape drag. */
+    cursor: move;
   }
   .crop-dim {
     position: absolute;

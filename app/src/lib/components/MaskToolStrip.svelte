@@ -23,14 +23,19 @@
    *   brushSize: number,
    *   brushHardness: number,
    *   brushFlow: number,
+   *   spotBrushSize: number,
    *   eraseMode: boolean,
+   *   maskOverlaysVisible: boolean,
    *   onToolToggle: (tool: string) => void,
    *   onMaskSelect: (id: string) => void,
    *   onBrushSizeChange: (value: number) => void,
    *   onBrushHardnessChange: (value: number) => void,
    *   onBrushFlowChange: (value: number) => void,
+   *   onSpotBrushSizeChange: (value: number) => void,
    *   onEraseToggle: () => void,
    *   onNewBrush: () => void,
+   *   onNewSpot: () => void,
+   *   onToggleMaskOverlaysVisible: () => void,
    *   onCreateLuminanceRange: () => void,
    *   crop: {x: number, y: number, width: number, height: number, angle: number},
    *   cropAspectLock: number | null,
@@ -46,14 +51,19 @@
     brushSize,
     brushHardness,
     brushFlow,
+    spotBrushSize,
     eraseMode,
+    maskOverlaysVisible,
     onToolToggle,
     onMaskSelect,
     onBrushSizeChange,
     onBrushHardnessChange,
     onBrushFlowChange,
+    onSpotBrushSizeChange,
     onEraseToggle,
     onNewBrush,
+    onNewSpot,
+    onToggleMaskOverlaysVisible,
     onCreateLuminanceRange,
     crop,
     cropAspectLock,
@@ -211,7 +221,7 @@
     class:active={activeTool === "spot"}
     type="button"
     disabled={atCap && activeTool !== "spot"}
-    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Spot Removal (Healing/Clone) -- click-drag to size a circle over a blemish"}
+    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Spot Removal (Healing/Clone) -- click-drag to paint over a blemish"}
     aria-label="Spot Removal"
     onclick={() => onToolToggle("spot")}
   >
@@ -219,6 +229,33 @@
       <circle cx="9.5" cy="6.5" r="4" stroke="currentColor" stroke-width="1.3" />
       <circle cx="3.6" cy="12.4" r="1.6" stroke="currentColor" stroke-width="1.1" stroke-dasharray="1.6 1.4" />
     </svg>
+  </button>
+
+  <div class="divider"></div>
+  <!-- Always visible, not gated by activeTool -- toggling it is a review
+       action independent of which mask tool (if any) is currently active,
+       so it needs to stay reachable the whole time. Mirrors the H hotkey
+       wired in +page.svelte. -->
+  <button
+    class="tool icon"
+    class:active={!maskOverlaysVisible}
+    type="button"
+    title={maskOverlaysVisible ? "Hide mask overlays (H) -- so edit pins/handles don't block reviewing the result" : "Show mask overlays (H)"}
+    aria-label={maskOverlaysVisible ? "Hide mask overlays" : "Show mask overlays"}
+    onclick={onToggleMaskOverlaysVisible}
+  >
+    {#if maskOverlaysVisible}
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+        <path d="M1 8 C3 4, 13 4, 15 8 C13 12, 3 12, 1 8 Z" stroke="currentColor" stroke-width="1.3" />
+        <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3" />
+      </svg>
+    {:else}
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+        <path d="M1 8 C3 4, 13 4, 15 8 C13 12, 3 12, 1 8 Z" stroke="currentColor" stroke-width="1.3" />
+        <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3" />
+        <line x1="2" y1="14" x2="14" y2="2" stroke="currentColor" stroke-width="1.3" />
+      </svg>
+    {/if}
   </button>
 
   {#if activeTool === "crop"}
@@ -308,6 +345,30 @@
         onclick={onEraseToggle}
       >Erase</button>
       <button class="tool small" type="button" title="Start a new brush mask on the next stroke" onclick={onNewBrush}>New Brush</button>
+    </div>
+  {/if}
+
+  {#if activeTool === "spot"}
+    <!-- M4 Slice 2 (brush-like spot removal): just a Size slider + "New
+         Spot" -- no Hardness/Flow, since a spot mask's edge softness is a
+         single mask-level Feather (edited in MaskEditorPanel, same as
+         before) rather than baked in per-dab, and spot removal has no
+         "build up opacity" flow concept the way adjustment brushing does.
+         Mirrors the Brush block's own layout above. -->
+    <div class="divider"></div>
+    <div class="brush-options">
+      <label class="brush-option">
+        <span>Size</span>
+        <input
+          type="range"
+          min="0.005"
+          max="0.15"
+          step="0.0025"
+          value={spotBrushSize}
+          oninput={(e) => onSpotBrushSizeChange(Number(e.currentTarget.value))}
+        />
+      </label>
+      <button class="tool small" type="button" title="Start a new spot mask on the next stroke" onclick={onNewSpot}>New Spot</button>
     </div>
   {/if}
 

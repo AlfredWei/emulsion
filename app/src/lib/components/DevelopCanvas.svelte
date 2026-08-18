@@ -24,6 +24,8 @@
    *   showMaskOverlay: boolean,
    *   maskOverlaysVisible: boolean,
    *   showOriginal: boolean,
+   *   spacePanning: boolean,
+   *   onSpotBrushSizeChange?: (size: number) => void,
    *   onMaskCreated: (placement:
    *     | { kind: "linear_gradient", start: {x: number, y: number}, end: {x: number, y: number} }
    *     | { kind: "radial_gradient", center: {x: number, y: number}, radiusX: number, radiusY: number }
@@ -81,6 +83,8 @@
     showMaskOverlay,
     maskOverlaysVisible = true,
     showOriginal = false,
+    spacePanning = false,
+    onSpotBrushSizeChange,
     onMaskCreated,
     onMaskUpdated,
     onMaskSelected,
@@ -743,6 +747,26 @@
   }
 
   function handlePointerDown(/** @type {PointerEvent} */ e) {
+    // Space-to-pan (checked before every activeTool branch below, including
+    // "crop"): holding Space temporarily overrides WHATEVER tool is active
+    // so the user can reposition a zoomed-in view without switching tools
+    // and losing their place -- real Photoshop/Lightroom convention. Reuses
+    // the exact same `dragState` the no-tool-active pan/zoom-click fallback
+    // at the bottom of this function already implements; see
+    // handlePointerMove/handlePointerUp's own matching early checks for why
+    // that reuse requires `dragState` to be checked FIRST there too.
+    if (spacePanning) {
+      if (!wrapEl) return;
+      e.preventDefault();
+      dragState = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startScrollLeft: wrapEl.scrollLeft,
+        startScrollTop: wrapEl.scrollTop,
+      };
+      tryCapturePointer(e);
+      return;
+    }
     if (activeTool === "linear_gradient") {
       e.preventDefault();
       const p = screenToNormalized(e.clientX, e.clientY);
@@ -843,6 +867,17 @@
 
   function handlePointerMove(/** @type {PointerEvent} */ e) {
     reportHoverPixel(e.clientX, e.clientY);
+    // Checked FIRST (ahead of every tool-specific branch below): `dragState`
+    // is only ever set by space-pan or the no-tool-active fallback at the
+    // bottom of this function, but space-pan can now start while `activeTool`
+    // is still "brush"/"spot"/etc, so this can no longer wait until after
+    // those branches without being shadowed by them -- see
+    // handlePointerDown's own space-pan branch.
+    if (dragState && wrapEl) {
+      wrapEl.scrollLeft = dragState.startScrollLeft - (e.clientX - dragState.startX);
+      wrapEl.scrollTop = dragState.startScrollTop - (e.clientY - dragState.startY);
+      return;
+    }
     if (placingMask?.kind === "linear_gradient") {
       placingMask = { ...placingMask, end: screenToNormalized(e.clientX, e.clientY) };
       return;
@@ -877,9 +912,6 @@
       }
       return;
     }
-    if (!dragState || !wrapEl) return;
-    wrapEl.scrollLeft = dragState.startScrollLeft - (e.clientX - dragState.startX);
-    wrapEl.scrollTop = dragState.startScrollTop - (e.clientY - dragState.startY);
   }
 
   async function handlePointerUp(/** @type {PointerEvent} */ e) {
@@ -888,6 +920,39 @@
     } catch {
       // Releasing a capture that was never successfully acquired would
       // itself throw -- non-fatal, see tryCapturePointer's comment.
+    }
+    // Checked FIRST (ahead of every tool-specific branch below), mirroring
+    // handlePointerMove's own reordering -- `dragState` can now be set by
+    // space-pan even while `activeTool` is "brush"/"spot", so the
+    // `activeTool === "brush" || "spot"` branch further down (which just
+    // clears paint-session state) can no longer run unconditionally before
+    // this finalizes the pan/zoom-click drag.
+    if (dragState) {
+      const moved = Math.max(Math.abs(e.clientX - dragState.startX), Math.abs(e.clientY - dragState.startY));
+      const clickPoint = { x: e.clientX, y: e.clientY };
+      dragState = null;
+      if (moved >= DRAG_CLICK_THRESHOLD) return; // a completed drag, not a click -- leave scroll as-is
+      if (zoomMode === "100") {
+        zoomMode = "fit";
+        return;
+      }
+      if (!canvasEl) return;
+      // Reuses the same helper crop-handle dragging uses (instead of
+      // duplicating the same math inline, as this used to) so both paths
+      // stay correct together.
+      const { x: nativeX, y: nativeY } = screenToNativePixel(clickPoint.x, clickPoint.y);
+      // Stored normalized (0-1), not as a native-pixel point -- the point
+      // itself doesn't change resolution, but the canvas's own backing-store
+      // size DOES once upgradeToFullTier swaps in the 1:1 tier moments
+      // later. A native-pixel value captured here would silently go stale
+      // and mis-center once that resize happens; the normalized fraction
+      // re-applies correctly against whichever tier's dimensions are
+      // current when it's read.
+      lastZoomFocus = { x: nativeX / canvasEl.width, y: nativeY / canvasEl.height };
+      zoomMode = "100";
+      await tick(); // required: $state-triggered DOM patches (the new canvas size) land on a microtask
+      scrollToNativeFocus(nativeX, nativeY);
+      return;
     }
     if (placingMask?.kind === "linear_gradient") {
       const { start, end } = placingMask;
@@ -953,34 +1018,51 @@
       lastPaintPoint = null;
       return;
     }
-    if (!dragState) return;
-    const moved = Math.max(Math.abs(e.clientX - dragState.startX), Math.abs(e.clientY - dragState.startY));
-    const clickPoint = { x: e.clientX, y: e.clientY };
-    dragState = null;
-    if (moved >= DRAG_CLICK_THRESHOLD) return; // a completed drag, not a click -- leave scroll as-is
-
-    if (zoomMode === "100") {
-      zoomMode = "fit";
-      return;
-    }
-    if (!canvasEl) return;
-    // Reuses the same helper crop-handle dragging uses (instead of
-    // duplicating the same math inline, as this used to) so both paths
-    // stay correct together.
-    const { x: nativeX, y: nativeY } = screenToNativePixel(clickPoint.x, clickPoint.y);
-    // Stored normalized (0-1), not as a native-pixel point -- the point
-    // itself doesn't change resolution, but the canvas's own backing-store
-    // size DOES once upgradeToFullTier swaps in the 1:1 tier moments
-    // later. A native-pixel value captured here would silently go stale
-    // and mis-center once that resize happens; the normalized fraction
-    // re-applies correctly against whichever tier's dimensions are
-    // current when it's read.
-    lastZoomFocus = { x: nativeX / canvasEl.width, y: nativeY / canvasEl.height };
-
-    zoomMode = "100";
-    await tick(); // required: $state-triggered DOM patches (the new canvas size) land on a microtask
-    scrollToNativeFocus(nativeX, nativeY);
   }
+
+  // Mirrors MaskToolStrip.svelte's own Spot Size slider (min/max/step) --
+  // scrolling over the canvas while painting spots is a much faster way to
+  // resize the brush than reaching for the slider mid-stroke, matching the
+  // same wheel-to-resize convention most photo editors' brush tools use.
+  // Scoped to activeTool==="spot" (not brush) per explicit user request;
+  // when it's any other tool, this deliberately does NOT preventDefault,
+  // so the wheel event passes through untouched to whatever the browser
+  // would otherwise do with it (e.g. nothing, since panning is via drag/
+  // scrollbars here, not wheel).
+  const SPOT_BRUSH_SIZE_MIN = 0.005;
+  const SPOT_BRUSH_SIZE_MAX = 0.15;
+  const SPOT_BRUSH_SIZE_STEP = 0.0025;
+  function handleWheel(/** @type {WheelEvent} */ e) {
+    if (activeTool !== "spot" || !onSpotBrushSizeChange) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -SPOT_BRUSH_SIZE_STEP : SPOT_BRUSH_SIZE_STEP;
+    const next = Math.min(SPOT_BRUSH_SIZE_MAX, Math.max(SPOT_BRUSH_SIZE_MIN, spotBrushSize + delta));
+    onSpotBrushSizeChange(next);
+  }
+
+  // A trackpad pinch over the canvas doesn't dispatch `wheel` at all -- in
+  // WebKit (this app's webview on macOS) it's a separate, nonstandard
+  // `gesturestart`/`gesturechange` event pair that natively zooms the whole
+  // page unless prevented, which is what a user doing a pinch-style gesture
+  // while trying to resize the spot brush would hit: `handleWheel` above
+  // never even fires, so its own `preventDefault()` can't help. These
+  // aren't part of the DOM standard (no TS lib types, no Svelte `on*`
+  // prop), so they're bound imperatively here rather than as a template
+  // attribute like `onwheel`.
+  $effect(() => {
+    if (!canvasEl) return;
+    const el = canvasEl;
+    /** @param {Event} e */
+    const preventIfSpot = (e) => {
+      if (activeTool === "spot") e.preventDefault();
+    };
+    el.addEventListener("gesturestart", preventIfSpot);
+    el.addEventListener("gesturechange", preventIfSpot);
+    return () => {
+      el.removeEventListener("gesturestart", preventIfSpot);
+      el.removeEventListener("gesturechange", preventIfSpot);
+    };
+  });
 
   /** Dragging an existing mask's handle -- separate from the canvas's own
    * pointer handlers above (these fire on the handle button itself, which
@@ -4155,6 +4237,30 @@
     if (status === "ready") writeAdjustmentsAndRender();
   });
 
+  // Before/after preview: a transient "Original"/"Edited" badge, shown
+  // whenever `showOriginal` actually CHANGES (via the \ hotkey) rather than
+  // persistently -- per explicit user request ("when press hot-key it
+  // should show original/edit label on image"), so a glance confirms which
+  // state you just landed in without permanently occupying screen space.
+  // `firstShowOriginalRun` skips the label on initial mount (this effect's
+  // own first pass, when `showOriginal` merely takes on its starting value
+  // rather than being toggled by the user) -- otherwise every freshly
+  // opened photo would flash the badge once for no reason.
+  let beforeAfterLabelVisible = $state(false);
+  let firstShowOriginalRun = true;
+  $effect(() => {
+    void showOriginal;
+    if (firstShowOriginalRun) {
+      firstShowOriginalRun = false;
+      return;
+    }
+    beforeAfterLabelVisible = true;
+    const timer = setTimeout(() => {
+      beforeAfterLabelVisible = false;
+    }, 1200);
+    return () => clearTimeout(timer);
+  });
+
   // Crop & Straighten (M3): the committed-crop CSS preview (rotate +
   // clip-via-overflow, see the markup's own doc comment) shows ONLY when
   // nothing that depends on FULL-image coordinates might be actively
@@ -4257,6 +4363,7 @@
       class:zoomed={zoomMode === "100"}
       class:cropped={showCommittedCropPreview}
       class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper" || activeTool === "spot"}
+      class:space-pan={spacePanning}
       style={showCommittedCropPreview
         ? `width:${100 / crop.width}%; height:${100 / crop.height}%; left:${(-crop.x * 100) / crop.width}%; top:${(-crop.y * 100) / crop.height}%; transform: rotate(${crop.angle}deg);`
         : activeTool === "crop"
@@ -4265,12 +4372,21 @@
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}
       onpointerup={handlePointerUp}
+      onwheel={handleWheel}
       onpointerleave={() => {
         brushCursor = null;
         onHoverPixel?.(null);
       }}
     ></canvas>
   </div>
+  {#if beforeAfterLabelVisible}
+    <!-- M4 Slice 3: transient before/after badge -- see the effect that
+         drives `beforeAfterLabelVisible` for why this is timed, not
+         persistent. Rendered as a `.canvas-wrap` sibling (not inside
+         `.crop-clip`) so it stays in a fixed screen position regardless of
+         `showCommittedCropPreview`'s own rotate/clip transform. -->
+    <div class="before-after-label">{showOriginal ? "Original" : "Edited"}</div>
+  {/if}
   {#if status === "ready" && !showCommittedCropPreview}
     <!-- M3 Slice 5: a sibling of canvas, NOT a child of a sizing wrapper
          (see the fix note near syncOverlayPosition) -- its left/top/width/
@@ -4576,6 +4692,17 @@
   canvas.placing {
     cursor: crosshair;
   }
+  /* Space-to-pan: comes AFTER .placing in source order deliberately, so it
+     wins the cursor tie-break and overrides the crosshair while Space is
+     held and a placing tool (brush/spot/etc) is still active -- see
+     handlePointerDown's own space-pan branch for why the tool stays active
+     underneath rather than being switched away. */
+  canvas.space-pan {
+    cursor: grab;
+  }
+  canvas.space-pan:active {
+    cursor: grabbing;
+  }
   /* Crop & Straighten (M3): inactive by default (`display:contents`
      removes this wrapper from the layout tree entirely, so canvas's own
      `max-width/max-height:100%; margin:auto` sizing above works exactly
@@ -4818,6 +4945,28 @@
   }
   .zoom-badge:hover {
     color: var(--text-primary);
+  }
+  /* M4 Slice 3: before/after transient label -- top-center (distinct from
+     `.zoom-badge`'s bottom-right corner) so the two never collide, and
+     `pointer-events: none` since this is purely informational, never
+     interactive. */
+  .before-after-label {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 5px 14px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+    background: rgba(20, 18, 16, 0.75);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    pointer-events: none;
+    z-index: 2;
   }
   .overlay {
     position: absolute;

@@ -275,6 +275,15 @@
   // a press-and-hold -- simpler and more reliable to implement correctly,
   // and matches Lightroom's own default behavior for this exact key.
   let showOriginal = $state(false);
+  // M4 Slice 3: holding Space temporarily overrides whatever tool is
+  // active so the user can pan a zoomed-in view without switching tools --
+  // real Photoshop/Lightroom convention. Set by handleGlobalKeydown/
+  // handleGlobalKeyup below (a press-and-hold, unlike showOriginal/
+  // maskOverlaysVisible's own toggles, since panning only makes sense
+  // while the key is physically down); also cleared on window blur so an
+  // Alt-Tab away mid-hold can't leave this stuck true forever with no
+  // keyup ever arriving to clear it.
+  let spacePanning = $state(false);
   // Mask UI polish: soft colored overlay for the SELECTED no-geometry mask
   // (brush, luminance range), toggleable via a MaskEditorPanel checkbox or
   // the "O" hotkey. Grouped with the brush TOOL options above, not with
@@ -1169,12 +1178,25 @@
       ) {
         return;
       }
+      // Real bug, not a hypothetical: every input in Develop is a <input
+      // type="range"> slider or a checkbox (confirmed -- no free-text
+      // fields exist here, those live behind the settingsOpen/etc guard
+      // above), and a slider keeps DOM focus after the user finishes
+      // dragging it. The old blanket "any HTMLInputElement blocks every
+      // shortcut" guard therefore silently swallowed H/\/O/Undo/Redo
+      // immediately after adjusting ANY slider (e.g. Feather) until the
+      // user clicked elsewhere first -- reported as "after adjust feather,
+      // hot-key, the effect applied failed." Narrowed to only the input
+      // TYPES that are genuinely a typing/toggle target for their own keys
+      // (a checkbox still needs Space to toggle via keyboard, so it keeps
+      // blocking single-key shortcuts; range doesn't use Space or letter
+      // keys for anything, so it shouldn't block them either).
       const target = e.target;
-      if (
-        target instanceof HTMLInputElement ||
+      const isTypingTarget =
+        (target instanceof HTMLInputElement && target.type !== "range") ||
         target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      ) {
+        target instanceof HTMLSelectElement;
+      if (isTypingTarget) {
         return;
       }
       // Undo/Redo (M3) -- placed BEFORE the blanket modifier-key guard
@@ -1196,6 +1218,16 @@
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // M4 Slice 3: Space arms temporary pan (see spacePanning's own doc
+      // comment) -- always preventDefault while held (including on
+      // auto-repeat keydowns) so the browser's own "Space scrolls the
+      // page" default never fires, but only flips state on the FIRST
+      // (non-repeat) press so a long hold doesn't churn re-renders.
+      if (e.key === " ") {
+        e.preventDefault();
+        if (!e.repeat) spacePanning = true;
+        return;
+      }
       if (e.key.toLowerCase() === "o" && OVERLAY_CAPABLE_MASK_OPS.includes(selectedMask?.op ?? "")) {
         e.preventDefault();
         showMaskOverlay = !showMaskOverlay;
@@ -1279,6 +1311,15 @@
       const color = COLOR_KEYS[/** @type {"6"|"7"|"8"|"9"} */ (key)];
       handleColorLabelChange(selectedId, selectedImage?.color_label === color ? "none" : color);
     }
+  }
+
+  // M4 Slice 3: releases space-pan (see spacePanning's own doc comment).
+  // No input-focus/dialog guards needed here, unlike handleGlobalKeydown --
+  // clearing this is always safe even if focus moved somewhere else while
+  // the key was held, since spacePanning can only have been set true by
+  // that same keydown handler's own guarded path in the first place.
+  function handleGlobalKeyup(/** @type {KeyboardEvent} */ e) {
+    if (e.key === " ") spacePanning = false;
   }
 
   // M2 Slice 2: IPTC fields save on blur (MetadataPanel), not debounced --
@@ -1808,7 +1849,7 @@
   });
 </script>
 
-<svelte:window onkeydown={handleGlobalKeydown} />
+<svelte:window onkeydown={handleGlobalKeydown} onkeyup={handleGlobalKeyup} onblur={() => (spacePanning = false)} />
 
 <div class="app">
   <div class="titlebar">
@@ -2069,6 +2110,8 @@
         {spotBrushSize}
         {maskOverlaysVisible}
         {showOriginal}
+        {spacePanning}
+        onSpotBrushSizeChange={(v) => (spotBrushSize = v)}
         onMaskCreated={handleMaskCreated}
         onMaskUpdated={handleMaskUpdated}
         onMaskSelected={(id) => (selectedMaskId = id)}

@@ -1456,7 +1456,7 @@
    * re-rendering the whole dab list from scratch every time. Reset
    * entirely on every image change (loadImage), since a canvas sized for
    * one image's resolution is meaningless for another.
-   * @type {Map<string, { canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D, layer: number, dabsDrawn: number, featherDrawn: number }>} */
+   * @type {Map<string, { canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D, layer: number, dabsDrawn: number, featherDrawn: number, firstDabX: number, firstDabY: number }>} */
   let brushRasterState = new Map();
   /** @type {number[]} */
   let freeBrushLayers = [];
@@ -3891,16 +3891,28 @@
         // nothing.
         ctx.fillStyle = "black";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        entry = { canvas, ctx, layer, dabsDrawn: 0, featherDrawn: 0 };
+        entry = { canvas, ctx, layer, dabsDrawn: 0, featherDrawn: 0, firstDabX: 0, firstDabY: 0 };
         brushRasterState.set(mask.id, entry);
       }
       const dabs = /** @type {any} */ (mask).dabs;
       const featherChanged = isSpot && /** @type {any} */ (mask).feather !== entry.featherDrawn;
-      if (dabs.length < entry.dabsDrawn || featherChanged) {
+      // Dragging a spot mask's "move" handle translates every dab in place
+      // (see handleMaskHandlePointerMove's own spot_move case) -- the dab
+      // COUNT never changes, so the append-only dirty check below (which
+      // this whole function otherwise relies on to keep a long stroke's
+      // per-move cost O(1)) is blind to it. Comparing dabs[0]'s own
+      // position against what was last baked into the texture is a cheap,
+      // sufficient proxy: a move translates the WHOLE stroke by one
+      // uniform delta, so if the first dab moved, they all did.
+      const posChanged = isSpot && dabs.length > 0 && (dabs[0].x !== entry.firstDabX || dabs[0].y !== entry.firstDabY);
+      if (dabs.length < entry.dabsDrawn || featherChanged || posChanged) {
         // Dab list shrank (not expected in this design, dabs only ever get
         // appended, but handled defensively rather than leaving stale
         // strokes visible) OR a spot mask's shared feather changed (every
-        // dab needs the new softness baked in, not just new ones).
+        // dab needs the new softness baked in, not just new ones) OR the
+        // whole stroke was dragged to a new position (every dab needs
+        // re-rasterizing at its new coordinates, not just newly-painted
+        // ones).
         entry.ctx.fillStyle = "black";
         entry.ctx.fillRect(0, 0, entry.canvas.width, entry.canvas.height);
         entry.dabsDrawn = 0;
@@ -3912,7 +3924,11 @@
           rasterizeDab(entry.ctx, entry.canvas.width, entry.canvas.height, dabs[i]);
         }
       }
-      if (isSpot) entry.featherDrawn = /** @type {any} */ (mask).feather;
+      if (isSpot) {
+        entry.featherDrawn = /** @type {any} */ (mask).feather;
+        entry.firstDabX = dabs.length > 0 ? dabs[0].x : 0;
+        entry.firstDabY = dabs.length > 0 ? dabs[0].y : 0;
+      }
       if (dabs.length !== entry.dabsDrawn) {
         entry.dabsDrawn = dabs.length;
         const imageData = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height);

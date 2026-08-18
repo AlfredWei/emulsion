@@ -1443,38 +1443,64 @@ fn color_mask_weight(rgb: [f32; 3], mask: &ColorRangeMask) -> f32 {
     weight
 }
 
-/// A `spot_mask` op (M4 Slice 1, Healing/Clone brush) -- structurally
+/// A single dab within a `spot_mask` op's painted stroke (M4 Slice 2:
+/// brush-like spot removal, replacing the original single-circle model).
+/// Same shape as a brush `Dab`, minus `hardness`/`flow`/`mode` -- a spot
+/// dab's edge softness comes from the MASK's own single `feather` (applied
+/// identically to every dab, see `spot_mask_weight`), not a per-dab
+/// hardness/flow the way brush painting works, since spot removal has no
+/// "build up opacity" concept.
+struct SpotDab {
+    x: f32,
+    y: f32,
+    radius: f32,
+}
+
+/// A `spot_mask` op (M4 Slice 1/2, Healing/Clone brush) -- structurally
 /// unlike every mask kind above: those all GATE a parametric adjustment
 /// (exposure/contrast/saturation) within a region; a spot mask instead
-/// COPIES pixel CONTENT from `source` into `dest`, so it carries no
-/// exposure/contrast/saturation/invert fields at all. `radius` is a
-/// fraction of image WIDTH, same single-scalar convention as a brush dab's
-/// own `radius` (see `dab_falloff`'s doc comment) -- a true circle in pixel
-/// space once `aspect`-corrected, not an ellipse like radial gradient's
-/// independent `radius_x`/`radius_y`. `heal_shift` is NOT parsed from the
-/// op JSON -- it's computed once per `apply_edit_stack` call, after the
-/// fully-graded pre-mask buffer exists (see `compute_heal_shift`), and
-/// left at its zeroed default for `mode: "clone"` masks (an unshifted
-/// sample IS a plain clone).
+/// COPIES pixel CONTENT from a SOURCE offset into `dabs`, so it carries no
+/// exposure/contrast/saturation/invert fields at all. `dabs` replaces the
+/// original single dest-circle-plus-explicit-source-point model with a
+/// painted STROKE (M4 Slice 2, per explicit user request for a brush-like
+/// interaction with a movable result) -- `source_offset` is a SINGLE
+/// (dx, dy) delta applied uniformly to every dab (real Photoshop clone-
+/// stamp behavior: one offset for the whole stroke, not a per-dab source),
+/// which is also what makes "drag to move the whole spot" trivial on the
+/// frontend: translating every dab's (x, y) by the same delta leaves
+/// `source_offset` correct with no recomputation needed. `heal_shift` is
+/// NOT parsed from the op JSON -- it's computed once per `apply_edit_stack`
+/// call from the dabs' centroid (see `compute_heal_shift`), and left at its
+/// zeroed default for `mode: "clone"` masks (an unshifted sample IS a plain
+/// clone).
 struct SpotMask {
-    dest: (f32, f32),
-    radius: f32,
+    dabs: Vec<SpotDab>,
     feather: f32,
-    source: (f32, f32),
+    source_offset: (f32, f32),
     heal: bool,
     heal_shift: [f32; 3],
 }
 
 fn parse_spot_mask(op: &serde_json::Value) -> Option<SpotMask> {
-    let dest = op.get("dest")?;
-    let source = op.get("source")?;
+    let dabs = op
+        .get("dabs")?
+        .as_array()?
+        .iter()
+        .filter_map(|d| {
+            Some(SpotDab {
+                x: d.get("x")?.as_f64()? as f32,
+                y: d.get("y")?.as_f64()? as f32,
+                radius: d.get("radius")?.as_f64()? as f32,
+            })
+        })
+        .collect();
+    let offset = op.get("sourceOffset")?;
     Some(SpotMask {
-        dest: (dest.get("x")?.as_f64()? as f32, dest.get("y")?.as_f64()? as f32),
-        radius: op.get("radius")?.as_f64()? as f32,
+        dabs,
         feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-        source: (
-            source.get("x")?.as_f64()? as f32,
-            source.get("y")?.as_f64()? as f32,
+        source_offset: (
+            offset.get("dx")?.as_f64()? as f32,
+            offset.get("dy")?.as_f64()? as f32,
         ),
         heal: op.get("mode").and_then(|v| v.as_str()) == Some("heal"),
         heal_shift: [0.0, 0.0, 0.0],
@@ -1482,22 +1508,48 @@ fn parse_spot_mask(op: &serde_json::Value) -> Option<SpotMask> {
 }
 
 /// Same aspect-corrected true-circle distance as `dab_falloff`, but with
-/// `radial_mask_weight`'s feather-band formula (a spot is a plain circle,
-/// not a hardness-stepped brush dab) -- always "inside" semantics, no
-/// `invert`: replacing pixel content everywhere EXCEPT a small circle
-/// would never be a sensible spot-removal operation, unlike the other mask
-/// kinds where inverting a region-gated adjustment is meaningful.
+/// `radial_mask_weight`'s feather-band formula (a spot dab is a plain
+/// circle, not a hardness-stepped brush dab) -- always "inside" semantics,
+/// no `invert`: replacing pixel content everywhere EXCEPT a small circle
+/// would never be a sensible spot-removal operation. Takes the MAX across
+/// every dab in the stroke (same accumulation as `brush_mask_weight`'s own
+/// `Add` dabs), one shared `feather` for the whole stroke rather than a
+/// per-dab hardness.
 fn spot_mask_weight(uv: (f32, f32), mask: &SpotMask, aspect: f32) -> f32 {
-    if mask.radius <= 0.0 {
-        return 0.0;
-    }
-    let dx = uv.0 - mask.dest.0;
-    let dy = (uv.1 - mask.dest.1) * aspect;
-    let d = (dx * dx + dy * dy).sqrt();
-    let normalized_d = d / mask.radius;
     let softness = (mask.feather / 100.0).clamp(0.0, 0.999);
     let denom = (2.0 * softness).max(0.001);
-    ((1.0 + softness - normalized_d) / denom).clamp(0.0, 1.0)
+    let mut weight = 0.0f32;
+    for dab in &mask.dabs {
+        if dab.radius <= 0.0 {
+            continue;
+        }
+        let dx = uv.0 - dab.x;
+        let dy = (uv.1 - dab.y) * aspect;
+        let d = (dx * dx + dy * dy).sqrt();
+        let normalized_d = d / dab.radius;
+        let w = ((1.0 + softness - normalized_d) / denom).clamp(0.0, 1.0);
+        weight = weight.max(w);
+    }
+    weight
+}
+
+/// The unweighted centroid of a spot mask's dabs, plus their average
+/// radius -- used as a single representative dest/source-ring center for
+/// `compute_heal_shift` (a whole-stroke heal shift is still one shared
+/// value, same "simplified, not true Poisson blending" scope as before,
+/// just now anchored to the stroke's centroid instead of a single dest
+/// point). Returns `((0,0), 0)` for an empty stroke, a defensive case that
+/// shouldn't reach here in practice (the frontend never creates a spot
+/// mask with zero dabs) but avoids a divide-by-zero rather than assuming.
+fn spot_centroid_and_radius(dabs: &[SpotDab]) -> ((f32, f32), f32) {
+    if dabs.is_empty() {
+        return ((0.0, 0.0), 0.0);
+    }
+    let n = dabs.len() as f32;
+    let (sx, sy, sr) = dabs.iter().fold((0.0, 0.0, 0.0), |acc, d| {
+        (acc.0 + d.x, acc.1 + d.y, acc.2 + d.radius)
+    });
+    ((sx / n, sy / n), sr / n)
 }
 
 const HEAL_RING_SAMPLES: usize = 24;
@@ -1560,8 +1612,10 @@ fn compute_heal_shift(
     height: usize,
     aspect: f32,
 ) -> [f32; 3] {
-    let dest_mean = sample_ring_mean(m.dest, m.radius, pre_mask, width, height, aspect);
-    let source_mean = sample_ring_mean(m.source, m.radius, pre_mask, width, height, aspect);
+    let (centroid, avg_radius) = spot_centroid_and_radius(&m.dabs);
+    let source_centroid = (centroid.0 + m.source_offset.0, centroid.1 + m.source_offset.1);
+    let dest_mean = sample_ring_mean(centroid, avg_radius, pre_mask, width, height, aspect);
+    let source_mean = sample_ring_mean(source_centroid, avg_radius, pre_mask, width, height, aspect);
     [
         dest_mean[0] - source_mean[0],
         dest_mean[1] - source_mean[1],
@@ -1630,8 +1684,7 @@ impl Mask {
     ) -> [f32; 3] {
         match self {
             Mask::Spot(m) => {
-                let offset = (m.source.0 - m.dest.0, m.source.1 - m.dest.1);
-                let sample_uv = (uv.0 + offset.0, uv.1 + offset.1);
+                let sample_uv = (uv.0 + m.source_offset.0, uv.1 + m.source_offset.1);
                 let sx = ((sample_uv.0 * width as f32) as i64).clamp(0, width as i64 - 1) as usize;
                 let sy =
                     ((sample_uv.1 * height as f32) as i64).clamp(0, height as i64 - 1) as usize;
@@ -4397,17 +4450,36 @@ mod tests {
     /// `apply_edit_stack`'s own Pass 8 derives `uv` from `(x, y)` -- so a
     /// radius expressed as a whole number of pixels (e.g. `1.0 /
     /// SPOT_TEST_SIZE as f32`) lands exactly on a pixel boundary, not
-    /// somewhere between two pixel centers.
+    /// somewhere between two pixel centers. Single-dab convenience wrapper
+    /// around `spot_mask_multi_dab_op` (M4 Slice 2: a stroke is a `Vec` of
+    /// dabs now, not one dest point) -- `source_offset` is derived as
+    /// `source_px - dest_px` in UV space, exactly reproducing this test
+    /// helper's original one-dest-one-source behavior.
     fn spot_mask_op(dest_px: (u32, u32), source_px: (u32, u32), radius: f32, feather: f32, mode: &str) -> serde_json::Value {
+        spot_mask_multi_dab_op(&[dest_px], source_px, radius, feather, mode)
+    }
+
+    /// General form: an arbitrary list of dab center pixel indices, all
+    /// sharing `radius`, plus ONE `source_px` that (combined with the
+    /// FIRST dab) determines `sourceOffset` -- matching the real op shape's
+    /// own "single offset applied to every dab" model (see `SpotMask`'s
+    /// own doc comment).
+    fn spot_mask_multi_dab_op(dab_px: &[(u32, u32)], source_px: (u32, u32), radius: f32, feather: f32, mode: &str) -> serde_json::Value {
         let to_uv = |p: (u32, u32)| ((p.0 as f32 + 0.5) / SPOT_TEST_SIZE as f32, (p.1 as f32 + 0.5) / SPOT_TEST_SIZE as f32);
-        let d = to_uv(dest_px);
+        let first = to_uv(dab_px[0]);
         let s = to_uv(source_px);
+        let dabs: Vec<_> = dab_px
+            .iter()
+            .map(|&p| {
+                let (x, y) = to_uv(p);
+                serde_json::json!({ "x": x, "y": y, "radius": radius })
+            })
+            .collect();
         serde_json::json!({
             "op": "spot_mask",
             "id": "test-spot-mask",
-            "dest": { "x": d.0, "y": d.1 },
-            "source": { "x": s.0, "y": s.1 },
-            "radius": radius,
+            "dabs": dabs,
+            "sourceOffset": { "dx": s.0 - first.0, "dy": s.1 - first.1 },
             "feather": feather,
             "mode": mode,
         })
@@ -4495,5 +4567,39 @@ mod tests {
                 "expected dest ~{expected:?} (graded source, 80 doubled to 160), got {dest:?}"
             );
         }
+    }
+
+    /// M4 Slice 2 (brush-like spot removal): a stroke is now a `Vec` of
+    /// dabs, not a single dest circle. Two 1px, hard-edged (`feather=0`)
+    /// dabs at (8,20) and (14,20) share ONE `sourceOffset` (derived from
+    /// the first dab to `source_px=(32,20)`, i.e. `+24px` in x). Both dabs'
+    /// own centers get full weight from THEIR OWN dab (max-across-dabs
+    /// accumulation, same as `brush_mask_weight`'s `Add` dabs) and each
+    /// samples content offset by that same `+24px`, landing on RIGHT-half
+    /// content in both cases -- proving the offset is shared across the
+    /// whole stroke, not recomputed per dab. A pixel roughly midway between
+    /// the two dabs, more than 1px from either center, gets weight 0 and
+    /// stays untouched -- proving coverage is a real per-dab union, not a
+    /// single blob spanning the dabs' bounding box.
+    #[test]
+    fn spot_mask_multi_dab_stroke_shares_one_source_offset_across_every_dab() {
+        let mut image = spot_test_image();
+        let op = spot_mask_multi_dab_op(&[(8, 20), (14, 20)], (32, 20), 1.0 / SPOT_TEST_SIZE as f32, 0.0, "clone");
+        apply_edit_stack(&mut image, &EditStack { schema_version: 1, ops: vec![op] });
+        assert_eq!(
+            image.get_pixel(8, 20).0,
+            [SPOT_TEST_RIGHT; 3],
+            "first dab's own center should sample RIGHT content via the shared +24px offset"
+        );
+        assert_eq!(
+            image.get_pixel(14, 20).0,
+            [SPOT_TEST_RIGHT; 3],
+            "second dab's own center should ALSO sample RIGHT content via the SAME shared offset"
+        );
+        assert_eq!(
+            image.get_pixel(11, 20).0,
+            [SPOT_TEST_LEFT; 3],
+            "a pixel more than 1px from either dab center should be outside both dabs' coverage and left untouched"
+        );
     }
 }

@@ -1186,6 +1186,83 @@ fn radial_mask_weight(uv: (f32, f32), mask: &RadialGradientMask) -> f32 {
     }
 }
 
+/// A `red_eye_mask` op (M4): same elliptical click-drag placement as
+/// `RadialGradientMask` (center/radius_x/radius_y/feather), but the effect
+/// itself is redness-selective rather than a flat exposure/contrast/
+/// saturation adjustment -- `pupil_size` controls how strict the red
+/// detection is (see `red_eye_redness_factor`) and `darken` controls how
+/// far the detected red is pulled toward gray (see `red_eye_local_color`).
+/// No `invert`: the whole point of this tool is "correct what's inside the
+/// oval," unlike Radial's dual vignette/spotlight use cases.
+struct RedEyeMask {
+    center: (f32, f32),
+    radius_x: f32,
+    radius_y: f32,
+    feather: f32,
+    pupil_size: f32,
+    darken: f32,
+}
+
+fn parse_red_eye_mask(op: &serde_json::Value) -> Option<RedEyeMask> {
+    let center = op.get("center")?;
+    Some(RedEyeMask {
+        center: (
+            center.get("x")?.as_f64()? as f32,
+            center.get("y")?.as_f64()? as f32,
+        ),
+        radius_x: op.get("radiusX")?.as_f64()? as f32,
+        radius_y: op.get("radiusY")?.as_f64()? as f32,
+        feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(50.0) as f32,
+        pupil_size: op
+            .get("pupilSize")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(50.0) as f32,
+        darken: op.get("darken").and_then(|v| v.as_f64()).unwrap_or(50.0) as f32,
+    })
+}
+
+/// Ellipse membership only (no invert) -- identical shape to
+/// `radial_mask_weight`'s `inside_weight`, always applied inside since
+/// red-eye correction has no outside/vignette use case.
+fn red_eye_ellipse_weight(uv: (f32, f32), mask: &RedEyeMask) -> f32 {
+    let dx = (uv.0 - mask.center.0) / mask.radius_x;
+    let dy = (uv.1 - mask.center.1) / mask.radius_y;
+    let d = (dx * dx + dy * dy).sqrt();
+    let softness = (mask.feather / 100.0).clamp(0.0, 0.999);
+    let denom = (2.0 * softness).max(0.001);
+    ((1.0 + softness - d) / denom).clamp(0.0, 1.0)
+}
+
+/// How strongly a pixel's own color reads as "red-eye red," 0 (not red at
+/// all) to 1 (fully qualifies). `redness` is how far red sits above the
+/// stronger of green/blue -- 0 for any neutral/green/blue-leaning pixel, up
+/// to 1 for pure red. `pupil_size` sets the qualifying threshold: 0
+/// requires near-pure red (threshold 1.0, strict), 100 accepts even a faint
+/// red cast (threshold floored at 0.05, permissive) -- mirroring how a real
+/// Pupil Size slider widens the correction to catch more of a larger/less-
+/// saturated red-eye area.
+fn red_eye_redness_factor(rgb: [f32; 3], mask: &RedEyeMask) -> f32 {
+    let redness = (rgb[0] - rgb[1].max(rgb[2])).max(0.0);
+    let threshold = (1.0 - mask.pupil_size / 100.0).clamp(0.05, 1.0);
+    (redness / threshold).clamp(0.0, 1.0)
+}
+
+fn red_eye_weight(uv: (f32, f32), rgb: [f32; 3], mask: &RedEyeMask) -> f32 {
+    red_eye_ellipse_weight(uv, mask) * red_eye_redness_factor(rgb, mask)
+}
+
+/// The corrected color a fully-selected red-eye pixel blends toward: pulled
+/// to its own luminance (full desaturation -- a corrected pupil should read
+/// as neutral gray, not just "less red") and darkened by up to 60% of that
+/// luminance at `darken=100`, matching a real pupil's near-black look
+/// without ever crushing to pure 0 regardless of slider position.
+fn red_eye_local_color(rgb: [f32; 3], mask: &RedEyeMask) -> [f32; 3] {
+    let luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+    let darken_amt = (mask.darken / 100.0).clamp(0.0, 1.0);
+    let target = luma * (1.0 - darken_amt * 0.6);
+    [target, target, target]
+}
+
 /// A single paint dab within a `brush_mask` op (M3 Slice 7). `radius` is a
 /// normalized fraction of image WIDTH only (a single scalar, unlike
 /// radial's independent `radius_x`/`radius_y`) -- the frontend rasterizes
@@ -1638,6 +1715,7 @@ enum Mask {
     LuminanceRange(LuminanceRangeMask),
     ColorRange(ColorRangeMask),
     Spot(SpotMask),
+    RedEye(RedEyeMask),
 }
 
 impl Mask {
@@ -1660,6 +1738,7 @@ impl Mask {
             Mask::LuminanceRange(m) => luminance_mask_weight(rgb, m),
             Mask::ColorRange(m) => color_mask_weight(rgb, m),
             Mask::Spot(m) => spot_mask_weight(uv, m, aspect),
+            Mask::RedEye(m) => red_eye_weight(uv, rgb, m),
         }
     }
 
@@ -1695,6 +1774,7 @@ impl Mask {
                     (sampled[2] + m.heal_shift[2]).clamp(0.0, 1.0),
                 ]
             }
+            Mask::RedEye(m) => red_eye_local_color(rgb, m),
             _ => {
                 let (exposure, contrast, saturation) = match self {
                     Mask::Linear(m) => (m.exposure, m.contrast, m.saturation),
@@ -1703,6 +1783,7 @@ impl Mask {
                     Mask::LuminanceRange(m) => (m.exposure, m.contrast, m.saturation),
                     Mask::ColorRange(m) => (m.exposure, m.contrast, m.saturation),
                     Mask::Spot(_) => unreachable!(),
+                    Mask::RedEye(_) => unreachable!(),
                 };
                 apply_adjustments(rgb, exposure, contrast, saturation)
             }
@@ -1719,6 +1800,7 @@ fn parse_masks(ops: &[serde_json::Value]) -> Vec<Mask> {
             Some("luminance_range_mask") => parse_luminance_range_mask(op).map(Mask::LuminanceRange),
             Some("color_range_mask") => parse_color_range_mask(op).map(Mask::ColorRange),
             Some("spot_mask") => parse_spot_mask(op).map(Mask::Spot),
+            Some("red_eye_mask") => parse_red_eye_mask(op).map(Mask::RedEye),
             _ => None,
         })
         .collect()
@@ -3209,6 +3291,130 @@ mod tests {
     fn radial_gradient_mask_outside_feathered_inverted_stays_unaffected() {
         assert_mask_pixel(
             radial_mask_stack((0.1, 0.1), 0.05, 0.05, 50.0, true, 1.0),
+            [100, 100, 100],
+        );
+    }
+
+    /// Same shape as `assert_mask_pixel`, but starting from a caller-chosen
+    /// color instead of a fixed neutral gray -- required for Red Eye's own
+    /// tests below, since a gray starting pixel has zero "redness" by
+    /// definition and could never exercise the redness-selective formula.
+    fn assert_mask_pixel_from(start: [u8; 3], stack: EditStack, expected: [i32; 3]) {
+        let mut image = RgbImage::from_pixel(1, 1, image::Rgb(start));
+        apply_edit_stack(&mut image, &stack);
+        let pixel = image.get_pixel(0, 0);
+        for (actual, expected) in pixel.0.iter().zip(expected.iter()) {
+            assert!(
+                (*actual as i32 - expected).abs() <= 2,
+                "expected ~{expected:?}, got {actual} (full pixel {:?})",
+                pixel.0
+            );
+        }
+    }
+
+    /// Red Eye masks (M4). Same 1x1-image-sampled-at-uv=(0.5,0.5)
+    /// convention as radial's own tests above, reusing radial's exact
+    /// ellipse geometry -- these cases instead vary `pupilSize`/`darken`
+    /// and the STARTING pixel color (via `assert_mask_pixel_from`), since
+    /// this mask's whole point is that its effect depends on color, not
+    /// just position. Every expected value hand-computed precisely (not
+    /// eyeballed) from `red_eye_redness_factor`/`red_eye_local_color`.
+    fn red_eye_mask_stack(
+        center: (f32, f32),
+        radius_x: f32,
+        radius_y: f32,
+        feather: f32,
+        pupil_size: f32,
+        darken: f32,
+    ) -> EditStack {
+        EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({
+                "op": "red_eye_mask",
+                "id": "test-red-eye-mask",
+                "center": { "x": center.0, "y": center.1 },
+                "radiusX": radius_x,
+                "radiusY": radius_y,
+                "feather": feather,
+                "pupilSize": pupil_size,
+                "darken": darken,
+            })],
+        }
+    }
+
+    /// Pure red, full ellipse weight, permissive pupil size, full darken --
+    /// the strongest correction case: desaturated to luma (0.2126 of 255 =
+    /// 54.2) then darkened by 60% of that (54.2 * 0.4 = 21.7) -> ~22.
+    #[test]
+    fn red_eye_mask_pure_red_full_strength_darkens_to_near_black_gray() {
+        assert_mask_pixel_from(
+            [255, 0, 0],
+            red_eye_mask_stack((0.5, 0.5), 0.3, 0.3, 0.0, 100.0, 100.0),
+            [22, 22, 22],
+        );
+    }
+
+    /// Same pure-red, full-weight case but `darken=0` -- still fully
+    /// desaturates to luma (that's the tool's whole "de-redify" point, not
+    /// optional), just without the extra darkening step: 0.2126 * 255 =
+    /// 54.2 -> 54.
+    #[test]
+    fn red_eye_mask_darken_zero_still_fully_desaturates() {
+        assert_mask_pixel_from(
+            [255, 0, 0],
+            red_eye_mask_stack((0.5, 0.5), 0.3, 0.3, 0.0, 100.0, 0.0),
+            [54, 54, 54],
+        );
+    }
+
+    /// A moderately (not purely) red pixel, strict pupil size (0 ->
+    /// threshold 1.0): redness = 0.7059 - 0.3922 = 0.3137, red_factor =
+    /// 0.3137 / 1.0 = 0.3137 (not clamped) -- only a partial correction
+    /// blends in even at full ellipse weight and full darken.
+    #[test]
+    fn red_eye_mask_strict_pupil_size_only_partially_corrects_a_faint_red() {
+        assert_mask_pixel_from(
+            [180, 100, 100],
+            red_eye_mask_stack((0.5, 0.5), 0.3, 0.3, 0.0, 0.0, 100.0),
+            [138, 83, 83],
+        );
+    }
+
+    /// Same faint-red pixel, permissive pupil size (100 -> threshold
+    /// floored at 0.05): red_factor = 0.3137 / 0.05 = 6.27, clamped to 1.0
+    /// -- the SAME pixel now gets the full correction, demonstrating pupil
+    /// size widens what counts as "red enough" rather than changing the
+    /// target color itself.
+    #[test]
+    fn red_eye_mask_permissive_pupil_size_fully_corrects_the_same_faint_red() {
+        assert_mask_pixel_from(
+            [180, 100, 100],
+            red_eye_mask_stack((0.5, 0.5), 0.3, 0.3, 0.0, 100.0, 100.0),
+            [47, 47, 47],
+        );
+    }
+
+    /// Well outside the ellipse (mirroring radial's own "outside" case) --
+    /// a pure red pixel gets NO correction regardless of pupil size/darken,
+    /// since ellipse weight is 0 there.
+    #[test]
+    fn red_eye_mask_outside_ellipse_pure_red_stays_unaffected() {
+        assert_mask_pixel_from(
+            [255, 0, 0],
+            red_eye_mask_stack((0.1, 0.1), 0.05, 0.05, 0.0, 100.0, 100.0),
+            [255, 0, 0],
+        );
+    }
+
+    /// Inside the ellipse (full spatial weight) but a NEUTRAL gray pixel --
+    /// zero redness means zero correction regardless of pupil size/darken,
+    /// the key behavior distinguishing this from a plain Radial mask (which
+    /// would uniformly grade every pixel in the oval, red or not).
+    #[test]
+    fn red_eye_mask_inside_ellipse_non_red_pixel_stays_unaffected() {
+        assert_mask_pixel_from(
+            [100, 100, 100],
+            red_eye_mask_stack((0.5, 0.5), 0.3, 0.3, 0.0, 100.0, 100.0),
             [100, 100, 100],
         );
     }

@@ -32,6 +32,7 @@
    *     | { kind: "brush", id: string }
    *     | { kind: "color_range", refColor: {r: number, g: number, b: number} }
    *     | { kind: "spot", id: string, initialDab: import('$lib/api/develop.js').SpotDab }
+   *     | { kind: "red_eye", center: {x: number, y: number}, radiusX: number, radiusY: number }
    *   ) => void,
    *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onMaskSelected: (id: string) => void,
@@ -781,6 +782,13 @@
       tryCapturePointer(e);
       return;
     }
+    if (activeTool === "red_eye") {
+      e.preventDefault();
+      const center = screenToNormalized(e.clientX, e.clientY);
+      placingMask = { kind: "red_eye", center, radiusX: 0, radiusY: 0 };
+      tryCapturePointer(e);
+      return;
+    }
     if (activeTool === "color_range") {
       e.preventDefault();
       colorRangeClickStart = { x: e.clientX, y: e.clientY };
@@ -886,6 +894,10 @@
       placingMask = { ...placingMask, ...radiusFromDrag(placingMask.center, e.clientX, e.clientY) };
       return;
     }
+    if (placingMask?.kind === "red_eye") {
+      placingMask = { ...placingMask, ...radiusFromDrag(placingMask.center, e.clientX, e.clientY) };
+      return;
+    }
     if (activeTool === "brush") {
       const p = screenToNormalized(e.clientX, e.clientY);
       brushCursor = p; // shown on hover too, not just while painting
@@ -970,6 +982,14 @@
       // (accidental click) must be rejected, not committed -- it would
       // corrupt the frame with Inf/NaN.
       if (radiusX > 0.01 && radiusY > 0.01) onMaskCreated({ kind: "radial_gradient", center, radiusX, radiusY });
+      return;
+    }
+    if (placingMask?.kind === "red_eye") {
+      const { center, radiusX, radiusY } = placingMask;
+      placingMask = null;
+      // Same minimum-radius guard as radial (radius is a divisor in the
+      // shader's ellipse-distance formula).
+      if (radiusX > 0.01 && radiusY > 0.01) onMaskCreated({ kind: "red_eye", center, radiusX, radiusY });
       return;
     }
     if (colorRangeClickStart) {
@@ -1533,11 +1553,17 @@
     // adjustments is entirely unused for spot (no exposure/contrast/
     // saturation channel -- it copies pixel CONTENT, see Mask::local_color
     // in develop_engine.rs) except adjustments.x, repurposed to carry
-    // mode (0=clone, 1=heal).
+    // mode (0=clone, 1=heal). kind=6 (red eye, M4) reuses radial's own
+    // start_end/params.x geometry layout verbatim (same click-drag ellipse)
+    // but repurposes the two slots radial uses for invert/padding instead:
+    // params.y becomes pupilSize (0-100, red eye has no invert concept)
+    // and adjustments.w becomes darken (0-100, otherwise unused padding on
+    // every other kind) -- see fs_mask's own red-eye branch for the
+    // formula both slots feed into.
     struct Mask {
-      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100); color range: xyz=refColor (0-1), w=range (0-100); spot: xy=sourceOffset(dx,dy), zw=dabs centroid (for heal-ring sampling only)
-      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1 (unused for brush/spot; spot repurposes this for dabs' average radius, also for heal-ring sampling), z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range, 5=spot), w = texture-array layer (brush AND spot)
-      adjustments: vec4<f32>, // x = exposure_ev (spot: mode, 0=clone/1=heal), y = contrast (unused for spot), z = saturation (unused for spot), w unused
+      start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100); color range: xyz=refColor (0-1), w=range (0-100); spot: xy=sourceOffset(dx,dy), zw=dabs centroid (for heal-ring sampling only); red eye: xy=center, zw=(radiusX,radiusY), same as radial
+      params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1 (unused for brush/spot; spot repurposes this for dabs' average radius, also for heal-ring sampling; red eye repurposes this for pupilSize 0-100), z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range, 5=spot, 6=red eye), w = texture-array layer (brush AND spot)
+      adjustments: vec4<f32>, // x = exposure_ev (spot: mode, 0=clone/1=heal), y = contrast (unused for spot/red eye), z = saturation (unused for spot/red eye), w unused (red eye repurposes this for darken 0-100)
     };
     const MAX_MASKS = 8;
 
@@ -2796,16 +2822,16 @@
           let denom = max(feather_width, 0.001);
           weight = clamp((threshold - dist) / denom + 1.0, 0.0, 1.0);
           if (m.params.y > 0.5) { weight = 1.0 - weight; }
-        } else {
-          // Spot (5, M4 Slice 1/2, Healing/Clone brush), and any future
-          // kind >= 5: structurally unlike every kind above -- it doesn't
-          // gate a parametric adjustment, it copies pixel CONTENT from a
-          // source offset into its dabs (see SpotMask's own doc comment in
-          // develop_engine.rs). M4 Slice 2 (brush-like spot removal, per
-          // explicit user request) made this a dab-stroke mask just like
-          // Brush (2): weight comes from its OWN texture-array layer
-          // (rasterized CPU-side by syncMaskRasterization/rasterizeSpotDab,
-          // matching spot_mask_weight's feather formula per dab, then
+        } else if (kind < 5.5) {
+          // Spot (5, M4 Slice 1/2, Healing/Clone brush): structurally
+          // unlike every kind above -- it doesn't gate a parametric
+          // adjustment, it copies pixel CONTENT from a source offset into
+          // its dabs (see SpotMask's own doc comment in develop_engine.rs).
+          // M4 Slice 2 (brush-like spot removal, per explicit user request)
+          // made this a dab-stroke mask just like Brush (2): weight comes
+          // from its OWN texture-array layer (rasterized CPU-side by
+          // syncMaskRasterization/rasterizeSpotDab, matching
+          // spot_mask_weight's feather formula per dab, then
           // max-accumulated across dabs the same way Brush's own texture
           // already accumulates its Add dabs), not an inline analytic
           // circle the way the original single-dest-circle design used.
@@ -2846,6 +2872,45 @@
           }
 
           rgb = mix(rgb, sampled, weight);
+        } else {
+          // Red Eye (6, M4): same elliptical geometry as Radial (1) --
+          // start_end.xy = center, start_end.zw = (radiusX, radiusY),
+          // params.x = feather -- but always applied INSIDE (no invert;
+          // the whole point is "correct what's in the oval") and gated by
+          // a SECOND factor beyond ellipse membership: how strongly this
+          // pixel's own color reads as red-eye red. Exact mirror of
+          // develop_engine.rs's red_eye_ellipse_weight/
+          // red_eye_redness_factor/red_eye_local_color -- see those
+          // functions' own doc comments for the reasoning behind each
+          // constant here.
+          let dx = (in.uv.x - m.start_end.x) / m.start_end.z;
+          let dy = (in.uv.y - m.start_end.y) / m.start_end.w;
+          let d = sqrt(dx * dx + dy * dy);
+          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
+          let denom = max(2.0 * softness, 0.001);
+          let ellipseWeight = clamp((1.0 + softness - d) / denom, 0.0, 1.0);
+
+          // params.y repurposed as pupilSize (0-100) for this kind -- red
+          // eye has no invert concept, so this slot is free (see the Mask
+          // struct's own doc comment above).
+          let pupilSize = m.params.y;
+          let redness = max(rgb.r - max(rgb.g, rgb.b), 0.0);
+          let threshold = clamp(1.0 - pupilSize / 100.0, 0.05, 1.0);
+          let rednessFactor = clamp(redness / threshold, 0.0, 1.0);
+          weight = ellipseWeight * rednessFactor;
+
+          // adjustments.w repurposed as darken (0-100) for this kind --
+          // unused padding for every other kind (see the Mask struct's own
+          // doc comment above). Always fully desaturates to luma at full
+          // weight (that's this tool's whole "de-redify" point, not
+          // optional); darken additionally pulls that luma down by up to
+          // 60% at darken=100, matching a real pupil's near-black look
+          // without ever crushing to pure black regardless of slider
+          // position.
+          let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+          let darkenAmt = clamp(m.adjustments.w / 100.0, 0.0, 1.0);
+          let corrected = luma * (1.0 - darkenAmt * 0.6);
+          rgb = mix(rgb, vec3<f32>(corrected, corrected, corrected), weight);
         }
         if (kind < 4.5) {
           rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
@@ -4046,6 +4111,23 @@
         maskData[o + 6] = 5; // kind = spot
         maskData[o + 7] = brushRasterState.get(m.id)?.layer ?? 0;
         maskData[o + 8] = m.mode === "heal" ? 1 : 0;
+      } else if (m.op === "red_eye_mask") {
+        // M4: same center/radiusX/radiusY/feather geometry as radial above,
+        // but o+5 (params.y, radial's own invert slot) is repurposed as
+        // pupilSize and o+11 (adjustments.w, unused padding on every other
+        // kind) as darken -- see the WGSL Mask struct's own doc comment.
+        // Like spot, must set its own o+5/o+8-10 here and be excluded from
+        // the common invert/exposure/contrast/saturation write below,
+        // since `m.invert`/`m.exposure`/etc are all undefined on this
+        // mask kind (see RedEyeMask's own JSDoc typedef in develop.js).
+        maskData[o + 0] = m.center.x;
+        maskData[o + 1] = m.center.y;
+        maskData[o + 2] = m.radiusX;
+        maskData[o + 3] = m.radiusY;
+        maskData[o + 4] = m.feather;
+        maskData[o + 5] = m.pupilSize;
+        maskData[o + 6] = 6; // kind = red eye
+        maskData[o + 11] = m.darken;
       } else {
         // linear_gradient_mask -- the only kind left once the four
         // explicit branches above are exhausted, given MASK_OP_NAMES
@@ -4065,7 +4147,7 @@
         maskData[o + 4] = m.feather;
         maskData[o + 6] = 0; // kind = linear
       }
-      if (m.op !== "spot_mask") {
+      if (m.op !== "spot_mask" && m.op !== "red_eye_mask") {
         maskData[o + 5] = m.invert ? 1 : 0;
         maskData[o + 8] = m.exposure;
         maskData[o + 9] = m.contrast;
@@ -4362,7 +4444,7 @@
       bind:this={canvasEl}
       class:zoomed={zoomMode === "100"}
       class:cropped={showCommittedCropPreview}
-      class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper" || activeTool === "spot"}
+      class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper" || activeTool === "spot" || activeTool === "red_eye"}
       class:space-pan={spacePanning}
       style={showCommittedCropPreview
         ? `width:${100 / crop.width}%; height:${100 / crop.height}%; left:${(-crop.x * 100) / crop.width}%; top:${(-crop.y * 100) / crop.height}%; transform: rotate(${crop.angle}deg);`
@@ -4486,6 +4568,36 @@
             onpointermove={handleMaskHandlePointerMove}
             onpointerup={handleMaskHandlePointerUp}
           ></button>
+        {:else if mask.op === "red_eye_mask"}
+          <!-- M4: same center/radius handle pair as Radial above (both
+               "center" and "radius" drag kinds are already fully generic
+               in handleMaskHandlePointerMove -- they patch whichever mask
+               id they're given, with no op-specific branching), just no
+               feather-range indicator rings (a named scope cut, not an
+               oversight: red eye's own "how strict is red detection"
+               control is Pupil Size, not spatial feather width, so a
+               feather-boundary visualization would be misleading here). -->
+          <svg class="mask-ellipse" class:selected={mask.id === selectedMaskId}>
+            <ellipse cx="{mask.center.x * 100}%" cy="{mask.center.y * 100}%" rx="{mask.radiusX * 100}%" ry="{mask.radiusY * 100}%" />
+          </svg>
+          <button
+            class="mask-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{mask.center.x * 100}%; top:{mask.center.y * 100}%"
+            aria-label="Red eye center"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "center")}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
+          <button
+            class="mask-handle"
+            class:selected={mask.id === selectedMaskId}
+            style="left:{(mask.center.x + mask.radiusX) * 100}%; top:{mask.center.y * 100}%"
+            aria-label="Red eye radius"
+            onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "radius", mask.center)}
+            onpointermove={handleMaskHandlePointerMove}
+            onpointerup={handleMaskHandlePointerUp}
+          ></button>
         {:else if mask.op === "spot_mask"}
           <!-- M4 Slice 2 (brush-like spot removal, replacing the original
                single dest-circle model): the painted stroke itself has no
@@ -4531,6 +4643,10 @@
           <line x1="{placingMask.start.x * 100}%" y1="{placingMask.start.y * 100}%" x2="{placingMask.end.x * 100}%" y2="{placingMask.end.y * 100}%" />
         </svg>
       {:else if placingMask?.kind === "radial_gradient"}
+        <svg class="mask-ellipse placing">
+          <ellipse cx="{placingMask.center.x * 100}%" cy="{placingMask.center.y * 100}%" rx="{placingMask.radiusX * 100}%" ry="{placingMask.radiusY * 100}%" />
+        </svg>
+      {:else if placingMask?.kind === "red_eye"}
         <svg class="mask-ellipse placing">
           <ellipse cx="{placingMask.center.x * 100}%" cy="{placingMask.center.y * 100}%" rx="{placingMask.radiusX * 100}%" ry="{placingMask.radiusY * 100}%" />
         </svg>

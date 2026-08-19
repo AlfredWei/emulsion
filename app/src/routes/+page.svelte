@@ -71,6 +71,7 @@
     createLuminanceRangeMask,
     createColorRangeMask,
     createSpotMask,
+    createRedEyeMask,
     OVERLAY_CAPABLE_MASK_OPS,
     getToneCurvePoints,
     upsertToneCurve,
@@ -398,6 +399,7 @@
      *   | { kind: "brush", id: string }
      *   | { kind: "color_range", refColor: {r:number,g:number,b:number} }
      *   | { kind: "spot", id: string, initialDab: {x:number,y:number,radius:number} }
+     *   | { kind: "red_eye", center: {x:number,y:number}, radiusX: number, radiusY: number }
      * } */ placement,
   ) {
     // Every kind gets its own explicit branch before the final
@@ -416,7 +418,9 @@
             ? createColorRangeMask(placement.refColor)
             : placement.kind === "spot"
               ? createSpotMask(placement.initialDab, placement.id)
-              : createLinearGradientMask(placement.start, placement.end);
+              : placement.kind === "red_eye"
+                ? createRedEyeMask(placement.center, placement.radiusX, placement.radiusY)
+                : createLinearGradientMask(placement.start, placement.end);
     editStack = addMask(editStack, mask);
     selectedMaskId = mask.id;
     // Real Lightroom drops back to selection after placing a gradient, but
@@ -436,7 +440,9 @@
             ? "Add Color Range Mask"
             : placement.kind === "spot"
               ? "Add Spot Removal"
-              : "Add Linear Gradient";
+              : placement.kind === "red_eye"
+                ? "Add Red Eye Correction"
+                : "Add Linear Gradient";
     scheduleFlush(label);
   }
 

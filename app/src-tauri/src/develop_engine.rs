@@ -2783,6 +2783,169 @@ pub(crate) fn apply_lens_correction(image: &mut RgbImage, stack: &EditStack) {
     }
 }
 
+// ==================== Perspective Correction (M4) ====================
+//
+// Manual-controls-only "Transform" tool (auto-upright is explicitly a
+// stretch goal per PRD/MILESTONES.md's M4 scope, not required) --
+// Vertical/Horizontal correct converging lines from a tilted camera,
+// Rotate is a fine post-warp correction, Aspect compensates the
+// foreshortening a strong Vertical/Horizontal correction introduces, and
+// Scale lets the user zoom in to manually crop away the blank corners the
+// warp reveals (no auto-crop: the existing `apply_crop`, which already
+// runs after this in both real callers, is exactly the tool for that --
+// see this op's own header comment on why it deliberately doesn't try to
+// solve that itself).
+//
+// Applied in the SAME slot lens correction occupies in both real callers
+// (`export.rs`, `import.rs`), immediately after it and before
+// `apply_edit_stack` -- the user grades and crops the geometrically
+// corrected image, not the tilted one, matching this file's own
+// lens-correction-ordering precedent above. Like lens correction and
+// `rotate_image`, this is a genuine resample (every output pixel can come
+// from a different source location), so it needs a fresh output buffer
+// and `sample_bilinear`, not an in-place per-pixel formula.
+//
+// The warp itself is a true projective (homography) map, not a shear or
+// simple affine stretch -- the minimal 2-degree-of-freedom model for how
+// a flat plane, photographed by a tilted camera, distorts: dividing by a
+// linear function of position is exactly what makes parallel lines in the
+// real world converge (or, run in reverse here, un-converge) in the
+// photograph. At `vertical = horizontal = 0` the divisor is exactly 1.0,
+// so the map is the identity to the last bit -- verified directly by this
+// section's own tests below.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Perspective {
+    vertical: f32,
+    horizontal: f32,
+    rotate: f32,
+    aspect: f32,
+    scale: f32,
+}
+
+impl Default for Perspective {
+    fn default() -> Self {
+        Perspective { vertical: 0.0, horizontal: 0.0, rotate: 0.0, aspect: 0.0, scale: 100.0 }
+    }
+}
+
+fn perspective_op(ops: &[serde_json::Value]) -> Perspective {
+    let op = ops.iter().find(|op| op.get("op").and_then(|v| v.as_str()) == Some("perspective"));
+    let Some(op) = op else { return Perspective::default() };
+    let f32_field = |key: &str, default: f32| -> f32 {
+        op.get(key).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
+    };
+    Perspective {
+        vertical: f32_field("vertical", 0.0),
+        horizontal: f32_field("horizontal", 0.0),
+        rotate: f32_field("rotate", 0.0),
+        aspect: f32_field("aspect", 0.0),
+        scale: f32_field("scale", 100.0),
+    }
+}
+
+fn perspective_is_identity(p: &Perspective) -> bool {
+    p.vertical == 0.0 && p.horizontal == 0.0 && p.rotate == 0.0 && p.aspect == 0.0 && p.scale == 100.0
+}
+
+/// Slider-extreme calibration constants, hand-picked to look reasonable at
+/// +-100 and confirmed empirically during this slice's own verification --
+/// the same "calibrated by eye" practice this file already uses for e.g.
+/// Grain's size/roughness mapping and Lens Correction's manual distortion
+/// constant.
+const PERSPECTIVE_KEYSTONE_MAX: f32 = 0.7;
+const PERSPECTIVE_ASPECT_MAX: f32 = 0.5;
+
+/// Pixel <-> isotropic normalized coordinate mapping -- same "centered,
+/// half-diagonal" spirit as `LensNorm::for_manual` above (a SHARED scale
+/// for both axes, not independent per-axis half-width/half-height), so
+/// the warp math below can treat x and y as physically comparable units
+/// regardless of the image's own aspect ratio.
+#[derive(Clone, Copy)]
+struct PerspectiveNorm {
+    cx: f32,
+    cy: f32,
+    scale: f32,
+}
+
+impl PerspectiveNorm {
+    fn new(width: u32, height: u32) -> Self {
+        let cx = width as f32 / 2.0;
+        let cy = height as f32 / 2.0;
+        PerspectiveNorm { cx, cy, scale: cx.hypot(cy).max(1.0) }
+    }
+    fn to_normalized(&self, px: f32, py: f32) -> (f32, f32) {
+        ((px - self.cx) / self.scale, (py - self.cy) / self.scale)
+    }
+    fn to_pixel(&self, nx: f32, ny: f32) -> (f32, f32) {
+        (nx * self.scale + self.cx, ny * self.scale + self.cy)
+    }
+}
+
+/// Where a given OUTPUT normalized coordinate `(xd, yd)` samples FROM in
+/// the SOURCE image's own normalized space -- inverse-composes, in this
+/// order, the individual stages of the forward edit a user would describe
+/// ("apply keystone, then stretch aspect, then rotate, then scale"):
+///   1. inverse scale (dividing by `scale` samples a SMALLER source
+///      region for `scale > 1`, i.e. the displayed image appears zoomed
+///      IN, matching the intuitive "bigger Scale = zoom in").
+///   2. inverse rotate (by `-rotate`).
+///   3. inverse aspect stretch (undoes the horizontal stretch).
+///   4. inverse keystone: the projective divide itself. `horizontal`
+///      warps as a function of x (corrects convergence from a
+///      left/right-panned camera), `vertical` warps as a function of y
+///      (corrects convergence from an up/down-tilted camera) -- see this
+///      section's own header comment for why this is a divide, not a
+///      shear.
+fn perspective_warp_coord(xd: f32, yd: f32, p: &Perspective) -> (f32, f32) {
+    let scale = (p.scale / 100.0).max(0.01);
+    let (mut x, mut y) = (xd / scale, yd / scale);
+
+    if p.rotate != 0.0 {
+        let rad = -p.rotate.to_radians();
+        let (sin_t, cos_t) = rad.sin_cos();
+        (x, y) = (x * cos_t - y * sin_t, x * sin_t + y * cos_t);
+    }
+
+    if p.aspect != 0.0 {
+        let stretch = (1.0 + (p.aspect / 100.0) * PERSPECTIVE_ASPECT_MAX).max(0.01);
+        x /= stretch;
+    }
+
+    let a = (p.horizontal / 100.0) * PERSPECTIVE_KEYSTONE_MAX;
+    let b = (p.vertical / 100.0) * PERSPECTIVE_KEYSTONE_MAX;
+    if a != 0.0 || b != 0.0 {
+        let denom = 1.0 + a * x + b * y;
+        if denom.abs() > 0.001 {
+            x /= denom;
+            y /= denom;
+        }
+    }
+
+    (x, y)
+}
+
+/// Applies the perspective warp via resampling -- see this section's own
+/// header comment for why a fresh output buffer is required. Skipped
+/// ENTIRELY at identity, matching every other op in this file.
+pub(crate) fn apply_perspective(image: &mut RgbImage, stack: &EditStack) {
+    let p = perspective_op(&stack.ops);
+    if perspective_is_identity(&p) {
+        return;
+    }
+
+    let (width, height) = (image.width(), image.height());
+    let norm = PerspectiveNorm::new(width, height);
+    let source = image.clone();
+    for oy in 0..height {
+        for ox in 0..width {
+            let (nx, ny) = norm.to_normalized(ox as f32, oy as f32);
+            let (sx, sy) = perspective_warp_coord(nx, ny, &p);
+            let (px, py) = norm.to_pixel(sx, sy);
+            image.put_pixel(ox, oy, sample_bilinear(&source, px, py));
+        }
+    }
+}
+
 /// Applies Crop & Straighten to `image` in place (rotate, then crop --
 /// matching this module's own doc comment on why crop-then-resize, not
 /// resize-then-crop, in the two real callers). Skipped ENTIRELY at
@@ -4695,6 +4858,152 @@ mod tests {
             ..LensCorrection::default()
         }));
         assert!(!lens_correction_is_identity(&LensCorrection { manual_distortion: 5.0, ..LensCorrection::default() }));
+    }
+
+    // -- M4 Perspective Correction --------------------------------------
+
+    #[test]
+    fn perspective_is_identity_matches_apply_perspective_no_op_cases() {
+        assert!(perspective_is_identity(&Perspective::default()));
+        assert!(!perspective_is_identity(&Perspective { vertical: 1.0, ..Perspective::default() }));
+        assert!(!perspective_is_identity(&Perspective { horizontal: 1.0, ..Perspective::default() }));
+        assert!(!perspective_is_identity(&Perspective { rotate: 1.0, ..Perspective::default() }));
+        assert!(!perspective_is_identity(&Perspective { aspect: 1.0, ..Perspective::default() }));
+        assert!(!perspective_is_identity(&Perspective { scale: 101.0, ..Perspective::default() }));
+    }
+
+    #[test]
+    fn perspective_warp_coord_at_default_params_is_the_exact_identity() {
+        // a=b=0 (keystone), rotate=0, aspect=0, scale=100 -- every stage's
+        // own divisor/multiplier collapses to exactly 1.0, not just
+        // "close to". Checked at several points, not just the origin,
+        // since a bug in any one stage could still leave (0,0) fixed.
+        for (x, y) in [(0.0, 0.0), (0.5, -0.3), (-0.8, 0.9), (0.1, 0.1)] {
+            let (sx, sy) = perspective_warp_coord(x, y, &Perspective::default());
+            assert_eq!((sx, sy), (x, y), "input ({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn apply_perspective_at_identity_is_an_exact_passthrough() {
+        let mut image = RgbImage::from_pixel(20, 16, image::Rgb([90, 140, 30]));
+        let before = image.clone();
+        apply_perspective(&mut image, &stack_with(&[]));
+        assert_eq!(image, before);
+    }
+
+    /// Hand-derived: on the horizontal centerline (`y = 0`), `vertical`
+    /// (the `b` coefficient) drops out of the divisor entirely (`1 + a*x
+    /// + b*0 = 1 + a*x`), so with `horizontal = 0` too (`a = 0`) the
+    /// divisor is exactly 1.0 and `x` is unchanged, regardless of how
+    /// large `vertical` is -- a real behavioral guarantee (Vertical must
+    /// not warp the horizontal centerline at all), not just an
+    /// implementation detail.
+    #[test]
+    fn perspective_warp_coord_vertical_only_leaves_the_horizontal_centerline_unchanged() {
+        let p = Perspective { vertical: 80.0, ..Perspective::default() };
+        for x in [-0.9, -0.2, 0.0, 0.4, 0.95] {
+            let (sx, sy) = perspective_warp_coord(x, 0.0, &p);
+            assert_eq!(sx, x, "x should be exactly unchanged on the centerline, got sx={sx} for x={x}");
+            assert_eq!(sy, 0.0, "y should stay exactly 0 on the centerline");
+        }
+    }
+
+    /// Mirror of the above on the vertical centerline (`x = 0`):
+    /// `horizontal` alone must leave it exactly unchanged.
+    #[test]
+    fn perspective_warp_coord_horizontal_only_leaves_the_vertical_centerline_unchanged() {
+        let p = Perspective { horizontal: 80.0, ..Perspective::default() };
+        for y in [-0.9, -0.2, 0.0, 0.4, 0.95] {
+            let (sx, sy) = perspective_warp_coord(0.0, y, &p);
+            assert_eq!(sx, 0.0, "x should stay exactly 0 on the centerline");
+            assert_eq!(sy, y, "y should be exactly unchanged on the centerline, got sy={sy} for y={y}");
+        }
+    }
+
+    /// Hand-derived exact value: at `y = 0.5`, `vertical = 100` gives
+    /// `b = 1.0 * PERSPECTIVE_KEYSTONE_MAX = 0.7`, so the divisor is
+    /// `1 + 0.7*0.5 = 1.35` and `y` maps to `0.5 / 1.35`.
+    #[test]
+    fn perspective_warp_coord_vertical_matches_hand_derived_divisor() {
+        let p = Perspective { vertical: 100.0, ..Perspective::default() };
+        let (sx, sy) = perspective_warp_coord(0.0, 0.5, &p);
+        assert_eq!(sx, 0.0);
+        let expected = 0.5 / (1.0 + PERSPECTIVE_KEYSTONE_MAX * 0.5);
+        assert!((sy - expected).abs() < 1e-6, "sy={sy} expected={expected}");
+    }
+
+    /// Hand-derived: `rotate = 90` degrees rotates the INVERSE map by
+    /// `-90`, so a destination point at `(1, 0)` samples from source
+    /// `(cos(-90), sin(-90)) = (0, -1)` -- i.e. the point that was to the
+    /// RIGHT of center in the output now reads from ABOVE center in the
+    /// source, matching a clockwise-appearing rotation of the displayed
+    /// image (consistent with this file's other rotation direction
+    /// convention -- see `rotate_image_90_degrees_matches_hand_derived_direction`).
+    #[test]
+    fn perspective_warp_coord_rotate_90_matches_hand_derived_direction() {
+        let p = Perspective { rotate: 90.0, ..Perspective::default() };
+        let (sx, sy) = perspective_warp_coord(1.0, 0.0, &p);
+        assert!((sx - 0.0).abs() < 1e-5, "sx={sx}");
+        assert!((sy - -1.0).abs() < 1e-5, "sy={sy}");
+    }
+
+    /// Hand-derived: `aspect = 100` gives `stretch = 1 +
+    /// PERSPECTIVE_ASPECT_MAX = 1.5`, so `x` maps to `x / 1.5`; `y` (no
+    /// aspect term at all) is untouched.
+    #[test]
+    fn perspective_warp_coord_aspect_matches_hand_derived_stretch() {
+        let p = Perspective { aspect: 100.0, ..Perspective::default() };
+        let (sx, sy) = perspective_warp_coord(0.6, 0.3, &p);
+        let expected_x = 0.6 / (1.0 + PERSPECTIVE_ASPECT_MAX);
+        assert!((sx - expected_x).abs() < 1e-6, "sx={sx} expected={expected_x}");
+        assert_eq!(sy, 0.3);
+    }
+
+    /// Hand-derived: `scale = 200` (2x) divides both axes by 2 before any
+    /// other stage runs, sampling a source region HALF the size -- i.e.
+    /// the displayed image appears zoomed in 2x.
+    #[test]
+    fn perspective_warp_coord_scale_matches_hand_derived_zoom() {
+        let p = Perspective { scale: 200.0, ..Perspective::default() };
+        let (sx, sy) = perspective_warp_coord(0.4, -0.6, &p);
+        assert!((sx - 0.2).abs() < 1e-6, "sx={sx}");
+        assert!((sy - -0.3).abs() < 1e-6, "sy={sy}");
+    }
+
+    /// End-to-end: a nonzero Vertical correction is a genuine resample, so
+    /// it must visibly move where an off-center marker ends up relative
+    /// to a passthrough render at the SAME pixel -- same style of check
+    /// `lens_correction_manual_distortion_visibly_shifts_content` uses.
+    #[test]
+    fn apply_perspective_vertical_visibly_shifts_content() {
+        let mut base = RgbImage::from_pixel(61, 61, image::Rgb([10, 10, 10]));
+        base.put_pixel(30, 10, image::Rgb([255, 255, 255]));
+
+        let mut corrected = base.clone();
+        apply_perspective(
+            &mut corrected,
+            &EditStack { schema_version: 1, ops: vec![serde_json::json!({ "op": "perspective", "vertical": 80.0 })] },
+        );
+
+        assert_ne!(corrected, base, "a nonzero Vertical amount must change the image");
+    }
+
+    /// End-to-end: increasing Scale (zooming in) must NOT introduce any
+    /// blank (pure-black, `sample_bilinear`'s documented out-of-bounds
+    /// fallback -- see that function's own doc comment) pixels on an
+    /// image with no blank content to begin with, since zooming in only
+    /// ever samples a SMALLER, fully-in-bounds region of the source.
+    #[test]
+    fn apply_perspective_scale_up_alone_never_reveals_blank_corners() {
+        let mut image = checkerboard(41);
+        apply_perspective(
+            &mut image,
+            &EditStack { schema_version: 1, ops: vec![serde_json::json!({ "op": "perspective", "scale": 150.0 })] },
+        );
+        for pixel in image.pixels() {
+            assert_ne!(*pixel, image::Rgb([0, 0, 0]), "scale-up-only must never sample out of bounds");
+        }
     }
 
     // M4 Slice 1 (Healing/Clone brush). Every case below builds a flat

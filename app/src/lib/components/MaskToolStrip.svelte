@@ -105,6 +105,7 @@
     let rangeCount = 0;
     let colorCount = 0;
     let spotCount = 0;
+    let redEyeCount = 0;
     return new Map(
       masks.map((mask) => {
         if (mask.op === "radial_gradient_mask") return [mask.id, `Radial ${++radialCount}`];
@@ -112,6 +113,7 @@
         if (mask.op === "luminance_range_mask") return [mask.id, `Range ${++rangeCount}`];
         if (mask.op === "color_range_mask") return [mask.id, `Color ${++colorCount}`];
         if (mask.op === "spot_mask") return [mask.id, `Spot ${++spotCount}`];
+        if (mask.op === "red_eye_mask") return [mask.id, `Red Eye ${++redEyeCount}`];
         return [mask.id, `Gradient ${++gradientCount}`];
       }),
     );
@@ -228,6 +230,20 @@
     <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
       <circle cx="9.5" cy="6.5" r="4" stroke="currentColor" stroke-width="1.3" />
       <circle cx="3.6" cy="12.4" r="1.6" stroke="currentColor" stroke-width="1.1" stroke-dasharray="1.6 1.4" />
+    </svg>
+  </button>
+  <button
+    class="tool icon"
+    class:active={activeTool === "red_eye"}
+    type="button"
+    disabled={atCap && activeTool !== "red_eye"}
+    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Red Eye Correction -- click-drag an oval over the eye"}
+    aria-label="Red Eye Correction"
+    onclick={() => onToolToggle("red_eye")}
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <path d="M1 8 C3 4, 13 4, 15 8 C13 12, 3 12, 1 8 Z" stroke="currentColor" stroke-width="1.3" />
+      <circle cx="8" cy="8" r="2" fill="var(--label-red)" />
     </svg>
   </button>
 

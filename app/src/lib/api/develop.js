@@ -150,7 +150,31 @@ import { invoke } from "@tauri-apps/api/core";
  * there is no "settings" channel to invert or dial in.
  */
 
-/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask | SpotMask} Mask */
+/**
+ * @typedef {Object} RedEyeMask
+ * @property {"red_eye_mask"} op
+ * @property {string} id
+ * @property {{x: number, y: number}} center - same click-drag elliptical
+ *   placement as `RadialGradientMask` (center/radiusX/radiusY/feather).
+ * @property {number} radiusX
+ * @property {number} radiusY
+ * @property {number} feather
+ * @property {number} pupilSize - 0-100, how strict the red-pixel detection
+ *   inside the ellipse is: 0 only catches near-pure red, 100 catches even a
+ *   faint red cast. NOT a literal pupil radius -- named to match real
+ *   Lightroom's own Red Eye Correction slider, which plays the same role.
+ * @property {number} darken - 0-100, how far a detected red pixel is pulled
+ *   toward black on top of the always-applied full desaturation (see
+ *   `red_eye_local_color` in develop_engine.rs) -- 0 still fully
+ *   desaturates, it just skips the extra luminance reduction.
+ *
+ * Deliberately has NO `invert`/`exposure`/`contrast`/`saturation` fields,
+ * same reasoning as `SpotMask`: this mask doesn't gate a parametric
+ * adjustment, its effect is fixed (redness-selective desaturate+darken)
+ * and there's no outside-the-oval use case to invert into.
+ */
+
+/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask | SpotMask | RedEyeMask} Mask */
 
 /**
  * @typedef {Object} EditStack
@@ -1174,6 +1198,7 @@ const MASK_OP_NAMES = [
   "luminance_range_mask",
   "color_range_mask",
   "spot_mask",
+  "red_eye_mask",
 ];
 
 // Presets (M3): op names a preset must NEVER capture -- `crop` and every
@@ -1237,6 +1262,28 @@ export function createRadialGradientMask(
     exposure: 0,
     contrast: 0,
     saturation: 0,
+  };
+}
+
+/** M4: same click-drag elliptical placement as `createRadialGradientMask`,
+ * defaults matching the Rust parser's own fallbacks (50/50) rather than an
+ * arbitrary UI-only default, so a freshly-placed mask and one round-tripped
+ * through a stack missing these fields behave identically.
+ * @returns {RedEyeMask} */
+export function createRedEyeMask(
+  /** @type {{x: number, y: number}} */ center,
+  /** @type {number} */ radiusX,
+  /** @type {number} */ radiusY,
+) {
+  return {
+    op: "red_eye_mask",
+    id: crypto.randomUUID(),
+    center,
+    radiusX,
+    radiusY,
+    feather: 50,
+    pupilSize: 50,
+    darken: 50,
   };
 }
 

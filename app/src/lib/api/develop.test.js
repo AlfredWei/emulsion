@@ -38,7 +38,7 @@ describe("presetEligibleOps", () => {
     });
   });
 
-  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 6 mask kinds plus crop and lens_correction", () => {
+  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 7 mask kinds plus crop and lens_correction", () => {
     expect(PRESET_EXCLUDED_OP_NAMES.sort()).toEqual(
       [
         "crop",
@@ -49,6 +49,7 @@ describe("presetEligibleOps", () => {
         "luminance_range_mask",
         "color_range_mask",
         "spot_mask",
+        "red_eye_mask",
       ].sort(),
     );
   });

@@ -46,7 +46,9 @@
             ? "Color Range"
             : mask.op === "spot_mask"
               ? "Spot Removal"
-              : "Linear Gradient",
+              : mask.op === "red_eye_mask"
+                ? "Red Eye Correction"
+                : "Linear Gradient",
   );
 </script>
 
@@ -79,7 +81,12 @@
         >Clone</button>
       </div>
     </div>
-  {:else}
+  {:else if mask.op !== "red_eye_mask"}
+    <!-- Red eye also skips this shared block -- like spot, it has no
+         exposure/contrast/saturation channel (see RedEyeMask's own JSDoc
+         typedef in develop.js); its own Pupil Size/Darken controls live in
+         a dedicated block below, same pattern as luminance/color range's
+         own dedicated blocks. -->
     <div class="row">
       <label for="mask-exposure">Exposure</label>
       <input
@@ -247,6 +254,39 @@
     </div>
   {/if}
 
+  {#if mask.op === "red_eye_mask"}
+    <!-- Pupil Size/Darken, not the shared Exposure/Contrast/Saturation
+         block above (skipped for this kind, see its own comment there) --
+         this kind's effect is fixed (redness-selective desaturate+darken),
+         these two sliders are its only tunable parameters. -->
+    <div class="row">
+      <label for="mask-red-eye-pupil-size">Pupil Size</label>
+      <input
+        id="mask-red-eye-pupil-size"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={mask.pupilSize}
+        oninput={(e) => onChange({ pupilSize: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.pupilSize}</span>
+    </div>
+    <div class="row">
+      <label for="mask-red-eye-darken">Darken</label>
+      <input
+        id="mask-red-eye-darken"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={mask.darken}
+        oninput={(e) => onChange({ darken: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{mask.darken}</span>
+    </div>
+  {/if}
+
   {#if OVERLAY_CAPABLE_MASK_OPS.includes(mask.op)}
     <!-- Soft colored overlay showing exactly what's selected -- brush,
          luminance-range, and color-range masks are otherwise invisible
@@ -263,12 +303,15 @@
     </label>
   {/if}
 
-  {#if mask.op !== "spot_mask"}
+  {#if mask.op !== "spot_mask" && mask.op !== "red_eye_mask"}
     <!-- No Invert for a spot mask: replacing pixel content everywhere
          EXCEPT a small circle would never be a sensible spot-removal
          operation (see spot_mask_weight's own doc comment in
          develop_engine.rs), unlike every other kind's region-gated
-         adjustment, which inverting meaningfully flips. -->
+         adjustment, which inverting meaningfully flips. Red eye has no
+         `invert` field at all (see RedEyeMask's own JSDoc typedef) --
+         correcting everywhere EXCEPT the oval is nonsensical for the same
+         reason. -->
     <label class="invert-row">
       <input type="checkbox" checked={mask.invert} onchange={(e) => onChange({ invert: e.currentTarget.checked })} />
       <span>Invert</span>

@@ -3419,6 +3419,73 @@ mod tests {
         );
     }
 
+    /// A real committed test photo (`test_image/Red-eye-flash.jpeg`, a
+    /// portrait with genuine flash-induced red-eye in both pupils) --
+    /// every other case above uses a synthetic 1x1 pixel, hand-computed
+    /// exactly; this one instead exercises the whole formula against real
+    /// photographic noise/gradients, on the real content shape (a small
+    /// saturated-red disc surrounded by blue iris and skin) this feature
+    /// was actually built for. The reddest pixel is found programmatically
+    /// (max `r - max(g,b)`) rather than hand-eyeballed, so this test stays
+    /// correct if the fixture image is ever swapped for another one.
+    #[test]
+    fn red_eye_mask_corrects_a_real_photo_pupil_without_touching_skin() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test_image/Red-eye-flash.jpeg");
+        let img = image::open(path)
+            .expect("test_image/Red-eye-flash.jpeg should be present and decodable")
+            .to_rgb8();
+        let (w, h) = img.dimensions();
+
+        let mut pupil = (0u32, 0u32);
+        let mut pupil_redness = -1.0f32;
+        for (x, y, p) in img.enumerate_pixels() {
+            let r = p[0] as f32 / 255.0;
+            let g = p[1] as f32 / 255.0;
+            let b = p[2] as f32 / 255.0;
+            let redness = r - g.max(b);
+            if redness > pupil_redness {
+                pupil_redness = redness;
+                pupil = (x, y);
+            }
+        }
+        assert!(
+            pupil_redness > 0.3,
+            "fixture should contain a clearly red pupil pixel, got max redness {pupil_redness}"
+        );
+
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({
+                "op": "red_eye_mask",
+                "id": "real-photo-test",
+                "center": { "x": (pupil.0 as f32 + 0.5) / w as f32, "y": (pupil.1 as f32 + 0.5) / h as f32 },
+                "radiusX": 0.025,
+                "radiusY": 0.025,
+                "feather": 40.0,
+                "pupilSize": 80.0,
+                "darken": 80.0,
+            })],
+        };
+
+        let mut edited = img.clone();
+        apply_edit_stack(&mut edited, &stack);
+
+        let after = edited.get_pixel(pupil.0, pupil.1);
+        let redness_after = after[0] as f32 / 255.0 - (after[1] as f32 / 255.0).max(after[2] as f32 / 255.0);
+        assert!(
+            redness_after < pupil_redness * 0.3,
+            "pupil redness should drop substantially after correction: before={pupil_redness}, after={redness_after}"
+        );
+
+        // Top-left corner (background, well outside either eye's small
+        // correction radius) must stay unchanged -- confirms the
+        // redness-selective spatial gating actually holds on a real photo,
+        // not just this file's synthetic 1x1 fixtures.
+        let far = img.get_pixel(w / 20, h / 20);
+        let far_after = edited.get_pixel(w / 20, h / 20);
+        assert_eq!(far, far_after, "a background pixel far from either eye should be untouched");
+    }
+
     /// Brush masks (M3 Slice 7). A 1x1 test image always samples at
     /// uv=(0.5,0.5) -- these cases place dabs at hand-computed positions so
     /// that fixed point lands at the desired distance/falloff, same

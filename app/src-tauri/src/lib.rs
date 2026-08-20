@@ -186,6 +186,20 @@ fn set_contact(state: State<'_, AppState>, image_id: i64, contact: String) -> Re
     catalog.set_contact(image_id, &contact).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn set_geo_location(
+    state: State<'_, AppState>,
+    image_id: i64,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    altitude: Option<f32>,
+) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .set_geo_location(image_id, latitude, longitude, altitude)
+        .map_err(|e| e.to_string())
+}
+
 /// Non-destructive removal (M2 Slice 3): catalog rows plus the app's own
 /// derived files (thumbnail JPEG, content-hash-keyed Develop preview PNG)
 /// -- the user's source file is NEVER touched (hard PRD constraint;
@@ -777,6 +791,7 @@ pub fn run() {
             set_caption,
             set_copyright,
             set_contact,
+            set_geo_location,
             remove_images,
             assign_keyword_path,
             remove_keyword_from_image,

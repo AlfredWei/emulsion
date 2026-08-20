@@ -1,7 +1,12 @@
 <script>
   import ToneCurveEditor from "$lib/components/ToneCurveEditor.svelte";
   import Histogram from "$lib/components/Histogram.svelte";
-  import { HSL_BAND_NAMES, HSL_BAND_CENTERS_DEG, IDENTITY_HSL_BANDS } from "$lib/api/develop.js";
+  import {
+    HSL_BAND_NAMES,
+    HSL_BAND_CENTERS_DEG,
+    IDENTITY_HSL_BANDS,
+    WB_PRESETS,
+  } from "$lib/api/develop.js";
 
   /**
    * @type {{
@@ -12,9 +17,24 @@
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
+   *   temperature?: number,
+   *   tint?: number,
+   *   highlights?: number,
+   *   shadows?: number,
+   *   whites?: number,
+   *   blacks?: number,
    *   onExposureChange: (value: number) => void,
    *   onContrastChange: (value: number) => void,
    *   onSaturationChange: (value: number) => void,
+   *   onTemperatureChange?: (value: number) => void,
+   *   onTintChange?: (value: number) => void,
+   *   onHighlightsChange?: (value: number) => void,
+   *   onShadowsChange?: (value: number) => void,
+   *   onWhitesChange?: (value: number) => void,
+   *   onBlacksChange?: (value: number) => void,
+   *   onAutoWhiteBalance?: () => void,
+   *   onAutoTone?: () => void,
+   *   onWbPresetChange?: (presetKey: string) => void,
    *   toneCurvePoints: readonly {x: number, y: number}[],
    *   onToneCurveChange: (points: readonly {x: number, y: number}[]) => void,
    *   hslBands: Readonly<Record<string, {hue: number, saturation: number, luminance: number}>>,
@@ -23,8 +43,8 @@
    *   onSplitToningZoneChange: (zone: "shadows" | "highlights", patch: Partial<{hue: number, saturation: number}>) => void,
    *   onSplitToningBalanceChange: (balance: number) => void,
    *   highlightedHslBand: string | null,
-   *   isEyedropperActive: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point") => boolean,
-   *   onEyedropperToggle: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point") => void,
+   *   isEyedropperActive: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point" | "white_balance") => boolean,
+   *   onEyedropperToggle: (target: "split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point" | "white_balance") => void,
    *   hasEdits: boolean,
    *   onResetRequest: () => void,
    *   dehaze: number,
@@ -42,7 +62,7 @@
    *     ca_amount: number,
    *     manual_distortion: number,
    *     manual_ca: number,
-   *     profile: {camera: string, lens: string} | null,
+   *     profile: import('$lib/api/develop.js').LensProfileMatch | null,
    *   },
    *   onLensCorrectionChange: (patch: Partial<{profile_enabled: boolean, distortion_amount: number, vignette_amount: number, ca_amount: number, manual_distortion: number, manual_ca: number}>) => void,
    *   perspective: {vertical: number, horizontal: number, rotate: number, aspect: number, scale: number},
@@ -71,9 +91,24 @@
     exposure,
     contrast,
     saturation,
+    temperature = 0,
+    tint = 0,
+    highlights = 0,
+    shadows = 0,
+    whites = 0,
+    blacks = 0,
     onExposureChange,
     onContrastChange,
     onSaturationChange,
+    onTemperatureChange,
+    onTintChange,
+    onHighlightsChange,
+    onShadowsChange,
+    onWhitesChange,
+    onBlacksChange,
+    onAutoWhiteBalance,
+    onAutoTone,
+    onWbPresetChange,
     toneCurvePoints,
     onToneCurveChange,
     hslBands,
@@ -120,7 +155,9 @@
   // the visible scroll area when the section first opens.
   $effect(() => {
     if (highlightedHslBand) {
-      document.querySelector(`[data-band="${highlightedHslBand}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document
+        .querySelector(`[data-band="${highlightedHslBand}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   });
 
@@ -131,7 +168,7 @@
   }
 
   /**
-   * @typedef {"split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point"} EyedropperTarget
+   * @typedef {"split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point" | "white_balance"} EyedropperTarget
    */
 </script>
 
@@ -141,8 +178,24 @@
      Color Range mask tool's own eyedropper icon). -->
 {#snippet eyedropperIcon()}
   <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-    <line x1="14" y1="2.3" x2="10.7" y2="5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-    <line x1="10.5" y1="5.4" x2="4.3" y2="11.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+    <line
+      x1="14"
+      y1="2.3"
+      x2="10.7"
+      y2="5.6"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+    />
+    <line
+      x1="10.5"
+      y1="5.4"
+      x2="4.3"
+      y2="11.6"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+    />
     <path d="M4.3 11.6 L3 14 L5.4 12.7 Z" fill="currentColor" />
   </svg>
 {/snippet}
@@ -156,6 +209,91 @@
   <details class="section" open>
     <summary>Basic</summary>
     <div class="sub-body">
+      <!-- White Balance -->
+      <div class="subsection-header">
+        <span class="subsection-title">White Balance</span>
+        <div class="header-actions">
+          <button
+            class="resample"
+            class:active={isEyedropperActive("white_balance")}
+            type="button"
+            title="White Balance Eyedropper: click a neutral tone in photo"
+            aria-label="White Balance Eyedropper"
+            onclick={() => onEyedropperToggle("white_balance")}
+          >
+            {@render eyedropperIcon()}
+          </button>
+          {#if onAutoWhiteBalance}
+            <button
+              class="auto-btn"
+              type="button"
+              title="Auto White Balance (AWB)"
+              onclick={onAutoWhiteBalance}
+            >
+              Auto WB
+            </button>
+          {/if}
+        </div>
+      </div>
+
+      {#if onWbPresetChange}
+        <div class="row">
+          <label for="wb-preset">Profile</label>
+          <select
+            id="wb-preset"
+            class="select-input"
+            onchange={(e) => onWbPresetChange(e.currentTarget.value)}
+          >
+            {#each Object.entries(WB_PRESETS) as [key, preset] (key)}
+              <option value={key}>{preset.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+
+      <div class="row">
+        <label for="temperature">Temp</label>
+        <input
+          id="temperature"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={temperature}
+          oninput={(e) => onTemperatureChange?.(Number(e.currentTarget.value))}
+        />
+        <span class="val">{temperature >= 0 ? "+" : ""}{temperature}</span>
+      </div>
+
+      <div class="row">
+        <label for="tint">Tint</label>
+        <input
+          id="tint"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={tint}
+          oninput={(e) => onTintChange?.(Number(e.currentTarget.value))}
+        />
+        <span class="val">{tint >= 0 ? "+" : ""}{tint}</span>
+      </div>
+
+      <!-- Tone -->
+      <div class="subsection-header" style="margin-top: 10px;">
+        <span class="subsection-title">Tone</span>
+        {#if onAutoTone}
+          <button
+            class="auto-btn"
+            type="button"
+            title="Auto Tone: balance exposure, contrast & dynamic range"
+            onclick={onAutoTone}
+          >
+            Auto Tone
+          </button>
+        {/if}
+      </div>
+
       <div class="row">
         <label for="exposure">Exposure</label>
         <input
@@ -181,6 +319,63 @@
           oninput={(e) => onContrastChange(Number(e.currentTarget.value))}
         />
         <span class="val">{contrast >= 0 ? "+" : ""}{contrast}</span>
+      </div>
+      <div class="row">
+        <label for="highlights">Highlights</label>
+        <input
+          id="highlights"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={highlights}
+          oninput={(e) => onHighlightsChange?.(Number(e.currentTarget.value))}
+        />
+        <span class="val">{highlights >= 0 ? "+" : ""}{highlights}</span>
+      </div>
+      <div class="row">
+        <label for="shadows">Shadows</label>
+        <input
+          id="shadows"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={shadows}
+          oninput={(e) => onShadowsChange?.(Number(e.currentTarget.value))}
+        />
+        <span class="val">{shadows >= 0 ? "+" : ""}{shadows}</span>
+      </div>
+      <div class="row">
+        <label for="whites">Whites</label>
+        <input
+          id="whites"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={whites}
+          oninput={(e) => onWhitesChange?.(Number(e.currentTarget.value))}
+        />
+        <span class="val">{whites >= 0 ? "+" : ""}{whites}</span>
+      </div>
+      <div class="row">
+        <label for="blacks">Blacks</label>
+        <input
+          id="blacks"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={blacks}
+          oninput={(e) => onBlacksChange?.(Number(e.currentTarget.value))}
+        />
+        <span class="val">{blacks >= 0 ? "+" : ""}{blacks}</span>
+      </div>
+
+      <!-- Presence -->
+      <div class="subsection-header" style="margin-top: 10px;">
+        <span class="subsection-title">Presence</span>
       </div>
       <div class="row">
         <label for="saturation">Saturation</label>
@@ -1180,5 +1375,57 @@
     outline: 1.5px solid var(--accent);
     outline-offset: -1.5px;
     transition: outline-color 0.2s ease;
+  }
+  .subsection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 4px 4px;
+    margin-bottom: 2px;
+  }
+  .subsection-title {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .auto-btn {
+    all: unset;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    padding: 2px 7px;
+    border-radius: var(--radius-s);
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+  .auto-btn:hover {
+    filter: brightness(1.15);
+    background: var(--accent);
+    color: #fff;
+  }
+  .select-input {
+    flex: 1;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    color: var(--text-primary);
+    font-size: 11px;
+    font-family: inherit;
+    padding: 3px 6px;
+    outline: none;
+  }
+  .select-input:focus {
+    border-color: var(--accent);
   }
 </style>

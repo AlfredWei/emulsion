@@ -107,6 +107,15 @@ pub struct ImageSummary {
     pub aperture: Option<f32>,
     pub shutter_speed: Option<f32>,
     pub focal_length: Option<f32>,
+    pub exposure_bias: Option<f32>,
+    pub metering_mode: Option<String>,
+    pub flash: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub altitude: Option<f32>,
+    pub file_size: Option<i64>,
     pub captured_at: Option<String>,
     /// IPTC (M2 Slice 2), user-editable via `set_caption`/`set_copyright`/
     /// `set_contact`. Deliberately split across tables, not uniform:
@@ -376,6 +385,14 @@ impl Catalog {
                 aperture REAL,
                 shutter_speed REAL,
                 focal_length REAL,
+                exposure_bias REAL,
+                metering_mode TEXT,
+                flash TEXT,
+                width INTEGER,
+                height INTEGER,
+                latitude REAL,
+                longitude REAL,
+                altitude REAL,
                 captured_at TEXT,
                 copyright TEXT,
                 contact TEXT
@@ -458,11 +475,6 @@ impl Catalog {
                 PRIMARY KEY (collection_id, image_id)
             );
 
-            -- Catalog backup (M2 final slice). A plain key/value table --
-            -- greenfield, no other settings/preferences storage exists
-            -- anywhere in this codebase. Nothing references this table via
-            -- foreign key, so no cleanup-on-delete concern like
-            -- image_keywords/collection_images above.
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -598,6 +610,14 @@ impl Catalog {
             "ALTER TABLE images ADD COLUMN aperture REAL",
             "ALTER TABLE images ADD COLUMN shutter_speed REAL",
             "ALTER TABLE images ADD COLUMN focal_length REAL",
+            "ALTER TABLE images ADD COLUMN exposure_bias REAL",
+            "ALTER TABLE images ADD COLUMN metering_mode TEXT",
+            "ALTER TABLE images ADD COLUMN flash TEXT",
+            "ALTER TABLE images ADD COLUMN width INTEGER",
+            "ALTER TABLE images ADD COLUMN height INTEGER",
+            "ALTER TABLE images ADD COLUMN latitude REAL",
+            "ALTER TABLE images ADD COLUMN longitude REAL",
+            "ALTER TABLE images ADD COLUMN altitude REAL",
             "ALTER TABLE images ADD COLUMN captured_at TEXT",
             "ALTER TABLE images ADD COLUMN copyright TEXT",
             "ALTER TABLE images ADD COLUMN contact TEXT",
@@ -673,8 +693,11 @@ impl Catalog {
             "INSERT INTO images (
                 path, content_hash, file_size,
                 camera_make, camera_model, lens_model,
-                iso, aperture, shutter_speed, focal_length, captured_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                iso, aperture, shutter_speed, focal_length,
+                exposure_bias, metering_mode, flash,
+                width, height, latitude, longitude, altitude,
+                captured_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 path,
                 content_hash,
@@ -686,6 +709,14 @@ impl Catalog {
                 metadata.aperture,
                 metadata.shutter_speed,
                 metadata.focal_length,
+                metadata.exposure_bias,
+                metadata.metering_mode,
+                metadata.flash,
+                metadata.width,
+                metadata.height,
+                metadata.latitude,
+                metadata.longitude,
+                metadata.altitude,
                 metadata.captured_at,
             ],
         )?;
@@ -1518,12 +1549,29 @@ impl Catalog {
         Ok(())
     }
 
+    /// Set or update the GPS coordinates and altitude for an image.
+    pub fn set_geo_location(
+        &self,
+        image_id: i64,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        altitude: Option<f32>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE images SET latitude = ?2, longitude = ?3, altitude = ?4 WHERE id = ?1",
+            params![image_id, latitude, longitude, altitude],
+        )?;
+        Ok(())
+    }
+
     /// Library grid data: one row per image, its primary (first,
     /// non-virtual-copy) version's culling state. Newest imports first.
     pub fn list_images(&self) -> Result<Vec<ImageSummary>> {
         let mut stmt = self.conn.prepare(
             "SELECT i.id, v.id, i.path, i.thumbnail_path, v.rating, v.flag, v.color_label, i.added_at, i.content_hash,
-                    i.camera_make, i.camera_model, i.lens_model, i.iso, i.aperture, i.shutter_speed, i.focal_length, i.captured_at,
+                    i.camera_make, i.camera_model, i.lens_model, i.iso, i.aperture, i.shutter_speed, i.focal_length,
+                    i.exposure_bias, i.metering_mode, i.flash, i.width, i.height, i.latitude, i.longitude, i.altitude,
+                    i.file_size, i.captured_at,
                     v.caption, i.copyright, i.contact
              FROM images i
              JOIN image_versions v ON v.id = (
@@ -1551,10 +1599,19 @@ impl Catalog {
                 aperture: row.get(13)?,
                 shutter_speed: row.get(14)?,
                 focal_length: row.get(15)?,
-                captured_at: row.get(16)?,
-                caption: row.get(17)?,
-                copyright: row.get(18)?,
-                contact: row.get(19)?,
+                exposure_bias: row.get(16)?,
+                metering_mode: row.get(17)?,
+                flash: row.get(18)?,
+                width: row.get(19)?,
+                height: row.get(20)?,
+                latitude: row.get(21)?,
+                longitude: row.get(22)?,
+                altitude: row.get(23)?,
+                file_size: row.get(24)?,
+                captured_at: row.get(25)?,
+                caption: row.get(26)?,
+                copyright: row.get(27)?,
+                contact: row.get(28)?,
             })
         })?;
         rows.collect()
@@ -1705,6 +1762,7 @@ mod tests {
             shutter_speed: Some(1.0 / 100.0),
             focal_length: Some(70.0),
             captured_at: Some("2017-01-05T05:53:29+00:00".to_string()),
+            ..Default::default()
         };
 
         catalog
@@ -1741,6 +1799,21 @@ mod tests {
         assert_eq!(images[0].caption.as_deref(), Some("A quiet morning in Kyoto"));
         assert_eq!(images[0].copyright.as_deref(), Some("© 2026 Alfred Wei"));
         assert_eq!(images[0].contact.as_deref(), Some("alfred@example.com"));
+    }
+
+    #[test]
+    fn set_geo_location_round_trips() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog
+            .add_image_with_edit_stack("/a.CR3", "hash-gps", 4096, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+
+        catalog.set_geo_location(image_id, Some(25.033964), Some(121.564468), Some(50.5)).unwrap();
+
+        let images = catalog.list_images().unwrap();
+        assert_eq!(images[0].latitude, Some(25.033964));
+        assert_eq!(images[0].longitude, Some(121.564468));
+        assert_eq!(images[0].altitude, Some(50.5));
     }
 
     /// The user-facing meaning of "non-destructive removal": both rows are

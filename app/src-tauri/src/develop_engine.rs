@@ -45,10 +45,71 @@ fn op_value(ops: &[serde_json::Value], name: &str) -> f32 {
         .unwrap_or(0.0) as f32
 }
 
-/// One global exposure/contrast/saturation application -- factored out so
-/// both the global pass and each mask's local pass (below) share the exact
-/// same formula, mirroring how the WGSL shader factors its own
-/// `apply_adjustments` helper for the same reason (M3 Slice 5).
+/// White balance adjustment (Temperature and Tint).
+/// Temperature shifts warm (yellow) vs cool (blue).
+/// Tint shifts magenta vs green.
+fn apply_white_balance(rgb: [f32; 3], temperature: f32, tint: f32) -> [f32; 3] {
+    let mut c = rgb;
+    let t = temperature / 100.0;
+    let tint_norm = tint / 100.0;
+
+    c[0] *= 1.0 + 0.35 * t + 0.15 * tint_norm;
+    c[1] *= 1.0 - 0.35 * tint_norm;
+    c[2] *= 1.0 - 0.35 * t + 0.15 * tint_norm;
+    c
+}
+
+/// Parametric Tone expansion (Highlights, Shadows, Whites, Blacks).
+fn apply_parametric_tone(
+    rgb: [f32; 3],
+    highlights: f32,
+    shadows: f32,
+    whites: f32,
+    blacks: f32,
+) -> [f32; 3] {
+    let luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+
+    // Highlights: smooth transition above 0.5
+    let w_h = if luma > 0.5 {
+        let t = (luma - 0.5) / 0.5;
+        t * t * (3.0 - 2.0 * t)
+    } else {
+        0.0
+    };
+    let delta_h = (highlights / 100.0) * w_h * (1.0 - luma) * 0.6;
+
+    // Shadows: smooth transition below 0.5
+    let w_s = if luma < 0.5 {
+        let t = (0.5 - luma) / 0.5;
+        t * t * (3.0 - 2.0 * t)
+    } else {
+        0.0
+    };
+    let delta_s = (shadows / 100.0) * w_s * luma * 0.6;
+
+    // Whites: extreme highlights (above 0.7)
+    let w_w = if luma > 0.7 {
+        let t = (luma - 0.7) / 0.3;
+        t * t * (3.0 - 2.0 * t)
+    } else {
+        0.0
+    };
+    let delta_w = (whites / 100.0) * w_w * 0.35;
+
+    // Blacks: extreme deep shadows (below 0.3)
+    let w_b = if luma < 0.3 {
+        let t = (0.3 - luma) / 0.3;
+        t * t * (3.0 - 2.0 * t)
+    } else {
+        0.0
+    };
+    let delta_b = (blacks / 100.0) * w_b * 0.35;
+
+    let delta = delta_h + delta_s + delta_w + delta_b;
+    [rgb[0] + delta, rgb[1] + delta, rgb[2] + delta]
+}
+
+/// Local adjustments for masks (exposure, contrast, saturation).
 fn apply_adjustments(rgb: [f32; 3], exposure_ev: f32, contrast: f32, saturation: f32) -> [f32; 3] {
     let mut c = rgb;
     for v in c.iter_mut() {
@@ -57,6 +118,34 @@ fn apply_adjustments(rgb: [f32; 3], exposure_ev: f32, contrast: f32, saturation:
     for v in c.iter_mut() {
         *v = (*v - 0.5) * (1.0 + contrast / 100.0) + 0.5;
     }
+    let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+    for v in c.iter_mut() {
+        *v = luma + (*v - luma) * (1.0 + saturation / 100.0);
+    }
+    c
+}
+
+/// Global adjustments (white balance, exposure, contrast, parametric tone, saturation).
+fn apply_global_adjustments(
+    rgb: [f32; 3],
+    exposure_ev: f32,
+    contrast: f32,
+    saturation: f32,
+    temperature: f32,
+    tint: f32,
+    highlights: f32,
+    shadows: f32,
+    whites: f32,
+    blacks: f32,
+) -> [f32; 3] {
+    let mut c = apply_white_balance(rgb, temperature, tint);
+    for v in c.iter_mut() {
+        *v *= 2f32.powf(exposure_ev);
+    }
+    for v in c.iter_mut() {
+        *v = (*v - 0.5) * (1.0 + contrast / 100.0) + 0.5;
+    }
+    c = apply_parametric_tone(c, highlights, shadows, whites, blacks);
     let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
     for v in c.iter_mut() {
         *v = luma + (*v - luma) * (1.0 + saturation / 100.0);
@@ -1825,6 +1914,12 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let exposure_ev = op_value(&stack.ops, "exposure");
     let contrast = op_value(&stack.ops, "contrast");
     let saturation = op_value(&stack.ops, "saturation");
+    let temperature = op_value(&stack.ops, "temperature");
+    let tint = op_value(&stack.ops, "tint");
+    let highlights = op_value(&stack.ops, "highlights");
+    let shadows = op_value(&stack.ops, "shadows");
+    let whites = op_value(&stack.ops, "whites");
+    let blacks = op_value(&stack.ops, "blacks");
     let mut masks = parse_masks(&stack.ops);
     // Built once per call, not per pixel -- see build_curve_lut's own doc
     // comment for why this must be the same discretized LUT the WGSL
@@ -1861,7 +1956,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     // pure per-pixel remap and fit directly in one loop; this one can't.
     let mut graded = vec![[0.0f32; 3]; w * h];
     for (x, y, pixel) in image.enumerate_pixels() {
-        let mut rgb = apply_adjustments(
+        let mut rgb = apply_global_adjustments(
             [
                 pixel[0] as f32 / 255.0,
                 pixel[1] as f32 / 255.0,
@@ -1870,6 +1965,12 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             exposure_ev,
             contrast,
             saturation,
+            temperature,
+            tint,
+            highlights,
+            shadows,
+            whites,
+            blacks,
         );
         rgb = [
             sample_lut(&curve_lut, rgb[0]),
@@ -5183,5 +5284,63 @@ mod tests {
             [SPOT_TEST_LEFT; 3],
             "a pixel more than 1px from either dab center should be outside both dabs' coverage and left untouched"
         );
+    }
+
+    #[test]
+    fn white_balance_temperature_positive_warms_image() {
+        let rgb = [0.5, 0.5, 0.5];
+        let warm = apply_white_balance(rgb, 50.0, 0.0);
+        assert!(warm[0] > rgb[0], "red should increase with positive temperature");
+        assert!(warm[2] < rgb[2], "blue should decrease with positive temperature");
+    }
+
+    #[test]
+    fn white_balance_tint_positive_shifts_magenta() {
+        let rgb = [0.5, 0.5, 0.5];
+        let magenta = apply_white_balance(rgb, 0.0, 50.0);
+        assert!(magenta[1] < rgb[1], "green should decrease with positive tint (magenta shift)");
+        assert!(magenta[0] > rgb[0], "red should slightly increase with positive tint");
+        assert!(magenta[2] > rgb[2], "blue should slightly increase with positive tint");
+    }
+
+    #[test]
+    fn parametric_tone_highlights_boost_bright_pixels() {
+        let bright = [0.8, 0.8, 0.8];
+        let dark = [0.2, 0.2, 0.2];
+        let boosted_bright = apply_parametric_tone(bright, 50.0, 0.0, 0.0, 0.0);
+        let boosted_dark = apply_parametric_tone(dark, 50.0, 0.0, 0.0, 0.0);
+
+        assert!(boosted_bright[0] > bright[0], "highlights adjustment should boost bright pixel");
+        assert!((boosted_dark[0] - dark[0]).abs() < 1e-4, "highlights adjustment should not touch dark pixel");
+    }
+
+    #[test]
+    fn parametric_tone_shadows_lift_dark_pixels() {
+        let bright = [0.8, 0.8, 0.8];
+        let dark = [0.2, 0.2, 0.2];
+        let lifted_dark = apply_parametric_tone(dark, 0.0, 50.0, 0.0, 0.0);
+        let lifted_bright = apply_parametric_tone(bright, 0.0, 50.0, 0.0, 0.0);
+
+        assert!(lifted_dark[0] > dark[0], "shadows adjustment should lift dark pixel");
+        assert!((lifted_bright[0] - bright[0]).abs() < 1e-4, "shadows adjustment should not touch bright pixel");
+    }
+
+    #[test]
+    fn apply_edit_stack_round_trips_with_white_balance_and_tone_ops() {
+        let mut image = RgbImage::from_pixel(4, 4, image::Rgb([128, 128, 128]));
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![
+                serde_json::json!({ "op": "temperature", "value": 20.0 }),
+                serde_json::json!({ "op": "tint", "value": -10.0 }),
+                serde_json::json!({ "op": "highlights", "value": -15.0 }),
+                serde_json::json!({ "op": "shadows", "value": 25.0 }),
+                serde_json::json!({ "op": "whites", "value": 10.0 }),
+                serde_json::json!({ "op": "blacks", "value": -5.0 }),
+            ],
+        };
+        apply_edit_stack(&mut image, &stack);
+        let p = image.get_pixel(0, 0).0;
+        assert!(p[0] > 0 && p[1] > 0 && p[2] > 0);
     }
 }

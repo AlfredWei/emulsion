@@ -21,6 +21,8 @@
   const COLOR_CYCLE = ["none", "red", "yellow", "green", "blue", "purple"];
 
   let thumbSrc = $derived(image.thumbnail_path ? convertFileSrc(image.thumbnail_path) : null);
+  let filename = $derived(image.path.split(/[/\\]/).pop() ?? image.path);
+  let dirPath = $derived(image.path.slice(0, Math.max(0, image.path.length - filename.length)).replace(/[/\\]$/, ""));
 
   function toggleFlag(/** @type {MouseEvent} */ e, /** @type {string} */ target) {
     e.stopPropagation();
@@ -56,6 +58,10 @@
   {:else}
     <div class="thumb placeholder" aria-hidden="true"></div>
   {/if}
+
+  <div class="file-label" title="{filename}&#10;{image.path}">
+    <span class="file-name">{filename}</span>
+  </div>
 
   <div class="badge-row">
     <div class="stars">
@@ -123,6 +129,32 @@
   }
   .thumb.placeholder {
     background: var(--bg-panel-raised);
+  }
+  .file-label {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 4px 6px;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.7) 0%, rgba(0, 0, 0, 0) 100%);
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+    opacity: 0.85;
+    transition: opacity 0.12s ease;
+  }
+  .cell:hover .file-label,
+  .cell.selected .file-label {
+    opacity: 1;
+  }
+  .file-name {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.9);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
   }
   .badge-row {
     position: absolute;

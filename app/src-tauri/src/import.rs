@@ -294,6 +294,9 @@ pub fn regenerate_edited_thumbnail(
     // Lens Corrections (M3): same ordering export.rs uses -- see
     // develop_engine.rs's own header comment on `apply_lens_correction`.
     crate::develop_engine::apply_lens_correction(&mut decoded, stack);
+    // Perspective Correction (M4): same ordering export.rs uses -- see
+    // develop_engine.rs's own header comment on `apply_perspective`.
+    crate::develop_engine::apply_perspective(&mut decoded, stack);
     crate::develop_engine::apply_edit_stack(&mut decoded, stack);
     // Crop & Straighten (M3): same shared post-process export.rs uses --
     // see develop_engine.rs's own doc comment on `apply_crop` for why

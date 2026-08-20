@@ -38,11 +38,12 @@ describe("presetEligibleOps", () => {
     });
   });
 
-  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 7 mask kinds plus crop and lens_correction", () => {
+  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 7 mask kinds plus crop, lens_correction, and perspective", () => {
     expect(PRESET_EXCLUDED_OP_NAMES.sort()).toEqual(
       [
         "crop",
         "lens_correction",
+        "perspective",
         "linear_gradient_mask",
         "radial_gradient_mask",
         "brush_mask",

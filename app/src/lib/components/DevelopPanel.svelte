@@ -45,6 +45,8 @@
    *     profile: {camera: string, lens: string} | null,
    *   },
    *   onLensCorrectionChange: (patch: Partial<{profile_enabled: boolean, distortion_amount: number, vignette_amount: number, ca_amount: number, manual_distortion: number, manual_ca: number}>) => void,
+   *   perspective: {vertical: number, horizontal: number, rotate: number, aspect: number, scale: number},
+   *   onPerspectiveChange: (patch: Partial<{vertical: number, horizontal: number, rotate: number, aspect: number, scale: number}>) => void,
    *   grain: {amount: number, size: number, roughness: number},
    *   onGrainChange: (patch: Partial<{amount: number, size: number, roughness: number}>) => void,
    *   sharpen: {amount: number, radius: number, detail: number, masking: number},
@@ -94,6 +96,8 @@
     onVignetteChange,
     lensCorrection,
     onLensCorrectionChange,
+    perspective,
+    onPerspectiveChange,
     grain,
     onGrainChange,
     sharpen,
@@ -800,6 +804,84 @@
            already exposes (see develop_engine.rs's own doc comment on
            this op for the full reasoning). -->
       <p class="preset-note">For manual vignette correction, use the Vignette section above.</p>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>Perspective</summary>
+    <div class="sub-body">
+      <div class="row">
+        <label for="perspective-vertical">Vertical</label>
+        <input
+          id="perspective-vertical"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={perspective.vertical}
+          oninput={(e) => onPerspectiveChange({ vertical: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{perspective.vertical}</span>
+      </div>
+      <div class="row">
+        <label for="perspective-horizontal">Horizontal</label>
+        <input
+          id="perspective-horizontal"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={perspective.horizontal}
+          oninput={(e) => onPerspectiveChange({ horizontal: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{perspective.horizontal}</span>
+      </div>
+      <div class="row">
+        <label for="perspective-rotate">Rotate</label>
+        <input
+          id="perspective-rotate"
+          type="range"
+          min="-10"
+          max="10"
+          step="0.1"
+          value={perspective.rotate}
+          oninput={(e) => onPerspectiveChange({ rotate: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{perspective.rotate}</span>
+      </div>
+      <div class="row">
+        <label for="perspective-aspect">Aspect</label>
+        <input
+          id="perspective-aspect"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={perspective.aspect}
+          oninput={(e) => onPerspectiveChange({ aspect: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{perspective.aspect}</span>
+      </div>
+      <div class="row">
+        <label for="perspective-scale">Scale</label>
+        <input
+          id="perspective-scale"
+          type="range"
+          min="50"
+          max="150"
+          step="1"
+          value={perspective.scale}
+          oninput={(e) => onPerspectiveChange({ scale: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{perspective.scale}</span>
+      </div>
+      <!-- No auto-crop here on purpose -- Vertical/Horizontal/Rotate can
+           reveal blank corners; the existing Crop tool (Develop's own
+           tool strip) is the manual way to trim them, matching this
+           slice's "manual controls only" scope (see
+           develop_engine.rs's own header comment on the `perspective`
+           op). -->
+      <p class="preset-note">Use the Crop tool to trim any blank corners this introduces.</p>
     </div>
   </details>
 </div>

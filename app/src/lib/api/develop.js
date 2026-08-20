@@ -880,6 +880,70 @@ export function buildLensCorrectionUniformData(
   ]);
 }
 
+// Perspective Correction (M4): manual-controls-only "Transform" tool --
+// see develop_engine.rs's own header comment on the `perspective` op for
+// the full warp derivation. Flat op shape (no nested payload), matching
+// `crop`'s own convention rather than `lens_correction`'s Profile/Manual
+// split -- there's nothing here that's baked from resolved equipment
+// data. `scale` defaults to 100 (not 0), the same "0 = identity" break
+// `LensCorrection`'s amounts already establish, since 0 would mean
+// "zoomed out to nothing".
+/** @typedef {Object} PerspectiveState
+ * @property {number} vertical
+ * @property {number} horizontal
+ * @property {number} rotate
+ * @property {number} aspect
+ * @property {number} scale
+ */
+
+export const IDENTITY_PERSPECTIVE = /** @type {PerspectiveState} */ (
+  Object.freeze({ vertical: 0, horizontal: 0, rotate: 0, aspect: 0, scale: 100 })
+);
+
+/** @returns {PerspectiveState} */
+export function getPerspective(
+  /** @type {EditStack} */ stack,
+  /** @type {PerspectiveState} */ fallback = IDENTITY_PERSPECTIVE,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "perspective"));
+  if (!op) return fallback;
+  return {
+    vertical: op.vertical ?? 0,
+    horizontal: op.horizontal ?? 0,
+    rotate: op.rotate ?? 0,
+    aspect: op.aspect ?? 0,
+    scale: op.scale ?? 100,
+  };
+}
+
+/** @returns {EditStack} */
+export function upsertPerspective(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<PerspectiveState>} */ patch,
+) {
+  const current = getPerspective(stack);
+  const next = { ...current, ...patch };
+  const ops = stack.ops.filter((o) => o.op !== "perspective");
+  ops.push(/** @type {any} */ ({ op: "perspective", ...next }));
+  return { ...stack, ops };
+}
+
+export function isPerspectiveIdentity(/** @type {PerspectiveState} */ p) {
+  return p.vertical === 0 && p.horizontal === 0 && p.rotate === 0 && p.aspect === 0 && p.scale === 100;
+}
+
+/** Packs into the exact Float32Array layout DevelopCanvas.svelte's
+ * `perspectiveBuffer`/the WGSL `PerspectiveParams` struct expects (field
+ * order matters -- must match the struct's own field order exactly, and
+ * develop_engine.rs's `Perspective` field order, for the same "one
+ * formula, two mirrored implementations" discipline every other geometry
+ * op in this app already follows). */
+export function buildPerspectiveUniformData(
+  /** @type {ReturnType<typeof getPerspective>} */ p,
+) {
+  return new Float32Array([p.vertical, p.horizontal, p.rotate, p.aspect, p.scale, 0, 0, 0]);
+}
+
 /** @typedef {Object} LensProfileMatch
  * @property {string} camera
  * @property {string} lens
@@ -1211,7 +1275,7 @@ const MASK_OP_NAMES = [
 // all, actually as portable as the global ops below -- excluded anyway
 // for v1 scope simplicity (one exclusion list, not "masks except this
 // one"), not because it's tied to the source image like the other four.
-export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop", "lens_correction"];
+export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop", "lens_correction", "perspective"];
 
 // Mask kinds with no on-canvas geometry to show (brush's painted region,
 // luminance range's pixel-value-based selection) get a toggleable colored

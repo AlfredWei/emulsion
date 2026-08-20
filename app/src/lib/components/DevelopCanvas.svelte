@@ -1,7 +1,7 @@
 <script>
   import { tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
+  import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
   import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, nativeCropClipSize, scrollTargetForNativeFocus, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { binHistogramPixels } from "$lib/histogramMath.js";
 
@@ -55,6 +55,7 @@
    *     manual_ca: number,
    *     profile: import('$lib/api/develop.js').LensProfileMatch | null,
    *   },
+   *   perspective: {vertical: number, horizontal: number, rotate: number, aspect: number, scale: number},
    *   grain: {amount: number, size: number, roughness: number},
    *   sharpen: {amount: number, radius: number, detail: number, masking: number},
    *   lumaNR: {amount: number, detail: number, contrast: number},
@@ -100,6 +101,7 @@
     clarity,
     vignette,
     lensCorrection,
+    perspective,
     grain,
     sharpen,
     lumaNR,
@@ -1218,6 +1220,10 @@
   // device-scoped and rewritten every render, same as those.
   /** @type {GPUBuffer | null} */
   let lensCorrectionBuffer = null;
+  // Perspective Correction (M4): same device-scoped, own-small-buffer
+  // treatment as Vignette/Grain above.
+  /** @type {GPUBuffer | null} */
+  let perspectiveBuffer = null;
   // Grain (M3): same device-scoped, own-small-buffer treatment as
   // Vignette above, for the same reason (3 fields, no spare Adjustments
   // padding left).
@@ -1307,6 +1313,13 @@
   // fs_grade's own WGSL body and inferred layout need no change at all.
   /** @type {GPURenderPipeline | null} */
   let lensCorrectPipeline = null;
+  // Perspective Correction (M4): another new pass, chained right after
+  // lens correction and before fs_grade -- reads lensCorrectedTex (same
+  // "same slot, different physical texture" technique lens correction's
+  // own doc comment above describes) and writes perspectiveCorrectedTex,
+  // which gradeBindGroup's binding 1 is then rebound to instead.
+  /** @type {GPURenderPipeline | null} */
+  let perspectivePipeline = null;
   /** @type {GPURenderPipeline | null} */
   let gradePipeline = null;
   /** @type {GPURenderPipeline | null} */
@@ -1354,6 +1367,11 @@
   // new 8-bit quantization step before grading.
   /** @type {GPUTexture | null} */
   let lensCorrectedTex = null;
+  // Perspective Correction (M4): fs_perspective's own output -- fs_grade
+  // reads this instead of lensCorrectedTex directly (see
+  // perspectivePipeline's own doc comment above).
+  /** @type {GPUTexture | null} */
+  let perspectiveCorrectedTex = null;
   /** @type {GPUTexture | null} */
   let gradedTex = null;
   /** @type {GPUTexture | null} */
@@ -1403,6 +1421,8 @@
 
   /** @type {GPUBindGroup | null} */
   let lensCorrectBindGroup = null;
+  /** @type {GPUBindGroup | null} */
+  let perspectiveBindGroup = null;
   /** @type {GPUBindGroup | null} */
   let gradeBindGroup = null;
   /** @type {GPUBindGroup | null} */
@@ -2287,6 +2307,95 @@
       return vec4<f32>(rgb, 1.0);
     }
 
+    // Perspective Correction (M4): a direct WGSL port of
+    // develop_engine.rs's own perspective_warp_coord/PerspectiveNorm --
+    // see that module's own extensive header comment for the full
+    // homography derivation. Its OWN pass, chained right after
+    // fs_lens_correct (reads srcTexture/srcSampler rebound to
+    // lensCorrectedTex -- see perspectivePipeline's own doc comment),
+    // writing into perspectiveCorrectedTex, for the same "genuine
+    // resample" reason lens correction needed its own pass.
+    //
+    // Out-of-bounds sampling here falls back to the sampler's own
+    // clamp-to-edge addressing (initGpu's own sampler, WebGPU's default),
+    // NOT the Rust twin's true black corners (sample_bilinear's own
+    // documented out-of-bounds contract) -- an already-accepted GPU-
+    // preview-vs-CPU-export divergence, same one lens correction's own
+    // geometry pass already has for the same reason (no cheap portable
+    // per-tap bounds check against a linear-filtered sampler here); the
+    // export/thumbnail-regen path the user actually delivers from always
+    // uses the exact Rust formula.
+    struct PerspectiveParams {
+      vertical: f32,
+      horizontal: f32,
+      rotate: f32,
+      aspect: f32,
+      scale: f32,
+      _pad0: f32,
+      _pad1: f32,
+      _pad2: f32,
+    };
+    @group(0) @binding(28) var<uniform> perspective: PerspectiveParams;
+
+    const PERSPECTIVE_KEYSTONE_MAX: f32 = 0.7;
+    const PERSPECTIVE_ASPECT_MAX: f32 = 0.5;
+
+    // Port of perspective_warp_coord -- see that Rust function's own
+    // doc comment for the stage-by-stage derivation (inverse scale,
+    // inverse rotate, inverse aspect stretch, inverse keystone divide).
+    fn perspectiveWarpCoord(xd: f32, yd: f32) -> vec2<f32> {
+      let scaleAmt = max(perspective.scale / 100.0, 0.01);
+      var x = xd / scaleAmt;
+      var y = yd / scaleAmt;
+
+      if (perspective.rotate != 0.0) {
+        let rad = -radians(perspective.rotate);
+        let s = sin(rad);
+        let c = cos(rad);
+        let rx = x * c - y * s;
+        let ry = x * s + y * c;
+        x = rx;
+        y = ry;
+      }
+
+      if (perspective.aspect != 0.0) {
+        let stretch = max(1.0 + (perspective.aspect / 100.0) * PERSPECTIVE_ASPECT_MAX, 0.01);
+        x = x / stretch;
+      }
+
+      let a = (perspective.horizontal / 100.0) * PERSPECTIVE_KEYSTONE_MAX;
+      let b = (perspective.vertical / 100.0) * PERSPECTIVE_KEYSTONE_MAX;
+      if (a != 0.0 || b != 0.0) {
+        let denom = 1.0 + a * x + b * y;
+        if (abs(denom) > 0.001) {
+          x = x / denom;
+          y = y / denom;
+        }
+      }
+
+      return vec2<f32>(x, y);
+    }
+
+    @fragment
+    fn fs_perspective(in: VertexOut) -> @location(0) vec4<f32> {
+      let dims = vec2<f32>(textureDimensions(srcTexture));
+      let cx = dims.x / 2.0;
+      let cy = dims.y / 2.0;
+      let normScale = max(length(vec2<f32>(cx, cy)), 1.0);
+
+      let px = in.uv.x * dims.x;
+      let py = in.uv.y * dims.y;
+      let nx = (px - cx) / normScale;
+      let ny = (py - cy) / normScale;
+
+      let s = perspectiveWarpCoord(nx, ny);
+      let sx = s.x * normScale + cx;
+      let sy = s.y * normScale + cy;
+
+      let rgb = textureSample(srcTexture, srcSampler, vec2<f32>(sx, sy) / dims).rgb;
+      return vec4<f32>(rgb, 1.0);
+    }
+
     // Grade pass (M3 Dehaze): the existing global chain (exposure ->
     // contrast -> saturation -> tone curve -> HSL -> split toning),
     // redirected to write into gradedTex instead of the swapchain --
@@ -3047,6 +3156,12 @@
       fragment: { module, entryPoint: "fs_lens_correct", targets: [{ format: "rgba16float" }] },
       primitive: { topology: "triangle-list" },
     });
+    perspectivePipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs_main" },
+      fragment: { module, entryPoint: "fs_perspective", targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list" },
+    });
     gradePipeline = device.createRenderPipeline({
       layout: "auto",
       vertex: { module, entryPoint: "vs_main" },
@@ -3178,6 +3293,10 @@
       size: 24 * 4, // 24 f32, matches the WGSL LensCorrectionParams struct exactly (no padding needed -- already a multiple of 16 bytes)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    perspectiveBuffer = device.createBuffer({
+      size: 8 * 4, // 8 f32 (5 real fields + 3 padding), matches the WGSL PerspectiveParams struct
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
     grainBuffer = device.createBuffer({
       size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL Grain struct
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -3306,7 +3425,7 @@
     // defensive guard against an unexpected call order, and because
     // TypeScript's null-narrowing from a caller's own guard doesn't carry
     // across a function boundary.
-    if (!device || !context || !pipeline || !preMaskPipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
+    if (!device || !context || !pipeline || !preMaskPipeline || !lensCorrectPipeline || !perspectivePipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !perspectiveBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
 
     // GPU texture-dimension safety: a genuinely native-resolution decode
     // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -3377,10 +3496,20 @@
 
     // Lens Corrections (M3): same "recreate whenever the source resolution
     // changes" lifecycle as sourceTexture/brushTextureArray above --
-    // fs_lens_correct's own output, read by fs_grade in place of
-    // sourceTexture (see gradeBindGroup's own doc comment below).
+    // fs_lens_correct's own output, read by fs_perspective in place of
+    // sourceTexture (see perspectiveBindGroup's own doc comment below).
     lensCorrectedTex?.destroy();
     lensCorrectedTex = device.createTexture({
+      size: [bitmap.width, bitmap.height],
+      format: "rgba16float",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    // Perspective Correction (M4): same lifecycle as lensCorrectedTex
+    // above -- fs_perspective's own output, read by fs_grade in place of
+    // lensCorrectedTex (see gradeBindGroup's own doc comment below).
+    perspectiveCorrectedTex?.destroy();
+    perspectiveCorrectedTex = device.createTexture({
       size: [bitmap.width, bitmap.height],
       format: "rgba16float",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
@@ -3531,18 +3660,32 @@
     const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
 
     // Lens Corrections (M3): fs_lens_correct's own bind group reads the
-    // TRUE original sourceTexture at binding 1. gradeBindGroup below binds
-    // a DIFFERENT physical texture (lensCorrectedTex) to that SAME slot
-    // number for fs_grade's own separately-inferred layout -- the same
-    // "same binding index, different texture per bind group" technique
-    // already established for lcRgbInput/lcBlurInput (see that binding's
-    // own doc comment), so fs_grade's WGSL body needs no change at all.
+    // TRUE original sourceTexture at binding 1. perspectiveBindGroup below
+    // binds a DIFFERENT physical texture (lensCorrectedTex) to that SAME
+    // slot number for fs_perspective's own separately-inferred layout --
+    // the same "same binding index, different texture per bind group"
+    // technique already established for lcRgbInput/lcBlurInput (see that
+    // binding's own doc comment), so fs_perspective's WGSL body needs no
+    // change at all. gradeBindGroup, in turn, does the same trick again
+    // one stage later, binding perspectiveCorrectedTex to binding 1 for
+    // fs_grade's own separately-inferred layout.
     lensCorrectBindGroup = gpuDevice.createBindGroup({
       layout: lensCorrectPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: sampler },
         { binding: 1, resource: sourceTexture.createView() },
         { binding: 25, resource: { buffer: lensCorrectionBuffer } },
+      ],
+    });
+    // Perspective Correction (M4): same "same slot, different texture"
+    // technique -- reads lensCorrectedTex (lens correction's own output)
+    // at binding 1, not the true original sourceTexture.
+    perspectiveBindGroup = gpuDevice.createBindGroup({
+      layout: /** @type {GPURenderPipeline} */ (perspectivePipeline).getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: sampler },
+        { binding: 1, resource: lensCorrectedTex.createView() },
+        { binding: 28, resource: { buffer: perspectiveBuffer } },
       ],
     });
     // M4 Slice 2: before/after preview (see fs_original's own doc comment).
@@ -3557,7 +3700,7 @@
       layout: gradePipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: sampler },
-        { binding: 1, resource: lensCorrectedTex.createView() },
+        { binding: 1, resource: /** @type {GPUTexture} */ (perspectiveCorrectedTex).createView() },
         { binding: 2, resource: { buffer: uniformBuffer } },
         { binding: 5, resource: { buffer: curveLutBuffer } },
         { binding: 6, resource: { buffer: hslBandsBuffer } },
@@ -3736,7 +3879,7 @@
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !preMaskPipeline || !lensCorrectPipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
+    if (!device || !context || !pipeline || !preMaskPipeline || !lensCorrectPipeline || !perspectivePipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !perspectiveBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -4014,7 +4157,7 @@
   }
 
   function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !preMaskPipeline || !preMaskBindGroup || !preMaskTex || !lensCorrectPipeline || !lensCorrectBindGroup || !lensCorrectedTex || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
+    if (!device || !context || !pipeline || !bindGroup || !preMaskPipeline || !preMaskBindGroup || !preMaskTex || !lensCorrectPipeline || !lensCorrectBindGroup || !lensCorrectedTex || !perspectivePipeline || !perspectiveBindGroup || !perspectiveCorrectedTex || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !perspectiveBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
 
     // M4 Slice 2: before/after preview -- skips the ENTIRE global-grade +
     // local-mask pipeline below (not just the mask loop) and draws the raw
@@ -4042,6 +4185,7 @@
     device.queue.writeBuffer(hslBandsBuffer, 0, buildHslUniformData(hslBands));
     device.queue.writeBuffer(splitToningBuffer, 0, buildSplitToningUniformData(splitToning));
     device.queue.writeBuffer(lensCorrectionBuffer, 0, buildLensCorrectionUniformData(lensCorrection));
+    device.queue.writeBuffer(perspectiveBuffer, 0, buildPerspectiveUniformData(perspective));
     device.queue.writeBuffer(vignetteBuffer, 0, buildVignetteUniformData(vignette));
     device.queue.writeBuffer(grainBuffer, 0, buildGrainUniformData(grain));
     device.queue.writeBuffer(sharpenBuffer, 0, buildSharpenUniformData(sharpen));
@@ -4196,13 +4340,17 @@
     // lens-correction-only change (e.g. dragging Manual Distortion) that
     // isn't in this key would silently show a stale, uncorrected preview
     // until some unrelated slider happened to invalidate the block.
+    // Perspective Correction's own inputs join for the identical reason:
+    // fs_perspective writes into perspectiveCorrectedTex, which
+    // gradeBindGroup ALSO reads inside this same block.
     const spatialOpsKey = JSON.stringify({
       exposure, contrast, saturation, toneCurvePoints, hslBands, splitToning, texture, clarity,
-      sharpenRadius: sharpen.radius, lensCorrection,
+      sharpenRadius: sharpen.radius, lensCorrection, perspective,
     });
     if (spatialOpsKey !== spatialOpsInputsKey) {
       spatialOpsInputsKey = spatialOpsKey;
       runFullscreenPass(encoder, lensCorrectPipeline, lensCorrectBindGroup, lensCorrectedTex.createView());
+      runFullscreenPass(encoder, perspectivePipeline, perspectiveBindGroup, /** @type {GPUTexture} */ (perspectiveCorrectedTex).createView());
       runFullscreenPass(encoder, gradePipeline, gradeBindGroup, gradedTex.createView());
       runFullscreenPass(encoder, textureHPipeline, textureHBindGroup, textureBlurScratchTex.createView());
       runFullscreenPass(encoder, textureVPipeline, textureVBindGroup, textureAdjustedTex.createView());
@@ -4310,6 +4458,7 @@
     void clarity;
     void vignette;
     void lensCorrection;
+    void perspective;
     void grain;
     void sharpen;
     void lumaNR;

@@ -15,7 +15,7 @@
 //! (M2 Slice 1).
 
 use crate::catalog::EditStack;
-use crate::develop_engine::{apply_crop, apply_edit_stack, apply_lens_correction};
+use crate::develop_engine::{apply_crop, apply_edit_stack, apply_lens_correction, apply_perspective};
 use crate::source_decode::{self, DecodeError};
 use image::codecs::jpeg::JpegEncoder;
 use image::RgbImage;
@@ -85,6 +85,9 @@ pub fn export_one(
     // comment on this op for why it's a separate resample step, not part
     // of apply_edit_stack's per-pixel loop.
     apply_lens_correction(&mut image, stack);
+    // Perspective Correction (M4): same slot as lens correction, right
+    // after it -- see develop_engine.rs's own header comment on this op.
+    apply_perspective(&mut image, stack);
     apply_edit_stack(&mut image, stack);
     // Crop & Straighten (M3): a pure geometric post-process, deliberately
     // separate from apply_edit_stack -- see develop_engine.rs's own doc

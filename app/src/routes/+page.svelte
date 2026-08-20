@@ -111,6 +111,9 @@
     setLensProfile,
     IDENTITY_LENS_CORRECTION,
     lookupLensProfile,
+    getPerspective,
+    upsertPerspective,
+    IDENTITY_PERSPECTIVE,
   } from "$lib/api/develop.js";
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
@@ -1544,6 +1547,17 @@
     scheduleFlush("Lens Corrections");
   }
 
+  // Perspective Correction (M4): same structured, own-getter/handler shape
+  // as Lens Corrections/Vignette above.
+  let perspective = $derived(getPerspective(editStack, IDENTITY_PERSPECTIVE));
+
+  function handlePerspectiveChange(
+    /** @type {Partial<{vertical: number, horizontal: number, rotate: number, aspect: number, scale: number}>} */ patch,
+  ) {
+    editStack = upsertPerspective(editStack, patch);
+    scheduleFlush("Perspective");
+  }
+
   // Grain (M3): same structured, own-getter/handler shape as Vignette
   // above.
   let grain = $derived(getGrain(editStack, IDENTITY_GRAIN));
@@ -2132,6 +2146,7 @@
         {clarity}
         {vignette}
         {lensCorrection}
+        {perspective}
         {grain}
         {sharpen}
         {lumaNR}
@@ -2189,6 +2204,8 @@
         onVignetteChange={handleVignetteChange}
         {lensCorrection}
         onLensCorrectionChange={handleLensCorrectionChange}
+        {perspective}
+        onPerspectiveChange={handlePerspectiveChange}
         {grain}
         onGrainChange={handleGrainChange}
         {sharpen}

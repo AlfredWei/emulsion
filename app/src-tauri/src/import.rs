@@ -84,10 +84,19 @@ fn jpeg_bytes_look_valid(bytes: &[u8]) -> bool {
 /// Shared core for both `scan_and_import` (directory walk) and the
 /// multi-file picker's `import_files` Tauri command (lib.rs).
 pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) -> ImportSummary {
+    let mut candidate_paths = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            candidate_paths.extend(collect_candidate_files(p));
+        } else {
+            candidate_paths.push(p.clone());
+        }
+    }
+
     let mut summary = ImportSummary::default();
     let _ = std::fs::create_dir_all(thumbnail_dir);
 
-    for path in paths {
+    for path in &candidate_paths {
         let Ok(bytes) = std::fs::read(path) else {
             summary.failed += 1;
             continue;

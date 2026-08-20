@@ -13,6 +13,12 @@
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
+   *   temperature?: number,
+   *   tint?: number,
+   *   highlights?: number,
+   *   shadows?: number,
+   *   whites?: number,
+   *   blacks?: number,
    *   masks: import('$lib/api/develop.js').Mask[],
    *   activeTool: string | null,
    *   selectedMaskId: string | null,
@@ -74,6 +80,12 @@
     exposure,
     contrast,
     saturation,
+    temperature = 0,
+    tint = 0,
+    highlights = 0,
+    shadows = 0,
+    whites = 0,
+    blacks = 0,
     masks,
     activeTool,
     selectedMaskId,
@@ -1531,35 +1543,25 @@
       return out;
     }
 
-    // Padded to a full 2x vec4 (32 bytes) deliberately -- mirrors the Mask
-    // struct's own "pack into vec4 multiples" discipline below, rather than
-    // leaving this at an arbitrary size once it grows past 4 scalars.
+    // Padded to a full 4x vec4 (64 bytes) -- mirrors the Mask struct's
+    // "pack into vec4 multiples" discipline below.
     struct Adjustments {
       exposure_ev: f32,
       contrast: f32,
       saturation: f32,
       mask_count: f32,
-      // Mask-overlay: -1 = no overlay, else the LOOP INDEX (not a texture
-      // layer) of the currently selected mask, when overlay is enabled.
-      // Unified across every no-geometry mask kind (brush, luminance
-      // range) -- replaces this field's earlier brush-only overlay_layer/
-      // overlay_invert pair (mask UI polish slice): the overlay now
-      // reuses each mask's own already-computed, already-inverted weight
-      // from the main loop below, rather than a separate
-      // re-sample-and-re-invert step, so no per-kind overlay data is
-      // needed here at all.
       selected_mask_index: f32,
-      // Dehaze (M3): 0-100, reuses this struct's own last spare padding
-      // float rather than a whole new tiny uniform buffer/binding for one
-      // scalar -- unlike Split Toning (5 new fields, genuinely didn't fit
-      // in 3 spare floats), Dehaze's single Amount slider does.
       dehaze_amount: f32,
-      // Texture & Clarity (M3): -100..100 each, claiming this struct's own
-      // last two spare padding floats the same way dehaze_amount claimed
-      // its own -- see fs_texture_v/fs_clarity_v for how these are
-      // consumed.
       texture_amount: f32,
       clarity_amount: f32,
+      temperature: f32,
+      tint: f32,
+      highlights: f32,
+      shadows: f32,
+      whites: f32,
+      blacks: f32,
+      pad0: f32,
+      pad1: f32,
     };
 
     // Packed entirely into vec4-multiples (48 bytes/mask) to sidestep
@@ -1856,9 +1858,63 @@
       return vec4<f32>(sum / window, 1.0);
     }
 
+    fn smoothstep_val(edge0: f32, edge1: f32, x: f32) -> f32 {
+      let t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+      return t * t * (3.0 - 2.0 * t);
+    }
+
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
       var c = rgb * pow(2.0, exposure_ev);
       c = (c - 0.5) * (1.0 + contrast / 100.0) + 0.5;
+      let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+      c = luma + (c - luma) * (1.0 + saturation / 100.0);
+      return c;
+    }
+
+    fn apply_global_adjustments(
+      rgb: vec3<f32>,
+      exposure_ev: f32,
+      contrast: f32,
+      saturation: f32,
+      temperature: f32,
+      tint: f32,
+      highlights: f32,
+      shadows: f32,
+      whites: f32,
+      blacks: f32
+    ) -> vec3<f32> {
+      var c = rgb;
+      let t = temperature / 100.0;
+      let tint_norm = tint / 100.0;
+
+      // White Balance
+      c.x = c.x * (1.0 + 0.35 * t + 0.15 * tint_norm);
+      c.y = c.y * (1.0 - 0.35 * tint_norm);
+      c.z = c.z * (1.0 - 0.35 * t + 0.15 * tint_norm);
+
+      // Exposure
+      c = c * pow(2.0, exposure_ev);
+
+      // Contrast
+      c = (c - 0.5) * (1.0 + contrast / 100.0) + 0.5;
+
+      // Parametric Tone
+      let luma_val = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+      let w_h = smoothstep_val(0.5, 1.0, luma_val);
+      let delta_h = (highlights / 100.0) * w_h * (1.0 - luma_val) * 0.6;
+
+      let w_s = smoothstep_val(0.5, 0.0, luma_val);
+      let delta_s = (shadows / 100.0) * w_s * luma_val * 0.6;
+
+      let w_w = smoothstep_val(0.7, 1.0, luma_val);
+      let delta_w = (whites / 100.0) * w_w * 0.35;
+
+      let w_b = smoothstep_val(0.3, 0.0, luma_val);
+      let delta_b = (blacks / 100.0) * w_b * 0.35;
+
+      c = c + vec3<f32>(delta_h + delta_s + delta_w + delta_b);
+
+      // Saturation
       let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
       c = luma + (c - luma) * (1.0 + saturation / 100.0);
       return c;
@@ -2410,7 +2466,18 @@
     @fragment
     fn fs_grade(in: VertexOut) -> @location(0) vec4<f32> {
       var rgb = textureSample(srcTexture, srcSampler, in.uv).rgb;
-      rgb = apply_adjustments(rgb, adj.exposure_ev, adj.contrast, adj.saturation);
+      rgb = apply_global_adjustments(
+        rgb,
+        adj.exposure_ev,
+        adj.contrast,
+        adj.saturation,
+        adj.temperature,
+        adj.tint,
+        adj.highlights,
+        adj.shadows,
+        adj.whites,
+        adj.blacks
+      );
       rgb = vec3<f32>(sampleCurveLut(rgb.x), sampleCurveLut(rgb.y), sampleCurveLut(rgb.z));
       rgb = applyHslBands(rgb);
       rgb = applySplitToning(rgb);
@@ -3266,7 +3333,7 @@
     });
 
     uniformBuffer = device.createBuffer({
-      size: 32, // 8 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, dehaze_amount, texture_amount, clarity_amount)
+      size: 64, // 16 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, dehaze, texture, clarity, temp, tint, highlights, shadows, whites, blacks, pad0, pad1)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     masksBuffer = device.createBuffer({
@@ -4203,7 +4270,24 @@
     device.queue.writeBuffer(
       uniformBuffer,
       0,
-      new Float32Array([exposure, contrast, saturation, masks.length, selectedMaskIndex, dehaze, texture, clarity]),
+      new Float32Array([
+        exposure,
+        contrast,
+        saturation,
+        masks.length,
+        selectedMaskIndex,
+        dehaze,
+        texture,
+        clarity,
+        temperature,
+        tint,
+        highlights,
+        shadows,
+        whites,
+        blacks,
+        0,
+        0,
+      ]),
     );
 
     const maskData = new Float32Array(MAX_MASKS * 12);

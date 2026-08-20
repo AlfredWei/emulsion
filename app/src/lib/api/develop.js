@@ -1472,3 +1472,135 @@ export function removeMask(/** @type {EditStack} */ stack, /** @type {string} */
   const ops = stack.ops.filter((o) => !(MASK_OP_NAMES.includes(o.op) && /** @type {any} */ (o).id === id));
   return { ...stack, ops };
 }
+
+/**
+ * White Balance Presets (Temperature & Tint).
+ * Temperature: -100 (cooler/blue) to +100 (warmer/yellow).
+ * Tint: -100 (green) to +100 (magenta).
+ */
+export const WB_PRESETS = Object.freeze({
+  as_shot: { name: "As Shot", temperature: 0, tint: 0 },
+  auto: { name: "Auto", temperature: 0, tint: 0 },
+  daylight: { name: "Daylight", temperature: 10, tint: 2 },
+  cloudy: { name: "Cloudy", temperature: 25, tint: 5 },
+  shade: { name: "Shade", temperature: 35, tint: 8 },
+  tungsten: { name: "Tungsten", temperature: -40, tint: -5 },
+  fluorescent: { name: "Fluorescent", temperature: -15, tint: 15 },
+  flash: { name: "Flash", temperature: 12, tint: 4 },
+  custom: { name: "Custom", temperature: 0, tint: 0 },
+});
+
+/**
+ * Auto White Balance (Gray-world algorithm).
+ * @param {{r: number, g: number, b: number}} avgRgb
+ * @returns {{temperature: number, tint: number}}
+ */
+export function computeAutoWhiteBalance(avgRgb) {
+  const { r, g, b } = avgRgb;
+  const mean = (r + g + b) / 3.0;
+  if (mean < 0.01) return { temperature: 0, tint: 0 };
+
+  const tempRatio = (b - r) / mean;
+  const temperature = Math.round(Math.max(-100, Math.min(100, tempRatio * 120)));
+
+  const tintRatio = (g - (r + b) / 2.0) / mean;
+  const tint = Math.round(Math.max(-100, Math.min(100, tintRatio * 120)));
+
+  return { temperature, tint };
+}
+
+/**
+ * Eyedropper White Balance.
+ * Neutralizes the sampled neutral color.
+ * @param {{r: number, g: number, b: number}} sampleRgb
+ * @returns {{temperature: number, tint: number}}
+ */
+export function computeEyedropperWhiteBalance(sampleRgb) {
+  const { r, g, b } = sampleRgb;
+  const luma = Math.max(0.01, 0.2126 * r + 0.7152 * g + 0.0722 * b);
+
+  const tempRatio = (b - r) / luma;
+  const temperature = Math.round(Math.max(-100, Math.min(100, tempRatio * 100)));
+
+  const tintRatio = (g - (r + b) / 2.0) / luma;
+  const tint = Math.round(Math.max(-100, Math.min(100, tintRatio * 100)));
+
+  return { temperature, tint };
+}
+
+/**
+ * Auto Tone algorithm.
+ * @param {{r: Uint32Array, g: Uint32Array, b: Uint32Array}} histogramData
+ * @returns {{exposure: number, contrast: number, highlights: number, shadows: number, whites: number, blacks: number}}
+ */
+export function computeAutoTone(histogramData) {
+  const { r, g, b } = histogramData;
+  const totalPixels = r.reduce((acc, v) => acc + v, 0);
+  if (totalPixels === 0) {
+    return { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0 };
+  }
+
+  const lumaHist = new Float64Array(256);
+  for (let i = 0; i < 256; i++) {
+    lumaHist[i] = r[i] * 0.2126 + g[i] * 0.7152 + b[i] * 0.0722;
+  }
+
+  let cum = 0;
+  let p1 = 0,
+    p10 = 0,
+    p50 = 0.5,
+    p90 = 1.0,
+    p99 = 1.0;
+  for (let i = 0; i < 256; i++) {
+    cum += lumaHist[i];
+    const frac = cum / totalPixels;
+    const norm = i / 255.0;
+    if (frac >= 0.01 && p1 === 0) p1 = norm;
+    if (frac >= 0.1 && p10 === 0) p10 = norm;
+    if (frac >= 0.5 && p50 === 0.5) p50 = norm;
+    if (frac >= 0.9 && p90 === 1.0) p90 = norm;
+    if (frac >= 0.99 && p99 === 1.0) p99 = norm;
+  }
+
+  const targetMedian = 0.45;
+  const rawEv = Math.log2(targetMedian / Math.max(p50, 0.04));
+  const exposure = Math.round(Math.max(-2.5, Math.min(2.5, rawEv)) * 20) / 20;
+
+  let whites = 0;
+  if (p99 < 0.88) {
+    whites = Math.round((0.95 - p99) * 120);
+  } else if (p99 > 0.98) {
+    whites = Math.round((0.95 - p99) * 150);
+  }
+  whites = Math.max(-50, Math.min(50, whites));
+
+  let blacks = 0;
+  if (p1 > 0.08) {
+    blacks = Math.round((0.03 - p1) * 150);
+  } else if (p1 < 0.01) {
+    blacks = Math.round((0.03 - p1) * 200);
+  }
+  blacks = Math.max(-50, Math.min(50, blacks));
+
+  const spread = p90 - p10;
+  let contrast = 0;
+  if (spread < 0.4) {
+    contrast = Math.round((0.55 - spread) * 50);
+  } else if (spread > 0.7) {
+    contrast = Math.round((0.65 - spread) * 40);
+  }
+  contrast = Math.max(-30, Math.min(30, contrast));
+
+  let highlights = 0;
+  let shadows = 0;
+  if (p90 > 0.85) {
+    highlights = -Math.round((p90 - 0.8) * 60);
+  }
+  if (p10 < 0.2) {
+    shadows = Math.round((0.25 - p10) * 80);
+  }
+  highlights = Math.max(-60, Math.min(20, highlights));
+  shadows = Math.max(-20, Math.min(60, shadows));
+
+  return { exposure, contrast, highlights, shadows, whites, blacks };
+}

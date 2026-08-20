@@ -24,6 +24,14 @@ pub struct ImageMetadata {
     pub aperture: Option<f32>,
     pub shutter_speed: Option<f32>,
     pub focal_length: Option<f32>,
+    pub exposure_bias: Option<f32>,
+    pub metering_mode: Option<String>,
+    pub flash: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub altitude: Option<f32>,
     /// ISO8601-ish (`YYYY-MM-DDTHH:MM:SS`), normalized from both RAW's
     /// `chrono` timestamp and JPEG's EXIF `YYYY:MM:DD HH:MM:SS` string so
     /// the frontend has one format to parse regardless of source.
@@ -46,6 +54,14 @@ pub fn extract_from_raw(image: &RawImage) -> ImageMetadata {
         aperture: (image.aperture() > 0.0).then_some(image.aperture()),
         shutter_speed: (image.shutter() > 0.0).then_some(image.shutter()),
         focal_length: (image.focal_len() > 0.0).then_some(image.focal_len()),
+        exposure_bias: None,
+        metering_mode: None,
+        flash: None,
+        width: None,
+        height: None,
+        latitude: None,
+        longitude: None,
+        altitude: None,
         // Same zero-means-missing guard as the fields above: LibRaw stores
         // "no timestamp" as 0, and rsraw's datetime() happily converts that
         // into the Unix epoch rather than None -- without this filter, a
@@ -75,8 +91,66 @@ fn ascii_string(value: &exif::Value) -> Option<String> {
 fn rational_f32(value: &exif::Value) -> Option<f32> {
     match value {
         exif::Value::Rational(v) => v.first().map(|r| r.to_f64() as f32),
+        exif::Value::SRational(v) => v.first().map(|r| r.to_f64() as f32),
         _ => None,
     }
+}
+
+fn metering_mode_label(code: u32) -> String {
+    match code {
+        1 => "Average".to_string(),
+        2 => "Center-weighted average".to_string(),
+        3 => "Spot".to_string(),
+        4 => "Multi-spot".to_string(),
+        5 => "Pattern".to_string(),
+        6 => "Partial".to_string(),
+        255 => "Other".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+fn flash_label(code: u32) -> String {
+    if code & 1 != 0 {
+        "Fired".to_string()
+    } else {
+        "Did not fire".to_string()
+    }
+}
+
+fn parse_gps_coord(coord: &exif::Value, ref_val: Option<&exif::Value>) -> Option<f64> {
+    if let exif::Value::Rational(rats) = coord {
+        if !rats.is_empty() {
+            let deg = rats.first().map(|r| r.to_f64()).unwrap_or(0.0);
+            let min = rats.get(1).map(|r| r.to_f64()).unwrap_or(0.0);
+            let sec = rats.get(2).map(|r| r.to_f64()).unwrap_or(0.0);
+            let mut val = deg + min / 60.0 + sec / 3600.0;
+            if let Some(exif::Value::Ascii(refs)) = ref_val {
+                if let Some(b) = refs.first() {
+                    let c = b.first().copied().map(|c| c as char).unwrap_or(' ');
+                    if c == 'S' || c == 'W' || c == 's' || c == 'w' {
+                        val = -val;
+                    }
+                }
+            }
+            return Some(val);
+        }
+    }
+    None
+}
+
+fn parse_gps_altitude(alt: &exif::Value, ref_val: Option<&exif::Value>) -> Option<f32> {
+    if let exif::Value::Rational(rats) = alt {
+        if let Some(r) = rats.first() {
+            let mut val = r.to_f64() as f32;
+            if let Some(exif::Value::Byte(bytes)) = ref_val {
+                if bytes.first() == Some(&1) {
+                    val = -val;
+                }
+            }
+            return Some(val);
+        }
+    }
+    None
 }
 
 /// EXIF's own date format ("YYYY:MM:DD HH:MM:SS") -> "YYYY-MM-DDTHH:MM:SS",
@@ -94,7 +168,22 @@ pub fn extract_from_jpeg(bytes: &[u8]) -> ImageMetadata {
         return ImageMetadata::default();
     };
 
-    let field = |tag: exif::Tag| exif.get_field(tag, exif::In::PRIMARY).map(|f| &f.value);
+    let field = |tag: exif::Tag| exif.fields().find(|f| f.tag == tag).map(|f| &f.value);
+
+    let lat = field(exif::Tag::GPSLatitude);
+    let lat_ref = field(exif::Tag::GPSLatitudeRef);
+    let lon = field(exif::Tag::GPSLongitude);
+    let lon_ref = field(exif::Tag::GPSLongitudeRef);
+    let alt = field(exif::Tag::GPSAltitude);
+    let alt_ref = field(exif::Tag::GPSAltitudeRef);
+
+    let width = field(exif::Tag::PixelXDimension)
+        .and_then(|v| v.get_uint(0))
+        .or_else(|| field(exif::Tag::ImageWidth).and_then(|v| v.get_uint(0)));
+
+    let height = field(exif::Tag::PixelYDimension)
+        .and_then(|v| v.get_uint(0))
+        .or_else(|| field(exif::Tag::ImageLength).and_then(|v| v.get_uint(0)));
 
     ImageMetadata {
         camera_make: field(exif::Tag::Make).and_then(ascii_string),
@@ -104,6 +193,18 @@ pub fn extract_from_jpeg(bytes: &[u8]) -> ImageMetadata {
         aperture: field(exif::Tag::FNumber).and_then(rational_f32),
         shutter_speed: field(exif::Tag::ExposureTime).and_then(rational_f32),
         focal_length: field(exif::Tag::FocalLength).and_then(rational_f32),
+        exposure_bias: field(exif::Tag::ExposureBiasValue).and_then(rational_f32),
+        metering_mode: field(exif::Tag::MeteringMode)
+            .and_then(|v| v.get_uint(0))
+            .map(metering_mode_label),
+        flash: field(exif::Tag::Flash)
+            .and_then(|v| v.get_uint(0))
+            .map(flash_label),
+        width,
+        height,
+        latitude: lat.and_then(|l| parse_gps_coord(l, lat_ref)),
+        longitude: lon.and_then(|l| parse_gps_coord(l, lon_ref)),
+        altitude: alt.and_then(|a| parse_gps_altitude(a, alt_ref)),
         captured_at: field(exif::Tag::DateTimeOriginal)
             .and_then(ascii_string)
             .and_then(|s| normalize_exif_datetime(&s)),
@@ -288,5 +389,38 @@ mod tests {
         assert_eq!(metadata.shutter_speed, Some(1.0 / 250.0));
         assert_eq!(metadata.focal_length, Some(50.0));
         assert_eq!(metadata.captured_at.as_deref(), Some("2024-03-15T10:30:00"));
+    }
+
+    #[test]
+    fn parse_gps_coord_calculates_correct_decimal_degrees() {
+        let coord_north = exif::Value::Rational(vec![
+            exif::Rational { num: 25, denom: 1 },
+            exif::Rational { num: 2, denom: 1 },
+            exif::Rational { num: 15, denom: 1 },
+        ]);
+        let ref_north = exif::Value::Ascii(vec![b"N".to_vec()]);
+        let lat = parse_gps_coord(&coord_north, Some(&ref_north)).unwrap();
+        let expected = 25.0 + 2.0 / 60.0 + 15.0 / 3600.0;
+        assert!((lat - expected).abs() < 1e-6);
+
+        let coord_south = exif::Value::Rational(vec![
+            exif::Rational { num: 33, denom: 1 },
+            exif::Rational { num: 51, denom: 1 },
+            exif::Rational { num: 30, denom: 1 },
+        ]);
+        let ref_south = exif::Value::Ascii(vec![b"S".to_vec()]);
+        let lat_s = parse_gps_coord(&coord_south, Some(&ref_south)).unwrap();
+        let expected_s = -(33.0 + 51.0 / 60.0 + 30.0 / 3600.0);
+        assert!((lat_s - expected_s).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parse_gps_altitude_handles_above_and_below_sea_level() {
+        let alt = exif::Value::Rational(vec![exif::Rational { num: 1500, denom: 10 }]);
+        let ref_above = exif::Value::Byte(vec![0]);
+        assert_eq!(parse_gps_altitude(&alt, Some(&ref_above)), Some(150.0));
+
+        let ref_below = exif::Value::Byte(vec![1]);
+        assert_eq!(parse_gps_altitude(&alt, Some(&ref_below)), Some(-150.0));
     }
 }

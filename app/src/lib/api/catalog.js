@@ -21,6 +21,15 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number | null} aperture
  * @property {number | null} shutter_speed
  * @property {number | null} focal_length
+ * @property {number | null} [exposure_bias]
+ * @property {string | null} [metering_mode]
+ * @property {string | null} [flash]
+ * @property {number | null} [width]
+ * @property {number | null} [height]
+ * @property {number | null} [latitude]
+ * @property {number | null} [longitude]
+ * @property {number | null} [altitude]
+ * @property {number | null} [file_size]
  * @property {string | null} captured_at
  * @property {string | null} caption
  * @property {string | null} copyright
@@ -81,6 +90,16 @@ export function setCopyright(/** @type {number} */ imageId, /** @type {string} *
 
 export function setContact(/** @type {number} */ imageId, /** @type {string} */ contact) {
   return invoke("set_contact", { imageId, contact });
+}
+
+/** Set or update GPS coordinates. */
+export function setGeoLocation(
+  /** @type {number} */ imageId,
+  /** @type {number | null} */ latitude,
+  /** @type {number | null} */ longitude,
+  /** @type {number | null} */ altitude,
+) {
+  return invoke("set_geo_location", { imageId, latitude, longitude, altitude });
 }
 
 /** Non-destructive removal (M2 Slice 3): catalog rows + app-owned derived

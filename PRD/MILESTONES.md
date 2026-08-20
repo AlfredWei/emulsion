@@ -111,6 +111,17 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 **Rough size:** 3–5 months · **Lightroom analog:** v4.0–v5.0, 2012–2013
 
 ### Scope
+- **Develop Auto tools & Basic Tone completion** (added to forefront of M4, 2026-08-20):
+  - White Balance system: Temperature & Tint adjustment pipeline (Rust CPU + WGSL GPU), White Balance eyedropper.
+  - Auto White Balance (AWB): color constancy / gray-world automatic white balance estimation.
+  - Basic tone expansion: Highlights, Shadows, Whites, Blacks adjustments.
+  - Auto Tone: intelligent dynamic-range, midtone, and clipping analysis to compute and apply optimal tone settings with one click.
+- **Library module depth & UX overhaul** (added to forefront of M4, 2026-08-20):
+  - Drag-and-drop file/folder import directly into Library view.
+  - Filename and full path display in grid and info bar with "Reveal in File Manager" capability.
+  - Complete EXIF metadata extraction & display with customized floating tooltip bubbles for truncated text.
+  - GPS / Geo-location extraction from EXIF, coordinate & altitude display, map viewing links, and manual geo-location entry/editing.
+  - Library multi-dimensional filter bar (rating, flag, color label, camera, lens, date range, text search).
 - Healing/clone brush (advanced retouching beyond basic spot removal), red-eye removal.
 - Perspective/upright correction (manual controls; auto-upright is a stretch goal, not required).
 - Soft proofing against output profiles.
@@ -124,6 +135,8 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 
 ### Exit criteria
 - Retouching quality is good enough that most images no longer need round-tripping to another tool for spot/object removal.
+- One-click Auto Tone and Auto White Balance provide reliable, natural starting points for editing.
+- Library allows drag-and-drop import, detailed EXIF and GPS inspection/editing, and flexible multi-criteria filtering.
 - Print output is color-accurate (soft-proof matches physical print within reasonable tolerance).
 - Editing against files on a slow/offline external drive doesn't degrade the Develop experience (Smart Previews working).
 

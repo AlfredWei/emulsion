@@ -2,7 +2,9 @@
   import "$lib/styles/tokens.css";
   import { open, save } from "@tauri-apps/plugin-dialog";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { onMount } from "svelte";
+  import LibraryFilterBar from "$lib/components/LibraryFilterBar.svelte";
   import LibraryGrid from "$lib/components/LibraryGrid.svelte";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
@@ -18,6 +20,11 @@
   import HistoryPanel from "$lib/components/HistoryPanel.svelte";
   import BackupPromptDialog from "$lib/components/BackupPromptDialog.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
+  import LibraryToolbar from "$lib/components/LibraryToolbar.svelte";
+  import LibraryImageViewer from "$lib/components/LibraryImageViewer.svelte";
+  import LibraryCompareView from "$lib/components/LibraryCompareView.svelte";
+  import LibrarySurveyView from "$lib/components/LibrarySurveyView.svelte";
+  import { getStoredShortcuts } from "$lib/shortcuts.js";
   import {
     importFolder,
     importFiles,
@@ -114,6 +121,10 @@
     getPerspective,
     upsertPerspective,
     IDENTITY_PERSPECTIVE,
+    computeAutoWhiteBalance,
+    computeEyedropperWhiteBalance,
+    computeAutoTone,
+    WB_PRESETS,
   } from "$lib/api/develop.js";
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
@@ -132,6 +143,10 @@
   let selectedIds = $state(/** @type {Set<number>} */ (new Set()));
   let confirmingRemoval = $state(false);
   let activeModule = $state("library"); // "library" | "develop"
+  let libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"));
+  let libraryZoomLevel = $state(1);
+  let imageViewerRef = $state(/** @type {any} */ (null));
+  let shortcuts = $state(getStoredShortcuts());
   let importing = $state(false);
   let statusMessage = $state("");
   // M3 Slice 1: general Settings dialog, app-level (not module-scoped, so
@@ -171,11 +186,25 @@
     manualMembership = new Map(manualMembership).set(collectionId, new Set(memberIds));
   }
 
-  // The image set the Library grid actually shows -- unfiltered `images`
-  // for "All Photos", a manual collection's fetched membership, or a
-  // smart collection's rules evaluated client-side against the
-  // already-loaded catalog.
-  let filteredImages = $derived.by(() => {
+  // Library Filters
+  let searchQuery = $state("");
+  let flagFilter = $state(/** @type {"all" | "pick" | "unflagged" | "reject"} */ ("all"));
+  let minRating = $state(0);
+  let ratingOp = $state(/** @type {">=" | "="} */ (">="));
+  let colorLabelFilter = $state("all");
+  let fileTypeFilter = $state(/** @type {"all" | "raw" | "jpeg"} */ ("all"));
+
+  function handleResetFilters() {
+    searchQuery = "";
+    flagFilter = "all";
+    minRating = 0;
+    ratingOp = ">=";
+    colorLabelFilter = "all";
+    fileTypeFilter = "all";
+  }
+
+  // Base image set for active folder/collection
+  let baseImages = $derived.by(() => {
     if (activeCollectionId === null) return images;
     const collection = collections.find((c) => c.id === activeCollectionId);
     if (!collection) return images;
@@ -188,18 +217,77 @@
     return images.filter((img) => memberIds.has(img.image_id));
   });
 
+  // The image set the Library grid and filmstrip show after applying active filters
+  let filteredImages = $derived.by(() => {
+    let result = baseImages;
+
+    // Search text query
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      result = result.filter((img) => {
+        const name = (img.path.split(/[/\\]/).pop() || "").toLowerCase();
+        const path = img.path.toLowerCase();
+        const make = (img.camera_make || "").toLowerCase();
+        const model = (img.camera_model || "").toLowerCase();
+        const lens = (img.lens_model || "").toLowerCase();
+        const caption = (img.caption || "").toLowerCase();
+        const copyright = (img.copyright || "").toLowerCase();
+        const contact = (img.contact || "").toLowerCase();
+        return (
+          name.includes(q) ||
+          path.includes(q) ||
+          make.includes(q) ||
+          model.includes(q) ||
+          lens.includes(q) ||
+          caption.includes(q) ||
+          copyright.includes(q) ||
+          contact.includes(q)
+        );
+      });
+    }
+
+    // Flag filter
+    if (flagFilter === "pick") {
+      result = result.filter((img) => img.flag === "pick");
+    } else if (flagFilter === "unflagged") {
+      result = result.filter((img) => img.flag === "none" || !img.flag);
+    } else if (flagFilter === "reject") {
+      result = result.filter((img) => img.flag === "reject");
+    }
+
+    // Star Rating filter
+    if (minRating > 0) {
+      if (ratingOp === ">=") {
+        result = result.filter((img) => img.rating >= minRating);
+      } else {
+        result = result.filter((img) => img.rating === minRating);
+      }
+    }
+
+    // Color label filter
+    if (colorLabelFilter !== "all") {
+      result = result.filter((img) => img.color_label === colorLabelFilter);
+    }
+
+    // File type filter
+    if (fileTypeFilter === "raw") {
+      result = result.filter(
+        (img) =>
+          !img.path.toLowerCase().endsWith(".jpg") && !img.path.toLowerCase().endsWith(".jpeg"),
+      );
+    } else if (fileTypeFilter === "jpeg") {
+      result = result.filter(
+        (img) =>
+          img.path.toLowerCase().endsWith(".jpg") || img.path.toLowerCase().endsWith(".jpeg"),
+      );
+    }
+
+    return result;
+  });
+
   let activeCollection = $derived(collections.find((c) => c.id === activeCollectionId) ?? null);
 
-  // The Filmstrip (persistent across both modules, docs/ux/UX-DESIGN.md
-  // §2/§4) shows the same `filteredImages` set in Develop as in Library --
-  // that's the whole point ("context is never lost switching between
-  // culling and editing"). But `filteredImages` is driven purely by the
-  // active collection filter, independent of `developVersionId`: if the
-  // open Develop image falls outside that filter (e.g. a filter was
-  // applied or changed after entering Develop), it would otherwise be
-  // invisible in its own filmstrip -- no highlighted cell, or an empty
-  // strip. Falls back to the unfiltered catalog only in that specific
-  // case, otherwise stays consistent with the active filter.
+  // The Filmstrip shows filtered images, falling back if active Develop photo is excluded
   let developFilmstripImages = $derived(
     filteredImages.some((img) => img.version_id === developVersionId) ? filteredImages : images,
   );
@@ -365,7 +453,7 @@
   // these four destinations change how DevelopCanvas itself samples or
   // reports a click, only where +page.svelte routes the result afterward.
   let eyedropperTarget = $state(
-    /** @type {"split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point" | null} */ (
+    /** @type {"split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point" | "white_balance" | null} */ (
       null
     ),
   );
@@ -943,6 +1031,15 @@
     });
   }
 
+  let isDraggingFiles = $state(false);
+
+  function handleDropImport(/** @type {string[]} */ paths) {
+    if (!paths || paths.length === 0) return;
+    return runImport(async () => {
+      return importFiles(paths);
+    });
+  }
+
   async function handleImportFiles() {
     // M2 Slice 1: a separate entry point from folder import -- Tauri's
     // dialog plugin has independent `directory`/`multiple` flags, no mode
@@ -969,30 +1066,144 @@
   // is part of an active multi-selection applies to the whole selection,
   // not just that one cell. Acting on a cell OUTSIDE the current
   // selection (or when only one image is selected) stays single-target,
-  // unaffected by an unrelated selection elsewhere -- matches the mental
-  // model that the star/flag/color-dot buttons are just this practice's
-  // culling controls, only shown in a bulk light when your selection
-  // literally includes the cell you clicked.
-  function targetVersionIds(/** @type {number} */ versionId) {
-    return selectedIds.size > 1 && selectedIds.has(versionId) ? [...selectedIds] : [versionId];
+  // unaffected by an unrelated selection elsewhere. When called without an
+  // explicit versionId (e.g. from toolbar / metadata panel / hotkey), applies
+  // to all currently selected images (or the anchor image).
+  function targetVersionIds(/** @type {number | null | undefined} */ versionId) {
+    if (versionId !== undefined && versionId !== null) {
+      if (selectedIds.size > 1 && selectedIds.has(versionId)) {
+        return [...selectedIds];
+      }
+      return [versionId];
+    }
+    if (selectedIds.size > 0) return [...selectedIds];
+    return selectedId !== null ? [selectedId] : [];
   }
 
-  async function handleRatingChange(/** @type {number} */ versionId, /** @type {number} */ rating) {
+  async function handleRatingChange(/** @type {number | null | undefined} */ versionId, /** @type {number} */ rating) {
     const targets = targetVersionIds(versionId);
+    if (targets.length === 0) return;
     for (const id of targets) patchLocal(id, { rating });
     await Promise.all(targets.map((id) => setRating(id, rating)));
   }
 
-  async function handleFlagChange(/** @type {number} */ versionId, /** @type {string} */ flag) {
+  async function handleFlagChange(/** @type {number | null | undefined} */ versionId, /** @type {string} */ flag) {
     const targets = targetVersionIds(versionId);
+    if (targets.length === 0) return;
     for (const id of targets) patchLocal(id, { flag });
     await Promise.all(targets.map((id) => setFlag(id, flag)));
   }
 
-  async function handleColorLabelChange(/** @type {number} */ versionId, /** @type {string} */ colorLabel) {
+  async function handleColorLabelChange(/** @type {number | null | undefined} */ versionId, /** @type {string} */ colorLabel) {
     const targets = targetVersionIds(versionId);
+    if (targets.length === 0) return;
     for (const id of targets) patchLocal(id, { color_label: colorLabel });
     await Promise.all(targets.map((id) => setColorLabel(id, colorLabel)));
+  }
+
+  // Keyboard navigation & selection helpers
+  function selectNextImage(/** @type {boolean=} */ extend) {
+    if (filteredImages.length === 0) return;
+    if (selectedId === null) {
+      const first = filteredImages[0];
+      selectedId = first.version_id;
+      selectedIds = new Set([first.version_id]);
+      return;
+    }
+    const idx = filteredImages.findIndex((img) => img.version_id === selectedId);
+    if (idx === -1) {
+      const first = filteredImages[0];
+      selectedId = first.version_id;
+      selectedIds = new Set([first.version_id]);
+      return;
+    }
+    if (idx < filteredImages.length - 1) {
+      const nextImg = filteredImages[idx + 1];
+      if (extend) {
+        const next = new Set(selectedIds);
+        next.add(nextImg.version_id);
+        selectedIds = next;
+        selectedId = nextImg.version_id;
+      } else {
+        selectedId = nextImg.version_id;
+        selectedIds = new Set([nextImg.version_id]);
+      }
+      if (activeModule === "develop") {
+        openDevelop(nextImg.version_id);
+      }
+    }
+  }
+
+  function selectPrevImage(/** @type {boolean=} */ extend) {
+    if (filteredImages.length === 0) return;
+    if (selectedId === null) {
+      const last = filteredImages[filteredImages.length - 1];
+      selectedId = last.version_id;
+      selectedIds = new Set([last.version_id]);
+      return;
+    }
+    const idx = filteredImages.findIndex((img) => img.version_id === selectedId);
+    if (idx === -1) {
+      const first = filteredImages[0];
+      selectedId = first.version_id;
+      selectedIds = new Set([first.version_id]);
+      return;
+    }
+    if (idx > 0) {
+      const prevImg = filteredImages[idx - 1];
+      if (extend) {
+        const next = new Set(selectedIds);
+        next.add(prevImg.version_id);
+        selectedIds = next;
+        selectedId = prevImg.version_id;
+      } else {
+        selectedId = prevImg.version_id;
+        selectedIds = new Set([prevImg.version_id]);
+      }
+      if (activeModule === "develop") {
+        openDevelop(prevImg.version_id);
+      }
+    }
+  }
+
+  function selectGridStep(/** @type {number} */ step, /** @type {boolean=} */ extend) {
+    if (filteredImages.length === 0) return;
+    if (selectedId === null) {
+      const first = filteredImages[0];
+      selectedId = first.version_id;
+      selectedIds = new Set([first.version_id]);
+      return;
+    }
+    const idx = filteredImages.findIndex((img) => img.version_id === selectedId);
+    if (idx === -1) return;
+    const targetIdx = Math.max(0, Math.min(filteredImages.length - 1, idx + step));
+    const targetImg = filteredImages[targetIdx];
+    if (!targetImg) return;
+    if (extend) {
+      const [from, to] = idx <= targetIdx ? [idx, targetIdx] : [targetIdx, idx];
+      selectedIds = new Set(filteredImages.slice(from, to + 1).map((img) => img.version_id));
+      selectedId = targetImg.version_id;
+    } else {
+      selectedId = targetImg.version_id;
+      selectedIds = new Set([targetImg.version_id]);
+    }
+  }
+
+  function handleSelectAll() {
+    if (filteredImages.length === 0) return;
+    selectedIds = new Set(filteredImages.map((img) => img.version_id));
+    if (selectedId === null || !selectedIds.has(selectedId)) {
+      selectedId = filteredImages[0].version_id;
+    }
+  }
+
+  function handleDeselectAll() {
+    if (libraryViewMode !== "grid") {
+      libraryViewMode = "grid";
+      return;
+    }
+    selectedIds = new Set();
+    selectedId = null;
   }
 
   // Multi-select click semantics (M2 Slice 3), standard file-manager
@@ -1168,15 +1379,21 @@
   // target-computation needed.
   const COLOR_KEYS = { 6: "red", 7: "yellow", 8: "green", 9: "blue" };
 
-  // Renamed from handleLibraryKeydown (mask UI polish) -- now handles a
-  // Develop-scoped shortcut too, so the old Library-only name would be
-  // misleading.
+  // Comprehensive keyboard shortcut handler with custom user bindings
   function handleGlobalKeydown(/** @type {KeyboardEvent} */ e) {
+    const target = e.target;
+    const isTypingTarget =
+      (target instanceof HTMLInputElement && target.type !== "range") ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement;
+    if (isTypingTarget) {
+      return;
+    }
+
+    const key = e.key.toLowerCase();
+    const rawKey = e.key;
+
     if (activeModule === "develop") {
-      // The only dialogs actually reachable while activeModule==="develop"
-      // -- confirmingRemoval/creatingCollection/creatingSmartCollection/
-      // creatingCollectionWithImages are Library-only concerns, structurally
-      // impossible here, not copied blindly from the Library branch below.
       if (
         exportItems !== null ||
         settingsOpen ||
@@ -1187,79 +1404,72 @@
       ) {
         return;
       }
-      // Real bug, not a hypothetical: every input in Develop is a <input
-      // type="range"> slider or a checkbox (confirmed -- no free-text
-      // fields exist here, those live behind the settingsOpen/etc guard
-      // above), and a slider keeps DOM focus after the user finishes
-      // dragging it. The old blanket "any HTMLInputElement blocks every
-      // shortcut" guard therefore silently swallowed H/\/O/Undo/Redo
-      // immediately after adjusting ANY slider (e.g. Feather) until the
-      // user clicked elsewhere first -- reported as "after adjust feather,
-      // hot-key, the effect applied failed." Narrowed to only the input
-      // TYPES that are genuinely a typing/toggle target for their own keys
-      // (a checkbox still needs Space to toggle via keyboard, so it keeps
-      // blocking single-key shortcuts; range doesn't use Space or letter
-      // keys for anything, so it shouldn't block them either).
-      const target = e.target;
-      const isTypingTarget =
-        (target instanceof HTMLInputElement && target.type !== "range") ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement;
-      if (isTypingTarget) {
-        return;
-      }
-      // Undo/Redo (M3) -- placed BEFORE the blanket modifier-key guard
-      // below, since every other Develop shortcut deliberately requires
-      // NO modifier held (see that guard's own reasoning) and these are
-      // the one deliberate exception. Cmd+Z / Ctrl+Z undoes; Cmd+Shift+Z
-      // (Mac convention) and Ctrl+Y (Windows/Linux convention) both redo,
-      // covering both platforms' own muscle memory rather than picking
-      // just one.
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "z") {
+      // Undo/Redo (M3)
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && key === "z") {
         e.preventDefault();
         if (e.shiftKey) handleRedo();
         else handleUndo();
         return;
       }
-      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "y") {
+      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && key === "y") {
         e.preventDefault();
         handleRedo();
         return;
       }
+
+      // Arrow navigation in Develop: navigate to previous / next photo
+      if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (rawKey === shortcuts.nextImage || rawKey === shortcuts.gridDown || rawKey === "ArrowRight") {
+          e.preventDefault();
+          selectNextImage(false);
+          return;
+        }
+        if (rawKey === shortcuts.prevImage || rawKey === shortcuts.gridUp || rawKey === "ArrowLeft") {
+          e.preventDefault();
+          selectPrevImage(false);
+          return;
+        }
+        if (key === shortcuts.viewGrid?.toLowerCase()) {
+          e.preventDefault();
+          switchModule("library");
+          libraryViewMode = "grid";
+          return;
+        }
+        if (key === shortcuts.viewLoupe?.toLowerCase()) {
+          e.preventDefault();
+          switchModule("library");
+          libraryViewMode = "loupe";
+          return;
+        }
+      }
+
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      // M4 Slice 3: Space arms temporary pan (see spacePanning's own doc
-      // comment) -- always preventDefault while held (including on
-      // auto-repeat keydowns) so the browser's own "Space scrolls the
-      // page" default never fires, but only flips state on the FIRST
-      // (non-repeat) press so a long hold doesn't churn re-renders.
-      if (e.key === " ") {
+      if (rawKey === " " || key === shortcuts.toggleView?.toLowerCase()) {
         e.preventDefault();
         if (!e.repeat) spacePanning = true;
         return;
       }
-      if (e.key.toLowerCase() === "o" && OVERLAY_CAPABLE_MASK_OPS.includes(selectedMask?.op ?? "")) {
+      if (
+        key === shortcuts.toggleMaskOverlay?.toLowerCase() &&
+        OVERLAY_CAPABLE_MASK_OPS.includes(selectedMask?.op ?? "")
+      ) {
         e.preventDefault();
         showMaskOverlay = !showMaskOverlay;
         return;
       }
-      // M4 Slice 2: H hides/shows every mask's overlay chrome (not gated
-      // on a selected mask -- unlike "o" above, this is a blanket review
-      // toggle, matching real Lightroom's own H convention for exactly
-      // this purpose).
-      if (e.key.toLowerCase() === "h") {
+      if (key === shortcuts.toggleMaskChrome?.toLowerCase()) {
         e.preventDefault();
         maskOverlaysVisible = !maskOverlaysVisible;
         return;
       }
-      // M4 Slice 2: \ toggles a quick before/after preview, matching real
-      // Lightroom's own \ convention.
-      if (e.key === "\\") {
+      if (rawKey === shortcuts.toggleOriginal || key === shortcuts.toggleOriginal?.toLowerCase()) {
         e.preventDefault();
         showOriginal = !showOriginal;
         return;
       }
       return;
     }
+
     if (activeModule !== "library") return;
     if (
       confirmingRemoval ||
@@ -1272,53 +1482,174 @@
     ) {
       return;
     }
-    // Backspace/typed digits are typing keys in MetadataPanel's fields and
-    // the toolbar/Settings <select>s -- never treat them as shortcuts while
-    // an editable or form-control element has focus.
-    const target = e.target;
-    if (
-      target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLSelectElement
-    ) {
+
+    // Select All: Cmd+A / Ctrl+A
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && key === "a") {
+      e.preventDefault();
+      handleSelectAll();
+      return;
+    }
+    // Deselect All / Back to Grid: Cmd+D / Ctrl+D / Escape
+    if (((e.metaKey || e.ctrlKey) && !e.altKey && key === "d") || rawKey === "Escape") {
+      e.preventDefault();
+      handleDeselectAll();
       return;
     }
 
-    if (e.key === "Delete" || e.key === "Backspace") {
+    if (rawKey === "Delete" || rawKey === "Backspace") {
       if (selectedIds.size === 0) return;
       e.preventDefault();
       confirmingRemoval = true;
       return;
     }
 
-    if (selectedId === null) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const key = e.key.toLowerCase();
-
-    if (key >= "0" && key <= "5") {
+    // Arrow navigation in Library
+    if (rawKey === shortcuts.nextImage || rawKey === "ArrowRight") {
       e.preventDefault();
-      handleRatingChange(selectedId, Number(key));
+      selectNextImage(e.shiftKey);
       return;
     }
-    if (key === "p") {
+    if (rawKey === shortcuts.prevImage || rawKey === "ArrowLeft") {
+      e.preventDefault();
+      selectPrevImage(e.shiftKey);
+      return;
+    }
+    if (rawKey === shortcuts.gridDown || rawKey === "ArrowDown") {
+      e.preventDefault();
+      if (libraryViewMode === "grid") {
+        selectGridStep(4, e.shiftKey);
+      } else {
+        selectNextImage(e.shiftKey);
+      }
+      return;
+    }
+    if (rawKey === shortcuts.gridUp || rawKey === "ArrowUp") {
+      e.preventDefault();
+      if (libraryViewMode === "grid") {
+        selectGridStep(-4, e.shiftKey);
+      } else {
+        selectPrevImage(e.shiftKey);
+      }
+      return;
+    }
+
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    // Mode hotkeys
+    if (key === shortcuts.viewGrid?.toLowerCase()) {
+      e.preventDefault();
+      libraryViewMode = "grid";
+      return;
+    }
+    if (key === shortcuts.viewLoupe?.toLowerCase() || rawKey === "Enter") {
+      e.preventDefault();
+      if (selectedId !== null) {
+        libraryViewMode = "loupe";
+      } else if (filteredImages.length > 0) {
+        selectedId = filteredImages[0].version_id;
+        selectedIds = new Set([filteredImages[0].version_id]);
+        libraryViewMode = "loupe";
+      }
+      return;
+    }
+    if (key === shortcuts.viewCompare?.toLowerCase()) {
+      e.preventDefault();
+      libraryViewMode = "compare";
+      return;
+    }
+    if (key === shortcuts.viewSurvey?.toLowerCase()) {
+      e.preventDefault();
+      libraryViewMode = "survey";
+      return;
+    }
+    if (key === shortcuts.viewDevelop?.toLowerCase()) {
+      e.preventDefault();
+      if (selectedId !== null) {
+        openDevelop(selectedId);
+      } else if (filteredImages.length > 0) {
+        openDevelop(filteredImages[0].version_id);
+      }
+      return;
+    }
+    if (rawKey === " " || key === shortcuts.toggleView?.toLowerCase()) {
+      e.preventDefault();
+      if (libraryViewMode === "grid") {
+        if (selectedId !== null) libraryViewMode = "loupe";
+      } else if (libraryViewMode === "loupe") {
+        libraryViewMode = "grid";
+      }
+      return;
+    }
+
+    // Rating shortcuts
+    if (rawKey === shortcuts.rate0) {
+      e.preventDefault();
+      handleRatingChange(selectedId, 0);
+      return;
+    }
+    if (rawKey === shortcuts.rate1) {
+      e.preventDefault();
+      handleRatingChange(selectedId, 1);
+      return;
+    }
+    if (rawKey === shortcuts.rate2) {
+      e.preventDefault();
+      handleRatingChange(selectedId, 2);
+      return;
+    }
+    if (rawKey === shortcuts.rate3) {
+      e.preventDefault();
+      handleRatingChange(selectedId, 3);
+      return;
+    }
+    if (rawKey === shortcuts.rate4) {
+      e.preventDefault();
+      handleRatingChange(selectedId, 4);
+      return;
+    }
+    if (rawKey === shortcuts.rate5) {
+      e.preventDefault();
+      handleRatingChange(selectedId, 5);
+      return;
+    }
+
+    // Flag shortcuts
+    if (key === shortcuts.flagPick?.toLowerCase()) {
       e.preventDefault();
       handleFlagChange(selectedId, selectedImage?.flag === "pick" ? "none" : "pick");
       return;
     }
-    if (key === "x") {
+    if (key === shortcuts.flagReject?.toLowerCase()) {
       e.preventDefault();
       handleFlagChange(selectedId, selectedImage?.flag === "reject" ? "none" : "reject");
       return;
     }
-    if (key === "u") {
+    if (key === shortcuts.flagUnflag?.toLowerCase()) {
       e.preventDefault();
       handleFlagChange(selectedId, "none");
       return;
     }
-    if (key in COLOR_KEYS) {
+
+    // Color labels
+    if (key === shortcuts.colorRed?.toLowerCase()) {
       e.preventDefault();
-      const color = COLOR_KEYS[/** @type {"6"|"7"|"8"|"9"} */ (key)];
-      handleColorLabelChange(selectedId, selectedImage?.color_label === color ? "none" : color);
+      handleColorLabelChange(selectedId, selectedImage?.color_label === "red" ? "none" : "red");
+      return;
+    }
+    if (key === shortcuts.colorYellow?.toLowerCase()) {
+      e.preventDefault();
+      handleColorLabelChange(selectedId, selectedImage?.color_label === "yellow" ? "none" : "yellow");
+      return;
+    }
+    if (key === shortcuts.colorGreen?.toLowerCase()) {
+      e.preventDefault();
+      handleColorLabelChange(selectedId, selectedImage?.color_label === "green" ? "none" : "green");
+      return;
+    }
+    if (key === shortcuts.colorBlue?.toLowerCase()) {
+      e.preventDefault();
+      handleColorLabelChange(selectedId, selectedImage?.color_label === "blue" ? "none" : "blue");
+      return;
     }
   }
 
@@ -1456,6 +1787,12 @@
     exposure: "Exposure",
     contrast: "Contrast",
     saturation: "Saturation",
+    temperature: "Temperature",
+    tint: "Tint",
+    highlights: "Highlights",
+    shadows: "Shadows",
+    whites: "Whites",
+    blacks: "Blacks",
     dehaze: "Dehaze",
     texture: "Texture",
     clarity: "Clarity",
@@ -1465,6 +1802,13 @@
     editStack = upsertOp(editStack, opName, value);
     scheduleFlush(ADJUSTMENT_LABELS[opName] ?? opName);
   }
+
+  let temperature = $derived(opValue(editStack, "temperature", 0));
+  let tint = $derived(opValue(editStack, "tint", 0));
+  let highlights = $derived(opValue(editStack, "highlights", 0));
+  let shadows = $derived(opValue(editStack, "shadows", 0));
+  let whites = $derived(opValue(editStack, "whites", 0));
+  let blacks = $derived(opValue(editStack, "blacks", 0));
 
   // Tone Curve (M3): a global-only adjustment (applied after exposure/
   // contrast/saturation, before any mask -- see develop_engine.rs/
@@ -1749,6 +2093,13 @@
       hslBandHighlightTimer = setTimeout(() => (highlightedHslBand = null), 1500);
       return;
     }
+    if (target === "white_balance") {
+      const { temperature, tint } = computeEyedropperWhiteBalance(color);
+      editStack = upsertOp(editStack, "temperature", temperature);
+      editStack = upsertOp(editStack, "tint", tint);
+      scheduleFlush("White Balance Eyedropper");
+      return;
+    }
     if (target === "tone_curve_point") {
       // x comes from the sampled pixel's own lightness. Note: like every
       // eyedropper here, this samples the ORIGINAL SOURCE pixel, not the
@@ -1769,6 +2120,53 @@
         scheduleFlush("Tone Curve");
       }
     }
+  }
+
+  function handleAutoWhiteBalance() {
+    let avgRgb = { r: 0.5, g: 0.5, b: 0.5 };
+    if (histogramData) {
+      let rSum = 0,
+        gSum = 0,
+        bSum = 0,
+        count = 0;
+      for (let i = 0; i < 256; i++) {
+        rSum += histogramData.r[i] * (i / 255);
+        gSum += histogramData.g[i] * (i / 255);
+        bSum += histogramData.b[i] * (i / 255);
+        count += histogramData.r[i];
+      }
+      if (count > 0) {
+        avgRgb = { r: rSum / count, g: gSum / count, b: bSum / count };
+      }
+    }
+    const { temperature, tint } = computeAutoWhiteBalance(avgRgb);
+    editStack = upsertOp(editStack, "temperature", temperature);
+    editStack = upsertOp(editStack, "tint", tint);
+    scheduleFlush("Auto White Balance");
+  }
+
+  function handleWbPresetChange(/** @type {string} */ presetKey) {
+    if (presetKey === "auto") {
+      handleAutoWhiteBalance();
+      return;
+    }
+    const preset = WB_PRESETS[/** @type {keyof typeof WB_PRESETS} */ (presetKey)];
+    if (!preset) return;
+    editStack = upsertOp(editStack, "temperature", preset.temperature);
+    editStack = upsertOp(editStack, "tint", preset.tint);
+    scheduleFlush(`WB Profile: ${preset.name}`);
+  }
+
+  function handleAutoTone() {
+    if (!histogramData) return;
+    const tone = computeAutoTone(histogramData);
+    editStack = upsertOp(editStack, "exposure", tone.exposure);
+    editStack = upsertOp(editStack, "contrast", tone.contrast);
+    editStack = upsertOp(editStack, "highlights", tone.highlights);
+    editStack = upsertOp(editStack, "shadows", tone.shadows);
+    editStack = upsertOp(editStack, "whites", tone.whites);
+    editStack = upsertOp(editStack, "blacks", tone.blacks);
+    scheduleFlush("Auto Tone");
   }
 
   async function handleExportClick() {
@@ -1865,7 +2263,38 @@
         unlistenClose = fn;
       });
 
-    return () => unlistenClose?.();
+    let unlistenDragDrop = /** @type {(() => void) | undefined} */ (undefined);
+    try {
+      getCurrentWebview()
+        .onDragDropEvent((event) => {
+          if (event.payload.type === "enter" || event.payload.type === "over") {
+            if (activeModule === "library") isDraggingFiles = true;
+          } else if (event.payload.type === "leave") {
+            isDraggingFiles = false;
+          } else if (event.payload.type === "drop") {
+            isDraggingFiles = false;
+            if (event.payload.paths && event.payload.paths.length > 0) {
+              handleDropImport(event.payload.paths);
+            }
+          }
+        })
+        .then((fn) => {
+          unlistenDragDrop = fn;
+        });
+    } catch {
+      // ignore outside Tauri
+    }
+
+    const onShortcutsUpdated = (/** @type {any} */ event) => {
+      if (event.detail) shortcuts = event.detail;
+    };
+    window.addEventListener("shortcuts-updated", onShortcutsUpdated);
+
+    return () => {
+      unlistenClose?.();
+      unlistenDragDrop?.();
+      window.removeEventListener("shortcuts-updated", onShortcutsUpdated);
+    };
   });
 </script>
 
@@ -2031,7 +2460,50 @@
   {/if}
 
   {#if activeModule === "library"}
-    <div class="body">
+    <LibraryFilterBar
+      searchQuery={searchQuery}
+      flagFilter={flagFilter}
+      minRating={minRating}
+      ratingOp={ratingOp}
+      colorLabelFilter={colorLabelFilter}
+      fileTypeFilter={fileTypeFilter}
+      totalCount={baseImages.length}
+      matchedCount={filteredImages.length}
+      onSearchChange={(q) => (searchQuery = q)}
+      onFlagChange={(f) => (flagFilter = f)}
+      onRatingChange={(r, op) => {
+        minRating = r;
+        ratingOp = op;
+      }}
+      onColorLabelChange={(c) => (colorLabelFilter = c)}
+      onFileTypeChange={(t) => (fileTypeFilter = t)}
+      onReset={handleResetFilters}
+    />
+    <div
+      class="body library-body"
+      role="region"
+      aria-label="Library view"
+      class:drag-over={isDraggingFiles}
+      ondragover={(e) => {
+        e.preventDefault();
+        isDraggingFiles = true;
+      }}
+      ondragleave={() => (isDraggingFiles = false)}
+      ondrop={(e) => {
+        e.preventDefault();
+        isDraggingFiles = false;
+      }}
+    >
+      {#if isDraggingFiles}
+        <div class="drop-overlay">
+          <div class="drop-card">
+            <span class="drop-icon">📥</span>
+            <span class="drop-title">Drop photos or folders to import</span>
+            <span class="drop-hint">Supports RAW (.CR2, .NEF, .ARW, .DNG) and JPEG</span>
+          </div>
+        </div>
+      {/if}
+
       <div class="rail">
         <div class="section-label">Folders</div>
         <button type="button" class="tree-item" class:active={activeCollectionId === null} onclick={() => selectCollection(null)}>
@@ -2080,20 +2552,114 @@
           <p>No photos in this collection.</p>
         </div>
       {:else}
-        <LibraryGrid
-          images={filteredImages}
-          {selectedIds}
-          onSelect={handleSelect}
-          onOpen={openDevelop}
-          onRatingChange={handleRatingChange}
-          onFlagChange={handleFlagChange}
-          onColorLabelChange={handleColorLabelChange}
-        />
+        <div class="library-view-container">
+          {#if libraryViewMode === "grid"}
+            <LibraryGrid
+              images={filteredImages}
+              {selectedIds}
+              onSelect={handleSelect}
+              onOpen={(vid) => {
+                selectedId = vid;
+                selectedIds = new Set([vid]);
+                libraryViewMode = "loupe";
+              }}
+              onRatingChange={handleRatingChange}
+              onFlagChange={handleFlagChange}
+              onColorLabelChange={handleColorLabelChange}
+            />
+          {:else if libraryViewMode === "loupe" && (selectedImage || filteredImages[0])}
+            {@const currentImg = selectedImage ?? filteredImages[0]}
+            {@const curIdx = filteredImages.findIndex((img) => img.version_id === currentImg.version_id)}
+            <LibraryImageViewer
+              bind:this={imageViewerRef}
+              image={currentImg}
+              hasPrev={curIdx > 0}
+              hasNext={curIdx < filteredImages.length - 1}
+              onPrev={() => selectPrevImage(false)}
+              onNext={() => selectNextImage(false)}
+              onRatingChange={(r) => handleRatingChange(currentImg.version_id, r)}
+              onFlagChange={(f) => handleFlagChange(currentImg.version_id, f)}
+              onColorLabelChange={(c) => handleColorLabelChange(currentImg.version_id, c)}
+              onOpenDevelop={() => openDevelop(currentImg.version_id)}
+              zoomLevel={libraryZoomLevel}
+              onZoomChange={(z) => (libraryZoomLevel = z)}
+            />
+          {:else if libraryViewMode === "compare" && filteredImages.length > 0}
+            {@const curIdx = selectedImage ? filteredImages.findIndex((img) => img.version_id === selectedImage.version_id) : 0}
+            {@const selImg = selectedImages.length >= 2 ? selectedImages[0] : (selectedImage ?? filteredImages[0])}
+            {@const candImg = selectedImages.length >= 2 ? selectedImages[1] : (filteredImages[curIdx + 1] ?? filteredImages[0])}
+            <LibraryCompareView
+              selectImage={selImg}
+              candidateImage={candImg}
+              onSwap={() => {
+                const temp = selImg.version_id;
+                selectedId = candImg.version_id;
+                selectedIds = new Set([candImg.version_id, temp]);
+              }}
+              onMakeSelect={() => {
+                selectedId = candImg.version_id;
+                selectedIds = new Set([candImg.version_id]);
+              }}
+              onNextCandidate={() => {
+                const cIdx = filteredImages.findIndex((img) => img.version_id === candImg.version_id);
+                if (cIdx < filteredImages.length - 1) {
+                  const nextCand = filteredImages[cIdx + 1];
+                  selectedIds = new Set([selImg.version_id, nextCand.version_id]);
+                }
+              }}
+              onPrevCandidate={() => {
+                const cIdx = filteredImages.findIndex((img) => img.version_id === candImg.version_id);
+                if (cIdx > 0) {
+                  const prevCand = filteredImages[cIdx - 1];
+                  selectedIds = new Set([selImg.version_id, prevCand.version_id]);
+                }
+              }}
+              onRatingChange={handleRatingChange}
+              onFlagChange={handleFlagChange}
+              onColorLabelChange={handleColorLabelChange}
+            />
+          {:else if libraryViewMode === "survey"}
+            <LibrarySurveyView
+              images={selectedImages.length > 0 ? selectedImages : filteredImages.slice(0, 4)}
+              primaryId={selectedId}
+              onSetPrimary={(vid) => (selectedId = vid)}
+              onDeselect={(vid) => {
+                const next = new Set(selectedIds);
+                next.delete(vid);
+                selectedIds = next;
+                if (selectedId === vid) selectedId = next.size > 0 ? [...next][0] : null;
+              }}
+              onOpen={(vid) => openDevelop(vid)}
+              onRatingChange={handleRatingChange}
+              onFlagChange={handleFlagChange}
+              onColorLabelChange={handleColorLabelChange}
+            />
+          {/if}
+
+          <!-- Library Bottom Toolbar -->
+          <LibraryToolbar
+            viewMode={libraryViewMode}
+            selectedCount={selectedIds.size}
+            totalCount={filteredImages.length}
+            zoomLevel={libraryZoomLevel}
+            onViewModeChange={(m) => (libraryViewMode = m)}
+            onRatingChange={(r) => handleRatingChange(null, r)}
+            onFlagChange={(f) => handleFlagChange(null, f)}
+            onColorLabelChange={(c) => handleColorLabelChange(null, c)}
+            onZoomChange={(z) => (libraryZoomLevel = z)}
+            onZoomFit={() => imageViewerRef?.zoomToFit?.()}
+            onZoom100={() => imageViewerRef?.zoomTo100?.()}
+          />
+        </div>
       {/if}
 
       <MetadataPanel
         image={selectedImage}
         targetImageIds={keywordTargetImageIds}
+        selectedCount={selectedIds.size}
+        onRatingChange={(rating) => handleRatingChange(selectedId, rating)}
+        onFlagChange={(flag) => handleFlagChange(selectedId, flag)}
+        onColorLabelChange={(color) => handleColorLabelChange(selectedId, color)}
         onCaptionChange={(caption) => selectedId !== null && handleCaptionChange(selectedId, caption)}
         onCopyrightChange={(copyright) =>
           selectedImage && handleCopyrightChange(selectedImage.image_id, copyright)}
@@ -2101,6 +2667,12 @@
           selectedImage && handleContactChange(selectedImage.image_id, contact)}
         onKeywordAssigned={(name, count) =>
           (statusMessage = `Added "${name}" to ${count} photo${count === 1 ? "" : "s"}`)}
+        onGeoLocationChange={(lat, lon, alt) => {
+          if (selectedImage) {
+            patchLocal(selectedImage.version_id, { latitude: lat, longitude: lon, altitude: alt });
+            statusMessage = lat != null ? "Updated GPS coordinates" : "Removed GPS coordinates";
+          }
+        }}
       />
     </div>
   {:else if developImagePath}
@@ -2119,6 +2691,12 @@
         {exposure}
         {contrast}
         {saturation}
+        {temperature}
+        {tint}
+        {highlights}
+        {shadows}
+        {whites}
+        {blacks}
         {masks}
         {activeTool}
         {selectedMaskId}
@@ -2179,9 +2757,24 @@
         {exposure}
         {contrast}
         {saturation}
+        {temperature}
+        {tint}
+        {highlights}
+        {shadows}
+        {whites}
+        {blacks}
         onExposureChange={(v) => handleAdjustmentChange("exposure", v)}
         onContrastChange={(v) => handleAdjustmentChange("contrast", v)}
         onSaturationChange={(v) => handleAdjustmentChange("saturation", v)}
+        onTemperatureChange={(v) => handleAdjustmentChange("temperature", v)}
+        onTintChange={(v) => handleAdjustmentChange("tint", v)}
+        onHighlightsChange={(v) => handleAdjustmentChange("highlights", v)}
+        onShadowsChange={(v) => handleAdjustmentChange("shadows", v)}
+        onWhitesChange={(v) => handleAdjustmentChange("whites", v)}
+        onBlacksChange={(v) => handleAdjustmentChange("blacks", v)}
+        onAutoWhiteBalance={handleAutoWhiteBalance}
+        onAutoTone={handleAutoTone}
+        onWbPresetChange={handleWbPresetChange}
         {toneCurvePoints}
         onToneCurveChange={handleToneCurveChange}
         {hslBands}
@@ -2380,6 +2973,51 @@
     display: flex;
     min-height: 0;
     position: relative;
+  }
+  .library-view-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+  }
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    background: rgba(14, 14, 18, 0.85);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--accent);
+    pointer-events: none;
+  }
+  .drop-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 24px 36px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-m);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  }
+  .drop-icon {
+    font-size: 32px;
+  }
+  .drop-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .drop-hint {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
   }
   .rail {
     width: 200px;

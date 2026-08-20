@@ -5,6 +5,7 @@
     removeKeywordFromImage,
     getImageKeywords,
     listKeywords,
+    setGeoLocation,
   } from "$lib/api/catalog.js";
   import LibraryHistogram from "$lib/components/LibraryHistogram.svelte";
 
@@ -17,28 +18,63 @@
    * @type {{
    *   image: import('$lib/api/catalog.js').ImageSummary | null,
    *   targetImageIds: number[],
+   *   selectedCount?: number,
+   *   onRatingChange?: (rating: number) => void,
+   *   onFlagChange?: (flag: string) => void,
+   *   onColorLabelChange?: (colorLabel: string) => void,
    *   onCaptionChange: (caption: string) => void,
    *   onCopyrightChange: (copyright: string) => void,
    *   onContactChange: (contact: string) => void,
    *   onKeywordAssigned: (name: string, imageCount: number) => void,
+   *   onGeoLocationChange?: (lat: number | null, lon: number | null, alt: number | null) => void,
    * }}
    */
-  let { image, targetImageIds, onCaptionChange, onCopyrightChange, onContactChange, onKeywordAssigned } =
-    $props();
+  let {
+    image,
+    targetImageIds,
+    selectedCount = 1,
+    onRatingChange,
+    onFlagChange,
+    onColorLabelChange,
+    onCaptionChange,
+    onCopyrightChange,
+    onContactChange,
+    onKeywordAssigned,
+    onGeoLocationChange,
+  } = $props();
+
+  let filename = $derived(image ? image.path.split(/[/\\]/).pop() || image.path : "—");
+  let dirPath = $derived(
+    image
+      ? image.path.slice(0, Math.max(0, image.path.length - filename.length)).replace(/[/\\]$/, "")
+      : "—",
+  );
+
+  let fileSizeFormatted = $derived.by(() => {
+    if (!image?.file_size) return "—";
+    const mb = image.file_size / (1024 * 1024);
+    if (mb >= 1) return `${mb.toFixed(2)} MB`;
+    const kb = image.file_size / 1024;
+    return `${kb.toFixed(1)} KB`;
+  });
+
+  let dimensionsLine = $derived.by(() => {
+    if (!image?.width || !image?.height) return "—";
+    const mp = ((image.width * image.height) / 1000000).toFixed(1);
+    return `${image.width} × ${image.height} (${mp} MP)`;
+  });
 
   let cameraLine = $derived(
     image ? [image.camera_make, image.camera_model].filter(Boolean).join(" ") || "—" : "—",
   );
   let lensLine = $derived(image?.lens_model || "—");
 
-  // "1/125 · f/8 · ISO 100" -- matches the reviewed mockup's combined
-  // Exposure row. shutter_speed is stored in seconds; sub-1s values
-  // display as a fraction (the common convention), 1s+ as "Ns".
   function formatShutter(/** @type {number} */ seconds) {
     if (seconds >= 1) return `${seconds}s`;
     const denominator = Math.round(1 / seconds);
-    return `1/${denominator}`;
+    return `1/${denominator}s`;
   }
+
   let exposureLine = $derived.by(() => {
     if (!image) return "—";
     const parts = [];
@@ -48,15 +84,65 @@
     return parts.length > 0 ? parts.join(" · ") : "—";
   });
 
-  // captured_at is stored as "YYYY-MM-DDTHH:MM:SS[+offset]" -- display as
-  // "YYYY-MM-DD HH:MM", matching the mockup's format.
+  let exposureBiasLine = $derived.by(() => {
+    if (image?.exposure_bias === undefined || image?.exposure_bias === null) return "—";
+    const val = image.exposure_bias;
+    return `${val >= 0 ? "+" : ""}${val.toFixed(2)} EV`;
+  });
+
+  let focalLengthLine = $derived(image?.focal_length ? `${Math.round(image.focal_length)} mm` : "—");
+  let meteringLine = $derived(image?.metering_mode || "—");
+  let flashLine = $derived(image?.flash || "—");
+
   let capturedLine = $derived(
     image?.captured_at ? image.captured_at.replace("T", " ").slice(0, 16) : "—",
   );
 
-  // Keywording (M2 Slice 4). This panel owns its own async state, matching
-  // ExportDialog's pattern -- +page.svelte only supplies `image`,
-  // `targetImageIds`, and a status-message callback.
+  // GPS / Geo Location State
+  let editingGps = $state(false);
+  let latInput = $state("");
+  let lonInput = $state("");
+  let altInput = $state("");
+
+  $effect(() => {
+    if (image) {
+      latInput = image.latitude != null ? image.latitude.toString() : "";
+      lonInput = image.longitude != null ? image.longitude.toString() : "";
+      altInput = image.altitude != null ? image.altitude.toString() : "";
+      editingGps = false;
+    }
+  });
+
+  let hasGps = $derived(image?.latitude != null && image?.longitude != null);
+  let gpsCoordsDisplay = $derived.by(() => {
+    if (!image || image.latitude == null || image.longitude == null) return "—";
+    const latStr = `${Math.abs(image.latitude).toFixed(5)}° ${image.latitude >= 0 ? "N" : "S"}`;
+    const lonStr = `${Math.abs(image.longitude).toFixed(5)}° ${image.longitude >= 0 ? "E" : "W"}`;
+    const altStr = image.altitude != null ? ` · ${Math.round(image.altitude)}m` : "";
+    return `${latStr}, ${lonStr}${altStr}`;
+  });
+
+  let mapUrl = $derived.by(() => {
+    if (!image || image.latitude == null || image.longitude == null) return "";
+    return `https://www.openstreetmap.org/?mlat=${image.latitude}&mlon=${image.longitude}#map=16/${image.latitude}/${image.longitude}`;
+  });
+
+  async function handleSaveGps() {
+    if (!image) return;
+    const lat = latInput.trim() ? parseFloat(latInput.trim()) : null;
+    const lon = lonInput.trim() ? parseFloat(lonInput.trim()) : null;
+    const alt = altInput.trim() ? parseFloat(altInput.trim()) : null;
+    await setGeoLocation(image.image_id, lat, lon, alt);
+    if (image) {
+      image.latitude = lat;
+      image.longitude = lon;
+      image.altitude = alt;
+    }
+    editingGps = false;
+    onGeoLocationChange?.(lat, lon, alt);
+  }
+
+  // Keywording (M2 Slice 4)
   let allKeywords = $state(/** @type {import('$lib/api/catalog.js').KeywordNode[]} */ ([]));
   let imageKeywords = $state(/** @type {import('$lib/api/catalog.js').KeywordRef[]} */ ([]));
   let keywordInput = $state("");
@@ -66,8 +152,6 @@
     allKeywords = await listKeywords();
   });
 
-  // Full "parent/child/leaf" display paths built client-side from the flat
-  // parent_id-linked list, for the assignment input's suggestions.
   let keywordSuggestions = $derived.by(() => {
     const byId = new Map(allKeywords.map((k) => [k.id, k]));
     return allKeywords.map((node) => {
@@ -83,13 +167,6 @@
     });
   });
 
-  // A small manually-rendered dropdown rather than an HTML <datalist> --
-  // WebKit's native datalist ignores page theming entirely (no CSS control
-  // over it at all), which would render as a plain white system dropdown
-  // against this panel's otherwise fully dark-themed inputs. This app has
-  // no way to screenshot its native window to verify that empirically, so
-  // rather than ship something unverifiable with a well-known theming
-  // problem, this uses the same themed styling as everything else here.
   let filteredSuggestions = $derived.by(() => {
     const query = keywordInput.trim().toLowerCase();
     if (!query) return [];
@@ -102,14 +179,6 @@
     handleAssignKeyword();
   }
 
-  // Race-guarded fetch on image change: rapid Library arrow-key/click
-  // navigation can have several of these in flight at once -- this
-  // codebase's one other prop-triggered fetch (DevelopCanvas's image
-  // loader) has no such guard, but that's a much rarer, more deliberate
-  // action than clicking through Library cells, so a late response here
-  // could plausibly overwrite a newer selection's chips with a stale
-  // image's. Guarded by re-checking the target id still matches when the
-  // response lands, not assigning otherwise.
   $effect(() => {
     const targetId = image?.image_id ?? null;
     if (targetId === null) {
@@ -147,12 +216,207 @@
     <p class="empty">Select a photo to see its details.</p>
   {:else}
     <LibraryHistogram thumbnailPath={image.thumbnail_path} />
-    <div class="section-label">Metadata</div>
-    <div class="row"><span class="row-label">Camera</span><span>{cameraLine}</span></div>
-    <div class="row"><span class="row-label">Lens</span><span>{lensLine}</span></div>
-    <div class="row"><span class="row-label">Exposure</span><span class="mono">{exposureLine}</span></div>
-    <div class="row"><span class="row-label">Captured</span><span class="mono">{capturedLine}</span></div>
 
+    <!-- Rating & Flag (Culling) -->
+    <div class="section-header-row">
+      <div class="section-label">Rating & Flag</div>
+      {#if selectedCount > 1}
+        <span class="multi-select-badge">{selectedCount} selected</span>
+      {/if}
+    </div>
+    <div class="culling-block">
+      <div class="culling-row stars-row">
+        <span class="culling-label">Rating</span>
+        <div class="culling-stars">
+          {#each [1, 2, 3, 4, 5] as n (n)}
+            <button
+              type="button"
+              class="star-btn"
+              class:on={image.rating >= n}
+              title="Rate {n} star{n === 1 ? '' : 's'} ({n})"
+              onclick={() => onRatingChange?.(image.rating === n ? 0 : n)}
+            >★</button>
+          {/each}
+          {#if image.rating > 0}
+            <button
+              type="button"
+              class="clear-rating-btn"
+              title="Clear rating (0)"
+              onclick={() => onRatingChange?.(0)}
+            >0</button>
+          {/if}
+        </div>
+      </div>
+      <div class="culling-row">
+        <span class="culling-label">Flag</span>
+        <div class="culling-flags">
+          <button
+            type="button"
+            class="flag-pill flag-pick"
+            class:active={image.flag === "pick"}
+            title="Pick (P)"
+            onclick={() => onFlagChange?.(image.flag === "pick" ? "none" : "pick")}
+          >✓ Pick</button>
+          <button
+            type="button"
+            class="flag-pill flag-reject"
+            class:active={image.flag === "reject"}
+            title="Reject (X)"
+            onclick={() => onFlagChange?.(image.flag === "reject" ? "none" : "reject")}
+          >✕ Reject</button>
+          <button
+            type="button"
+            class="flag-pill flag-unflag"
+            class:active={image.flag === "none" || !image.flag}
+            title="Unflag (U)"
+            onclick={() => onFlagChange?.("none")}
+          >⚐ Unflag</button>
+        </div>
+      </div>
+      <div class="culling-row">
+        <span class="culling-label">Color</span>
+        <div class="culling-colors">
+          {#each ["red", "yellow", "green", "blue", "purple"] as color (color)}
+            <button
+              type="button"
+              class="color-dot-btn"
+              class:active={image.color_label === color}
+              style="background: var(--label-{color})"
+              title="{color.charAt(0).toUpperCase() + color.slice(1)}"
+              onclick={() => onColorLabelChange?.(image.color_label === color ? "none" : color)}
+            ></button>
+          {/each}
+          {#if image.color_label && image.color_label !== "none"}
+            <button
+              type="button"
+              class="clear-color-btn"
+              title="Clear color label"
+              onclick={() => onColorLabelChange?.("none")}
+            >×</button>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+    <!-- File Information -->
+    <div class="section-label">File</div>
+    <div class="row has-tooltip">
+      <span class="row-label">Name</span>
+      <span class="val truncate font-mono">{filename}</span>
+      <div class="tooltip-bubble">{filename}&#10;{image.path}</div>
+    </div>
+    <div class="row has-tooltip">
+      <span class="row-label">Folder</span>
+      <span class="val truncate font-mono">{dirPath}</span>
+      <div class="tooltip-bubble">{dirPath}</div>
+    </div>
+    <div class="row">
+      <span class="row-label">Size</span>
+      <span class="val font-mono">{fileSizeFormatted}</span>
+    </div>
+    {#if dimensionsLine !== "—"}
+      <div class="row">
+        <span class="row-label">Dimensions</span>
+        <span class="val font-mono">{dimensionsLine}</span>
+      </div>
+    {/if}
+
+    <!-- Camera & Lens -->
+    <div class="section-label">Camera & Lens</div>
+    <div class="row has-tooltip">
+      <span class="row-label">Camera</span>
+      <span class="val truncate">{cameraLine}</span>
+      {#if cameraLine !== "—"}
+        <div class="tooltip-bubble">{cameraLine}</div>
+      {/if}
+    </div>
+    <div class="row has-tooltip">
+      <span class="row-label">Lens</span>
+      <span class="val truncate">{lensLine}</span>
+      {#if lensLine !== "—"}
+        <div class="tooltip-bubble">{lensLine}</div>
+      {/if}
+    </div>
+
+    <!-- Shooting & Exposure -->
+    <div class="section-label">Shooting</div>
+    <div class="row">
+      <span class="row-label">Exposure</span>
+      <span class="val font-mono">{exposureLine}</span>
+    </div>
+    {#if exposureBiasLine !== "—"}
+      <div class="row">
+        <span class="row-label">Bias</span>
+        <span class="val font-mono">{exposureBiasLine}</span>
+      </div>
+    {/if}
+    {#if focalLengthLine !== "—"}
+      <div class="row">
+        <span class="row-label">Focal L.</span>
+        <span class="val font-mono">{focalLengthLine}</span>
+      </div>
+    {/if}
+    {#if meteringLine !== "—"}
+      <div class="row">
+        <span class="row-label">Metering</span>
+        <span class="val">{meteringLine}</span>
+      </div>
+    {/if}
+    {#if flashLine !== "—"}
+      <div class="row">
+        <span class="row-label">Flash</span>
+        <span class="val">{flashLine}</span>
+      </div>
+    {/if}
+    <div class="row">
+      <span class="row-label">Captured</span>
+      <span class="val font-mono">{capturedLine}</span>
+    </div>
+
+    <!-- Location (GPS) -->
+    <div class="section-header-row">
+      <div class="section-label">Location (GPS)</div>
+      <button
+        class="action-link-btn"
+        type="button"
+        onclick={() => (editingGps = !editingGps)}
+      >
+        {editingGps ? "Cancel" : hasGps ? "Edit" : "+ Add GPS"}
+      </button>
+    </div>
+
+    {#if editingGps}
+      <div class="gps-edit-form">
+        <div class="gps-field">
+          <label for="gps-lat">Latitude</label>
+          <input id="gps-lat" type="text" placeholder="e.g. 25.03396" bind:value={latInput} />
+        </div>
+        <div class="gps-field">
+          <label for="gps-lon">Longitude</label>
+          <input id="gps-lon" type="text" placeholder="e.g. 121.56446" bind:value={lonInput} />
+        </div>
+        <div class="gps-field">
+          <label for="gps-alt">Altitude (m)</label>
+          <input id="gps-alt" type="text" placeholder="e.g. 15.0" bind:value={altInput} />
+        </div>
+        <button class="save-gps-btn" type="button" onclick={handleSaveGps}>Save Coordinates</button>
+      </div>
+    {:else if hasGps}
+      <div class="row has-tooltip">
+        <span class="row-label">Coords</span>
+        <span class="val font-mono truncate">{gpsCoordsDisplay}</span>
+        <div class="tooltip-bubble">{gpsCoordsDisplay}</div>
+      </div>
+      <div class="gps-action-row">
+        <a class="map-link" href={mapUrl} target="_blank" rel="noreferrer">
+          🗺 View on OpenStreetMap ↗
+        </a>
+      </div>
+    {:else}
+      <div class="empty-hint-row">No GPS data</div>
+    {/if}
+
+    <!-- Keywords -->
     <div class="section-label">Keywords</div>
     <div class="keyword-chips">
       {#each imageKeywords as keyword (keyword.id)}
@@ -185,7 +449,11 @@
         <ul class="suggestions">
           {#each filteredSuggestions as path (path)}
             <li>
-              <button type="button" onmousedown={(e) => e.preventDefault()} onclick={() => pickSuggestion(path)}>
+              <button
+                type="button"
+                onmousedown={(e) => e.preventDefault()}
+                onclick={() => pickSuggestion(path)}
+              >
                 {path}
               </button>
             </li>
@@ -194,7 +462,8 @@
       {/if}
     </div>
 
-    <div class="section-label">Info</div>
+    <!-- IPTC Info -->
+    <div class="section-label">IPTC Info</div>
     <div class="field">
       <label for="md-caption">Caption</label>
       <textarea
@@ -227,7 +496,7 @@
 
 <style>
   .panel {
-    width: 240px;
+    width: 250px;
     flex: none;
     background: var(--bg-panel);
     border-left: 1px solid var(--border-subtle);
@@ -249,29 +518,303 @@
     padding: 10px 4px 6px;
     font-weight: 600;
   }
+  .section-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-right: 4px;
+  }
+  .section-header-row .section-label {
+    padding-right: 0;
+  }
+  .multi-select-badge {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    padding: 2px 6px;
+    border-radius: var(--radius-s);
+    border: 1px solid var(--accent-border);
+    font-weight: 500;
+  }
+  .culling-block {
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    padding: 8px;
+    margin: 2px 4px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .culling-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .culling-label {
+    font-size: 10.5px;
+    color: var(--text-secondary);
+    width: 44px;
+    flex: none;
+  }
+  .culling-stars {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .star-btn {
+    all: unset;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text-tertiary);
+    opacity: 0.5;
+    transition: transform 0.1s ease, color 0.1s ease, opacity 0.1s ease;
+    padding: 1px 2px;
+  }
+  .star-btn:hover {
+    transform: scale(1.15);
+    opacity: 1;
+    color: var(--accent-strong);
+  }
+  .star-btn.on {
+    opacity: 1;
+    color: var(--accent-strong);
+  }
+  .clear-rating-btn {
+    all: unset;
+    cursor: pointer;
+    font-size: 9.5px;
+    font-family: var(--font-mono);
+    color: var(--text-tertiary);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 50%;
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 3px;
+  }
+  .clear-rating-btn:hover {
+    color: var(--label-red);
+    border-color: var(--label-red);
+  }
+  .culling-flags {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .flag-pill {
+    all: unset;
+    cursor: pointer;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    padding: 2.5px 6px;
+    border-radius: var(--radius-s);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    transition: all 0.1s ease;
+  }
+  .flag-pill:hover {
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+  }
+  .flag-pick.active {
+    background: rgba(34, 197, 94, 0.18);
+    color: var(--label-green);
+    border-color: rgba(34, 197, 94, 0.4);
+    font-weight: 600;
+  }
+  .flag-reject.active {
+    background: rgba(239, 68, 68, 0.18);
+    color: var(--label-red);
+    border-color: rgba(239, 68, 68, 0.4);
+    font-weight: 600;
+  }
+  .flag-unflag.active {
+    background: var(--bg-app);
+    color: var(--text-tertiary);
+  }
+  .culling-colors {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .color-dot-btn {
+    all: unset;
+    cursor: pointer;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+    transition: transform 0.1s ease, box-shadow 0.1s ease;
+  }
+  .color-dot-btn:hover {
+    transform: scale(1.25);
+  }
+  .color-dot-btn.active {
+    box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--accent);
+    transform: scale(1.2);
+  }
+  .clear-color-btn {
+    all: unset;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    padding: 0 3px;
+  }
+  .clear-color-btn:hover {
+    color: var(--label-red);
+  }
+  .action-link-btn {
+    all: unset;
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+    color: var(--accent);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: var(--radius-s);
+  }
+  .action-link-btn:hover {
+    text-decoration: underline;
+  }
   .row {
+    position: relative;
     display: flex;
     align-items: baseline;
     gap: 8px;
-    padding: 4px 4px;
-    font-size: 12px;
+    padding: 3.5px 4px;
+    font-size: 11.5px;
   }
   .row-label {
-    width: 62px;
+    width: 66px;
     flex: none;
     color: var(--text-secondary);
   }
-  .row span {
+  .val {
     color: var(--text-primary);
+    min-width: 0;
+  }
+  .truncate {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    display: block;
+    flex: 1;
   }
-  .mono {
+  .font-mono {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     font-size: 11px;
   }
+
+  /* Custom Floating Tooltip Bubble */
+  .has-tooltip {
+    cursor: default;
+  }
+  .tooltip-bubble {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 4px;
+    z-index: 50;
+    max-width: 230px;
+    background: rgba(18, 18, 22, 0.95);
+    color: #f1f1f5;
+    padding: 5px 8px;
+    border-radius: var(--radius-s);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-all;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+    border: 1px solid var(--border-subtle);
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    transform: translateY(2px);
+  }
+  .has-tooltip:hover .tooltip-bubble {
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .gps-edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 4px 8px;
+    background: var(--bg-panel-raised);
+    border-radius: var(--radius-s);
+    margin-bottom: 6px;
+  }
+  .gps-field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .gps-field label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    width: 65px;
+  }
+  .gps-field input {
+    flex: 1;
+    padding: 3px 6px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    box-sizing: border-box;
+  }
+  .save-gps-btn {
+    all: unset;
+    margin-top: 4px;
+    padding: 4px 8px;
+    text-align: center;
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    border-radius: var(--radius-s);
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .save-gps-btn:hover {
+    filter: brightness(1.1);
+  }
+  .gps-action-row {
+    padding: 3px 4px 6px;
+  }
+  .map-link {
+    font-size: 10.5px;
+    color: var(--accent);
+    text-decoration: none;
+    font-family: var(--font-mono);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .map-link:hover {
+    text-decoration: underline;
+  }
+  .empty-hint-row {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    padding: 2px 4px 6px;
+  }
+
   .field {
     display: flex;
     flex-direction: column;

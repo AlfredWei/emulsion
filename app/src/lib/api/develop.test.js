@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { PRESET_EXCLUDED_OP_NAMES, presetEligibleOps, applyPresetOps } from "./develop.js";
+import {
+  PRESET_EXCLUDED_OP_NAMES,
+  presetEligibleOps,
+  applyPresetOps,
+  computeAutoWhiteBalance,
+  computeEyedropperWhiteBalance,
+  computeAutoTone,
+} from "./develop.js";
 
 // Fixtures here model real op shapes (vignette/crop/hsl/masks) that the
 // EditOp|Mask typedef union doesn't fully cover -- the same "loosen via
@@ -128,3 +135,70 @@ describe("applyPresetOps", () => {
     ]);
   });
 });
+
+describe("computeAutoWhiteBalance", () => {
+  test("neutral gray yields 0 temp and 0 tint", () => {
+    const { temperature, tint } = computeAutoWhiteBalance({ r: 0.5, g: 0.5, b: 0.5 });
+    expect(temperature).toBe(0);
+    expect(tint).toBe(0);
+  });
+
+  test("warm image (high red, low blue) yields negative temperature (cooling)", () => {
+    const { temperature } = computeAutoWhiteBalance({ r: 0.7, g: 0.5, b: 0.3 });
+    expect(temperature).toBeLessThan(0);
+  });
+
+  test("cool image (low red, high blue) yields positive temperature (warming)", () => {
+    const { temperature } = computeAutoWhiteBalance({ r: 0.3, g: 0.5, b: 0.7 });
+    expect(temperature).toBeGreaterThan(0);
+  });
+
+  test("green cast yields positive tint (magenta shift)", () => {
+    const { tint } = computeAutoWhiteBalance({ r: 0.4, g: 0.7, b: 0.4 });
+    expect(tint).toBeGreaterThan(0);
+  });
+});
+
+describe("computeEyedropperWhiteBalance", () => {
+  test("neutral sample yields 0 temp and 0 tint", () => {
+    const { temperature, tint } = computeEyedropperWhiteBalance({ r: 0.5, g: 0.5, b: 0.5 });
+    expect(temperature).toBe(0);
+    expect(tint).toBe(0);
+  });
+
+  test("warm sampled patch cools down", () => {
+    const { temperature } = computeEyedropperWhiteBalance({ r: 0.8, g: 0.5, b: 0.2 });
+    expect(temperature).toBeLessThan(0);
+  });
+});
+
+describe("computeAutoTone", () => {
+  test("balanced histogram produces sensible parameters", () => {
+    const r = new Uint32Array(256).fill(10);
+    const g = new Uint32Array(256).fill(10);
+    const b = new Uint32Array(256).fill(10);
+
+    const result = computeAutoTone({ r, g, b });
+    expect(typeof result.exposure).toBe("number");
+    expect(typeof result.contrast).toBe("number");
+    expect(typeof result.highlights).toBe("number");
+    expect(typeof result.shadows).toBe("number");
+    expect(typeof result.whites).toBe("number");
+    expect(typeof result.blacks).toBe("number");
+  });
+
+  test("dark under-exposed histogram produces positive exposure boost", () => {
+    const r = new Uint32Array(256);
+    const g = new Uint32Array(256);
+    const b = new Uint32Array(256);
+    // All pixels concentrated in shadows [0..50]
+    for (let i = 0; i <= 50; i++) {
+      r[i] = 100;
+      g[i] = 100;
+      b[i] = 100;
+    }
+    const result = computeAutoTone({ r, g, b });
+    expect(result.exposure).toBeGreaterThan(0);
+  });
+});
+

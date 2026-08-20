@@ -147,6 +147,7 @@
   let libraryZoomLevel = $state(1);
   let imageViewerRef = $state(/** @type {any} */ (null));
   let shortcuts = $state(getStoredShortcuts());
+  let compareCandidateId = $state(/** @type {number | null} */ (null));
   let importing = $state(false);
   let statusMessage = $state("");
   // M3 Slice 1: general Settings dialog, app-level (not module-scoped, so
@@ -737,6 +738,35 @@
         : [],
   );
 
+  let compareSelectImage = $derived.by(() => {
+    if (selectedId !== null) {
+      const match = filteredImages.find((img) => img.version_id === selectedId);
+      if (match) return match;
+    }
+    return filteredImages[0] ?? null;
+  });
+
+  let compareCandidateImage = $derived.by(() => {
+    if (compareCandidateId !== null) {
+      const match = filteredImages.find((img) => img.version_id === compareCandidateId);
+      if (match) return match;
+    }
+    if (selectedIds.size >= 2) {
+      const otherId = [...selectedIds].find((id) => id !== selectedId);
+      if (otherId != null) {
+        const match = filteredImages.find((img) => img.version_id === otherId);
+        if (match) return match;
+      }
+    }
+    if (compareSelectImage && filteredImages.length > 1) {
+      const selIdx = filteredImages.findIndex((img) => img.version_id === compareSelectImage.version_id);
+      if (selIdx >= 0) {
+        return filteredImages[(selIdx + 1) % filteredImages.length];
+      }
+    }
+    return compareSelectImage;
+  });
+
   // Persistence is debounced (not written on every slider tick) so a drag
   // doesn't flood the catalog with writes -- flushed immediately whenever
   // navigation could otherwise lose the pending change (UX-DESIGN.md §5's
@@ -1206,6 +1236,61 @@
     selectedId = null;
   }
 
+  function handleCompareNextCandidate() {
+    if (filteredImages.length === 0) return;
+    const curCandidate = compareCandidateImage;
+    const curSelect = compareSelectImage;
+    const cIdx = curCandidate
+      ? filteredImages.findIndex((img) => img.version_id === curCandidate.version_id)
+      : 0;
+    const nextIdx = (cIdx + 1) % filteredImages.length;
+    const nextCand = filteredImages[nextIdx];
+    compareCandidateId = nextCand.version_id;
+    if (curSelect) {
+      selectedIds = new Set([curSelect.version_id, nextCand.version_id]);
+    }
+  }
+
+  function handleComparePrevCandidate() {
+    if (filteredImages.length === 0) return;
+    const curCandidate = compareCandidateImage;
+    const curSelect = compareSelectImage;
+    const cIdx = curCandidate
+      ? filteredImages.findIndex((img) => img.version_id === curCandidate.version_id)
+      : 0;
+    const prevIdx = (cIdx - 1 + filteredImages.length) % filteredImages.length;
+    const prevCand = filteredImages[prevIdx];
+    compareCandidateId = prevCand.version_id;
+    if (curSelect) {
+      selectedIds = new Set([curSelect.version_id, prevCand.version_id]);
+    }
+  }
+
+  function handleCompareSwap() {
+    const curSelect = compareSelectImage;
+    const curCand = compareCandidateImage;
+    if (!curSelect || !curCand) return;
+    const oldSelId = curSelect.version_id;
+    const oldCandId = curCand.version_id;
+    selectedId = oldCandId;
+    compareCandidateId = oldSelId;
+    selectedIds = new Set([oldCandId, oldSelId]);
+  }
+
+  function handleCompareMakeSelect() {
+    const curCand = compareCandidateImage;
+    if (!curCand) return;
+    selectedId = curCand.version_id;
+    const newSelIdx = filteredImages.findIndex((img) => img.version_id === curCand.version_id);
+    if (filteredImages.length > 1) {
+      const nextCandIdx = (newSelIdx + 1) % filteredImages.length;
+      compareCandidateId = filteredImages[nextCandIdx].version_id;
+      selectedIds = new Set([selectedId, compareCandidateId]);
+    } else {
+      selectedIds = new Set([selectedId]);
+    }
+  }
+
   // Multi-select click semantics (M2 Slice 3), standard file-manager
   // behavior: plain click replaces the selection and moves the anchor;
   // Cmd/Ctrl toggles one image in/out; Shift selects the contiguous range
@@ -1506,12 +1591,20 @@
     // Arrow navigation in Library
     if (rawKey === shortcuts.nextImage || rawKey === "ArrowRight") {
       e.preventDefault();
-      selectNextImage(e.shiftKey);
+      if (libraryViewMode === "compare") {
+        handleCompareNextCandidate();
+      } else {
+        selectNextImage(e.shiftKey);
+      }
       return;
     }
     if (rawKey === shortcuts.prevImage || rawKey === "ArrowLeft") {
       e.preventDefault();
-      selectPrevImage(e.shiftKey);
+      if (libraryViewMode === "compare") {
+        handleComparePrevCandidate();
+      } else {
+        selectPrevImage(e.shiftKey);
+      }
       return;
     }
     if (rawKey === shortcuts.gridDown || rawKey === "ArrowDown") {
@@ -2584,36 +2677,14 @@
               zoomLevel={libraryZoomLevel}
               onZoomChange={(z) => (libraryZoomLevel = z)}
             />
-          {:else if libraryViewMode === "compare" && filteredImages.length > 0}
-            {@const curIdx = selectedImage ? filteredImages.findIndex((img) => img.version_id === selectedImage.version_id) : 0}
-            {@const selImg = selectedImages.length >= 2 ? selectedImages[0] : (selectedImage ?? filteredImages[0])}
-            {@const candImg = selectedImages.length >= 2 ? selectedImages[1] : (filteredImages[curIdx + 1] ?? filteredImages[0])}
+          {:else if libraryViewMode === "compare" && compareSelectImage && compareCandidateImage}
             <LibraryCompareView
-              selectImage={selImg}
-              candidateImage={candImg}
-              onSwap={() => {
-                const temp = selImg.version_id;
-                selectedId = candImg.version_id;
-                selectedIds = new Set([candImg.version_id, temp]);
-              }}
-              onMakeSelect={() => {
-                selectedId = candImg.version_id;
-                selectedIds = new Set([candImg.version_id]);
-              }}
-              onNextCandidate={() => {
-                const cIdx = filteredImages.findIndex((img) => img.version_id === candImg.version_id);
-                if (cIdx < filteredImages.length - 1) {
-                  const nextCand = filteredImages[cIdx + 1];
-                  selectedIds = new Set([selImg.version_id, nextCand.version_id]);
-                }
-              }}
-              onPrevCandidate={() => {
-                const cIdx = filteredImages.findIndex((img) => img.version_id === candImg.version_id);
-                if (cIdx > 0) {
-                  const prevCand = filteredImages[cIdx - 1];
-                  selectedIds = new Set([selImg.version_id, prevCand.version_id]);
-                }
-              }}
+              selectImage={compareSelectImage}
+              candidateImage={compareCandidateImage}
+              onSwap={handleCompareSwap}
+              onMakeSelect={handleCompareMakeSelect}
+              onNextCandidate={filteredImages.length > 1 ? handleCompareNextCandidate : undefined}
+              onPrevCandidate={filteredImages.length > 1 ? handleComparePrevCandidate : undefined}
               onRatingChange={handleRatingChange}
               onFlagChange={handleFlagChange}
               onColorLabelChange={handleColorLabelChange}

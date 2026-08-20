@@ -227,6 +227,7 @@
 
 <svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="image-viewer"
   bind:this={containerEl}

@@ -122,6 +122,10 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
   - Complete EXIF metadata extraction & display with customized floating tooltip bubbles for truncated text.
   - GPS / Geo-location extraction from EXIF, coordinate & altitude display, map viewing links, and manual geo-location entry/editing.
   - Library multi-dimensional filter bar (rating, flag, color label, camera, lens, date range, text search).
+  - Library view modes: Grid, Loupe (Single View with full-resolution interactive Pan & Zoom), Compare View (synchronized side-by-side comparison with candidate navigation), and Survey View (multi-photo responsive matrix).
+  - Multi-selection batch culling: batch setting of flags (Pick/Reject/Unflag), color labels (6 colors), and star ratings (0–5) with selection counter badges.
+  - Comprehensive hotkeys & keyboard customization: arrow keys navigation with Shift range extension, view mode hotkeys (G/E/C/N/D/Space), and interactive shortcut configuration/rebinding in Settings dialog.
+  - Modern UI icon buttons: SVG icons for Auto WB, Auto Tone, Pick, Reject, and Unflag.
 - Healing/clone brush (advanced retouching beyond basic spot removal), red-eye removal.
 - Perspective/upright correction (manual controls; auto-upright is a stretch goal, not required).
 - Soft proofing against output profiles.
@@ -136,7 +140,7 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 ### Exit criteria
 - Retouching quality is good enough that most images no longer need round-tripping to another tool for spot/object removal.
 - One-click Auto Tone and Auto White Balance provide reliable, natural starting points for editing.
-- Library allows drag-and-drop import, detailed EXIF and GPS inspection/editing, and flexible multi-criteria filtering.
+- Library allows drag-and-drop import, detailed EXIF and GPS inspection/editing, flexible multi-criteria filtering, full view modes (Grid, Loupe, Compare, Survey), batch culling, and customizable keyboard shortcuts.
 - Print output is color-accurate (soft-proof matches physical print within reasonable tolerance).
 - Editing against files on a slow/offline external drive doesn't degrade the Develop experience (Smart Previews working).
 

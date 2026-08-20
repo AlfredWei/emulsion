@@ -2,6 +2,31 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M4 — Library View Modes, Multi-Select Batch Culling, Hotkey System & UI Polish (2026-08-20)
+
+Major expansion of the Library module culling workflow, multi-mode inspection system, custom shortcut configuration, and UI icon modernization:
+
+- **Library View Modes (Grid / Loupe / Compare / Survey)**:
+  - **Loupe (Single View `E`)**: High-resolution image viewer with interactive Pan & Zoom (Fit, 100%, wheel-based zoom centered on cursor, Space-drag pan), top-left metadata HUD, and quick culling overlay.
+  - **Compare View (`C`)**: Side-by-side comparison (Select vs Candidate) with synchronized zoom & pan. Robust candidate tracking via `compareCandidateId` avoiding catalog order swapping, seamless `‹ Prev` / `Next ›` candidate navigation (including arrow keys), `⇄ Swap`, and `★ Make Select`.
+  - **Survey View (`N`)**: Multi-photo responsive grid fitting all selected images into the viewport with individual photo removal (`✕`), primary selection highlight, and per-cell culling controls.
+  - **Library Toolbar**: Bottom toolbar integrating view mode switcher (`[田 Grid]`, `[▢ Loupe]`, `[⚏ Compare]`, `[⧉ Survey]`), zoom controls (slider, Fit, 100%), and batch culling buttons.
+- **Multi-Selection Batch Culling**:
+  - Rating & Flag controls added to `MetadataPanel.svelte` and `LibraryToolbar.svelte` with a dynamic selection counter badge (`N selected`).
+  - Batch application across all selected photos for star ratings (0–5), flags (Pick, Reject, Unflag), and color labels (Red, Yellow, Green, Blue, Purple).
+- **Keyboard Shortcuts & Hotkey Settings**:
+  - Arrow key navigation (`ArrowLeft` / `ArrowRight` / `ArrowUp` / `ArrowDown`) with Shift-key range extension in Library and Develop.
+  - View mode hotkeys (`G` Grid, `E` Loupe, `C` Compare, `N` Survey, `D` Develop, `Space` Toggle/Zoom, `Cmd+A` Select All, `Cmd+D`/`Esc` Deselect).
+  - New `shortcuts.js` configuration module with `localStorage` persistence and `shortcuts-updated` event dispatching.
+  - Dedicated **Keyboard Shortcuts** tab in `SettingsDialog.svelte` with interactive key recording, duplicate conflict detection, and "Reset to Defaults".
+- **Icon Modernization**:
+  - Replaced text buttons for Auto WB, Auto Tone, Pick, Reject, and Unflag with clean vector SVG icon buttons across Develop and Library panels.
+- **Verification**:
+  - 223/223 Rust cargo tests passing.
+  - `npm run check` clean with 0 errors and 0 warnings.
+  - 77/77 frontend Vitest tests passing.
+  - Tested production bundle build (`make build`).
+
 ## M4 — Perspective/Upright Correction (2026-08-20)
 
 Next unbuilt item in M4's own scope list after Healing/clone brush + red-eye removal: "Perspective/upright correction (manual controls; auto-upright is a stretch goal, not required)." Manual-controls-only Transform panel — Vertical, Horizontal, Rotate, Aspect, Scale — matching real Lightroom's own slider set, with auto-upright explicitly out of scope per the milestone doc.

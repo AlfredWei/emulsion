@@ -104,27 +104,36 @@
       class="filter-btn pick-btn"
       class:active={flagFilter === "pick"}
       title="Picks only (P)"
+      aria-label="Picks only"
       onclick={() => onFlagChange(flagFilter === "pick" ? "all" : "pick")}
     >
-      ✓ Pick
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
+        <path d="M3 2v12h1.5V9h7l-1.5-3.5L11.5 2H3z" />
+      </svg>
     </button>
     <button
       type="button"
       class="filter-btn unflagged-btn"
       class:active={flagFilter === "unflagged"}
-      title="Unflagged only"
+      title="Unflagged only (U)"
+      aria-label="Unflagged only"
       onclick={() => onFlagChange(flagFilter === "unflagged" ? "all" : "unflagged")}
     >
-      ○ Unflagged
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+        <path d="M3 2v12h1.5V9h6.5l-1.2-3.5L11 2H3z" stroke-linejoin="round" />
+      </svg>
     </button>
     <button
       type="button"
       class="filter-btn reject-btn"
       class:active={flagFilter === "reject"}
       title="Rejects only (X)"
+      aria-label="Rejects only"
       onclick={() => onFlagChange(flagFilter === "reject" ? "all" : "reject")}
     >
-      ✕ Reject
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M4 4l8 8M12 4l-8 8" />
+      </svg>
     </button>
   </div>
 

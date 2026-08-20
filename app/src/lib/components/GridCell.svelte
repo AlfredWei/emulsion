@@ -78,18 +78,27 @@
     <button
       class="flag"
       class:pick={image.flag === "pick"}
-      class:reject={image.flag === "reject"}
       type="button"
       title="Pick (P)"
+      aria-label="Pick"
       onclick={(e) => toggleFlag(e, "pick")}
-    >✓</button>
+    >
+      <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true">
+        <path d="M3 2v12h1.5V9h7l-1.5-3.5L11.5 2H3z" />
+      </svg>
+    </button>
     <button
       class="flag"
       class:reject={image.flag === "reject"}
       type="button"
       title="Reject (X)"
+      aria-label="Reject"
       onclick={(e) => toggleFlag(e, "reject")}
-    >✕</button>
+    >
+      <svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M4 4l8 8M12 4l-8 8" />
+      </svg>
+    </button>
     <button
       class="color-dot"
       style={image.color_label !== "none" ? `background: var(--label-${image.color_label})` : ""}

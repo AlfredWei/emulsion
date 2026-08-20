@@ -130,15 +130,25 @@
                 class="flag pick"
                 class:active={image.flag === "pick"}
                 title="Pick (P)"
+                aria-label="Pick flag"
                 onclick={() => onFlagChange(image.version_id, image.flag === "pick" ? "none" : "pick")}
-              >✓</button>
+              >
+                <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true">
+                  <path d="M3 2v12h1.5V9h7l-1.5-3.5L11.5 2H3z" />
+                </svg>
+              </button>
               <button
                 type="button"
                 class="flag reject"
                 class:active={image.flag === "reject"}
                 title="Reject (X)"
+                aria-label="Reject flag"
                 onclick={() => onFlagChange(image.version_id, image.flag === "reject" ? "none" : "reject")}
-              >✕</button>
+              >
+                <svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
             </div>
 
             <button

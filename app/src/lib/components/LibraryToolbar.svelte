@@ -94,25 +94,34 @@
         type="button"
         class="cull-btn flag-pick"
         title="Pick (P) - Apply to selection"
+        aria-label="Pick flag"
         onclick={() => onFlagChange("pick")}
       >
-        <span class="icon">✓</span>
-      </button>
-      <button
-        type="button"
-        class="cull-btn flag-reject"
-        title="Reject (X) - Apply to selection"
-        onclick={() => onFlagChange("reject")}
-      >
-        <span class="icon">✕</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
+          <path d="M3 2v12h1.5V9h7l-1.5-3.5L11.5 2H3z" />
+        </svg>
       </button>
       <button
         type="button"
         class="cull-btn flag-unflag"
         title="Unflag (U) - Apply to selection"
+        aria-label="Unflag"
         onclick={() => onFlagChange("none")}
       >
-        <span class="icon">⚐</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+          <path d="M3 2v12h1.5V9h6.5l-1.2-3.5L11 2H3z" stroke-linejoin="round" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="cull-btn flag-reject"
+        title="Reject (X) - Apply to selection"
+        aria-label="Reject flag"
+        onclick={() => onFlagChange("reject")}
+      >
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 4l8 8M12 4l-8 8" />
+        </svg>
       </button>
     </div>
 

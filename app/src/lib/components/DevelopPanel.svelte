@@ -200,6 +200,27 @@
   </svg>
 {/snippet}
 
+{#snippet autoWbIcon()}
+  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+    <!-- Magic sparkles & temperature balance -->
+    <path d="M7.5 1.5 L8.5 4.5 L11.5 5.5 L8.5 6.5 L7.5 9.5 L6.5 6.5 L3.5 5.5 L6.5 4.5 Z" fill="currentColor" />
+    <path d="M12 9 L12.5 10.5 L14 11 L12.5 11.5 L12 13 L11.5 11.5 L10 11 L11.5 10.5 Z" fill="currentColor" opacity="0.8" />
+    <circle cx="4" cy="11.5" r="1.5" fill="currentColor" opacity="0.8" />
+  </svg>
+{/snippet}
+
+{#snippet autoToneIcon()}
+  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+    <!-- Equalizer / Auto tone levels -->
+    <line x1="3" y1="2" x2="3" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.4" />
+    <circle cx="3" cy="6" r="2" fill="currentColor" />
+    <line x1="8" y1="2" x2="8" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.4" />
+    <circle cx="8" cy="10" r="2" fill="currentColor" />
+    <line x1="13" y1="2" x2="13" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.4" />
+    <circle cx="13" cy="4" r="2" fill="currentColor" />
+  </svg>
+{/snippet}
+
 <div class="panel">
   <div class="panel-header">
     <span class="panel-title">Edit</span>
@@ -228,9 +249,10 @@
               class="auto-btn"
               type="button"
               title="Auto White Balance (AWB)"
+              aria-label="Auto White Balance"
               onclick={onAutoWhiteBalance}
             >
-              Auto WB
+              {@render autoWbIcon()}
             </button>
           {/if}
         </div>
@@ -287,9 +309,10 @@
             class="auto-btn"
             type="button"
             title="Auto Tone: balance exposure, contrast & dynamic range"
+            aria-label="Auto Tone"
             onclick={onAutoTone}
           >
-            Auto Tone
+            {@render autoToneIcon()}
           </button>
         {/if}
       </div>
@@ -1398,15 +1421,17 @@
   }
   .auto-btn {
     all: unset;
-    font-size: 10px;
-    font-family: var(--font-mono);
-    font-weight: 600;
+    cursor: pointer;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 20px;
     color: var(--accent-strong);
     background: var(--accent-soft);
     border: 1px solid var(--accent);
-    padding: 2px 7px;
     border-radius: var(--radius-s);
-    cursor: pointer;
     transition: all 0.12s ease;
   }
   .auto-btn:hover {

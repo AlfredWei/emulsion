@@ -255,22 +255,37 @@
             class="flag-pill flag-pick"
             class:active={image.flag === "pick"}
             title="Pick (P)"
+            aria-label="Pick flag"
             onclick={() => onFlagChange?.(image.flag === "pick" ? "none" : "pick")}
-          >✓ Pick</button>
-          <button
-            type="button"
-            class="flag-pill flag-reject"
-            class:active={image.flag === "reject"}
-            title="Reject (X)"
-            onclick={() => onFlagChange?.(image.flag === "reject" ? "none" : "reject")}
-          >✕ Reject</button>
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
+              <path d="M3 2v12h1.5V9h7l-1.5-3.5L11.5 2H3z" />
+            </svg>
+          </button>
           <button
             type="button"
             class="flag-pill flag-unflag"
             class:active={image.flag === "none" || !image.flag}
             title="Unflag (U)"
+            aria-label="Unflag"
             onclick={() => onFlagChange?.("none")}
-          >⚐ Unflag</button>
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M3 2v12h1.5V9h6.5l-1.2-3.5L11 2H3z" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="flag-pill flag-reject"
+            class:active={image.flag === "reject"}
+            title="Reject (X)"
+            aria-label="Reject flag"
+            onclick={() => onFlagChange?.(image.flag === "reject" ? "none" : "reject")}
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
         </div>
       </div>
       <div class="culling-row">
@@ -611,9 +626,11 @@
   .flag-pill {
     all: unset;
     cursor: pointer;
-    font-size: 10px;
-    font-family: var(--font-mono);
-    padding: 2.5px 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 20px;
     border-radius: var(--radius-s);
     background: var(--bg-panel);
     border: 1px solid var(--border-subtle);

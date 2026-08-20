@@ -190,14 +190,26 @@
             type="button"
             class="flag pick"
             class:active={selectImage.flag === "pick"}
+            title="Pick (P)"
+            aria-label="Pick flag"
             onclick={() => onFlagChange(selectImage.version_id, selectImage.flag === "pick" ? "none" : "pick")}
-          >✓</button>
+          >
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" aria-hidden="true">
+              <path d="M3 2v12h1.5V9h7l-1.5-3.5L11.5 2H3z" />
+            </svg>
+          </button>
           <button
             type="button"
             class="flag reject"
             class:active={selectImage.flag === "reject"}
+            title="Reject (X)"
+            aria-label="Reject flag"
             onclick={() => onFlagChange(selectImage.version_id, selectImage.flag === "reject" ? "none" : "reject")}
-          >✕</button>
+          >
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -249,14 +261,26 @@
             type="button"
             class="flag pick"
             class:active={candidateImage.flag === "pick"}
+            title="Pick (P)"
+            aria-label="Pick flag"
             onclick={() => onFlagChange(candidateImage.version_id, candidateImage.flag === "pick" ? "none" : "pick")}
-          >✓</button>
+          >
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" aria-hidden="true">
+              <path d="M3 2v12h1.5V9h7l-1.5-3.5L11.5 2H3z" />
+            </svg>
+          </button>
           <button
             type="button"
             class="flag reject"
             class:active={candidateImage.flag === "reject"}
+            title="Reject (X)"
+            aria-label="Reject flag"
             onclick={() => onFlagChange(candidateImage.version_id, candidateImage.flag === "reject" ? "none" : "reject")}
-          >✕</button>
+          >
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>

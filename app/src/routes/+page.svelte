@@ -128,6 +128,7 @@
   } from "$lib/api/develop.js";
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
+  import { folderKeyForPath, buildFolderEntries } from "$lib/libraryFolders.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
@@ -165,6 +166,47 @@
   let collections = $state(/** @type {import('$lib/api/catalog.js').CollectionSummary[]} */ ([]));
   let activeCollectionId = $state(/** @type {number | null} */ (null));
   let manualMembership = $state(/** @type {Map<number, Set<number>>} */ (new Map()));
+
+  // Folders / Last Import (M4 Library slice). Three library "sources" --
+  // All Photos, Last Import, and a real folder -- are mutually exclusive
+  // with each other and with a Collection, so only one of
+  // `activeCollectionId` / `activeFolderKey` / `showLastImportOnly` is ever
+  // "on" at a time; `baseImages` below checks them in that same order.
+  let activeFolderKey = $state(/** @type {string | null} */ (null));
+  let showLastImportOnly = $state(false);
+
+  let folderEntries = $derived(buildFolderEntries(images));
+
+  /** The most recent import's batch id, or null before any tagged import
+   * has happened (a pre-existing catalog whose rows predate this column).
+   * `import_batch` is optional/nullable on ImageSummary, so this only
+   * considers rows that actually have one. */
+  let lastImportBatchId = $derived.by(() => {
+    let max = /** @type {number | null} */ (null);
+    for (const img of images) {
+      const batch = img.import_batch;
+      if (batch != null && (max === null || batch > max)) max = batch;
+    }
+    return max;
+  });
+
+  function selectAllPhotos() {
+    activeCollectionId = null;
+    activeFolderKey = null;
+    showLastImportOnly = false;
+  }
+
+  function selectLastImport() {
+    activeCollectionId = null;
+    activeFolderKey = null;
+    showLastImportOnly = true;
+  }
+
+  function selectFolder(/** @type {string} */ key) {
+    activeCollectionId = null;
+    activeFolderKey = key;
+    showLastImportOnly = false;
+  }
   let allImageKeywords = $state(/** @type {import('$lib/api/catalog.js').ImageKeywordAssignment[]} */ ([]));
   let keywordIdsByImage = $derived(buildKeywordIdsByImage(allImageKeywords));
 
@@ -206,6 +248,12 @@
 
   // Base image set for active folder/collection
   let baseImages = $derived.by(() => {
+    if (showLastImportOnly) {
+      return lastImportBatchId === null ? [] : images.filter((img) => img.import_batch === lastImportBatchId);
+    }
+    if (activeFolderKey !== null) {
+      return images.filter((img) => folderKeyForPath(img.path) === activeFolderKey);
+    }
     if (activeCollectionId === null) return images;
     const collection = collections.find((c) => c.id === activeCollectionId);
     if (!collection) return images;
@@ -295,6 +343,8 @@
 
   async function selectCollection(/** @type {number | null} */ collectionId) {
     activeCollectionId = collectionId;
+    activeFolderKey = null;
+    showLastImportOnly = false;
     if (collectionId !== null && !manualMembership.has(collectionId)) {
       const collection = collections.find((c) => c.id === collectionId);
       if (collection && !collection.is_smart) await loadManualMembership(collectionId);
@@ -2598,11 +2648,36 @@
       {/if}
 
       <div class="rail">
-        <div class="section-label">Folders</div>
-        <button type="button" class="tree-item" class:active={activeCollectionId === null} onclick={() => selectCollection(null)}>
+        <div class="section-label">Catalog</div>
+        <button
+          type="button"
+          class="tree-item"
+          class:active={activeCollectionId === null && activeFolderKey === null && !showLastImportOnly}
+          onclick={selectAllPhotos}
+        >
           All Photos
           <span class="count">{images.length}</span>
         </button>
+        <button type="button" class="tree-item" class:active={showLastImportOnly} onclick={selectLastImport}>
+          Last Import
+          <span class="count">{lastImportBatchId === null ? 0 : images.filter((img) => img.import_batch === lastImportBatchId).length}</span>
+        </button>
+
+        {#if folderEntries.length > 0}
+          <div class="section-label folders-label">Folders</div>
+          {#each folderEntries as folder (folder.key)}
+            <button
+              type="button"
+              class="tree-item"
+              class:active={activeFolderKey === folder.key}
+              onclick={() => selectFolder(folder.key)}
+              title={folder.key}
+            >
+              <span class="tree-item-name">{folder.key}</span>
+              <span class="count">{folder.count}</span>
+            </button>
+          {/each}
+        {/if}
 
         <div class="collections-header">
           <span class="section-label">Collections</span>
@@ -2642,7 +2717,15 @@
         </div>
       {:else if filteredImages.length === 0}
         <div class="empty">
-          <p>No photos in this collection.</p>
+          <p>
+            {#if showLastImportOnly}
+              No photos in the last import.
+            {:else if activeFolderKey !== null}
+              No photos in this folder.
+            {:else}
+              No photos in this collection.
+            {/if}
+          </p>
         </div>
       {:else}
         <div class="library-view-container">
@@ -3137,11 +3220,15 @@
     font-size: 10.5px;
     color: var(--text-tertiary);
   }
+  .folders-label {
+    margin-top: 10px;
+  }
   .collections-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding-right: 2px;
+    margin-top: 10px;
   }
   .collections-actions {
     display: flex;

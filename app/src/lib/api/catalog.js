@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {string} flag
  * @property {string} color_label
  * @property {string} added_at
+ * @property {number | null} [import_batch]
  * @property {string | null} content_hash
  * @property {string | null} camera_make
  * @property {string | null} camera_model

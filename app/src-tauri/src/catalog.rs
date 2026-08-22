@@ -93,6 +93,12 @@ pub struct ImageSummary {
     pub flag: String,
     pub color_label: String,
     pub added_at: String,
+    /// Which `import_paths` call brought this image in (M4 Library slice) --
+    /// shared by every image imported in the same folder/files operation,
+    /// so the frontend's "Last Import" source can filter by
+    /// `import_batch == max(import_batch)` without a separate batch table.
+    /// `None` for rows inserted before this column existed.
+    pub import_batch: Option<i64>,
     /// Nullable in Rust to match the nullable `images.content_hash`
     /// column, even though `add_image_with_metadata` always sets it for
     /// real imports. Lets `preview_cache::pregenerate_missing` key the
@@ -378,6 +384,7 @@ impl Catalog {
                 thumbnail_path TEXT,
                 stack_id INTEGER,
                 added_at TEXT NOT NULL DEFAULT (datetime('now')),
+                import_batch INTEGER,
                 camera_make TEXT,
                 camera_model TEXT,
                 lens_model TEXT,
@@ -622,6 +629,7 @@ impl Catalog {
             "ALTER TABLE images ADD COLUMN copyright TEXT",
             "ALTER TABLE images ADD COLUMN contact TEXT",
             "ALTER TABLE image_versions ADD COLUMN caption TEXT",
+            "ALTER TABLE images ADD COLUMN import_batch INTEGER",
         ] {
             add_column_if_missing(conn, ddl)?;
         }
@@ -1216,6 +1224,20 @@ impl Catalog {
         Ok(())
     }
 
+    /// Tags a just-inserted image with the batch id `import_paths` computed
+    /// once for the whole import call -- a separate step from
+    /// `add_image_with_edit_stack`'s own insert transaction (rather than a
+    /// new parameter threaded through it and its ~20 existing test call
+    /// sites) since this is bookkeeping for the "Last Import" library source,
+    /// not data the atomic image+version+metadata insert needs to guard.
+    pub fn set_import_batch(&self, image_id: i64, import_batch: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE images SET import_batch = ?2 WHERE id = ?1",
+            params![image_id, import_batch],
+        )?;
+        Ok(())
+    }
+
     /// Create an edit-stack record for an image. Lower-level building
     /// block, same status as `add_image_with_metadata` above -- superseded
     /// as the import pipeline's caller by `add_image_with_edit_stack`,
@@ -1572,7 +1594,7 @@ impl Catalog {
                     i.camera_make, i.camera_model, i.lens_model, i.iso, i.aperture, i.shutter_speed, i.focal_length,
                     i.exposure_bias, i.metering_mode, i.flash, i.width, i.height, i.latitude, i.longitude, i.altitude,
                     i.file_size, i.captured_at,
-                    v.caption, i.copyright, i.contact
+                    v.caption, i.copyright, i.contact, i.import_batch
              FROM images i
              JOIN image_versions v ON v.id = (
                  SELECT id FROM image_versions
@@ -1612,6 +1634,7 @@ impl Catalog {
                 caption: row.get(26)?,
                 copyright: row.get(27)?,
                 contact: row.get(28)?,
+                import_batch: row.get(29)?,
             })
         })?;
         rows.collect()

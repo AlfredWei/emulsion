@@ -49,6 +49,26 @@ body {
   font-size: 13px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
+  /* This is a desktop app shell, not a document -- chrome (labels, button
+     text, thumbnail filenames, metadata fields) shouldn't be
+     text-selectable in the first place, matching the existing per-component
+     precedent (LibraryToolbar/LibraryImageViewer/LibraryCompareView/
+     DevelopCanvas). Applied at the root because macOS's native Cmd+A
+     "Select All" (WKWebView's built-in selectAll: responder action) can't
+     reliably be intercepted or disabled at the app level -- it fires
+     independently of the Library module's own "select all photos" keydown
+     handler, so without this, an accidental Cmd+A leaves the whole UI
+     visibly (and stickily) highlighted with nothing to click that clears
+     it. Real text fields opt back in below. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 @media (prefers-reduced-motion: reduce) {

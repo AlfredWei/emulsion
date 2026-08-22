@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M4 — Reveal in File Manager (2026-08-22)
+
+Next slice after Folders/Last Import, picked from the two remaining items on M4's "Library module depth & UX overhaul" bullet: "Filename and full path display in grid and info bar with 'Reveal in File Manager' capability" and "customized floating tooltip bubbles for truncated text." Checked the actual codebase state first rather than assuming both were gaps — the tooltip-bubble half was **already fully built** (`MetadataPanel.svelte`'s `.tooltip-bubble`/`.has-tooltip`, covering Name/Folder/Camera/Lens/Coords, real hover-triggered floating bubbles, not native `title` tooltips), so this slice is Reveal-in-File-Manager only.
+
+- **No new Rust command** — `tauri-plugin-opener` (already a dependency, already `.plugin(tauri_plugin_opener::init())`-registered) ships `revealItemInDir`, cross-platform (Finder/Explorer/Linux default file manager) out of the box, and `opener:default` (already granted in `capabilities/default.json`) already includes `allow-reveal-item-in-dir` — confirmed by reading the crate's own `permissions/default.toml` rather than assuming. First real use of `@tauri-apps/plugin-opener`'s JS API in this codebase (previously only its Rust `init()` was wired up; the GPS panel's map link is a plain `<a target="_blank">`, not this plugin).
+- New `src/lib/api/system.js` (`revealInFileManager`), same thin-wrapper convention as `catalog.js`. Wired into `MetadataPanel.svelte`'s File section as a "📁 Reveal in File Manager ↗" button right after the Folder row, styled to match the existing GPS "View on OpenStreetMap ↗" action-link precedent (`.reveal-link`/`.file-action-row` mirroring `.map-link`/`.gps-action-row`).
+- **Verification**: no Rust touched, so the existing 224/224 Rust suite is unaffected (not re-run). `npm run check` clean across 253 files. 83/83 Vitest (unchanged, run for regression). Real Tauri production build (`make build`) run. **Not verified interactively this session** — actually clicking the button and watching Finder open with the file selected — same documented environment gap as every prior slice.
+
 ## M4 — Library rail: Folders + Last Import (2026-08-22)
 
 Real M1-scope gap closed: "folder-based browsing" was listed in M1's own scope but never built -- the Library rail only ever had "All Photos" and "Collections". User asked for two additions: keep All Photos, add a "Last Import" source, and add a real Folders tree grouping images by path.

@@ -52,7 +52,17 @@
       .then((p) => {
         if (!cancelled && p?.path) selectUrl = convertFileSrc(p.path);
       })
-      .catch(() => {});
+      .catch(() => {
+        // A missing/moved source file (or any other decode failure) must
+        // not leave the PREVIOUS pane's preview on screen -- clearing lets
+        // the template fall back to `selectThumb` (the cached thumbnail,
+        // independent of the source file still existing), same fallback
+        // the happy path already uses. Left unguarded before, this silently
+        // kept showing whichever photo last loaded successfully while the
+        // filename label moved on, so a broken candidate looked identical
+        // to a working one.
+        if (!cancelled) selectUrl = null;
+      });
     return () => {
       cancelled = true;
     };
@@ -69,7 +79,9 @@
       .then((p) => {
         if (!cancelled && p?.path) candidateUrl = convertFileSrc(p.path);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) candidateUrl = null;
+      });
     return () => {
       cancelled = true;
     };

@@ -7,6 +7,7 @@
     listKeywords,
     setGeoLocation,
   } from "$lib/api/catalog.js";
+  import { revealInFileManager } from "$lib/api/system.js";
   import LibraryHistogram from "$lib/components/LibraryHistogram.svelte";
 
   /**
@@ -140,6 +141,10 @@
     }
     editingGps = false;
     onGeoLocationChange?.(lat, lon, alt);
+  }
+
+  function handleReveal() {
+    if (image) revealInFileManager(image.path);
   }
 
   // Keywording (M2 Slice 4)
@@ -324,6 +329,9 @@
       <span class="row-label">Folder</span>
       <span class="val truncate font-mono">{dirPath}</span>
       <div class="tooltip-bubble">{dirPath}</div>
+    </div>
+    <div class="file-action-row">
+      <button type="button" class="reveal-link" onclick={handleReveal}>📁 Reveal in File Manager ↗</button>
     </div>
     <div class="row">
       <span class="row-label">Size</span>
@@ -824,6 +832,22 @@
     gap: 4px;
   }
   .map-link:hover {
+    text-decoration: underline;
+  }
+  .file-action-row {
+    padding: 3px 4px 6px;
+  }
+  .reveal-link {
+    all: unset;
+    cursor: pointer;
+    font-size: 10.5px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .reveal-link:hover {
     text-decoration: underline;
   }
   .empty-hint-row {

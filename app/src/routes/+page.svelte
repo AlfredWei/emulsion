@@ -353,6 +353,13 @@
 
   let developVersionId = $state(/** @type {number | null} */ (null));
   let developImagePath = $state("");
+  // M4 Smart Previews: derived, not a second $state var kept manually in
+  // sync with developImagePath -- stays correct automatically as `images`
+  // updates, and there's exactly one place (`openDevelop` below) that ever
+  // needs to change which image is open anyway.
+  let developImageContentHash = $derived(
+    images.find((img) => img.version_id === developVersionId)?.content_hash ?? null,
+  );
   /** @type {import('$lib/api/develop.js').EditStack} */
   let editStack = $state({ schema_version: 1, ops: [] });
 
@@ -2842,6 +2849,7 @@
       />
       <DevelopCanvas
         imagePath={developImagePath}
+        imageContentHash={developImageContentHash}
         {exposure}
         {contrast}
         {saturation}

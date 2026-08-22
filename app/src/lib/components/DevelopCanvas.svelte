@@ -10,6 +10,7 @@
   /**
    * @type {{
    *   imagePath: string,
+   *   imageContentHash?: string | null,
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
@@ -77,6 +78,7 @@
    */
   let {
     imagePath,
+    imageContentHash = null,
     exposure,
     contrast,
     saturation,
@@ -132,6 +134,12 @@
   let overlayEl = $state(/** @type {HTMLDivElement | null} */ (null));
   let status = $state("loading"); // "loading" | "ready" | "error"
   let errorMessage = $state("");
+  // M4 Smart Previews: true when the currently-loaded preview is a
+  // fallback served because the source file itself couldn't be read (see
+  // getDevelopPreview's own doc comment) -- drives the on-canvas banner
+  // below and disables the 1:1 tier upgrade (which would just fail the
+  // same way, since it also needs to read the source).
+  let isSmartPreview = $state(false);
 
   // M3 Slice 5 (fixed after an empirical regression report): the canvas
   // itself stays the sized flex item, exactly as it was before this slice
@@ -3955,7 +3963,8 @@
     fullTierPromise = null;
     activeTier = "draft";
 
-    const preview = await getDevelopPreview(path);
+    const preview = await getDevelopPreview(path, imageContentHash);
+    isSmartPreview = preview.is_smart_preview;
     const response = await fetch(convertFileSrc(preview.path));
     const bitmap = await createImageBitmap(await response.blob());
     await applyBitmapToGpu(bitmap);
@@ -4634,9 +4643,13 @@
   // site needs to know about the tier upgrade at all. Guarded on
   // activeTier so it's a no-op once already upgraded for this image, and
   // on status==="ready" so it can't fire before loadImage has finished
-  // its own initial setup.
+  // its own initial setup. Also skipped entirely while showing a Smart
+  // Preview fallback (M4) -- the 1:1 tier needs the same unreachable
+  // source file the draft tier just failed to read, so attempting it
+  // would just fail again; the draft tier's DEVELOP_PREVIEW_MAX_DIMENSION
+  // cap is the effective zoom ceiling while offline.
   $effect(() => {
-    if (status === "ready" && zoomMode === "100" && activeTier !== "full") {
+    if (status === "ready" && zoomMode === "100" && activeTier !== "full" && !isSmartPreview) {
       upgradeToFullTier(imagePath);
     }
   });
@@ -4979,6 +4992,14 @@
       onclick={() => (zoomMode = zoomMode === "fit" ? "100" : "fit")}
     >{zoomMode === "fit" ? "Fit" : "100%"}</button>
   {/if}
+  {#if status === "ready" && isSmartPreview}
+    <div
+      class="smart-preview-badge"
+      title="The original photo file couldn't be found -- it may have been moved, renamed, or is on a disconnected drive. Showing a cached Smart Preview instead; your edits still apply and the full-resolution original will be used again once it's reachable."
+    >
+      ⚠ Smart Preview — original unavailable
+    </div>
+  {/if}
   {#if status === "loading"}
     <div class="overlay">Decoding…</div>
   {:else if status === "error"}
@@ -5294,6 +5315,26 @@
   }
   .zoom-badge:hover {
     color: var(--text-primary);
+  }
+  /* M4 Smart Previews: persistent (unlike `.before-after-label`'s transient
+     fade), so top-left rather than top-center -- avoids colliding with
+     that label's own top-center spot when both happen to be visible at
+     once (e.g. right after toggling the before/after hotkey on an
+     offline photo). */
+  .smart-preview-badge {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    padding: 5px 10px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--label-yellow);
+    background: rgba(20, 18, 16, 0.85);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    pointer-events: none;
+    z-index: 2;
   }
   /* M4 Slice 3: before/after transient label -- top-center (distinct from
      `.zoom-badge`'s bottom-right corner) so the two never collide, and

@@ -400,12 +400,24 @@ fn list_collection_image_ids(state: State<'_, AppState>, collection_id: i64) -> 
 /// Develop preview (M1 Slice 3, cache-aware since M1 Slice 4 — see
 /// preview_cache.rs). Decode-only concern -- doesn't touch the catalog,
 /// matching how raw_decode.rs/import.rs are already decoupled from
-/// catalog specifics. Runs on a blocking thread (same pattern as
-/// `import_folder`) since a cache-miss decode is CPU-heavy (a cache hit
-/// is cheap, but still worth keeping off the async executor's own thread
-/// since it still touches disk).
+/// catalog specifics: `content_hash` is a caller-supplied input (the
+/// frontend already holds it on the `ImageSummary` it fetched for the
+/// Library/Develop), not looked up here. Runs on a blocking thread (same
+/// pattern as `import_folder`) since a cache-miss decode is CPU-heavy (a
+/// cache hit is cheap, but still worth keeping off the async executor's
+/// own thread since it still touches disk).
+///
+/// `content_hash` backs Smart Previews (M4): if the source file itself
+/// can't be read (moved/offline drive), `ensure_develop_preview` falls
+/// back to this hash's existing cache entry rather than failing outright.
+/// `None` (e.g. a catalog row that predates the `content_hash` column) is
+/// still a fully valid call -- just with no fallback available.
 #[tauri::command]
-async fn get_develop_preview(app: AppHandle, path: String) -> Result<DevelopPreviewInfo, String> {
+async fn get_develop_preview(
+    app: AppHandle,
+    path: String,
+    content_hash: Option<String>,
+) -> Result<DevelopPreviewInfo, String> {
     let previews_dir = app
         .path()
         .app_data_dir()
@@ -420,8 +432,12 @@ async fn get_develop_preview(app: AppHandle, path: String) -> Result<DevelopPrev
         // (os error 2)") means nothing to someone who never touched the
         // filesystem directly. See PreviewCacheError::user_message's own
         // doc comment.
-        preview_cache::ensure_develop_preview(std::path::Path::new(&path), &previews_dir)
-            .map_err(|e| e.user_message())
+        preview_cache::ensure_develop_preview(
+            std::path::Path::new(&path),
+            &previews_dir,
+            content_hash.as_deref(),
+        )
+        .map_err(|e| e.user_message())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -435,7 +451,11 @@ async fn get_develop_preview(app: AppHandle, path: String) -> Result<DevelopPrev
 /// `preview_cache::ensure_develop_full_preview`'s own doc comment for why
 /// this is lazy, not part of the background pregeneration pass.
 #[tauri::command]
-async fn get_develop_full_preview(app: AppHandle, path: String) -> Result<DevelopPreviewInfo, String> {
+async fn get_develop_full_preview(
+    app: AppHandle,
+    path: String,
+    content_hash: Option<String>,
+) -> Result<DevelopPreviewInfo, String> {
     let previews_dir = app
         .path()
         .app_data_dir()
@@ -445,8 +465,12 @@ async fn get_develop_full_preview(app: AppHandle, path: String) -> Result<Develo
     tauri::async_runtime::spawn_blocking(move || {
         // user_message(), not to_string() -- same reasoning as
         // get_develop_preview's own identical switch above.
-        preview_cache::ensure_develop_full_preview(std::path::Path::new(&path), &previews_dir)
-            .map_err(|e| e.user_message())
+        preview_cache::ensure_develop_full_preview(
+            std::path::Path::new(&path),
+            &previews_dir,
+            content_hash.as_deref(),
+        )
+        .map_err(|e| e.user_message())
     })
     .await
     .map_err(|e| e.to_string())?

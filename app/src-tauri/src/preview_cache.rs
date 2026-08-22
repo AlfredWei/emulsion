@@ -14,6 +14,22 @@
 //! correctly produces a new cache entry, but the old PNG is left orphaned
 //! on disk. Matches thumbnails' existing unbounded growth — not a
 //! regression, just not solved here.
+//!
+//! **Smart Previews (M4)**: this same draft-tier cache doubles as the
+//! offline fallback PRD/MILESTONES.md's M4 scope calls "Smart Previews" --
+//! deliberately not a second, separate artifact/format (e.g. a lossy DNG
+//! proxy, as real Lightroom builds). This cache is already
+//! content-hash-keyed and already pregenerated for every cataloged image
+//! by `pregenerate_missing` (called after every import/at startup), so it
+//! already IS a "lightweight proxy that outlives the source" -- the only
+//! missing piece was behavioral: `ensure_develop_preview`'s interactive
+//! path used to unconditionally read+hash the source file to find its own
+//! cache key, so a disconnected/offline source made even an
+//! ALREADY-CACHED preview unreachable. `known_content_hash` closes that
+//! gap: the frontend already holds the catalog's own `content_hash` for
+//! whatever image it's opening, so it can supply it directly, and a
+//! source-read failure falls back to that hash's cache entry instead of
+//! failing outright.
 
 use crate::catalog::Catalog;
 use crate::source_decode::{self, DecodeError};
@@ -31,6 +47,13 @@ pub struct DevelopPreviewInfo {
     pub path: String,
     pub width: u32,
     pub height: u32,
+    /// M4 Smart Previews: true only when the source file itself could not
+    /// be read (moved/renamed/deleted/on a disconnected drive) and this
+    /// result is a pre-existing cache entry served instead, via the
+    /// caller-supplied `known_content_hash` -- see `ensure_develop_preview`'s
+    /// doc comment. False for every normal, source-verified result,
+    /// including a completely ordinary cache hit.
+    pub is_smart_preview: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -87,13 +110,60 @@ fn capped_dimensions(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
 /// right after the first) — not worth restructuring
 /// `source_decode::decode_develop_preview` to accept pre-read bytes just to
 /// avoid it.
+///
+/// `known_content_hash` is the Smart Previews fallback (M4): the frontend
+/// already has this image's `content_hash` from the catalog, so when the
+/// source file itself can't be read (moved/renamed/deleted/offline drive),
+/// this falls back to that hash's existing cache entry instead of failing
+/// outright — still fails cleanly if no such entry exists (an image whose
+/// preview was never generated while its source was reachable has nothing
+/// to fall back to). Still catalog-decoupled: the hash is a caller-
+/// supplied input, not looked up here.
 pub fn ensure_develop_preview(
     source_path: &Path,
     previews_dir: &Path,
+    known_content_hash: Option<&str>,
 ) -> Result<DevelopPreviewInfo, PreviewCacheError> {
-    let bytes = std::fs::read(source_path)?;
-    let content_hash = blake3::hash(&bytes).to_hex().to_string();
-    ensure_develop_preview_for_hash(source_path, &content_hash, previews_dir)
+    match std::fs::read(source_path) {
+        Ok(bytes) => {
+            let content_hash = blake3::hash(&bytes).to_hex().to_string();
+            ensure_develop_preview_for_hash(source_path, &content_hash, previews_dir)
+        }
+        Err(io_err) => {
+            if io_err.kind() == std::io::ErrorKind::NotFound {
+                if let Some(cached) = smart_preview_fallback(known_content_hash, previews_dir, "")? {
+                    return Ok(cached);
+                }
+            }
+            Err(PreviewCacheError::Io(io_err))
+        }
+    }
+}
+
+/// Shared by the draft and full-preview fallback paths: looks for an
+/// existing cache entry under `known_content_hash` (with `suffix` —
+/// `DEVELOP_FULL_PREVIEW_SUFFIX` or `""` for the draft tier) and returns it
+/// marked `is_smart_preview: true` if present, `Ok(None)` if there's no
+/// hash to fall back to or nothing cached under it (the caller then
+/// surfaces the original read error, not this function's own absence of a
+/// result).
+fn smart_preview_fallback(
+    known_content_hash: Option<&str>,
+    previews_dir: &Path,
+    suffix: &str,
+) -> Result<Option<DevelopPreviewInfo>, PreviewCacheError> {
+    let Some(hash) = known_content_hash else { return Ok(None) };
+    let out_path = previews_dir.join(format!("{hash}{suffix}.png"));
+    if !out_path.exists() {
+        return Ok(None);
+    }
+    let (width, height) = image::image_dimensions(&out_path)?;
+    Ok(Some(DevelopPreviewInfo {
+        path: out_path.to_string_lossy().to_string(),
+        width,
+        height,
+        is_smart_preview: true,
+    }))
 }
 
 /// Background-walk path: the caller already knows the content hash from
@@ -116,6 +186,7 @@ pub fn ensure_develop_preview_for_hash(
             path: out_path.to_string_lossy().to_string(),
             width,
             height,
+            is_smart_preview: false,
         });
     }
 
@@ -139,6 +210,7 @@ pub fn ensure_develop_preview_for_hash(
         path: out_path.to_string_lossy().to_string(),
         width: resized.width(),
         height: resized.height(),
+        is_smart_preview: false,
     })
 }
 
@@ -161,10 +233,24 @@ pub const DEVELOP_FULL_PREVIEW_SUFFIX: &str = "_full";
 pub fn ensure_develop_full_preview(
     source_path: &Path,
     previews_dir: &Path,
+    known_content_hash: Option<&str>,
 ) -> Result<DevelopPreviewInfo, PreviewCacheError> {
-    let bytes = std::fs::read(source_path)?;
-    let content_hash = blake3::hash(&bytes).to_hex().to_string();
-    ensure_develop_full_preview_for_hash(source_path, &content_hash, previews_dir)
+    match std::fs::read(source_path) {
+        Ok(bytes) => {
+            let content_hash = blake3::hash(&bytes).to_hex().to_string();
+            ensure_develop_full_preview_for_hash(source_path, &content_hash, previews_dir)
+        }
+        Err(io_err) => {
+            if io_err.kind() == std::io::ErrorKind::NotFound {
+                if let Some(cached) =
+                    smart_preview_fallback(known_content_hash, previews_dir, DEVELOP_FULL_PREVIEW_SUFFIX)?
+                {
+                    return Ok(cached);
+                }
+            }
+            Err(PreviewCacheError::Io(io_err))
+        }
+    }
 }
 
 /// Cache key is `{content_hash}_full.png` -- a distinct filename from the
@@ -187,6 +273,7 @@ pub fn ensure_develop_full_preview_for_hash(
             path: out_path.to_string_lossy().to_string(),
             width,
             height,
+            is_smart_preview: false,
         });
     }
 
@@ -202,6 +289,7 @@ pub fn ensure_develop_full_preview_for_hash(
         path: out_path.to_string_lossy().to_string(),
         width: source.width(),
         height: source.height(),
+        is_smart_preview: false,
     })
 }
 
@@ -272,6 +360,7 @@ mod tests {
         let err = ensure_develop_preview(
             std::path::Path::new("/definitely/does/not/exist/nowhere.jpg"),
             &previews_dir,
+            None,
         )
         .expect_err("a nonexistent source path must fail");
         assert_eq!(
@@ -296,6 +385,52 @@ mod tests {
         assert!(err.user_message().contains("could not read source file from disk"));
     }
 
+    /// Smart Previews (M4): needs no real RAW sample -- unlike the
+    /// decode-path tests below, this only exercises the fallback branch
+    /// (an already-cached PNG on disk, a source path that fails to read),
+    /// so it always runs, not gated on `EMULSION_TEST_RAW_SAMPLE`.
+    #[test]
+    fn falls_back_to_a_cached_preview_by_hash_when_the_source_is_unreachable() {
+        let previews_dir = temp_previews_dir("smart-preview-fallback");
+        let hash = "deadbeefcafefeed";
+        let cached_path = previews_dir.join(format!("{hash}.png"));
+        image::RgbImage::from_pixel(4, 3, image::Rgb([10, 20, 30])).save(&cached_path).unwrap();
+
+        let result = ensure_develop_preview(
+            Path::new("/definitely/does/not/exist/nowhere.CR3"),
+            &previews_dir,
+            Some(hash),
+        )
+        .expect("must fall back to the cached preview, not fail outright");
+
+        assert_eq!(result.path, cached_path.to_string_lossy());
+        assert_eq!((result.width, result.height), (4, 3));
+        assert!(result.is_smart_preview, "must be flagged as a Smart Preview fallback result");
+
+        let _ = std::fs::remove_dir_all(&previews_dir);
+    }
+
+    /// The fallback only helps when something was actually cached under
+    /// the supplied hash -- an image whose preview was never generated
+    /// while its source was reachable has nothing to fall back to, and
+    /// must still fail with the same friendly "not found" message as
+    /// before, not silently succeed with nothing to show.
+    #[test]
+    fn fails_cleanly_when_source_is_unreachable_and_nothing_is_cached_for_the_hash() {
+        let previews_dir = temp_previews_dir("smart-preview-no-fallback");
+        let err = ensure_develop_preview(
+            Path::new("/definitely/does/not/exist/nowhere.CR3"),
+            &previews_dir,
+            Some("some-hash-with-nothing-cached"),
+        )
+        .expect_err("no cache entry exists for this hash, so this must still fail");
+        assert_eq!(
+            err.user_message(),
+            "Source photo not found -- it may have been moved, renamed, or deleted outside the app, or is on a disconnected drive."
+        );
+        let _ = std::fs::remove_dir_all(&previews_dir);
+    }
+
     /// Real-file-gated, same pattern as raw_decode.rs/import.rs: point
     /// EMULSION_TEST_RAW_SAMPLE at a real RAW/DNG file to run these.
     #[test]
@@ -306,17 +441,18 @@ mod tests {
         };
         let previews_dir = temp_previews_dir("cache-hit");
 
-        let first = ensure_develop_preview(Path::new(&sample_path), &previews_dir)
+        let first = ensure_develop_preview(Path::new(&sample_path), &previews_dir, None)
             .expect("first call decodes and caches");
         let mtime_after_first = std::fs::metadata(&first.path).unwrap().modified().unwrap();
 
-        let second = ensure_develop_preview(Path::new(&sample_path), &previews_dir)
+        let second = ensure_develop_preview(Path::new(&sample_path), &previews_dir, None)
             .expect("second call hits the cache");
         let mtime_after_second = std::fs::metadata(&second.path).unwrap().modified().unwrap();
 
         assert_eq!(first.path, second.path);
         assert_eq!(first.width, second.width);
         assert_eq!(first.height, second.height);
+        assert!(!first.is_smart_preview, "a normal, source-verified result must not be flagged as a fallback");
         assert_eq!(
             mtime_after_first, mtime_after_second,
             "second call must not rewrite the cached PNG"
@@ -343,8 +479,8 @@ mod tests {
         std::fs::copy(&sample_path, &copy_a).unwrap();
         std::fs::copy(&sample_path, &copy_b).unwrap();
 
-        let from_a = ensure_develop_preview(&copy_a, &previews_dir).expect("decodes copy a");
-        let from_b = ensure_develop_preview(&copy_b, &previews_dir).expect("hits cache for copy b");
+        let from_a = ensure_develop_preview(&copy_a, &previews_dir, None).expect("decodes copy a");
+        let from_b = ensure_develop_preview(&copy_b, &previews_dir, None).expect("hits cache for copy b");
 
         assert_eq!(from_a.path, from_b.path, "identical content must resolve to the same cache entry");
 
@@ -364,9 +500,9 @@ mod tests {
         };
         let previews_dir = temp_previews_dir("full-tier-separate");
 
-        let draft = ensure_develop_preview(Path::new(&sample_path), &previews_dir)
+        let draft = ensure_develop_preview(Path::new(&sample_path), &previews_dir, None)
             .expect("draft tier decodes and caches");
-        let full = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir)
+        let full = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir, None)
             .expect("full tier decodes and caches");
 
         assert_ne!(draft.path, full.path, "draft and full tiers must not share a cache file");
@@ -391,11 +527,11 @@ mod tests {
         };
         let previews_dir = temp_previews_dir("full-tier-cache-hit");
 
-        let first = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir)
+        let first = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir, None)
             .expect("first call decodes and caches");
         let mtime_after_first = std::fs::metadata(&first.path).unwrap().modified().unwrap();
 
-        let second = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir)
+        let second = ensure_develop_full_preview(Path::new(&sample_path), &previews_dir, None)
             .expect("second call hits the cache");
         let mtime_after_second = std::fs::metadata(&second.path).unwrap().modified().unwrap();
 
@@ -427,8 +563,8 @@ mod tests {
         std::fs::copy(&sample_path, &copy_a).unwrap();
         std::fs::copy(&sample_path, &copy_b).unwrap();
 
-        let from_a = ensure_develop_full_preview(&copy_a, &previews_dir).expect("decodes copy a");
-        let from_b = ensure_develop_full_preview(&copy_b, &previews_dir).expect("hits cache for copy b");
+        let from_a = ensure_develop_full_preview(&copy_a, &previews_dir, None).expect("decodes copy a");
+        let from_b = ensure_develop_full_preview(&copy_b, &previews_dir, None).expect("hits cache for copy b");
 
         assert_eq!(from_a.path, from_b.path, "identical content must resolve to the same cache entry");
 

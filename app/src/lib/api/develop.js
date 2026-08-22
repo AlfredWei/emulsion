@@ -8,6 +8,9 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {string} path
  * @property {number} width
  * @property {number} height
+ * @property {boolean} is_smart_preview -- M4 Smart Previews: true only when
+ *   the source file couldn't be read and this is a pre-existing cached
+ *   preview served instead (see getDevelopPreview's own doc comment).
  */
 
 /**
@@ -182,19 +185,25 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {Array<EditOp | Mask>} ops
  */
 
-/** @returns {Promise<DevelopPreviewInfo>} */
-export function getDevelopPreview(/** @type {string} */ path) {
-  return invoke("get_develop_preview", { path });
+/** `contentHash` backs Smart Previews (M4, see preview_cache.rs's own doc
+ * comment): pass the image's catalog `content_hash` so a source-unreachable
+ * (moved/offline drive) call can still fall back to a cached preview
+ * instead of failing outright. Omit (or pass `null`/`undefined`) when it's
+ * not known -- still a fully valid call, just with no fallback available.
+ * @returns {Promise<DevelopPreviewInfo>} */
+export function getDevelopPreview(/** @type {string} */ path, /** @type {string | null} */ contentHash = null) {
+  return invoke("get_develop_preview", { path, contentHash });
 }
 
 /** The 1:1 tier alongside `getDevelopPreview`'s Standard/draft tier --
  * uncapped native resolution, built lazily by the backend on first call
  * (see `preview_cache::ensure_develop_full_preview`'s doc comment).
  * DevelopCanvas.svelte only calls this once the user actually zooms an
- * image to 100%, not on every Develop open.
+ * image to 100%, not on every Develop open. `contentHash` is the same
+ * Smart Previews fallback as `getDevelopPreview`'s own.
  * @returns {Promise<DevelopPreviewInfo>} */
-export function getDevelopFullPreview(/** @type {string} */ path) {
-  return invoke("get_develop_full_preview", { path });
+export function getDevelopFullPreview(/** @type {string} */ path, /** @type {string | null} */ contentHash = null) {
+  return invoke("get_develop_full_preview", { path, contentHash });
 }
 
 /**

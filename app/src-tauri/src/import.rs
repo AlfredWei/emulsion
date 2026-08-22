@@ -84,6 +84,15 @@ fn jpeg_bytes_look_valid(bytes: &[u8]) -> bool {
 /// Shared core for both `scan_and_import` (directory walk) and the
 /// multi-file picker's `import_files` Tauri command (lib.rs).
 pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) -> ImportSummary {
+    // One id for every image landed by this call -- backs the Library
+    // sidebar's "Last Import" source (`import_batch == max(import_batch)`).
+    // Wall-clock millis, not an autoincrement counter, since there's no
+    // dedicated batch table to hand one out from.
+    let import_batch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
     let mut candidate_paths = Vec::new();
     for p in paths {
         if p.is_dir() {
@@ -147,6 +156,7 @@ pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) 
                     summary.failed += 1;
                     continue;
                 };
+                let _ = catalog.set_import_batch(image_id, import_batch);
 
                 if let Some(thumb_path) =
                     extract_and_write_thumbnail(&mut raw_image, image_id, thumbnail_dir)
@@ -172,12 +182,16 @@ pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) 
                 // extraction (no demosaic to skip); running it synchronously
                 // inside this loop would visibly slow a JPEG-heavy import
                 // with zero progress feedback, unlike RAW's import path today.
-                if catalog
+                match catalog
                     .add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty(), &file_metadata)
-                    .is_err()
                 {
-                    summary.failed += 1;
-                    continue;
+                    Ok(image_id) => {
+                        let _ = catalog.set_import_batch(image_id, import_batch);
+                    }
+                    Err(_) => {
+                        summary.failed += 1;
+                        continue;
+                    }
                 }
             }
         }
@@ -424,6 +438,42 @@ mod tests {
         let images = catalog.lock().unwrap().list_images().unwrap();
         assert!(images[0].thumbnail_path.is_some(), "background pass should have filled in the thumbnail");
         assert!(Path::new(images[0].thumbnail_path.as_ref().unwrap()).exists());
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// Backs the Library sidebar's "Last Import" source: every image landed
+    /// by one `import_paths` call must share the same `import_batch`, and a
+    /// later, separate import must get a strictly newer one -- otherwise
+    /// "Last Import" couldn't distinguish the two.
+    #[test]
+    fn images_from_one_import_share_a_batch_id_and_a_later_import_gets_a_newer_one() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("import-batch");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([1, 2, 3])).save(dir.join("a.jpg")).unwrap();
+        image::RgbImage::from_pixel(200, 100, image::Rgb([4, 5, 6])).save(dir.join("b.jpg")).unwrap();
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let summary = scan_and_import(&dir, &catalog, &thumb_dir);
+        assert_eq!(summary.imported, 2);
+
+        let first_batch_images = catalog.list_images().unwrap();
+        assert_eq!(first_batch_images.len(), 2);
+        let batch_a = first_batch_images[0].import_batch.expect("import_batch must be set");
+        let batch_b = first_batch_images[1].import_batch.expect("import_batch must be set");
+        assert_eq!(batch_a, batch_b, "both images from the same import must share one batch id");
+
+        let dir2 = dir.parent().unwrap().join("scan2");
+        std::fs::create_dir_all(&dir2).unwrap();
+        image::RgbImage::from_pixel(200, 100, image::Rgb([7, 8, 9])).save(dir2.join("c.jpg")).unwrap();
+        let summary2 = scan_and_import(&dir2, &catalog, &thumb_dir);
+        assert_eq!(summary2.imported, 1);
+
+        let images = catalog.list_images().unwrap();
+        let newest = images.iter().find(|img| img.path.ends_with("c.jpg")).unwrap();
+        assert!(
+            newest.import_batch.unwrap() >= batch_a,
+            "a later, separate import must get a batch id no older than the first"
+        );
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }

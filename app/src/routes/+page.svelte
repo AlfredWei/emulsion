@@ -236,6 +236,10 @@
   let ratingOp = $state(/** @type {">=" | "="} */ (">="));
   let colorLabelFilter = $state("all");
   let fileTypeFilter = $state(/** @type {"all" | "raw" | "jpeg"} */ ("all"));
+  let cameraFilter = $state("all");
+  let lensFilter = $state("all");
+  let dateFrom = $state("");
+  let dateTo = $state("");
 
   function handleResetFilters() {
     searchQuery = "";
@@ -244,6 +248,15 @@
     ratingOp = ">=";
     colorLabelFilter = "all";
     fileTypeFilter = "all";
+    cameraFilter = "all";
+    lensFilter = "all";
+    dateFrom = "";
+    dateTo = "";
+  }
+
+  /** "Make Model" (e.g. "Canon EOS 5D Mark III"), same join convention as MetadataPanel's own camera row. */
+  function cameraLabel(/** @type {{ camera_make?: string|null, camera_model?: string|null }} */ img) {
+    return [img.camera_make, img.camera_model].filter(Boolean).join(" ") || null;
   }
 
   // Base image set for active folder/collection
@@ -265,6 +278,14 @@
     if (!memberIds) return []; // membership not fetched yet
     return images.filter((img) => memberIds.has(img.image_id));
   });
+
+  // Distinct camera/lens values within the active folder/collection scope, for the filter dropdowns
+  let cameraOptions = $derived(
+    [...new Set(baseImages.map(cameraLabel).filter((v) => v !== null))].sort(),
+  );
+  let lensOptions = $derived(
+    [...new Set(baseImages.map((img) => img.lens_model || "").filter((v) => v !== ""))].sort(),
+  );
 
   // The image set the Library grid and filmstrip show after applying active filters
   let filteredImages = $derived.by(() => {
@@ -329,6 +350,26 @@
         (img) =>
           img.path.toLowerCase().endsWith(".jpg") || img.path.toLowerCase().endsWith(".jpeg"),
       );
+    }
+
+    // Camera filter
+    if (cameraFilter !== "all") {
+      result = result.filter((img) => cameraLabel(img) === cameraFilter);
+    }
+
+    // Lens filter
+    if (lensFilter !== "all") {
+      result = result.filter((img) => img.lens_model === lensFilter);
+    }
+
+    // Date-taken range filter (captured_at is an ISO 8601 string; comparing its
+    // YYYY-MM-DD date portion lexicographically against the <input type="date"> values
+    // avoids parsing either side as a Date/timezone).
+    if (dateFrom) {
+      result = result.filter((img) => img.captured_at && img.captured_at.slice(0, 10) >= dateFrom);
+    }
+    if (dateTo) {
+      result = result.filter((img) => img.captured_at && img.captured_at.slice(0, 10) <= dateTo);
     }
 
     return result;
@@ -2617,6 +2658,12 @@
       ratingOp={ratingOp}
       colorLabelFilter={colorLabelFilter}
       fileTypeFilter={fileTypeFilter}
+      cameraFilter={cameraFilter}
+      lensFilter={lensFilter}
+      dateFrom={dateFrom}
+      dateTo={dateTo}
+      cameraOptions={cameraOptions}
+      lensOptions={lensOptions}
       totalCount={baseImages.length}
       matchedCount={filteredImages.length}
       onSearchChange={(q) => (searchQuery = q)}
@@ -2627,6 +2674,12 @@
       }}
       onColorLabelChange={(c) => (colorLabelFilter = c)}
       onFileTypeChange={(t) => (fileTypeFilter = t)}
+      onCameraChange={(c) => (cameraFilter = c)}
+      onLensChange={(l) => (lensFilter = l)}
+      onDateRangeChange={(from, to) => {
+        dateFrom = from;
+        dateTo = to;
+      }}
       onReset={handleResetFilters}
     />
     <div

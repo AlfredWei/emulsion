@@ -7,6 +7,12 @@
    *   ratingOp: ">=" | "=",
    *   colorLabelFilter: string,
    *   fileTypeFilter: "all" | "raw" | "jpeg",
+   *   cameraFilter: string,
+   *   lensFilter: string,
+   *   dateFrom: string,
+   *   dateTo: string,
+   *   cameraOptions: string[],
+   *   lensOptions: string[],
    *   totalCount: number,
    *   matchedCount: number,
    *   onSearchChange: (val: string) => void,
@@ -14,6 +20,9 @@
    *   onRatingChange: (rating: number, op: ">=" | "=") => void,
    *   onColorLabelChange: (label: string) => void,
    *   onFileTypeChange: (type: "all" | "raw" | "jpeg") => void,
+   *   onCameraChange: (camera: string) => void,
+   *   onLensChange: (lens: string) => void,
+   *   onDateRangeChange: (from: string, to: string) => void,
    *   onReset: () => void,
    * }}
    */
@@ -24,6 +33,12 @@
     ratingOp,
     colorLabelFilter,
     fileTypeFilter,
+    cameraFilter,
+    lensFilter,
+    dateFrom,
+    dateTo,
+    cameraOptions,
+    lensOptions,
     totalCount,
     matchedCount,
     onSearchChange,
@@ -31,6 +46,9 @@
     onRatingChange,
     onColorLabelChange,
     onFileTypeChange,
+    onCameraChange,
+    onLensChange,
+    onDateRangeChange,
     onReset,
   } = $props();
 
@@ -49,7 +67,11 @@
       flagFilter !== "all" ||
       minRating > 0 ||
       colorLabelFilter !== "all" ||
-      fileTypeFilter !== "all",
+      fileTypeFilter !== "all" ||
+      cameraFilter !== "all" ||
+      lensFilter !== "all" ||
+      Boolean(dateFrom) ||
+      Boolean(dateTo),
   );
 
   function toggleStar(/** @type {number} */ n) {
@@ -222,6 +244,54 @@
     >
       JPEG
     </button>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Camera / Lens Filters -->
+  <select
+    class="dropdown-filter"
+    aria-label="Filter by camera"
+    value={cameraFilter}
+    onchange={(e) => onCameraChange(e.currentTarget.value)}
+  >
+    <option value="all">All Cameras</option>
+    {#each cameraOptions as camera (camera)}
+      <option value={camera}>{camera}</option>
+    {/each}
+  </select>
+
+  <select
+    class="dropdown-filter"
+    aria-label="Filter by lens"
+    value={lensFilter}
+    onchange={(e) => onLensChange(e.currentTarget.value)}
+  >
+    <option value="all">All Lenses</option>
+    {#each lensOptions as lens (lens)}
+      <option value={lens}>{lens}</option>
+    {/each}
+  </select>
+
+  <div class="divider"></div>
+
+  <!-- Date Taken Range Filter -->
+  <div class="date-range-filter">
+    <input
+      type="date"
+      class="date-input"
+      aria-label="Date taken from"
+      value={dateFrom}
+      onchange={(e) => onDateRangeChange(e.currentTarget.value, dateTo)}
+    />
+    <span class="date-range-sep">–</span>
+    <input
+      type="date"
+      class="date-input"
+      aria-label="Date taken to"
+      value={dateTo}
+      onchange={(e) => onDateRangeChange(dateFrom, e.currentTarget.value)}
+    />
   </div>
 
   <!-- Spacer & Counter -->
@@ -411,6 +481,43 @@
     opacity: 1;
     box-shadow: 0 0 0 2px var(--text-primary);
     transform: scale(1.2);
+  }
+  .dropdown-filter {
+    flex-shrink: 0;
+    max-width: 130px;
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-family: inherit;
+    padding: 3px 4px;
+  }
+  .dropdown-filter:hover {
+    color: var(--text-primary);
+  }
+  .date-range-filter {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .date-input {
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-family: inherit;
+    padding: 2px 4px;
+    color-scheme: dark;
+  }
+  .date-input:hover {
+    color: var(--text-primary);
+  }
+  .date-range-sep {
+    color: var(--text-tertiary);
+    font-size: 11px;
   }
   .spacer {
     flex: 1;

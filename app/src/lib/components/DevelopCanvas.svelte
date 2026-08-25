@@ -4397,8 +4397,9 @@
 
     // Texture/Clarity/Dehaze/Sharpen/NR: the local-contrast, dark-channel/
     // atmospheric-light/transmission, and sharpen/NR blur passes depend on
-    // {exposure, contrast, saturation, toneCurvePoints, hslBands,
-    // splitToning, texture, clarity, sharpenRadius} -- NOT masks/
+    // {exposure, contrast, saturation, temperature, tint, highlights,
+    // shadows, whites, blacks, toneCurvePoints, hslBands, splitToning,
+    // texture, clarity, sharpenRadius} -- NOT masks/
     // selectedMaskId/showMaskOverlay, which only ever affect the cheap
     // final pass below, and NOT dehaze/sharpen's-own-amount/lumaNR/colorNR
     // (only fs_final's own cheap blend reads those; none of the BLUR
@@ -4436,8 +4437,20 @@
     // Perspective Correction's own inputs join for the identical reason:
     // fs_perspective writes into perspectiveCorrectedTex, which
     // gradeBindGroup ALSO reads inside this same block.
+    // White Balance (temperature/tint) and Basic Tone (highlights/shadows/
+    // whites/blacks) belong here for the SAME reason exposure/contrast/
+    // saturation do, not a new one -- fs_grade applies all of them together
+    // in one apply_global_adjustments call (see that WGSL function's own
+    // parameter list) and writes the result into gradedTex, INSIDE this
+    // gated block. Omitting them was a real bug: the interactive Uniform
+    // buffer write always carries their current value (writeBuffer below is
+    // unconditional), but without fs_grade actually re-running, gradedTex
+    // stayed stale -- Temp/Tint/Highlights/Shadows/Whites/Blacks silently
+    // had zero visible effect on their own, until some unrelated slider in
+    // this key happened to invalidate the block and "catch up."
     const spatialOpsKey = JSON.stringify({
-      exposure, contrast, saturation, toneCurvePoints, hslBands, splitToning, texture, clarity,
+      exposure, contrast, saturation, temperature, tint, highlights, shadows, whites, blacks,
+      toneCurvePoints, hslBands, splitToning, texture, clarity,
       sharpenRadius: sharpen.radius, lensCorrection, perspective,
     });
     if (spatialOpsKey !== spatialOpsInputsKey) {
@@ -4540,6 +4553,12 @@
     void exposure;
     void contrast;
     void saturation;
+    void temperature;
+    void tint;
+    void highlights;
+    void shadows;
+    void whites;
+    void blacks;
     void masks;
     void selectedMaskId;
     void showMaskOverlay;

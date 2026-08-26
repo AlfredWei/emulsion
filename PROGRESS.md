@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Fix: Develop pan/zoom jitter on tall portrait images (2026-08-26)
+
+User report: "when pan/zoom smiling-women, the view start jitter and become non-stable" — referring to `test_image/Smiling-woman-pink-shirt-portrait.jpg` (1779x2848, portrait orientation).
+
+Root cause: a race between two independent writers of the canvas-wrap's scroll position. `handlePointerUp`'s click-to-zoom (`DevelopCanvas.svelte`) captures a normalized focus point and centers on it against the DRAFT tier's dimensions; `upgradeToFullTier` then asynchronously decodes the native-resolution image and, once it lands, unconditionally re-centers on the SAME stored focus point again — a **second, blind write** to the same scroll position, with no check for whatever the user did in between. For this specific image, the draft tier is capped at `DEVELOP_PREVIEW_MAX_DIMENSION` (2048px) on its long axis, but the source's 2848px height exceeds that cap, so the full-tier decode is a genuinely slow, non-instant resize+GPU-upload — long enough for a user to start dragging before it resolves. Any pan started in that window gets silently overwritten the instant the decode finishes, reading as jitter/instability. A smaller landscape/square test image never crosses this cap, so the tier swap is effectively instant and the race window never opens — explaining why this surfaced specifically on the portrait test image.
+
+- **New `zoomFocusPanned` flag** (`DevelopCanvas.svelte`): reset to `false` every time a fresh zoom-in click captures `lastZoomFocus`, set to `true` by any actual pan-drag scroll write (`handlePointerMove`'s `dragState` branch) in the meantime. `upgradeToFullTier`'s own re-center is now skipped entirely when this flag is set — preserving the user's manual pan instead of blindly overwriting it.
+- **Secondary fix**: `reportHoverPixel` (drives the RGB-under-cursor readout) was firing on every `pointermove` even during an active pan-drag, before the `dragState` early-return — pure per-frame `$state` churn competing with scroll compositing for no visible benefit (the readout isn't meaningful mid-pan). Reordered so it's skipped while `dragState` is active.
+- **Verification**: `npm run check` clean across 254 files. 83/83 Vitest (unchanged — no unit-testable logic touched, pure interactive-state fix). Verified interactively against the real running dev app (computer-use desktop automation): zoomed to 100% on the smiling-woman portrait and performed several consecutive pan drags in different directions — each held its position stably across repeated screenshots with no snap-back, matching the pre-fix race window that a fast local decode makes hard to reliably repro via scripted timing alone, but the fix addresses the actual mechanism regardless of timing.
+
 ## Fix: thumbnail batch updates (2026-08-26)
 
 User report: "the thumbnail and the develop image has different effect... the program should remember how many thumbnail/preview image it should apply effect, and update them as a single batch tracker to make sure all thumbnail are updated."

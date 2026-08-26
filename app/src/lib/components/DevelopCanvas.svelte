@@ -240,6 +240,18 @@
   // upgradeToFullTier swaps them in moments later. Defaults to center for
   // the zoom-badge-button entry path, which has no click point at all.
   let lastZoomFocus = { x: 0.5, y: 0.5 };
+  // Guards upgradeToFullTier's own re-center (see that function's doc
+  // comment) against clobbering a pan the user made WHILE the full-res
+  // decode was still in flight -- reset to false every time lastZoomFocus
+  // is freshly captured (a new zoom-in click), set true by any actual
+  // pan-drag scroll write in the meantime. Without this, a slow full-tier
+  // decode (large/portrait source images that exceed the draft tier's
+  // DEVELOP_PREVIEW_MAX_DIMENSION cap on their long axis are the real-world
+  // trigger, since only those force a genuinely different, non-instant
+  // decode+GPU-upload) lets the user start dragging, then has the view
+  // silently snap back to the original click point the moment the decode
+  // resolves -- visible as jitter/instability, not a single one-time jump.
+  let zoomFocusPanned = false;
   /** @type {{ startX: number, startY: number, startScrollLeft: number, startScrollTop: number } | null} */
   let dragState = null;
   const DRAG_CLICK_THRESHOLD = 4; // px -- below this, pointerup is a click (toggle zoom), not a completed drag
@@ -896,18 +908,22 @@
   }
 
   function handlePointerMove(/** @type {PointerEvent} */ e) {
-    reportHoverPixel(e.clientX, e.clientY);
-    // Checked FIRST (ahead of every tool-specific branch below): `dragState`
-    // is only ever set by space-pan or the no-tool-active fallback at the
-    // bottom of this function, but space-pan can now start while `activeTool`
-    // is still "brush"/"spot"/etc, so this can no longer wait until after
-    // those branches without being shadowed by them -- see
-    // handlePointerDown's own space-pan branch.
+    // Checked FIRST (ahead of every tool-specific branch below, AND ahead of
+    // reportHoverPixel): `dragState` is only ever set by space-pan or the
+    // no-tool-active fallback at the bottom of this function, but space-pan
+    // can now start while `activeTool` is still "brush"/"spot"/etc, so this
+    // can no longer wait until after those branches without being shadowed
+    // by them -- see handlePointerDown's own space-pan branch. Skipping
+    // reportHoverPixel during an active pan-drag avoids per-frame $state
+    // churn (MetadataPanel's RGB readout) competing with scroll
+    // compositing -- the readout isn't meaningful mid-pan anyway.
     if (dragState && wrapEl) {
       wrapEl.scrollLeft = dragState.startScrollLeft - (e.clientX - dragState.startX);
       wrapEl.scrollTop = dragState.startScrollTop - (e.clientY - dragState.startY);
+      zoomFocusPanned = true; // see this flag's own doc comment
       return;
     }
+    reportHoverPixel(e.clientX, e.clientY);
     if (placingMask?.kind === "linear_gradient") {
       placingMask = { ...placingMask, end: screenToNormalized(e.clientX, e.clientY) };
       return;
@@ -983,6 +999,7 @@
       // re-applies correctly against whichever tier's dimensions are
       // current when it's read.
       lastZoomFocus = { x: nativeX / canvasEl.width, y: nativeY / canvasEl.height };
+      zoomFocusPanned = false; // fresh focus point -- see this flag's own doc comment
       zoomMode = "100";
       await tick(); // required: $state-triggered DOM patches (the new canvas size) land on a microtask
       scrollToNativeFocus(nativeX, nativeY);
@@ -4015,8 +4032,18 @@
       // reads/sets scroll position against it (otherwise the browser
       // clamps the new scrollLeft/scrollTop against the STALE, still
       // fit-sized box).
+      //
+      // Skipped entirely if the user has already panned since the zoom-in
+      // click (zoomFocusPanned) -- see that flag's own doc comment. This
+      // decode is async and, for a source whose long axis exceeds the
+      // draft tier's own resolution cap, genuinely slow -- long enough for
+      // a user to start dragging before it resolves. Recentering
+      // unconditionally here would silently snap their pan back to the
+      // original click point the instant the decode finishes.
       await tick();
-      if (canvasEl) scrollToNativeFocus(lastZoomFocus.x * canvasEl.width, lastZoomFocus.y * canvasEl.height);
+      if (canvasEl && !zoomFocusPanned) {
+        scrollToNativeFocus(lastZoomFocus.x * canvasEl.width, lastZoomFocus.y * canvasEl.height);
+      }
       writeAdjustmentsAndRender();
     })();
     try {

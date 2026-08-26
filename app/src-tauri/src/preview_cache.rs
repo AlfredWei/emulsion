@@ -31,7 +31,7 @@
 //! source-read failure falls back to that hash's cache entry instead of
 //! failing outright.
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, EditStack};
 use crate::source_decode::{self, DecodeError};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -289,6 +289,69 @@ pub fn ensure_develop_full_preview_for_hash(
         path: out_path.to_string_lossy().to_string(),
         width: source.width(),
         height: source.height(),
+        is_smart_preview: false,
+    })
+}
+
+/// Edit-graded companion to the draft tier above — closes the "Library
+/// mode and Develop show different colors" gap: `ensure_develop_preview`/
+/// `ensure_develop_full_preview` are BOTH a pure, unedited decode (see
+/// this module's own header comment — they exist as a GPU source texture
+/// for `DevelopCanvas.svelte`'s own shader pipeline to grade, nothing
+/// more), so `LibraryImageViewer.svelte` (Library's Loupe view, which has
+/// no shader pipeline of its own — it just displays a plain `<img>`) was
+/// rendering the RAW, un-graded preview directly. Only the small grid
+/// thumbnail (`import::regenerate_edited_thumbnail`, capped at 1024px)
+/// was ever edit-stack-graded outside Develop itself.
+///
+/// This applies the SAME grading pipeline that function already
+/// established (lens correction -> perspective -> edit stack -> crop) to
+/// the draft tier's own cached decode, at that tier's resolution (already
+/// capped at `DEVELOP_PREVIEW_MAX_DIMENSION` — crop only ever shrinks
+/// further, so no separate resize step is needed here). Cache key folds
+/// in a hash of the edit-stack JSON, mirroring
+/// `regenerate_edited_thumbnail`'s own content-addressing precedent: a
+/// later edit naturally produces a different filename, so there's no
+/// explicit invalidation step to get wrong — same accepted "orphaned old
+/// entries, no eviction" tradeoff this module's own header comment
+/// already documents for its other tiers.
+pub fn ensure_graded_preview_for_hash(
+    source_path: &Path,
+    content_hash: &str,
+    stack: &EditStack,
+    previews_dir: &Path,
+) -> Result<DevelopPreviewInfo, PreviewCacheError> {
+    let stack_json = serde_json::to_string(stack).unwrap_or_default();
+    let stack_hash = blake3::hash(stack_json.as_bytes()).to_hex().to_string();
+    let out_path = previews_dir.join(format!("{content_hash}_{}_graded.png", &stack_hash[..8]));
+
+    if out_path.exists() {
+        let (width, height) = image::image_dimensions(&out_path)?;
+        return Ok(DevelopPreviewInfo {
+            path: out_path.to_string_lossy().to_string(),
+            width,
+            height,
+            is_smart_preview: false,
+        });
+    }
+
+    // Reuse the draft tier's own unedited cache as the decode source --
+    // avoids a second raw source decode purely to apply grading on top.
+    let preview = ensure_develop_preview_for_hash(source_path, content_hash, previews_dir)?;
+    let mut decoded = image::open(&preview.path)?.into_rgb8();
+
+    crate::develop_engine::apply_lens_correction(&mut decoded, stack);
+    crate::develop_engine::apply_perspective(&mut decoded, stack);
+    crate::develop_engine::apply_edit_stack(&mut decoded, stack);
+    crate::develop_engine::apply_crop(&mut decoded, stack);
+
+    std::fs::create_dir_all(previews_dir)?;
+    decoded.save(&out_path)?;
+
+    Ok(DevelopPreviewInfo {
+        path: out_path.to_string_lossy().to_string(),
+        width: decoded.width(),
+        height: decoded.height(),
         is_smart_preview: false,
     })
 }
@@ -570,6 +633,81 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&previews_dir);
         let _ = std::fs::remove_dir_all(&scratch_dir);
+    }
+
+    /// The core "Library and Develop show different colors" bug this
+    /// function exists to fix: given a real, non-identity edit stack, the
+    /// graded output must actually differ from the unedited draft-tier
+    /// source, be cached distinctly by the edit stack's own hash, and
+    /// reuse that cache entry on a second call with the identical stack.
+    /// No RAW sample needed -- this operates entirely on a synthetic JPEG
+    /// source, same as `import.rs`'s own
+    /// `regenerate_edited_thumbnail_reflects_the_edit_and_is_content_addressed`.
+    #[test]
+    fn graded_preview_reflects_the_edit_and_is_content_addressed() {
+        let dir = temp_previews_dir("graded-preview-source");
+        let previews_dir = temp_previews_dir("graded-preview-cache");
+        let source_path = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([120, 90, 60])).save(&source_path).unwrap();
+        let bytes = std::fs::read(&source_path).unwrap();
+        let content_hash = blake3::hash(&bytes).to_hex().to_string();
+
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![
+                serde_json::json!({"op": "exposure", "value": 1.0}),
+                serde_json::json!({"op": "saturation", "value": -100.0}),
+            ],
+        };
+
+        // Populate the draft tier's own cache FIRST (independent of
+        // grading), so its pixel value can be compared before/after below
+        // -- a flat-color JPEG source can still decode back a pixel or two
+        // off the original due to ordinary lossy YCbCr round-tripping, so
+        // this test pins "the draft cache is untouched by grading," not
+        // "the draft cache exactly equals the synthetic input."
+        let draft_before = ensure_develop_preview_for_hash(&source_path, &content_hash, &previews_dir).unwrap();
+        let draft_before_pixel = *image::open(&draft_before.path).unwrap().into_rgb8().get_pixel(0, 0);
+
+        let graded = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir)
+            .expect("grading a real JPEG source should succeed");
+
+        assert!(std::path::Path::new(&graded.path).exists());
+        assert!(
+            graded.path.ends_with("_graded.png"),
+            "graded preview's filename should carry the distinguishing suffix, got {}",
+            graded.path
+        );
+
+        let edited = image::open(&graded.path).unwrap().into_rgb8();
+        let edited_pixel = edited.get_pixel(0, 0);
+        assert_ne!(*edited_pixel, draft_before_pixel, "graded output must differ from the unedited draft preview");
+
+        // Re-requesting the identical stack must resolve to the same cache entry.
+        let graded_again = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir).unwrap();
+        assert_eq!(graded.path, graded_again.path);
+
+        // A DIFFERENT stack must resolve to a DIFFERENT cache entry, not
+        // silently reuse (or clobber) the first one.
+        let other_stack = EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({"op": "exposure", "value": -1.0})],
+        };
+        let other_graded =
+            ensure_graded_preview_for_hash(&source_path, &content_hash, &other_stack, &previews_dir).unwrap();
+        assert_ne!(graded.path, other_graded.path, "a different edit stack must produce a distinct cache entry");
+
+        // And the draft tier's own unedited cache entry must still exist,
+        // byte-identical to before grading ran -- a separate cache file,
+        // not an in-place overwrite of the source this function decoded
+        // from.
+        let draft_path = previews_dir.join(format!("{content_hash}.png"));
+        assert!(draft_path.exists());
+        let draft_after_pixel = *image::open(&draft_path).unwrap().into_rgb8().get_pixel(0, 0);
+        assert_eq!(draft_after_pixel, draft_before_pixel, "draft tier cache must stay unedited by grading");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&previews_dir);
     }
 
     #[test]

@@ -476,6 +476,47 @@ async fn get_develop_full_preview(
     .map_err(|e| e.to_string())?
 }
 
+/// Edit-graded preview for Library mode's Loupe view (`LibraryImageViewer.svelte`)
+/// -- unlike `get_develop_preview`/`get_develop_full_preview` (both a pure,
+/// unedited decode, existing purely as a GPU source texture for
+/// `DevelopCanvas.svelte`'s own shader pipeline to grade), this bakes the
+/// CURRENT edit stack in on the Rust side, via the same pipeline
+/// `regenerate_thumbnail` already established for the grid thumbnail --
+/// see `preview_cache::ensure_graded_preview_for_hash`'s own doc comment.
+/// Takes `version_id` (not a bare path) since it needs to look up the
+/// image's current edit stack, which only the catalog knows -- re-reads
+/// it fresh on every call rather than trusting a client-supplied one, same
+/// "always re-read from the catalog" discipline `regenerate_thumbnail`
+/// already follows.
+#[tauri::command]
+async fn get_graded_develop_preview(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: i64,
+) -> Result<DevelopPreviewInfo, String> {
+    let catalog = state.catalog.clone();
+    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let (source, stack) = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
+            let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
+            (source, stack)
+        };
+
+        preview_cache::ensure_graded_preview_for_hash(
+            std::path::Path::new(&source.path),
+            source.content_hash.as_deref().unwrap_or(""),
+            &stack,
+            &previews_dir,
+        )
+        .map_err(|e| e.user_message())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn get_edit_stack(state: State<'_, AppState>, version_id: i64) -> Result<EditStack, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
@@ -833,6 +874,7 @@ pub fn run() {
             list_collection_image_ids,
             get_develop_preview,
             get_develop_full_preview,
+            get_graded_develop_preview,
             get_edit_stack,
             set_edit_stack,
             lookup_lens_profile,

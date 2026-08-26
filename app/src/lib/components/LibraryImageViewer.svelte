@@ -1,7 +1,7 @@
 <script>
   import { onMount, tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDevelopPreview, getDevelopFullPreview } from "$lib/api/develop.js";
+  import { getGradedDevelopPreview } from "$lib/api/develop.js";
 
   /**
    * LibraryImageViewer: High-resolution single image viewer (Loupe View)
@@ -39,7 +39,6 @@
   let containerHeight = $state(0);
 
   let previewUrl = $state(/** @type {string | null} */ (null));
-  let fullPreviewUrl = $state(/** @type {string | null} */ (null));
   let naturalWidth = $state(0);
   let naturalHeight = $state(0);
   let loadingPreview = $state(false);
@@ -80,18 +79,33 @@
   let thumbPlaceholder = $derived(image.thumbnail_path ? convertFileSrc(image.thumbnail_path) : null);
   let filename = $derived(image.path.split(/[/\\]/).pop() ?? image.path);
 
-  // Load preview whenever image changes
+  // Load the edit-graded preview whenever the image (or its edits) change
+  // -- getGradedDevelopPreview bakes the CURRENT edit stack in on the Rust
+  // side, the same pipeline the grid thumbnail and Develop module already
+  // apply, so this Loupe view finally shows the same colors both of those
+  // do (see that function's own doc comment for what it replaces:
+  // getDevelopPreview/getDevelopFullPreview are both a pure, UNEDITED
+  // decode, meant only as a GPU source texture for DevelopCanvas.svelte's
+  // own shader pipeline to grade -- rendering that directly here, with no
+  // grading step of this component's own, was the actual root cause of
+  // the color mismatch).
+  //
+  // Deliberately single-tier, unlike the old draft/full-1:1 split: the
+  // graded preview is capped at the same ~2048px draft resolution the
+  // grid thumbnail's own pipeline starts from, not the source's true
+  // native size. A named scope cut -- correct color at Loupe-view zoom
+  // levels was the actual reported bug; perfectly crisp pixels at extreme
+  // zoom on a very high-resolution source is a smaller, separate concern.
   $effect(() => {
-    const currentPath = image.path;
+    const currentVersionId = image.version_id;
     let cancelled = false;
     loadingPreview = true;
     previewUrl = null;
-    fullPreviewUrl = null;
     isFit = true;
     panX = 0;
     panY = 0;
 
-    getDevelopPreview(currentPath)
+    getGradedDevelopPreview(currentVersionId)
       .then((preview) => {
         if (cancelled) return;
         previewUrl = convertFileSrc(preview.path);
@@ -107,22 +121,6 @@
     return () => {
       cancelled = true;
     };
-  });
-
-  // When zooming to >= 100%, lazily fetch full 1:1 preview
-  $effect(() => {
-    if (!isFit && effectiveScale >= 0.95 && previewUrl && !fullPreviewUrl) {
-      const currentPath = image.path;
-      getDevelopFullPreview(currentPath)
-        .then((fullPreview) => {
-          if (image.path === currentPath) {
-            fullPreviewUrl = convertFileSrc(fullPreview.path);
-            naturalWidth = fullPreview.width;
-            naturalHeight = fullPreview.height;
-          }
-        })
-        .catch(() => {});
-    }
   });
 
   export function zoomToFit() {
@@ -191,25 +189,58 @@
     onZoomChange?.(scale);
   }
 
-  function handleMouseDown(/** @type {MouseEvent} */ e) {
+  // Pointer Events + setPointerCapture, not plain mouse events -- a fast
+  // drag routinely carries the cursor outside .image-viewer's own bounds
+  // between two mousemove samples. Plain (target-bound) mouse events stop
+  // firing the instant the cursor leaves the element, so the pan would
+  // freeze until the cursor wandered back inside -- a real stutter/lag on
+  // top of (and independent from) the CSS-transition jitter fixed
+  // separately above. Capturing the pointer keeps every move/up event
+  // routed to this element regardless of where the cursor actually is,
+  // matching DevelopCanvas.svelte's own established drag-pan pattern.
+  function handlePointerDown(/** @type {PointerEvent} */ e) {
     if (e.button !== 0) return;
+    // A click on any HUD control (Develop, star rating, flags, nav
+    // arrows) bubbles its pointerdown/up up to this container same as a
+    // click on the photo itself -- only cull-hud's own onclick stops
+    // propagation, which doesn't reach this pointerdown handler at all.
+    // Capturing the pointer here (below) would otherwise hijack that
+    // control's own click, since a captured pointer's subsequent events
+    // -- including the click WebKit synthesizes from them -- target the
+    // CAPTURING element, not the button the user actually pressed.
+    // Bailing out early for any real interactive control leaves normal
+    // click handling on that control completely untouched.
+    if (e.target instanceof HTMLElement && e.target.closest("button")) return;
     isDragging = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     startPanX = panX;
     startPanY = panY;
+    try {
+      containerEl?.setPointerCapture(e.pointerId);
+    } catch {
+      // Capturing a pointer that's already gone (e.g. a synthetic event)
+      // would itself throw -- non-fatal, the drag still works via the
+      // regular event flow, just without the off-element guarantee.
+    }
   }
 
-  function handleMouseMove(/** @type {MouseEvent} */ e) {
+  function handlePointerMove(/** @type {PointerEvent} */ e) {
     if (!isDragging) return;
     panX = startPanX + (e.clientX - dragStartX);
     panY = startPanY + (e.clientY - dragStartY);
   }
 
-  function handleMouseUp(/** @type {MouseEvent} */ e) {
+  function handlePointerUp(/** @type {PointerEvent} */ e) {
     if (!isDragging) return;
     const moved = Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY);
     isDragging = false;
+    try {
+      containerEl?.releasePointerCapture(e.pointerId);
+    } catch {
+      // Releasing a capture that was never successfully acquired would
+      // itself throw -- non-fatal, see handlePointerDown's own comment.
+    }
     // If it was just a click (not a drag), toggle zoom
     if (moved < 5) {
       handleToggleZoom(e);
@@ -234,9 +265,9 @@
   bind:clientWidth={containerWidth}
   bind:clientHeight={containerHeight}
   onwheel={handleWheel}
-  onmousedown={handleMouseDown}
-  onmousemove={handleMouseMove}
-  onmouseup={handleMouseUp}
+  onpointerdown={handlePointerDown}
+  onpointermove={handlePointerMove}
+  onpointerup={handlePointerUp}
   class:is-panning={isDragging || spaceHeld}
   class:zoomed={!isFit}
   role="region"
@@ -248,9 +279,9 @@
     class:panning={isDragging}
     style="transform: translate({panX}px, {panY}px) scale({effectiveScale});"
   >
-    {#if fullPreviewUrl || previewUrl}
+    {#if previewUrl}
       <img
-        src={fullPreviewUrl || previewUrl}
+        src={previewUrl}
         alt={filename}
         class="main-img"
         draggable="false"

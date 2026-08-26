@@ -126,6 +126,7 @@
     computeAutoTone,
     WB_PRESETS,
   } from "$lib/api/develop.js";
+  import { queueThumbnailRegeneration, flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { folderKeyForPath, buildFolderEntries } from "$lib/libraryFolders.js";
@@ -1087,17 +1088,30 @@
   // must never be able to delay a save or block app quit. Never awaited by
   // any caller. Only called from real "done editing this image for now"
   // transitions (leaving Develop, exporting, closing) -- not from the bare
-  // 250ms debounce settle inside flushEditStack, since a cache-hit reuse
-  // of the Develop preview is still a real decode+edit+resize+encode, not
-  // free, and a user still actively dragging a slider would otherwise
-  // trigger a regen immediately superseded by the next tick.
+  // Thumbnail batch update: coalesces multiple regeneration requests within
+  // a 150ms debounce window into a single atomic update via Promise.all, so
+  // all components consuming thumbnails (grid, filmstrip, metadata panel,
+  // histogram) update together rather than staggered.
+  function handleBatchThumbnailsComplete(/** @type {Map<number, string | null>} */ results) {
+    // Update all thumbnails in one pass: map over images array, apply paths
+    // for all version IDs that are in the results map, leave others unchanged.
+    images = images.map((img) => {
+      const newPath = results.get(img.version_id);
+      if (newPath !== undefined) {
+        return { ...img, thumbnail_path: newPath };
+      }
+      return img;
+    });
+  }
+
+  // 250ms debounce inside flushEditStack + 150ms debounce in batch queue (two
+  // layers) prevents rapid edits/slider drags from hammering the backend:
+  // first layer settles pending edits, second layer coalesces multiple regen
+  // requests into a single atomic update. The batch system ensures all
+  // components see thumbnails refresh together.
   function regenerateThumbnailFor(/** @type {number | null} */ versionId) {
     if (versionId === null) return;
-    regenerateThumbnail(versionId)
-      .then((path) => {
-        if (path) patchLocal(versionId, { thumbnail_path: path });
-      })
-      .catch(() => {}); // best-effort; a stale grid thumbnail isn't worth surfacing an error for
+    queueThumbnailRegeneration(versionId, handleBatchThumbnailsComplete);
   }
 
   async function refresh() {
@@ -2441,8 +2455,13 @@
         // grid thumbnail, strictly lower stakes than the lost-edit bug M1
         // Slice 6 actually fixed for the edit-stack flush -- direct
         // precedent already established for generate_missing_thumbnails.
-        // Blocking app quit on this would be a real regression.
-        if (wasEditPending) regenerateThumbnailFor(developVersionId);
+        // Blocking app quit on this would be a real regression. Flush the
+        // batch queue to ensure pending regens start immediately, but don't
+        // wait for them to complete.
+        if (wasEditPending) {
+          regenerateThumbnailFor(developVersionId);
+          flushThumbnailBatch(handleBatchThumbnailsComplete);
+        }
 
         // Always resolves -- "Skip This Time" is always available even if
         // "Back Up Now" fails, so this can never trap the user unable to quit.

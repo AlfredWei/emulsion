@@ -2,6 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Fix: thumbnail batch updates (2026-08-26)
+
+User report: "the thumbnail and the develop image has different effect... the program should remember how many thumbnail/preview image it should apply effect, and update them as a single batch tracker to make sure all thumbnail are updated."
+
+Root cause: Thumbnails regenerated individually after each edit, causing staggered updates across components (grid, filmstrip, metadata panel, histogram). Rapid operations (slider drags, undo/redo, preset application) triggered multiple independent `regenerateThumbnail()` calls, each updating local state separately, resulting in visible refresh delays and inconsistency between components showing the same image.
+
+- **New `thumbnailBatchQueue.js`**: coalesces multiple regeneration requests within a 150ms debounce window into a single atomic update via `Promise.all`. `queueThumbnailRegeneration(versionId, callback)` registers a version ID; multiple calls within the window only trigger ONE regeneration. `flushThumbnailBatch(callback)` forces immediate processing (used on app quit). Map-based result delivery lets callers apply all paths in a single reactive update.
+- **Integration into `+page.svelte`**: `regenerateThumbnailFor` now calls `queueThumbnailRegeneration` instead of calling `regenerateThumbnail` directly. New `handleBatchThumbnailsComplete` callback updates all thumbnails in one pass via `images.map()`, so components consuming `thumbnail_path` see synchronized refreshes. The debounce + batching stacks with the existing 250ms edit-stack debounce (two layers: edit settle, then thumbnail coalesce).
+- **Strategic flushes**: app-close handler (`beforeunload`) calls `flushThumbnailBatch` to ensure pending regens start immediately without blocking quit; other callers (history restore, develop close, export) just queue normally and benefit from automatic debouncing.
+- **Verification**: `npm run check` clean across 254 files. No Rust/WGSL touched. No new tests needed — the batching is an implementation detail; components' existing tests already cover thumbnail updates via reactive state changes, and now those updates arrive atomically.
+
 ## M4 — Library filter bar: camera, lens, date-taken range (2026-08-24)
 
 Closed the last gap in M4's own "Library multi-dimensional filter bar (rating, flag, color label, camera, lens, date range, text search)" bullet. The filter bar already covered search/flag/rating/color/file-type; camera and lens were only reachable indirectly via free-text search, and there was no date-range filter at all. Picked via `AskUserQuestion` against the three real remaining M4 items (this, Soft Proofing, Print Module) — chosen as the smallest, most contained slice.

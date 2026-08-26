@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Fix: Library Loupe pan/zoom jitter (2026-08-26)
+
+Follow-up to the same-day Develop-canvas pan/zoom jitter fix (`fix/develop-pan-zoom-jitter` branch): the user clarified the actual reported jitter ("when pan/zoom smiling-women, the view start jitter and become non-stable") occurs in **Library mode's Loupe view**, not the Develop canvas — a completely separate implementation (`LibraryImageViewer.svelte`, CSS-transform-based pan/zoom over a plain `<img>`, unrelated to `DevelopCanvas.svelte`'s GPU/scroll-based one).
+
+Root cause: `.image-canvas`'s CSS `transition: transform 0.05s linear` was applied unconditionally, including during an active pan-drag. `handleMouseMove` sets `panX`/`panY` directly from every single `mousemove` event while dragging — with the transform's target constantly moving faster than a 50ms eased transition can catch up, each new frame restarts the animation before the previous one finishes, producing a visibly laggy, wobbling image that never quite tracks the cursor 1:1. A textbook CSS-transition-during-continuous-drag bug, not specific to this image's resolution (unlike the Develop-canvas issue) — it would show up on any image being panned in Loupe view.
+
+- **Fix**: added a `panning` class bound to `isDragging`, applied to `.image-canvas`, with `transition: none` under it — disables the eased transition only during an active drag, so pan tracks the cursor immediately/1:1. The transition still applies for the click-to-toggle-zoom and wheel-zoom cases (both discrete jumps, where a little easing is a genuine visual benefit, not a fight against continuous input).
+- **Verification**: `npm run check` clean across 254 files. 83/83 Vitest (unchanged — no dedicated tests for this component, matching its existing convention of DOM-dependent logic not being separately unit-tested). Verified interactively via computer-use against the real running dev app: zoomed to 100% on the smiling-woman portrait in Library Loupe view, performed four consecutive drags in different directions plus a wheel-zoom — all tracked smoothly with no visible lag/wobble.
+
 ## Fix: Develop pan/zoom jitter on tall portrait images (2026-08-26)
 
 User report: "when pan/zoom smiling-women, the view start jitter and become non-stable" — referring to `test_image/Smiling-woman-pink-shirt-portrait.jpg` (1779x2848, portrait orientation).

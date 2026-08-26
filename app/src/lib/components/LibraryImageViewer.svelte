@@ -245,6 +245,7 @@
   <!-- Main Display Image -->
   <div
     class="image-canvas"
+    class:panning={isDragging}
     style="transform: translate({panX}px, {panY}px) scale({effectiveScale});"
   >
     {#if fullPreviewUrl || previewUrl}
@@ -416,6 +417,16 @@
     transform-origin: center center;
     transition: transform 0.05s linear;
     pointer-events: none;
+  }
+  /* Disabled during an active pan-drag: handleMouseMove sets panX/panY on
+     EVERY mousemove event, each one restarting this 50ms transition --
+     with the transform's target constantly moving faster than the eased
+     animation can catch up, the image visibly lags and wobbles behind the
+     cursor instead of tracking it 1:1. The transition is worth keeping for
+     the click-to-toggle-zoom/wheel-zoom cases (a discrete jump benefits
+     from a little easing), but actively harmful for continuous drag input. */
+  .image-canvas.panning {
+    transition: none;
   }
   .main-img {
     max-width: none;

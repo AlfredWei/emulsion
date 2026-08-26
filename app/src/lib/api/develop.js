@@ -206,6 +206,20 @@ export function getDevelopFullPreview(/** @type {string} */ path, /** @type {str
   return invoke("get_develop_full_preview", { path, contentHash });
 }
 
+/** Edit-graded preview for Library mode's Loupe view (`LibraryImageViewer.svelte`)
+ * -- unlike `getDevelopPreview`/`getDevelopFullPreview` (both a pure,
+ * unedited decode -- they exist purely as a GPU source texture for
+ * DevelopCanvas.svelte's OWN shader pipeline to grade), this bakes the
+ * image's CURRENT edit stack in on the Rust side, via the same pipeline
+ * `regenerateThumbnail` already uses for the grid thumbnail. Takes
+ * `versionId` (not a bare path) since the backend needs to look up the
+ * current edit stack, which only the catalog knows -- always fresh, never
+ * a client-supplied stack.
+ * @returns {Promise<DevelopPreviewInfo>} */
+export function getGradedDevelopPreview(/** @type {number} */ versionId) {
+  return invoke("get_graded_develop_preview", { versionId });
+}
+
 /**
  * @typedef {Object} HistoryEntry
  * @property {number} id

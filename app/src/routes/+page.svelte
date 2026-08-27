@@ -1,6 +1,7 @@
 <script>
   import "$lib/styles/tokens.css";
   import { open, save } from "@tauri-apps/plugin-dialog";
+  import { convertFileSrc } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { onMount } from "svelte";
@@ -125,6 +126,7 @@
     computeEyedropperWhiteBalance,
     computeAutoTone,
     WB_PRESETS,
+    getSoftProofPreview,
   } from "$lib/api/develop.js";
   import { queueThumbnailRegeneration, flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
@@ -486,6 +488,92 @@
   // invisible until a nonzero adjustment is set, a real discoverability
   // gap this directly fixes.
   let showMaskOverlay = $state(true);
+
+  // M4 Soft Proofing: ephemeral view state, never persisted into the edit
+  // stack -- same "plain view state, not saved via handleAdjustmentChange/
+  // scheduleFlush" treatment as maskOverlaysVisible/showOriginal above.
+  // `softProofPreviewUrl`/`softProofLoading` are populated by the debounced
+  // effect below and passed straight through to DevelopCanvas for display.
+  let softProofEnabled = $state(false);
+  let softProofTarget = $state(
+    /** @type {"srgb" | "adobe-rgb" | "prophoto-rgb" | "custom"} */ ("srgb"),
+  );
+  let softProofCustomProfilePath = $state(/** @type {string | null} */ (null));
+  let softProofIntent = $state(
+    /** @type {"perceptual" | "relative" | "saturation" | "absolute"} */ ("relative"),
+  );
+  let softProofGamutWarning = $state(false);
+  let softProofPreviewUrl = $state(/** @type {string | null} */ (null));
+  let softProofLoading = $state(false);
+  let softProofProfileLabel = $derived(
+    softProofTarget === "adobe-rgb"
+      ? "Adobe RGB"
+      : softProofTarget === "prophoto-rgb"
+        ? "ProPhoto RGB"
+        : softProofTarget === "custom"
+          ? (softProofCustomProfilePath?.split(/[\\/]/).pop() ?? "Custom Profile")
+          : "sRGB",
+  );
+
+  /** Mirrors the existing single-file picker precedent (`handleImportPresetRequest`
+   * below), just with an ICC/ICM extension filter instead of JSON. Selecting a
+   * new custom profile also switches `softProofTarget` to "custom" -- picking
+   * a file only to leave a different profile active would be confusing. */
+  async function handleChooseCustomProfile() {
+    const path = await open({ multiple: false, filters: [{ name: "ICC Profile", extensions: ["icc", "icm"] }] });
+    if (!path || Array.isArray(path)) return;
+    softProofCustomProfilePath = path;
+    softProofTarget = "custom";
+  }
+
+  // Debounced (same 250ms settle as scheduleFlush below, a separate timer
+  // for a separate purpose -- this refetches a PREVIEW, it never writes
+  // anything) fetch of the soft-proofed preview whenever proofing is on and
+  // anything it depends on changes: the edit stack (so proofing reflects
+  // the CURRENT graded look, not a stale one), which image is open, or the
+  // proof settings themselves. Off (or no image open) just clears the
+  // preview -- DevelopCanvas falls back to its own live WGSL render then.
+  let softProofTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+  $effect(() => {
+    void editStack;
+    const versionId = developVersionId;
+    const enabled = softProofEnabled;
+    const target = softProofTarget;
+    const customPath = softProofCustomProfilePath;
+    const intent = softProofIntent;
+    const gamutWarning = softProofGamutWarning;
+
+    if (softProofTimer) clearTimeout(softProofTimer);
+
+    if (!enabled || versionId === null) {
+      softProofPreviewUrl = null;
+      softProofLoading = false;
+      return;
+    }
+
+    softProofTimer = setTimeout(() => {
+      softProofLoading = true;
+      getSoftProofPreview(versionId, {
+        target,
+        custom_profile_path: customPath,
+        intent,
+        gamut_warning: gamutWarning,
+      })
+        .then((preview) => {
+          softProofPreviewUrl = convertFileSrc(preview.path);
+        })
+        .catch(() => {
+          softProofPreviewUrl = null;
+        })
+        .finally(() => {
+          softProofLoading = false;
+        });
+    }, 250);
+
+    return () => {
+      if (softProofTimer) clearTimeout(softProofTimer);
+    };
+  });
 
   // Color range's "change select color" action: re-uses the SAME
   // click-to-sample canvas gesture that CREATES a color-range mask
@@ -2970,6 +3058,10 @@
         onHistogramUpdate={handleHistogramUpdate}
         {showClippingOverlay}
         onHoverPixel={handleHoverPixel}
+        {softProofEnabled}
+        {softProofPreviewUrl}
+        {softProofLoading}
+        {softProofProfileLabel}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -3047,6 +3139,16 @@
         onExportPreset={handleExportPreset}
         onDeletePresetRequest={handleDeletePresetRequest}
         onImportPresetRequest={handleImportPresetRequest}
+        {softProofEnabled}
+        {softProofTarget}
+        {softProofCustomProfilePath}
+        {softProofIntent}
+        {softProofGamutWarning}
+        onSoftProofEnabledChange={(v) => (softProofEnabled = v)}
+        onSoftProofTargetChange={(v) => (softProofTarget = /** @type {typeof softProofTarget} */ (v))}
+        onSoftProofIntentChange={(v) => (softProofIntent = /** @type {typeof softProofIntent} */ (v))}
+        onSoftProofGamutWarningChange={(v) => (softProofGamutWarning = v)}
+        onChooseCustomProfile={handleChooseCustomProfile}
       />
     </div>
     <MaskToolStrip

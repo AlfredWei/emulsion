@@ -81,6 +81,16 @@
    *   onExportPreset: (presetId: number) => void,
    *   onDeletePresetRequest: (presetId: number) => void,
    *   onImportPresetRequest: () => void,
+   *   softProofEnabled?: boolean,
+   *   softProofTarget?: "srgb" | "adobe-rgb" | "prophoto-rgb" | "custom",
+   *   softProofCustomProfilePath?: string | null,
+   *   softProofIntent?: "perceptual" | "relative" | "saturation" | "absolute",
+   *   softProofGamutWarning?: boolean,
+   *   onSoftProofEnabledChange?: (value: boolean) => void,
+   *   onSoftProofTargetChange?: (value: string) => void,
+   *   onSoftProofIntentChange?: (value: string) => void,
+   *   onSoftProofGamutWarningChange?: (value: boolean) => void,
+   *   onChooseCustomProfile?: () => void,
    * }}
    */
   let {
@@ -147,6 +157,16 @@
     onExportPreset,
     onDeletePresetRequest,
     onImportPresetRequest,
+    softProofEnabled = false,
+    softProofTarget = "srgb",
+    softProofCustomProfilePath = null,
+    softProofIntent = "relative",
+    softProofGamutWarning = false,
+    onSoftProofEnabledChange,
+    onSoftProofTargetChange,
+    onSoftProofIntentChange,
+    onSoftProofGamutWarningChange,
+    onChooseCustomProfile,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -1100,6 +1120,82 @@
            develop_engine.rs's own header comment on the `perspective`
            op). -->
       <p class="preset-note">Use the Crop tool to trim any blank corners this introduces.</p>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>Soft Proof</summary>
+    <div class="sub-body">
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          checked={softProofEnabled}
+          onchange={(e) => onSoftProofEnabledChange?.(e.currentTarget.checked)}
+        />
+        Enable Soft Proofing
+      </label>
+      <div class="row">
+        <label for="soft-proof-target">Profile</label>
+        <select
+          id="soft-proof-target"
+          class="select-input"
+          value={softProofTarget}
+          onchange={(e) => {
+            const value = e.currentTarget.value;
+            if (value === "custom") {
+              onChooseCustomProfile?.();
+            } else {
+              onSoftProofTargetChange?.(value);
+            }
+          }}
+        >
+          <option value="srgb">sRGB</option>
+          <option value="adobe-rgb">Adobe RGB</option>
+          <option value="prophoto-rgb">ProPhoto RGB</option>
+          <option value="custom">Custom Profile…</option>
+        </select>
+      </div>
+      {#if softProofTarget === "custom"}
+        <div class="row">
+          <label for="soft-proof-custom-path">File</label>
+          <button
+            id="soft-proof-custom-path"
+            type="button"
+            class="preset-action-btn"
+            onclick={onChooseCustomProfile}
+            title={softProofCustomProfilePath ?? "No profile chosen"}
+          >
+            {softProofCustomProfilePath ? softProofCustomProfilePath.split(/[\\/]/).pop() : "Choose File…"}
+          </button>
+        </div>
+      {/if}
+      <div class="row">
+        <label for="soft-proof-intent">Rendering Intent</label>
+        <select
+          id="soft-proof-intent"
+          class="select-input"
+          value={softProofIntent}
+          onchange={(e) => onSoftProofIntentChange?.(e.currentTarget.value)}
+        >
+          <option value="perceptual">Perceptual</option>
+          <option value="relative">Relative Colorimetric</option>
+          <option value="saturation">Saturation</option>
+          <option value="absolute">Absolute Colorimetric</option>
+        </select>
+      </div>
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          checked={softProofGamutWarning}
+          onchange={(e) => onSoftProofGamutWarningChange?.(e.currentTarget.checked)}
+        />
+        Show Gamut Warning
+      </label>
+      <p class="preset-note">
+        Simulates how the current edit will look when rendered on the selected output profile. Out-of-gamut colors
+        are approximated (or, with Gamut Warning on, flagged in gray) the way they would actually be clipped by
+        that device.
+      </p>
     </div>
   </details>
 </div>

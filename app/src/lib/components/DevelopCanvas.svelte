@@ -74,6 +74,10 @@
    *   onHistogramUpdate?: (data: {r: Uint32Array, g: Uint32Array, b: Uint32Array}) => void,
    *   showClippingOverlay?: boolean,
    *   onHoverPixel?: (rgb: {r: number, g: number, b: number} | null) => void,
+   *   softProofEnabled?: boolean,
+   *   softProofPreviewUrl?: string | null,
+   *   softProofLoading?: boolean,
+   *   softProofProfileLabel?: string,
    * }}
    */
   let {
@@ -127,6 +131,10 @@
     onHistogramUpdate,
     showClippingOverlay = false,
     onHoverPixel,
+    softProofEnabled = false,
+    softProofPreviewUrl = null,
+    softProofLoading = false,
+    softProofProfileLabel = "",
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
@@ -4762,6 +4770,23 @@
       }}
     ></canvas>
   </div>
+  {#if softProofEnabled && softProofPreviewUrl}
+    <!-- M4 Soft Proofing: a static, fit-to-view simulation of the CURRENT
+         edit rendered against the target ICC profile (see soft_proof.rs),
+         computed CPU-side and re-fetched debounced on every edit/settings
+         change by +page.svelte -- not the live WGSL canvas, and
+         deliberately doesn't track the canvas's own pan/zoom/crop-preview
+         transforms (`object-fit: contain` over the whole `.canvas-wrap`
+         instead): this is a periodic "how will this look on the target
+         device" check, not a second fully-interactive view. `pointer-
+         events: none` so it never blocks the tool strip/hotkeys. -->
+    <img class="soft-proof-overlay" src={softProofPreviewUrl} alt="Soft proof preview" draggable="false" />
+  {/if}
+  {#if softProofEnabled}
+    <div class="soft-proof-badge" title="Simulating: {softProofProfileLabel}">
+      Soft Proof — {softProofProfileLabel}{softProofLoading ? "…" : ""}
+    </div>
+  {/if}
   {#if beforeAfterLabelVisible}
     <!-- M4 Slice 3: transient before/after badge -- see the effect that
          drives `beforeAfterLabelVisible` for why this is timed, not
@@ -5370,6 +5395,41 @@
   }
   .zoom-badge:hover {
     color: var(--text-primary);
+  }
+  /* M4 Soft Proofing: covers the whole canvas area (not just `.crop-clip`'s
+     own box -- see the markup's own comment for why this deliberately
+     doesn't track the live canvas's pan/zoom/crop-preview transforms),
+     `object-fit: contain` to letterbox rather than stretch/crop, above
+     every other overlay (mask chrome, before/after label) since it's meant
+     to show the true simulated result unobstructed. */
+  .soft-proof-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+    pointer-events: none;
+    z-index: 3;
+  }
+  /* Top-right -- `.smart-preview-badge` already owns top-left and
+     `.before-after-label` owns top-center, and both can legitimately be
+     visible at the same time as this one (an offline photo being soft-
+     proofed, or toggling before/after while proofing is on). */
+  .soft-proof-badge {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    padding: 5px 10px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--accent);
+    background: rgba(20, 18, 16, 0.85);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    pointer-events: none;
+    z-index: 4;
   }
   /* M4 Smart Previews: persistent (unlike `.before-after-label`'s transient
      fade), so top-left rather than top-center -- avoids colliding with

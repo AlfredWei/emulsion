@@ -66,6 +66,8 @@ pub enum PreviewCacheError {
     BufferMismatch,
     #[error("image processing failed: {0}")]
     Image(#[from] image::ImageError),
+    #[error("soft proofing failed: {0}")]
+    SoftProof(#[from] crate::soft_proof::SoftProofError),
 }
 
 impl PreviewCacheError {
@@ -344,6 +346,56 @@ pub fn ensure_graded_preview_for_hash(
     crate::develop_engine::apply_perspective(&mut decoded, stack);
     crate::develop_engine::apply_edit_stack(&mut decoded, stack);
     crate::develop_engine::apply_crop(&mut decoded, stack);
+
+    std::fs::create_dir_all(previews_dir)?;
+    decoded.save(&out_path)?;
+
+    Ok(DevelopPreviewInfo {
+        path: out_path.to_string_lossy().to_string(),
+        width: decoded.width(),
+        height: decoded.height(),
+        is_smart_preview: false,
+    })
+}
+
+/// Soft-proof simulation of the CURRENT edit-graded look on a target ICC
+/// profile (M4 Soft Proofing) — reuses the graded tier's own cached decode
+/// as its source, since soft proofing simulates what the user's ACTUAL
+/// edit will look like on the target device, not the unedited RAW, then
+/// applies `soft_proof::apply_soft_proof` on top. Cache key folds in both
+/// the edit-stack hash (via the graded tier's own filename) and a hash of
+/// the soft-proof settings themselves (`soft_proof::settings_cache_key`)
+/// — same content-addressed, no-explicit-invalidation discipline as every
+/// other tier in this module.
+pub fn ensure_soft_proof_preview_for_hash(
+    source_path: &Path,
+    content_hash: &str,
+    stack: &EditStack,
+    settings: &crate::soft_proof::SoftProofSettings,
+    previews_dir: &Path,
+) -> Result<DevelopPreviewInfo, PreviewCacheError> {
+    let settings_key = crate::soft_proof::settings_cache_key(settings)?;
+    let stack_json = serde_json::to_string(stack).unwrap_or_default();
+    let stack_hash = blake3::hash(stack_json.as_bytes()).to_hex().to_string();
+    let out_path = previews_dir.join(format!(
+        "{content_hash}_{}_proof_{settings_key}.png",
+        &stack_hash[..8]
+    ));
+
+    if out_path.exists() {
+        let (width, height) = image::image_dimensions(&out_path)?;
+        return Ok(DevelopPreviewInfo {
+            path: out_path.to_string_lossy().to_string(),
+            width,
+            height,
+            is_smart_preview: false,
+        });
+    }
+
+    let graded = ensure_graded_preview_for_hash(source_path, content_hash, stack, previews_dir)?;
+    let mut decoded = image::open(&graded.path)?.into_rgb8();
+
+    crate::soft_proof::apply_soft_proof(&mut decoded, settings)?;
 
     std::fs::create_dir_all(previews_dir)?;
     decoded.save(&out_path)?;
@@ -705,6 +757,61 @@ mod tests {
         assert!(draft_path.exists());
         let draft_after_pixel = *image::open(&draft_path).unwrap().into_rgb8().get_pixel(0, 0);
         assert_eq!(draft_after_pixel, draft_before_pixel, "draft tier cache must stay unedited by grading");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&previews_dir);
+    }
+
+    #[test]
+    fn soft_proof_preview_reflects_the_edit_and_settings_and_is_content_addressed() {
+        let dir = temp_previews_dir("soft-proof-source");
+        let previews_dir = temp_previews_dir("soft-proof-cache");
+        let source_path = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([255, 0, 0])).save(&source_path).unwrap();
+        let bytes = std::fs::read(&source_path).unwrap();
+        let content_hash = blake3::hash(&bytes).to_hex().to_string();
+
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({"op": "exposure", "value": 1.0})],
+        };
+        let settings = crate::soft_proof::SoftProofSettings {
+            target: crate::soft_proof::TARGET_ADOBE_RGB.to_string(),
+            custom_profile_path: None,
+            intent: "relative".to_string(),
+            gamut_warning: false,
+        };
+
+        let graded = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir).unwrap();
+        let graded_pixel = *image::open(&graded.path).unwrap().into_rgb8().get_pixel(0, 0);
+
+        let proofed = ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &settings, &previews_dir)
+            .expect("soft-proofing a real JPEG-derived graded preview should succeed");
+
+        assert!(std::path::Path::new(&proofed.path).exists());
+        assert!(
+            proofed.path.contains("_proof_"),
+            "soft-proof preview's filename should carry the distinguishing marker, got {}",
+            proofed.path
+        );
+
+        // The graded tier's own cache must be untouched by proofing --
+        // a separate cache file, not an in-place overwrite.
+        let graded_pixel_after = *image::open(&graded.path).unwrap().into_rgb8().get_pixel(0, 0);
+        assert_eq!(graded_pixel_after, graded_pixel, "graded tier cache must stay unaffected by soft proofing");
+
+        // Re-requesting the identical settings must resolve to the same cache entry.
+        let proofed_again =
+            ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &settings, &previews_dir).unwrap();
+        assert_eq!(proofed.path, proofed_again.path);
+
+        // DIFFERENT soft-proof settings must resolve to a DIFFERENT cache
+        // entry, not silently reuse (or clobber) the first one.
+        let other_settings = crate::soft_proof::SoftProofSettings { gamut_warning: true, ..settings.clone() };
+        let other_proofed =
+            ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &other_settings, &previews_dir)
+                .unwrap();
+        assert_ne!(proofed.path, other_proofed.path, "different soft-proof settings must produce a distinct cache entry");
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&previews_dir);

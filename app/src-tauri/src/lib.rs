@@ -7,6 +7,7 @@ mod lens_profile;
 mod metadata;
 mod preview_cache;
 mod raw_decode;
+mod soft_proof;
 mod source_decode;
 
 use catalog::{
@@ -517,6 +518,45 @@ async fn get_graded_develop_preview(
     .map_err(|e| e.to_string())?
 }
 
+/// Soft-proof simulation (M4) of the CURRENT edit-graded look on a target
+/// ICC profile, for `DevelopPanel.svelte`'s "Soft Proof" toggle -- mirrors
+/// `get_graded_develop_preview`'s own shape exactly (look up source+stack
+/// under a brief catalog lock, release it, then do the slow work on a
+/// blocking thread), with `settings` (target profile, rendering intent,
+/// gamut-warning flag) supplied fresh by the frontend on every call rather
+/// than persisted anywhere -- this is ephemeral view state, not part of
+/// the edit stack (see `soft_proof.rs`'s own doc comment).
+#[tauri::command]
+async fn get_soft_proof_preview(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: i64,
+    settings: soft_proof::SoftProofSettings,
+) -> Result<DevelopPreviewInfo, String> {
+    let catalog = state.catalog.clone();
+    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let (source, stack) = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
+            let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
+            (source, stack)
+        };
+
+        preview_cache::ensure_soft_proof_preview_for_hash(
+            std::path::Path::new(&source.path),
+            source.content_hash.as_deref().unwrap_or(""),
+            &stack,
+            &settings,
+            &previews_dir,
+        )
+        .map_err(|e| e.user_message())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn get_edit_stack(state: State<'_, AppState>, version_id: i64) -> Result<EditStack, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
@@ -875,6 +915,7 @@ pub fn run() {
             get_develop_preview,
             get_develop_full_preview,
             get_graded_develop_preview,
+            get_soft_proof_preview,
             get_edit_stack,
             set_edit_stack,
             lookup_lens_profile,

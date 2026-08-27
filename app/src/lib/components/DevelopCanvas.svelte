@@ -1302,9 +1302,11 @@
   // for the full reasoning on why 256x256 specifically. Rendered into
   // using fs_final's OWN existing `pipeline`/`bindGroup` a second time
   // (see writeAdjustmentsAndRender), so no new WGSL entry point, pipeline,
-  // or bind group is needed at all -- the GPU's own hardware bilinear
-  // sampling naturally downsamples the exact same graded pixels the main
-  // canvas shows, just at a smaller output resolution.
+  // or bind group is needed at all -- fs_mask's own `in.uv`-based coord
+  // (see that pass's doc comment) proportionally maps this small target
+  // across the full preMaskTex, giving a nearest-neighbor 256x256 grid
+  // sample of the same graded pixels the main canvas shows, just at a
+  // smaller output resolution.
   const HISTOGRAM_SIZE = 256;
   /** @type {GPUTexture | null} */
   let histogramTex = null;
@@ -2918,7 +2920,14 @@
     // own doc comment for the full reasoning.
     @fragment
     fn fs_mask(in: VertexOut) -> @location(0) vec4<f32> {
-      let coord = vec2<i32>(in.position.xy);
+      // Use in.uv (0..1, independent of render-target size) rather than
+      // in.position.xy (relative to THIS pass's own render target) -- this
+      // pipeline is reused to draw into both the main canvas (matching
+      // preMaskTex's size) and the small fixed-size histogramTex, so a
+      // position-based coord silently only sampled preMaskTex's top-left
+      // corner when drawing into the smaller target.
+      let dims = vec2<i32>(textureDimensions(preMaskTex));
+      let coord = clamp(vec2<i32>(in.uv * vec2<f32>(dims)), vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
       var rgb = textureLoad(preMaskTex, coord, 0).rgb;
 
       // Local adjustments layer on top of the globally-graded image,
@@ -4532,10 +4541,10 @@
     runFullscreenPass(encoder, pipeline, bindGroup, context.getCurrentTexture().createView());
 
     // Histogram: fs_final's OWN pipeline/bindGroup, unchanged, drawn a
-    // SECOND time into the small fixed-size histogramTex -- the GPU's own
-    // hardware bilinear sampling naturally downsamples the exact same
-    // graded pixels the canvas above just got, so this needs no separate
-    // WGSL entry point or bind group (see histogramTex's own doc comment).
+    // SECOND time into the small fixed-size histogramTex -- fs_mask's own
+    // `in.uv`-based coord proportionally re-maps across the same graded
+    // pixels the canvas above just got, so this needs no separate WGSL
+    // entry point or bind group (see histogramTex's own doc comment).
     // Skipped while a previous readback is still in flight -- a buffer
     // that's currently mapped (see readHistogramIfIdle) can't be copied
     // into again without a validation error, and the next render (there

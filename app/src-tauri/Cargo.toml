@@ -31,6 +31,7 @@ tauri-plugin-dialog = "2.7.2"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 kamadak-exif = "0.6.1"
 lensfun = "0.7.0"
+bytemuck = "1.25"
 
 # Patched fork of rsraw-sys so RAW decoding builds on Windows/MSVC via a
 # vcpkg-linked LibRaw instead of upstream's from-source compile (which

@@ -221,6 +221,26 @@ export function getGradedDevelopPreview(/** @type {number} */ versionId) {
 }
 
 /**
+ * @typedef {Object} SoftProofSettings
+ * @property {"srgb" | "adobe-rgb" | "prophoto-rgb" | "custom"} target
+ * @property {string | null} custom_profile_path -- required (and only used) when target === "custom"
+ * @property {"perceptual" | "relative" | "saturation" | "absolute"} intent
+ * @property {boolean} gamut_warning
+ */
+
+/** Soft-proof simulation (M4) of the image's CURRENT edit-graded look on a
+ * target ICC profile, via a real lcms2 proofing transform on the Rust side
+ * -- see `soft_proof.rs`'s own doc comment for why this simulates
+ * "sRGB source -> target profile" rather than true working-space handling.
+ * `settings` is ephemeral view state (not part of the persisted edit
+ * stack), so it's supplied fresh on every call rather than looked up from
+ * the catalog. Same `versionId`-keyed shape as `getGradedDevelopPreview`.
+ * @returns {Promise<DevelopPreviewInfo>} */
+export function getSoftProofPreview(/** @type {number} */ versionId, /** @type {SoftProofSettings} */ settings) {
+  return invoke("get_soft_proof_preview", { versionId, settings });
+}
+
+/**
  * @typedef {Object} HistoryEntry
  * @property {number} id
  * @property {string} label

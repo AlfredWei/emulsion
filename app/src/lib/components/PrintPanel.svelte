@@ -167,49 +167,60 @@
           <option value="landscape">Landscape</option>
         </select>
       </div>
-      <div class="row">
-        <label for="print-margin-top">Margins (in)</label>
-        <input
-          id="print-margin-top"
-          class="num-input margin-input"
-          type="number"
-          min="0"
-          max="4"
-          step="0.1"
-          value={margins.top}
-          title="Top"
-          onchange={(e) => onMarginChange("top", Math.max(0, Number(e.currentTarget.value) || 0))}
-        />
-        <input
-          class="num-input margin-input"
-          type="number"
-          min="0"
-          max="4"
-          step="0.1"
-          value={margins.right}
-          title="Right"
-          onchange={(e) => onMarginChange("right", Math.max(0, Number(e.currentTarget.value) || 0))}
-        />
-        <input
-          class="num-input margin-input"
-          type="number"
-          min="0"
-          max="4"
-          step="0.1"
-          value={margins.bottom}
-          title="Bottom"
-          onchange={(e) => onMarginChange("bottom", Math.max(0, Number(e.currentTarget.value) || 0))}
-        />
-        <input
-          class="num-input margin-input"
-          type="number"
-          min="0"
-          max="4"
-          step="0.1"
-          value={margins.left}
-          title="Left"
-          onchange={(e) => onMarginChange("left", Math.max(0, Number(e.currentTarget.value) || 0))}
-        />
+      <div class="subsection-label">Margins (in)</div>
+      <div class="margin-grid">
+        <div class="margin-field">
+          <label for="print-margin-top">Top</label>
+          <input
+            id="print-margin-top"
+            class="num-input"
+            type="number"
+            min="0"
+            max="4"
+            step="0.1"
+            value={margins.top}
+            onchange={(e) => onMarginChange("top", Math.max(0, Number(e.currentTarget.value) || 0))}
+          />
+        </div>
+        <div class="margin-field">
+          <label for="print-margin-right">Right</label>
+          <input
+            id="print-margin-right"
+            class="num-input"
+            type="number"
+            min="0"
+            max="4"
+            step="0.1"
+            value={margins.right}
+            onchange={(e) => onMarginChange("right", Math.max(0, Number(e.currentTarget.value) || 0))}
+          />
+        </div>
+        <div class="margin-field">
+          <label for="print-margin-bottom">Bottom</label>
+          <input
+            id="print-margin-bottom"
+            class="num-input"
+            type="number"
+            min="0"
+            max="4"
+            step="0.1"
+            value={margins.bottom}
+            onchange={(e) => onMarginChange("bottom", Math.max(0, Number(e.currentTarget.value) || 0))}
+          />
+        </div>
+        <div class="margin-field">
+          <label for="print-margin-left">Left</label>
+          <input
+            id="print-margin-left"
+            class="num-input"
+            type="number"
+            min="0"
+            max="4"
+            step="0.1"
+            value={margins.left}
+            onchange={(e) => onMarginChange("left", Math.max(0, Number(e.currentTarget.value) || 0))}
+          />
+        </div>
       </div>
       <p class="preset-note">
         This drives the on-screen layout. The OS print dialog is authoritative for the paper actually loaded in your
@@ -347,6 +358,31 @@
   .sub-body {
     padding-bottom: 8px;
   }
+  .subsection-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    padding: 8px 4px 4px;
+  }
+  .margin-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 2px 4px 8px;
+  }
+  .margin-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .margin-field label {
+    width: 40px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    flex: none;
+  }
   .checkbox-row {
     display: flex;
     align-items: center;
@@ -398,9 +434,6 @@
   }
   .num-input:focus {
     border-color: var(--accent);
-  }
-  .margin-input {
-    flex: 1;
   }
   .preset-action-btn {
     all: unset;

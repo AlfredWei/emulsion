@@ -6,6 +6,7 @@ mod jpeg_decode;
 mod lens_profile;
 mod metadata;
 mod preview_cache;
+mod print;
 mod raw_decode;
 mod soft_proof;
 mod source_decode;
@@ -808,6 +809,63 @@ async fn export_images(
     .map_err(|e| e.to_string())?
 }
 
+/// Print module (M4, final scope item, see print.rs). Same shape as
+/// `get_graded_develop_preview`/`get_soft_proof_preview`: takes bare
+/// `version_id`s, re-resolves each one's source path/content_hash/edit
+/// stack fresh from the catalog under a brief lock (never a
+/// client-supplied path or hash) rather than `export_images`'s
+/// frontend-trusts-the-path convention -- print needs the content_hash for
+/// its own cache key, which only the catalog holds. `color_management` is
+/// supplied fresh by the frontend on every call, matching soft-proof
+/// settings' own "ephemeral view state, never persisted" treatment.
+#[tauri::command]
+async fn get_print_ready_images(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_ids: Vec<i64>,
+    color_management: print::PrintColorManagement,
+) -> Result<Vec<print::PrintReadyResult>, String> {
+    let catalog = state.catalog.clone();
+    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        // A version_id whose source can't be resolved (deleted from the
+        // catalog mid-selection, etc.) becomes an immediate error result --
+        // never silently dropped, so the frontend's result list always
+        // matches its request 1:1 and can tell which item failed.
+        let (resolvable, mut results): (Vec<_>, Vec<_>) = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            let mut resolvable = Vec::new();
+            let mut results = Vec::new();
+            for version_id in version_ids {
+                match catalog.get_version_source(version_id) {
+                    Ok(source) => {
+                        let stack = catalog.get_edit_stack(version_id).unwrap_or_else(|_| EditStack::empty());
+                        resolvable.push((
+                            version_id,
+                            std::path::PathBuf::from(source.path),
+                            source.content_hash.unwrap_or_default(),
+                            stack,
+                        ));
+                    }
+                    Err(e) => results.push(print::PrintReadyResult {
+                        version_id,
+                        path: None,
+                        width: None,
+                        height: None,
+                        error: Some(e.to_string()),
+                    }),
+                }
+            }
+            (resolvable, results)
+        };
+        results.extend(print::generate_print_ready_batch(resolvable, &color_management, &previews_dir));
+        Ok::<_, String>(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn get_backup_settings(state: State<'_, AppState>) -> Result<BackupSettings, String> {
     state.catalog.lock().map_err(|e| e.to_string())?.get_backup_settings().map_err(|e| e.to_string())
@@ -916,6 +974,7 @@ pub fn run() {
             get_develop_full_preview,
             get_graded_develop_preview,
             get_soft_proof_preview,
+            get_print_ready_images,
             get_edit_stack,
             set_edit_stack,
             lookup_lens_profile,

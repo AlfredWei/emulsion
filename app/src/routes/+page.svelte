@@ -4,7 +4,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import LibraryFilterBar from "$lib/components/LibraryFilterBar.svelte";
   import LibraryGrid from "$lib/components/LibraryGrid.svelte";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
@@ -25,6 +25,8 @@
   import LibraryImageViewer from "$lib/components/LibraryImageViewer.svelte";
   import LibraryCompareView from "$lib/components/LibraryCompareView.svelte";
   import LibrarySurveyView from "$lib/components/LibrarySurveyView.svelte";
+  import PrintPanel from "$lib/components/PrintPanel.svelte";
+  import PrintLayoutView from "$lib/components/PrintLayoutView.svelte";
   import { getStoredShortcuts } from "$lib/shortcuts.js";
   import {
     importFolder,
@@ -133,6 +135,7 @@
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { folderKeyForPath, buildFolderEntries } from "$lib/libraryFolders.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
+  import { getPrintReadyImages } from "$lib/api/print.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -524,6 +527,96 @@
     if (!path || Array.isArray(path)) return;
     softProofCustomProfilePath = path;
     softProofTarget = "custom";
+  }
+
+  // Print module (M4, final scope item): ephemeral view state, same
+  // "never persisted into the edit stack" treatment as Soft Proof's own
+  // state above -- nothing here is part of a photo's saved edits.
+  // `printItems` is a snapshot of Library's selection (or the open Develop
+  // image) taken when entering Print (see switchModule), matching how
+  // Develop snapshots its own open image while Library's grid is hidden.
+  let printItems = $state(/** @type {{ path: string, version_id: number }[]} */ ([]));
+  let printTemplate = $state(/** @type {"single" | "contact-sheet"} */ ("single"));
+  let printFitMode = $state(/** @type {"fit" | "fill"} */ ("fit"));
+  let printRows = $state(2);
+  let printCols = $state(2);
+  let printCellSpacing = $state(0.1);
+  let printPaperSize = $state("letter");
+  let printOrientation = $state(/** @type {"portrait" | "landscape"} */ ("portrait"));
+  let printMargins = $state({ top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 });
+  let printColorManaged = $state(false);
+  let printProfileTarget = $state(
+    /** @type {"srgb" | "adobe-rgb" | "prophoto-rgb" | "custom"} */ ("srgb"),
+  );
+  let printCustomProfilePath = $state(/** @type {string | null} */ (null));
+  let printIntent = $state(
+    /** @type {"perceptual" | "relative" | "saturation" | "absolute"} */ ("relative"),
+  );
+  let printing = $state(false);
+  // Populated by handlePrint right before window.print() -- swapped into
+  // PrintLayoutView's <img> src in place of the live (lower-resolution)
+  // layout preview, so the actual OS print dialog sees the real
+  // full-resolution, color-managed payload.
+  let printReadyUrls = $state(/** @type {Record<number, string>} */ ({}));
+
+  /** Same file-picker precedent as `handleChooseCustomProfile` above, kept
+   * separate since it targets Print's own (not Soft Proof's) state. */
+  async function handleChoosePrintCustomProfile() {
+    const path = await open({ multiple: false, filters: [{ name: "ICC Profile", extensions: ["icc", "icm"] }] });
+    if (!path || Array.isArray(path)) return;
+    printCustomProfilePath = path;
+    printProfileTarget = "custom";
+  }
+
+  let printColorManagementSettings = $derived(
+    printColorManaged
+      ? { target: printProfileTarget, customProfilePath: printCustomProfilePath, intent: printIntent }
+      : null,
+  );
+
+  /** Generates the full-resolution, color-managed print payload for every
+   * item in this print job, swaps it into the layout view, then triggers
+   * the OS-native print dialog. Awaiting `tick()` before `window.print()`
+   * gives the swapped `<img src>`s a chance to actually load -- the OS
+   * dialog reads whatever's currently painted, not a promise. */
+  async function handlePrint() {
+    if (printItems.length === 0 || printing) return;
+    printing = true;
+    try {
+      const results = await getPrintReadyImages(
+        printItems.map((item) => item.version_id),
+        {
+          profile: printColorManaged
+            ? {
+                target: printProfileTarget,
+                custom_profile_path: printCustomProfilePath,
+                intent: printIntent,
+                gamut_warning: false,
+              }
+            : null,
+        },
+      );
+      const next = { ...printReadyUrls };
+      const failures = [];
+      for (const result of results) {
+        if (result.path) {
+          next[result.version_id] = convertFileSrc(result.path);
+        } else {
+          failures.push(result.error ?? "unknown error");
+        }
+      }
+      printReadyUrls = next;
+      if (failures.length > 0) {
+        statusMessage = `Print: ${failures.length} photo(s) could not be prepared (${failures[0]})`;
+        if (failures.length === results.length) return;
+      }
+      await tick();
+      window.print();
+    } catch (e) {
+      statusMessage = `Print failed: ${e}`;
+    } finally {
+      printing = false;
+    }
   }
 
   // Debounced (same 250ms settle as scheduleFlush below, a separate timer
@@ -2069,6 +2162,15 @@
       activeTool = null;
       selectedMaskId = null;
     }
+    if (target === "print") {
+      // Snapshot what Print will act on -- same source `currentExportItems`
+      // already derives (open Develop image, else Library's selection) --
+      // taken once on entry so the print job doesn't silently change out
+      // from under the user if they alter Library's selection afterward
+      // (Library's own grid is hidden while inside Print, same as Develop).
+      printItems = currentExportItems;
+      printReadyUrls = {};
+    }
     activeModule = target;
   }
 
@@ -2607,6 +2709,13 @@
       <button class:active={activeModule === "develop"} onclick={() => switchModule("develop")}>
         Develop
       </button>
+      <button
+        class:active={activeModule === "print"}
+        onclick={() => switchModule("print")}
+        disabled={activeModule !== "print" && currentExportItems.length === 0}
+      >
+        Print
+      </button>
     </div>
     <div class="spacer"></div>
     {#if activeModule === "library" && activeCollectionId !== null && activeCollection && !activeCollection.is_smart}
@@ -2996,7 +3105,7 @@
         }}
       />
     </div>
-  {:else if developImagePath}
+  {:else if activeModule === "develop" && developImagePath}
     <div class="develop-body">
       <HistoryPanel
         {history}
@@ -3178,6 +3287,51 @@
       onCropAngleChange={(v) => handleCropChange({ angle: v })}
       onCropReset={handleCropReset}
     />
+  {:else if activeModule === "print"}
+    <div class="print-body">
+      <PrintLayoutView
+        items={printItems}
+        template={printTemplate}
+        fitMode={printFitMode}
+        rows={printRows}
+        cols={printCols}
+        cellSpacing={printCellSpacing}
+        paperSize={printPaperSize}
+        orientation={printOrientation}
+        margins={printMargins}
+        colorManagement={printColorManagementSettings}
+        {printReadyUrls}
+      />
+      <PrintPanel
+        itemCount={printItems.length}
+        template={printTemplate}
+        onTemplateChange={(v) => (printTemplate = v)}
+        fitMode={printFitMode}
+        onFitModeChange={(v) => (printFitMode = v)}
+        rows={printRows}
+        cols={printCols}
+        onRowsChange={(v) => (printRows = v)}
+        onColsChange={(v) => (printCols = v)}
+        cellSpacing={printCellSpacing}
+        onCellSpacingChange={(v) => (printCellSpacing = v)}
+        paperSize={printPaperSize}
+        onPaperSizeChange={(v) => (printPaperSize = v)}
+        orientation={printOrientation}
+        onOrientationChange={(v) => (printOrientation = v)}
+        margins={printMargins}
+        onMarginChange={(side, v) => (printMargins = { ...printMargins, [side]: v })}
+        colorManaged={printColorManaged}
+        onColorManagedChange={(v) => (printColorManaged = v)}
+        profileTarget={printProfileTarget}
+        onProfileTargetChange={(v) => (printProfileTarget = /** @type {typeof printProfileTarget} */ (v))}
+        customProfilePath={printCustomProfilePath}
+        onChooseCustomProfile={handleChoosePrintCustomProfile}
+        intent={printIntent}
+        onIntentChange={(v) => (printIntent = /** @type {typeof printIntent} */ (v))}
+        {printing}
+        onPrint={handlePrint}
+      />
+    </div>
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>
   {/if}
@@ -3234,6 +3388,10 @@
   .module-switch button.active {
     background: var(--bg-panel-raised);
     color: var(--text-primary);
+  }
+  .module-switch button:disabled {
+    cursor: default;
+    opacity: 0.5;
   }
   .spacer {
     flex: 1;
@@ -3304,7 +3462,8 @@
     border-bottom: 1px solid var(--border-subtle);
   }
   .body,
-  .develop-body {
+  .develop-body,
+  .print-body {
     flex: 1;
     display: flex;
     min-height: 0;

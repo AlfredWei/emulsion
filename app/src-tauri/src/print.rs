@@ -17,7 +17,10 @@
 use crate::catalog::EditStack;
 use crate::export::{self, ExportError};
 use crate::soft_proof::{self, SoftProofError, SoftProofSettings};
-use printpdf::{Mm, Op, PdfDocument, PdfPage, PdfSaveOptions, Pt, RawImage, RawImageData, RawImageFormat, XObjectTransform};
+use printpdf::{
+    Color, LinePoint, Mm, Op, PaintMode, PdfDocument, PdfPage, PdfSaveOptions, Point, Polygon, PolygonRing, Pt,
+    RawImage, RawImageData, RawImageFormat, Rgb, WindingOrder, XObjectTransform,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -297,6 +300,31 @@ fn place_image_op(doc: &mut PdfDocument, image: &image::RgbImage, rect: &PtRect)
     }
 }
 
+/// Fills `rect` with `PrintLayoutView.svelte`'s own `.grid-cell { background:
+/// #eee; }` gray -- without this, a Contact Sheet of mixed-aspect photos
+/// (each independently letterboxed within its own, otherwise invisible,
+/// cell) reads as scattered/misaligned rather than as a grid, since nothing
+/// on the page marks where each cell's actual boundary is.
+fn cell_background_op(rect: &PtRect) -> Vec<Op> {
+    let corner = |x: f64, y: f64| LinePoint { p: Point { x: Pt(x as f32), y: Pt(y as f32) }, bezier: false };
+    let polygon = Polygon {
+        rings: vec![PolygonRing {
+            points: vec![
+                corner(rect.x, rect.y),
+                corner(rect.x + rect.w, rect.y),
+                corner(rect.x + rect.w, rect.y + rect.h),
+                corner(rect.x, rect.y + rect.h),
+            ],
+        }],
+        mode: PaintMode::Fill,
+        winding_order: WindingOrder::NonZero,
+    };
+    vec![
+        Op::SetFillColor { col: Color::Rgb(Rgb { r: 0.933, g: 0.933, b: 0.933, icc_profile: None }) },
+        Op::DrawPolygon { polygon },
+    ]
+}
+
 /// Builds a single-page PDF containing `images` laid out per `layout`/`page`
 /// -- `images` are assumed already full-resolution and color-managed (the
 /// SAME print-ready rasters `generate_print_ready_batch` produces for the
@@ -313,6 +341,7 @@ fn build_print_pdf(images: &[image::RgbImage], layout: &PdfLayout, page: &PdfPag
     if layout.template == "contact-sheet" {
         let cells = contact_sheet_cells(&content, layout.rows, layout.cols, layout.cell_spacing_in);
         for (image, cell) in images.iter().zip(cells.iter()) {
+            ops.extend(cell_background_op(cell));
             let rect = place_contain(image.width() as f64, image.height() as f64, cell);
             ops.push(place_image_op(&mut doc, image, &rect));
         }
@@ -616,6 +645,50 @@ mod tests {
         let layout = PdfLayout { template: "single".to_string(), fit_mode: "fit".to_string(), rows: 1, cols: 1, cell_spacing_in: 0.0 };
         let bytes = build_print_pdf(&[], &layout, &test_page());
         assert!(bytes.starts_with(b"%PDF"), "an empty job must still produce a valid (blank) PDF, not panic");
+    }
+
+    #[test]
+    fn cell_background_op_fills_the_full_cell_rect_in_eee_gray() {
+        let cell = PtRect { x: 10.0, y: 20.0, w: 100.0, h: 50.0 };
+        let ops = cell_background_op(&cell);
+        assert_eq!(ops.len(), 2, "must set a fill color, then draw the filled rect");
+
+        match &ops[0] {
+            Op::SetFillColor { col: Color::Rgb(rgb) } => {
+                // #eee == 238/255 ~= 0.933, matching PrintLayoutView.svelte's
+                // `.grid-cell { background: #eee; }`.
+                assert!((rgb.r - 0.933).abs() < 1e-3);
+                assert!((rgb.g - 0.933).abs() < 1e-3);
+                assert!((rgb.b - 0.933).abs() < 1e-3);
+            }
+            other => panic!("expected Op::SetFillColor, got {other:?}"),
+        }
+
+        match &ops[1] {
+            Op::DrawPolygon { polygon } => {
+                assert_eq!(polygon.mode, PaintMode::Fill);
+                let points: Vec<(f32, f32)> =
+                    polygon.rings[0].points.iter().map(|p| (p.p.x.0, p.p.y.0)).collect();
+                assert_eq!(
+                    points,
+                    vec![(10.0, 20.0), (110.0, 20.0), (110.0, 70.0), (10.0, 70.0)],
+                    "must trace the cell's exact four corners"
+                );
+            }
+            other => panic!("expected Op::DrawPolygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_print_pdf_draws_a_cell_background_per_contact_sheet_image() {
+        let images = vec![
+            image::RgbImage::from_pixel(400, 300, image::Rgb([255, 0, 0])),
+            image::RgbImage::from_pixel(300, 400, image::Rgb([0, 255, 0])),
+        ];
+        let layout = PdfLayout { template: "contact-sheet".to_string(), fit_mode: "fit".to_string(), rows: 1, cols: 2, cell_spacing_in: 0.2 };
+        let bytes = build_print_pdf(&images, &layout, &test_page());
+        assert!(bytes.starts_with(b"%PDF"));
+        assert!(bytes.len() > 100);
     }
 
     #[test]

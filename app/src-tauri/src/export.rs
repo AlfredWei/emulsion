@@ -70,11 +70,15 @@ fn unique_output_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     }
 }
 
-pub fn export_one(
-    source_path: &Path,
-    stack: &EditStack,
-    options: &ExportOptions,
-) -> Result<PathBuf, ExportError> {
+/// The full-resolution decode-through-crop pipeline shared by `export_one`
+/// below and `print.rs`'s print-ready raster generation -- both need the
+/// SAME final-quality, native-resolution rendered image (per ADR-0004: no
+/// <100ms latency requirement on this path, so it runs CPU-side, not via
+/// the interactive WGSL shader). Kept here, not duplicated in `print.rs`,
+/// since this exact op ordering (lens correction -> perspective -> edit
+/// stack -> crop) is correctness-sensitive -- see the doc comments on each
+/// step below, unchanged from before this was extracted.
+pub(crate) fn render_full_resolution(source_path: &Path, stack: &EditStack) -> Result<RgbImage, ExportError> {
     let decoded = source_decode::decode_preview(source_path)?;
     let mut image = RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
         .ok_or(ExportError::BufferMismatch)?;
@@ -94,6 +98,16 @@ pub fn export_one(
     // comment on `apply_crop`. Crop-then-resize, not resize-then-crop, so
     // the long-edge cap below describes the DELIVERED (post-crop) image.
     apply_crop(&mut image, stack);
+
+    Ok(image)
+}
+
+pub fn export_one(
+    source_path: &Path,
+    stack: &EditStack,
+    options: &ExportOptions,
+) -> Result<PathBuf, ExportError> {
+    let image = render_full_resolution(source_path, stack)?;
 
     let image = match options.long_edge {
         Some(long_edge) if image.width().max(image.height()) > long_edge => {

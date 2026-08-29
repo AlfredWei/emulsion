@@ -32,6 +32,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 kamadak-exif = "0.6.1"
 lensfun = "0.7.0"
 bytemuck = "1.25"
+printpdf = { version = "0.12.7", default-features = false }
 
 # Patched fork of rsraw-sys so RAW decoding builds on Windows/MSVC via a
 # vcpkg-linked LibRaw instead of upstream's from-source compile (which

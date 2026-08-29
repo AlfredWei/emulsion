@@ -30,6 +30,8 @@
    *   onIntentChange: (v: string) => void,
    *   printing: boolean,
    *   onPrint: () => void,
+   *   exportingPdf: boolean,
+   *   onExportPdf: () => void,
    * }}
    */
   let {
@@ -60,6 +62,8 @@
     onIntentChange,
     printing,
     onPrint,
+    exportingPdf,
+    onExportPdf,
   } = $props();
 </script>
 
@@ -299,6 +303,14 @@
     <button class="print-btn" type="button" disabled={itemCount === 0 || printing} onclick={onPrint}>
       {printing ? "Preparing…" : "Print…"}
     </button>
+    <button
+      class="print-btn secondary"
+      type="button"
+      disabled={itemCount === 0 || exportingPdf}
+      onclick={onExportPdf}
+    >
+      {exportingPdf ? "Exporting…" : "Export as PDF…"}
+    </button>
   </div>
 </div>
 
@@ -457,6 +469,9 @@
   }
   .print-actions {
     padding: 14px 4px 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
   .print-btn {
     all: unset;
@@ -470,6 +485,10 @@
     border-radius: var(--radius-s);
     color: var(--accent-on);
     background: var(--accent);
+  }
+  .print-btn.secondary {
+    color: var(--accent-strong);
+    background: var(--accent-soft);
   }
   .print-btn:disabled {
     cursor: default;

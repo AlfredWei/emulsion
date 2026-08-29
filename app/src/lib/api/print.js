@@ -26,6 +26,46 @@ export function getPrintReadyImages(
   return invoke("get_print_ready_images", { versionIds, colorManagement });
 }
 
+/**
+ * @typedef {Object} PdfLayout
+ * @property {"single" | "contact-sheet"} template
+ * @property {"fit" | "fill"} fit_mode
+ * @property {number} rows
+ * @property {number} cols
+ * @property {number} cell_spacing_in
+ */
+
+/**
+ * @typedef {Object} PdfPageSetup
+ * @property {number} width_in
+ * @property {number} height_in
+ * @property {number} margin_top_in
+ * @property {number} margin_right_in
+ * @property {number} margin_bottom_in
+ * @property {number} margin_left_in
+ */
+
+/**
+ * @typedef {Object} PrintPdfRequest
+ * @property {number[]} version_ids
+ * @property {string} destination_path
+ * @property {PdfLayout} layout
+ * @property {PdfPageSetup} page
+ * @property {PrintColorManagement} color_management
+ */
+
+/** "Export as PDF" -- a direct, one-step alternative to the `window.print()`
+ * flow (see PrintLayoutView.svelte): writes a real PDF straight to
+ * `destination_path` (picked via a native save dialog, same as
+ * Export/preset-export's own file-picker convention), no interactive OS
+ * print dialog involved. Reuses the exact same full-resolution,
+ * color-managed raster `get_print_ready_images` already generates and
+ * caches -- see `print.rs`'s own doc comment on `export_pdf`.
+ * @returns {Promise<void>} */
+export function exportPrintPdf(/** @type {PrintPdfRequest} */ request) {
+  return invoke("export_print_pdf", { request });
+}
+
 /** Fixed paper-size list, inches -- matches this slice's scope cut (a fixed
  * dropdown, not free-form custom page sizes). A4/A3 are shown under their
  * familiar metric names even though the values stored/used throughout the

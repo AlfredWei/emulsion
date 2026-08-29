@@ -135,7 +135,7 @@
   import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
   import { folderKeyForPath, buildFolderEntries } from "$lib/libraryFolders.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
-  import { getPrintReadyImages } from "$lib/api/print.js";
+  import { getPrintReadyImages, exportPrintPdf, PAPER_SIZES } from "$lib/api/print.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -616,6 +616,62 @@
       statusMessage = `Print failed: ${e}`;
     } finally {
       printing = false;
+    }
+  }
+
+  let exportingPdf = $state(false);
+
+  /** "Export as PDF" -- a direct alternative to handlePrint's window.print()
+   * flow: picks a destination via the same save-dialog convention as
+   * Export/preset-export, then asks the Rust side to compose a real PDF
+   * from the print-ready rasters (same generation/caching path handlePrint
+   * uses via get_print_ready_images), skipping the OS print dialog. */
+  async function handleExportPdf() {
+    if (printItems.length === 0 || exportingPdf) return;
+    const destinationPath = await save({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      defaultPath: "print.pdf",
+    });
+    if (!destinationPath) return;
+    exportingPdf = true;
+    try {
+      const paper = PAPER_SIZES[/** @type {keyof typeof PAPER_SIZES} */ (printPaperSize)] ?? PAPER_SIZES.letter;
+      const pageWidthIn = printOrientation === "landscape" ? paper.heightIn : paper.widthIn;
+      const pageHeightIn = printOrientation === "landscape" ? paper.widthIn : paper.heightIn;
+      await exportPrintPdf({
+        version_ids: printItems.map((item) => item.version_id),
+        destination_path: destinationPath,
+        layout: {
+          template: printTemplate,
+          fit_mode: printFitMode,
+          rows: printRows,
+          cols: printCols,
+          cell_spacing_in: printCellSpacing,
+        },
+        page: {
+          width_in: pageWidthIn,
+          height_in: pageHeightIn,
+          margin_top_in: printMargins.top,
+          margin_right_in: printMargins.right,
+          margin_bottom_in: printMargins.bottom,
+          margin_left_in: printMargins.left,
+        },
+        color_management: {
+          profile: printColorManaged
+            ? {
+                target: printProfileTarget,
+                custom_profile_path: printCustomProfilePath,
+                intent: printIntent,
+                gamut_warning: false,
+              }
+            : null,
+        },
+      });
+      statusMessage = `Exported PDF to ${destinationPath}`;
+    } catch (e) {
+      statusMessage = `PDF export failed: ${e}`;
+    } finally {
+      exportingPdf = false;
     }
   }
 
@@ -3330,6 +3386,8 @@
         onIntentChange={(v) => (printIntent = /** @type {typeof printIntent} */ (v))}
         {printing}
         onPrint={handlePrint}
+        {exportingPdf}
+        onExportPdf={handleExportPdf}
       />
     </div>
   {:else}

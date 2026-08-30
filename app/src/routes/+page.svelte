@@ -15,6 +15,7 @@
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import TextPromptDialog from "$lib/components/TextPromptDialog.svelte";
   import SmartCollectionDialog from "$lib/components/SmartCollectionDialog.svelte";
+  import CopySettingsDialog from "$lib/components/CopySettingsDialog.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import Filmstrip from "$lib/components/Filmstrip.svelte";
   import DevelopInfoBar from "$lib/components/DevelopInfoBar.svelte";
@@ -62,6 +63,7 @@
     deleteSnapshot,
     presetEligibleOps,
     applyPresetOps,
+    copySettingsOps,
     createPreset,
     listPresets,
     deletePreset,
@@ -1042,6 +1044,70 @@
       statusMessage = `Apply preset failed: ${e}`;
     } finally {
       applyingPreset = false;
+    }
+  }
+
+  // Copy/Paste Settings (M4.5): an unsaved, in-memory analog of Presets --
+  // "Copy Settings" snapshots a filtered subset of the CURRENTLY OPEN
+  // Develop image's own edit stack (via copySettingsOps, over the exact
+  // same preset-eligible op universe presetEligibleOps already defines);
+  // "Paste Settings" applies that snapshot with the SAME applyPresetOps
+  // upsert-by-name merge Presets use, so it carries the identical
+  // whole-op-replace limitation documented there. Deliberately reuses
+  // this machinery rather than inventing a second merge strategy.
+  let copiedSettings = $state(/** @type {import('$lib/api/develop.js').EditStack | null} */ (null));
+  let copySettingsDialogOpen = $state(false);
+  // Guards Paste Settings while a batch paste is in flight, same
+  // narrow race-mitigation purpose as applyingPreset above.
+  let pastingSettings = $state(false);
+
+  function handleCopySettingsRequest() {
+    if (developVersionId === null) return;
+    copySettingsDialogOpen = true;
+  }
+
+  function handleCopySettingsConfirmed(/** @type {string[]} */ groupIds) {
+    copySettingsDialogOpen = false;
+    copiedSettings = copySettingsOps(editStack, groupIds);
+    statusMessage = "Copied settings";
+  }
+
+  /** Pasting onto the image currently open in Develop is an immediate,
+   * discrete action (like Apply Preset), flushed right away rather than
+   * going through the slider debounce. Pasting onto a Library selection
+   * (including one that happens to contain the open Develop image)
+   * follows handleApplyPresetToSelection's exact batch shape below. */
+  async function handlePasteSettings() {
+    if (!copiedSettings) return;
+    if (activeModule === "develop") {
+      if (developVersionId === null) return;
+      editStack = applyPresetOps(editStack, copiedSettings);
+      flushEditStack("Paste Settings");
+      statusMessage = "Pasted settings";
+      return;
+    }
+    const targets = [...selectedIds];
+    if (targets.length === 0) return;
+    const settingsToApply = copiedSettings;
+    pastingSettings = true;
+    try {
+      await Promise.all(
+        targets.map(async (versionId) => {
+          const current = await getEditStack(versionId);
+          const merged = applyPresetOps(current, settingsToApply);
+          await setEditStack(versionId, merged, "Paste Settings");
+          const path = await regenerateThumbnail(versionId);
+          if (path) patchLocal(versionId, { thumbnail_path: path });
+        }),
+      );
+      if (developVersionId !== null && targets.includes(developVersionId)) {
+        editStack = await getEditStack(developVersionId);
+      }
+      statusMessage = `Pasted settings to ${targets.length} photo${targets.length === 1 ? "" : "s"}`;
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Paste settings failed: ${e}`;
+    } finally {
+      pastingSettings = false;
     }
   }
 
@@ -2808,6 +2874,18 @@
         <option value={preset.id}>{preset.name}</option>
       {/each}
     </select>
+    <button class="import-btn secondary" onclick={handleCopySettingsRequest} disabled={developVersionId === null}>
+      Copy Settings…
+    </button>
+    <button
+      class="import-btn secondary"
+      onclick={handlePasteSettings}
+      disabled={!copiedSettings ||
+        pastingSettings ||
+        (activeModule === "develop" ? developVersionId === null : selectedIds.size === 0)}
+    >
+      {pastingSettings ? "Pasting…" : "Paste Settings…"}
+    </button>
     <button
       class="remove-btn"
       onclick={() => (confirmingRemoval = true)}
@@ -2830,6 +2908,12 @@
   <SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} />
 
   <ExportDialog items={exportItems} onClose={() => (exportItems = null)} />
+
+  <CopySettingsDialog
+    open={copySettingsDialogOpen}
+    onConfirm={handleCopySettingsConfirmed}
+    onCancel={() => (copySettingsDialogOpen = false)}
+  />
 
   <ConfirmDialog
     open={confirmingRemoval}

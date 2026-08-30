@@ -359,6 +359,40 @@ export function applyPresetOps(/** @type {EditStack} */ target, /** @type {EditS
   return { schema_version: target.schema_version, ops };
 }
 
+/** M4.5: named groups over the SAME preset-eligible op universe
+ * `PRESET_EXCLUDED_OP_NAMES` already defines (masks/crop/lens
+ * correction/perspective stay excluded here too, for the identical
+ * per-image-geometry reason) -- lets the Copy Settings dialog offer
+ * Lightroom-style checkboxes without introducing a second, competing
+ * notion of what's "portable" between images. Order here is the order
+ * checkboxes render in. */
+export const OP_GROUPS = [
+  { id: "white_balance", label: "White Balance", ops: ["temperature", "tint"] },
+  { id: "basic_tone", label: "Basic Tone", ops: ["exposure", "contrast", "highlights", "shadows", "whites", "blacks"] },
+  { id: "presence", label: "Presence", ops: ["saturation", "dehaze", "texture", "clarity"] },
+  { id: "tone_curve", label: "Tone Curve", ops: ["tone_curve"] },
+  { id: "hsl", label: "HSL / Color Mixer", ops: ["hsl"] },
+  { id: "split_toning", label: "Split Toning", ops: ["split_toning"] },
+  { id: "detail", label: "Detail (Sharpening & Noise Reduction)", ops: ["sharpen", "luma_nr", "color_nr"] },
+  { id: "effects", label: "Effects (Vignette & Grain)", ops: ["vignette", "grain"] },
+];
+
+/** Copy Settings (M4.5): keeps only the ops belonging to the selected
+ * `OP_GROUPS` ids, further filtered through `presetEligibleOps` so a
+ * caller can't accidentally select-in a mask/crop/lens/perspective op
+ * even by passing a bogus group id. The result feeds `applyPresetOps`
+ * on paste -- same per-op-name upsert merge Presets already use, so it
+ * carries the exact same "whole-op replace, not per-field" limitation
+ * documented on `applyPresetOps` above.
+ * @returns {EditStack} */
+export function copySettingsOps(/** @type {EditStack} */ stack, /** @type {string[]} */ selectedGroupIds) {
+  const allowedOpNames = new Set(
+    OP_GROUPS.filter((g) => selectedGroupIds.includes(g.id)).flatMap((g) => g.ops),
+  );
+  const eligible = presetEligibleOps(stack);
+  return { schema_version: eligible.schema_version, ops: eligible.ops.filter((o) => allowedOpNames.has(o.op)) };
+}
+
 /** @returns {Promise<PresetEntry>} */
 export function createPreset(/** @type {string} */ name, /** @type {EditStack} */ stack) {
   return invoke("create_preset", { name, stack });

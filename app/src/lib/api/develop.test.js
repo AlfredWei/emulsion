@@ -3,6 +3,8 @@ import {
   PRESET_EXCLUDED_OP_NAMES,
   presetEligibleOps,
   applyPresetOps,
+  OP_GROUPS,
+  copySettingsOps,
   computeAutoWhiteBalance,
   computeEyedropperWhiteBalance,
   computeAutoTone,
@@ -133,6 +135,68 @@ describe("applyPresetOps", () => {
         bands: { red: { hue: 0, saturation: 0, luminance: 0 }, orange: { hue: 40, saturation: 0, luminance: 0 } },
       },
     ]);
+  });
+});
+
+describe("copySettingsOps", () => {
+  test("keeps only ops belonging to a selected group", () => {
+    const stack = /** @type {EditStack} */ ({
+      schema_version: 1,
+      ops: [
+        { op: "exposure", value: 0.5 },
+        { op: "temperature", value: 200 },
+        { op: "hsl", bands: {} },
+      ],
+    });
+
+    expect(copySettingsOps(stack, ["basic_tone"]).ops).toEqual([{ op: "exposure", value: 0.5 }]);
+  });
+
+  test("unions ops across multiple selected groups", () => {
+    const stack = /** @type {EditStack} */ ({
+      schema_version: 1,
+      ops: [
+        { op: "exposure", value: 0.5 },
+        { op: "temperature", value: 200 },
+        { op: "hsl", bands: {} },
+      ],
+    });
+
+    const copied = copySettingsOps(stack, ["basic_tone", "white_balance"]);
+
+    expect(copied.ops).toEqual([{ op: "exposure", value: 0.5 }, { op: "temperature", value: 200 }]);
+  });
+
+  test("an unselected group's ops are dropped even if every group is preset-eligible", () => {
+    const stack = /** @type {any} */ ({
+      schema_version: 1,
+      ops: [{ op: "vignette", amount: 20, midpoint: 50, feather: 50 }],
+    });
+
+    expect(copySettingsOps(stack, ["basic_tone"]).ops).toEqual([]);
+  });
+
+  test("still strips crop/masks/lens/perspective even if the caller passes every group id", () => {
+    const stack = /** @type {EditStack} */ ({
+      schema_version: 1,
+      ops: [
+        { op: "exposure", value: 0.5 },
+        { op: "crop", x: 0, y: 0, width: 1, height: 1, angle: 0 },
+        { op: "brush_mask", id: "a" },
+      ],
+    });
+
+    const copied = copySettingsOps(
+      stack,
+      OP_GROUPS.map((g) => g.id),
+    );
+
+    expect(copied.ops).toEqual([{ op: "exposure", value: 0.5 }]);
+  });
+
+  test("no selected groups yields an empty ops list", () => {
+    const stack = /** @type {EditStack} */ ({ schema_version: 1, ops: [{ op: "exposure", value: 0.5 }] });
+    expect(copySettingsOps(stack, []).ops).toEqual([]);
   });
 });
 

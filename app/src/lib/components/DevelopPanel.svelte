@@ -91,6 +91,9 @@
    *   onSoftProofIntentChange?: (value: string) => void,
    *   onSoftProofGamutWarningChange?: (value: boolean) => void,
    *   onChooseCustomProfile?: () => void,
+   *   onCopySettingsRequest: () => void,
+   *   canPasteSettings: boolean,
+   *   onPasteSettingsRequest: () => void,
    * }}
    */
   let {
@@ -167,6 +170,9 @@
     onSoftProofIntentChange,
     onSoftProofGamutWarningChange,
     onChooseCustomProfile,
+    onCopySettingsRequest,
+    canPasteSettings,
+    onPasteSettingsRequest,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -1198,6 +1204,18 @@
       </p>
     </div>
   </details>
+
+  <details class="section">
+    <summary>Copy/Paste Settings</summary>
+    <div class="sub-body">
+      <div class="preset-actions">
+        <button type="button" class="preset-action-btn" onclick={onCopySettingsRequest}>Copy Settings…</button>
+        <button type="button" class="preset-action-btn" onclick={onPasteSettingsRequest} disabled={!canPasteSettings}>
+          Paste Settings…
+        </button>
+      </div>
+    </div>
+  </details>
 </div>
 
 <style>
@@ -1317,6 +1335,12 @@
     color: var(--accent-strong);
     background: var(--accent-soft);
     text-align: center;
+  }
+  .preset-action-btn:disabled {
+    cursor: default;
+    color: var(--text-tertiary);
+    background: transparent;
+    opacity: 0.6;
   }
   .preset-list {
     list-style: none;

@@ -248,6 +248,7 @@
 {/snippet}
 
 <div class="panel">
+  <div class="panel-scroll">
   <div class="panel-header">
     <span class="panel-title">Edit</span>
     <button class="reset-btn" type="button" disabled={!hasEdits} onclick={onResetRequest}>Reset</button>
@@ -1204,29 +1205,47 @@
       </p>
     </div>
   </details>
+  </div>
 
-  <details class="section">
-    <summary>Copy/Paste Settings</summary>
-    <div class="sub-body">
-      <div class="preset-actions">
-        <button type="button" class="preset-action-btn" onclick={onCopySettingsRequest}>Copy Settings…</button>
-        <button type="button" class="preset-action-btn" onclick={onPasteSettingsRequest} disabled={!canPasteSettings}>
-          Paste Settings…
-        </button>
-      </div>
-    </div>
-  </details>
+  <div class="panel-footer">
+    <button type="button" class="preset-action-btn" onclick={onCopySettingsRequest}>Copy Settings…</button>
+    <button type="button" class="preset-action-btn" onclick={onPasteSettingsRequest} disabled={!canPasteSettings}>
+      Paste Settings…
+    </button>
+  </div>
 </div>
 
 <style>
   .panel {
     width: 240px;
     flex: none;
+    display: flex;
+    flex-direction: column;
     background: var(--bg-panel);
     border-left: 1px solid var(--border-subtle);
+    overflow: hidden;
+  }
+  /* Everything scrolls except .panel-footer below -- Copy/Paste Settings
+     needs to stay reachable without scrolling past every adjustment
+     section (user feedback: it was buried at the bottom of the scroll
+     as a collapsible section originally). */
+  .panel-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 14px 12px;
+  }
+  .panel-footer {
+    flex: none;
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .panel-footer .preset-action-btn {
+    flex: 1 1 0;
+    width: auto;
   }
   .panel-header {
     display: flex;

@@ -4,6 +4,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { listen } from "@tauri-apps/api/event";
   import { onMount, tick } from "svelte";
   import LibraryFilterBar from "$lib/components/LibraryFilterBar.svelte";
   import LibraryGrid from "$lib/components/LibraryGrid.svelte";
@@ -2708,6 +2709,83 @@
     exportItems = currentExportItems.length > 0 ? currentExportItems : null;
   }
 
+  /** Native OS menu bar (M4.5 Slice 4, see build_menu in lib.rs): a menu
+   * click reaches here as a `"menu-action"` event carrying the clicked
+   * item's id, and every case below just calls the exact same handler an
+   * equivalent in-UI button already calls -- no new behavior, only a new
+   * entry point. Module-scoped actions (Select All, the Develop-only
+   * toggles) no-op outside their module rather than acting on
+   * invisible/irrelevant state, matching how the in-UI controls they
+   * mirror are only ever rendered in the first place. */
+  function handleMenuAction(/** @type {string} */ action) {
+    switch (action) {
+      case "import_folder":
+        handleImportFolder();
+        break;
+      case "import_files":
+        handleImportFiles();
+        break;
+      case "export":
+        handleExportClick();
+        break;
+      case "export_pdf":
+        handleExportPdf();
+        break;
+      case "preferences":
+        settingsOpen = true;
+        break;
+      case "undo":
+        if (activeModule === "develop") handleUndo();
+        break;
+      case "redo":
+        if (activeModule === "develop") handleRedo();
+        break;
+      case "copy_settings":
+        handleCopySettingsRequest();
+        break;
+      case "paste_settings":
+        handlePasteSettings();
+        break;
+      case "select_all":
+        if (activeModule === "library") handleSelectAll();
+        break;
+      case "deselect_all":
+        if (activeModule === "library") handleDeselectAll();
+        break;
+      case "view_library":
+        switchModule("library");
+        break;
+      case "view_develop":
+        switchModule("develop");
+        break;
+      case "view_print":
+        switchModule("print");
+        break;
+      case "view_grid":
+        switchModule("library");
+        libraryViewMode = "grid";
+        break;
+      case "view_loupe":
+        switchModule("library");
+        libraryViewMode = "loupe";
+        break;
+      case "view_compare":
+        switchModule("library");
+        libraryViewMode = "compare";
+        break;
+      case "view_survey":
+        switchModule("library");
+        libraryViewMode = "survey";
+        break;
+      case "toggle_clipping":
+        if (activeModule === "develop") handleToggleClippingOverlay();
+        break;
+      case "toggle_before_after":
+        if (activeModule === "develop") showOriginal = !showOriginal;
+        break;
+    }
+  }
+
   onMount(() => {
     // Also covers the startup catch-up pass (preview_cache::pregenerate_missing
     // / import::generate_missing_thumbnails, both run once in lib.rs's
@@ -2820,9 +2898,24 @@
     };
     window.addEventListener("shortcuts-updated", onShortcutsUpdated);
 
+    // Native OS menu bar (M4.5 Slice 4): lib.rs's `on_menu_event` re-emits
+    // every click as a plain `"menu-action"` event, same
+    // try/catch-outside-Tauri precedent as the drag-drop listener above.
+    let unlistenMenu = /** @type {(() => void) | undefined} */ (undefined);
+    try {
+      listen("menu-action", (/** @type {{ payload: string }} */ event) => {
+        handleMenuAction(event.payload);
+      }).then((fn) => {
+        unlistenMenu = fn;
+      });
+    } catch {
+      // ignore outside Tauri
+    }
+
     return () => {
       unlistenClose?.();
       unlistenDragDrop?.();
+      unlistenMenu?.();
       window.removeEventListener("shortcuts-updated", onShortcutsUpdated);
     };
   });

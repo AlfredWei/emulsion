@@ -19,7 +19,8 @@ use export::{ExportOptions, ExportResult};
 use import::ImportSummary;
 use preview_cache::DevelopPreviewInfo;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// App-wide state: the one catalog connection for this run, per ADR-0005
 /// (a single local catalog file, not per-window/per-command connections).
@@ -955,11 +956,145 @@ async fn perform_catalog_backup(
     .map_err(|e| e.to_string())?
 }
 
+/// Native OS menu bar (M4.5 Slice 4): every item here just re-emits its id
+/// as a `"menu-action"` event for the frontend to dispatch to the exact
+/// same handler functions the in-UI controls already call (see
+/// `on_menu_event` below and `+page.svelte`'s `listen("menu-action", ...)`)
+/// -- Rust never interprets these ids, matching the "Rust never interprets
+/// `ops`" boundary this file already keeps for edit-stack data.
+///
+/// Deliberately gives NO accelerator to Undo/Redo/Copy Settings/Paste
+/// Settings/Select All/Deselect All: those already have DOM-level keyboard
+/// shortcuts (`+page.svelte`'s `handleGlobalKeydown`) that explicitly skip
+/// firing while a text field has focus (`isTypingTarget`), so a photographer
+/// can Cmd+A-select text in a Caption/Keyword field. A native menu
+/// accelerator is checked by the OS's own key-equivalent handling *before*
+/// the event ever reaches the webview's DOM, bypassing that guard entirely
+/// -- binding Cmd+A/Cmd+Z here would silently break normal text editing
+/// anywhere in the app. The accelerators that ARE set below (Import Files,
+/// Export, Preferences, module switching) don't collide with any
+/// text-editing convention, so they're safe to expose as real OS shortcuts.
+fn build_menu<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    let mut builder = MenuBuilder::new(app);
+
+    if cfg!(target_os = "macos") {
+        let about = PredefinedMenuItem::about(
+            app,
+            Some("About Emulsion"),
+            Some(AboutMetadataBuilder::new().version(Some("0.1.0")).build()),
+        )?;
+        let preferences = MenuItemBuilder::with_id("preferences", "Preferences…")
+            .accelerator("CmdOrCtrl+,")
+            .build(app)?;
+        let app_menu = SubmenuBuilder::new(app, "Emulsion")
+            .item(&about)
+            .separator()
+            .item(&preferences)
+            .separator()
+            .services()
+            .separator()
+            .hide()
+            .hide_others()
+            .show_all()
+            .separator()
+            .quit()
+            .build()?;
+        builder = builder.item(&app_menu);
+    }
+
+    let import_folder = MenuItemBuilder::with_id("import_folder", "Import Folder…").build(app)?;
+    let import_files = MenuItemBuilder::with_id("import_files", "Import Files…")
+        .accelerator("CmdOrCtrl+Shift+I")
+        .build(app)?;
+    let export = MenuItemBuilder::with_id("export", "Export…")
+        .accelerator("CmdOrCtrl+Shift+E")
+        .build(app)?;
+    let export_pdf = MenuItemBuilder::with_id("export_pdf", "Export Contact Sheet PDF…").build(app)?;
+    let mut file_menu = SubmenuBuilder::new(app, "File")
+        .item(&import_folder)
+        .item(&import_files)
+        .separator()
+        .item(&export)
+        .item(&export_pdf);
+    if !cfg!(target_os = "macos") {
+        let preferences = MenuItemBuilder::with_id("preferences", "Preferences…")
+            .accelerator("CmdOrCtrl+,")
+            .build(app)?;
+        file_menu = file_menu.separator().item(&preferences).separator().quit();
+    }
+    builder = builder.item(&file_menu.build()?);
+
+    let undo = MenuItemBuilder::with_id("undo", "Undo").build(app)?;
+    let redo = MenuItemBuilder::with_id("redo", "Redo").build(app)?;
+    let copy_settings = MenuItemBuilder::with_id("copy_settings", "Copy Settings").build(app)?;
+    let paste_settings = MenuItemBuilder::with_id("paste_settings", "Paste Settings").build(app)?;
+    let select_all = MenuItemBuilder::with_id("select_all", "Select All").build(app)?;
+    let deselect_all = MenuItemBuilder::with_id("deselect_all", "Deselect All").build(app)?;
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .item(&undo)
+        .item(&redo)
+        .separator()
+        .item(&copy_settings)
+        .item(&paste_settings)
+        .separator()
+        .item(&select_all)
+        .item(&deselect_all)
+        .build()?;
+    builder = builder.item(&edit_menu);
+
+    let view_library = MenuItemBuilder::with_id("view_library", "Library")
+        .accelerator("CmdOrCtrl+1")
+        .build(app)?;
+    let view_develop = MenuItemBuilder::with_id("view_develop", "Develop")
+        .accelerator("CmdOrCtrl+2")
+        .build(app)?;
+    let view_print = MenuItemBuilder::with_id("view_print", "Print")
+        .accelerator("CmdOrCtrl+3")
+        .build(app)?;
+    let view_grid = MenuItemBuilder::with_id("view_grid", "Grid").build(app)?;
+    let view_loupe = MenuItemBuilder::with_id("view_loupe", "Loupe").build(app)?;
+    let view_compare = MenuItemBuilder::with_id("view_compare", "Compare").build(app)?;
+    let view_survey = MenuItemBuilder::with_id("view_survey", "Survey").build(app)?;
+    let toggle_clipping =
+        MenuItemBuilder::with_id("toggle_clipping", "Toggle Clipping Overlay").build(app)?;
+    let toggle_before_after =
+        MenuItemBuilder::with_id("toggle_before_after", "Toggle Before / After").build(app)?;
+    let view_menu = SubmenuBuilder::new(app, "View")
+        .item(&view_library)
+        .item(&view_develop)
+        .item(&view_print)
+        .separator()
+        .item(&view_grid)
+        .item(&view_loupe)
+        .item(&view_compare)
+        .item(&view_survey)
+        .separator()
+        .item(&toggle_clipping)
+        .item(&toggle_before_after)
+        .build()?;
+    builder = builder.item(&view_menu);
+
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .close_window()
+        .build()?;
+    builder = builder.item(&window_menu);
+
+    builder.build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .menu(|app| build_menu(app))
+        .on_menu_event(|app, event| {
+            let id: &str = event.id().as_ref();
+            let _ = app.emit("menu-action", id);
+        })
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;

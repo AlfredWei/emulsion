@@ -953,13 +953,23 @@
   /** Applying a preset to the currently open Develop image is an
    * immediate, discrete action (like Reset/mask-delete), not a debounced
    * slider drag -- flushes right away under its own label. */
-  function handleApplyPreset(/** @type {number} */ presetId) {
+  async function handleApplyPreset(/** @type {number} */ presetId) {
     clearPreview();
     if (developVersionId === null) return;
     const preset = presets.find((p) => p.id === presetId);
     if (!preset) return;
+    const versionId = developVersionId;
     editStack = applyPresetOps(editStack, preset.edit_stack);
-    flushEditStack(`Apply Preset: ${preset.name}`);
+    // Same immediate-regen pattern restoreTo/handleRestoreSnapshot already
+    // follow -- this is a jump-to-a-different-look commit, not a slider
+    // drag, so the Library grid thumbnail shouldn't have to wait for the
+    // "leaving Develop" checkpoint (switchModule/openDevelop) to catch up.
+    // Awaited first, same unawaited-dependent-IPC-calls hazard openDevelop's
+    // own flush/regen pair guards against (regenerateThumbnailFor re-reads
+    // the edit stack fresh from the catalog, so it must not race the write
+    // it's meant to reflect).
+    await flushEditStack(`Apply Preset: ${preset.name}`);
+    regenerateThumbnailFor(versionId);
   }
 
   async function handleExportPreset(/** @type {number} */ presetId) {
@@ -1079,10 +1089,14 @@
    * open in Develop -- an immediate, discrete action (like Apply
    * Preset), flushed right away rather than going through the slider
    * debounce. */
-  function handlePasteSettings() {
+  async function handlePasteSettings() {
     if (!copiedSettings || developVersionId === null) return;
+    const versionId = developVersionId;
     editStack = applyPresetOps(editStack, copiedSettings);
-    flushEditStack("Paste Settings");
+    // Same immediate-regen reasoning (and awaited-first ordering) as
+    // handleApplyPreset's own comment.
+    await flushEditStack("Paste Settings");
+    regenerateThumbnailFor(versionId);
     statusMessage = "Pasted settings";
   }
 

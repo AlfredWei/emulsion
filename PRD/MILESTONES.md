@@ -146,6 +146,30 @@ Each milestone lists **scope**, **explicitly deferred**, and **exit criteria** (
 
 ---
 
+## M4.5 — Develop & workflow UX polish
+**Rough size:** 1–2 months · **Lightroom analog:** n/a — workflow refinements identified from dogfooding M1–M4, not tied to a specific Lightroom version release
+
+Inserted between M4 and M5 (2026-08-30, user request after M4's Print Module shipped) — these are lower-risk, high-frequency workflow wins surfaced by actually using the app day-to-day, worth landing before M5's heavier GPU/merge/faces work.
+
+### Scope
+- Copy/paste Develop settings: copy an edit stack (or a chosen subset of its groups) from one image, paste onto another.
+- Batch apply: apply a copied edit stack or a saved preset across a multi-selected batch of images in one action.
+- Export dialog and batch export UX: visible per-file/overall progress during a batch export, and a "reveal in file manager" action once export completes (extends M4's existing single-item Reveal-in-File-Manager, currently Library-only, to the export flow).
+- Native OS menu bar (File/Edit/View/etc.), wired to existing app actions currently reachable only via in-UI controls.
+- History panel preview-on-hover: hovering a history step (or a preset) shows a live preview of that step's result before committing to it; relocate the Presets panel into this same area.
+- Resizable left/right Develop panel widths (drag to resize, replacing today's fixed widths).
+- Step-nudge (up/down) micro-adjustment controls on Develop slider values, for fine single-step increments beyond drag precision.
+
+### Exit criteria
+- A user can copy an edit stack (or a chosen subset) from one image and apply it to a single image or a batch selection.
+- Batch export shows real per-file/overall progress and offers a one-click reveal of the output folder when it completes.
+- Core app actions (Import, Export, Undo/Redo, etc.) are reachable from a native OS menu bar, not just in-app controls.
+- Hovering any history step or preset previews its result without committing to it.
+- Develop's left/right panels can be resized by the user and the chosen width persists across sessions.
+- Every Develop slider supports fine step-nudge adjustment via up/down controls, not drag-only.
+
+---
+
 ## M5 — Performance, GPU, merges, faces
 **Rough size:** 3–6 months · **Lightroom analog:** v6.0/CC, 2015
 

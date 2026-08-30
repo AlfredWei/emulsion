@@ -15,6 +15,7 @@
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import TextPromptDialog from "$lib/components/TextPromptDialog.svelte";
   import SmartCollectionDialog from "$lib/components/SmartCollectionDialog.svelte";
+  import CopySettingsDialog from "$lib/components/CopySettingsDialog.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import Filmstrip from "$lib/components/Filmstrip.svelte";
   import DevelopInfoBar from "$lib/components/DevelopInfoBar.svelte";
@@ -62,6 +63,7 @@
     deleteSnapshot,
     presetEligibleOps,
     applyPresetOps,
+    copySettingsOps,
     createPreset,
     listPresets,
     deletePreset,
@@ -1043,6 +1045,41 @@
     } finally {
       applyingPreset = false;
     }
+  }
+
+  // Copy/Paste Settings (M4.5): an unsaved, in-memory analog of Presets --
+  // "Copy Settings" snapshots a filtered subset of the CURRENTLY OPEN
+  // Develop image's own edit stack (via copySettingsOps, over the exact
+  // same preset-eligible op universe presetEligibleOps already defines);
+  // "Paste Settings" applies that snapshot with the SAME applyPresetOps
+  // upsert-by-name merge Presets use, so it carries the identical
+  // whole-op-replace limitation documented there. Deliberately reuses
+  // this machinery rather than inventing a second merge strategy.
+  let copiedSettings = $state(/** @type {import('$lib/api/develop.js').EditStack | null} */ (null));
+  let copySettingsDialogOpen = $state(false);
+
+  function handleCopySettingsRequest() {
+    if (developVersionId === null) return;
+    copySettingsDialogOpen = true;
+  }
+
+  function handleCopySettingsConfirmed(/** @type {string[]} */ groupIds) {
+    copySettingsDialogOpen = false;
+    copiedSettings = copySettingsOps(editStack, groupIds);
+    statusMessage = "Copied settings";
+  }
+
+  /** Both buttons live at the bottom of DevelopPanel (Develop-only), so
+   * paste only ever targets the image currently open in Develop -- an
+   * immediate, discrete action (like Apply Preset), flushed right away
+   * rather than going through the slider debounce. Applying a copied
+   * selection to a Library batch is Milestone M4.5's separate "batch
+   * apply" slice, not this one. */
+  function handlePasteSettings() {
+    if (!copiedSettings || developVersionId === null) return;
+    editStack = applyPresetOps(editStack, copiedSettings);
+    flushEditStack("Paste Settings");
+    statusMessage = "Pasted settings";
   }
 
   // What Export would act on right now: the open Develop image, or every
@@ -2831,6 +2868,12 @@
 
   <ExportDialog items={exportItems} onClose={() => (exportItems = null)} />
 
+  <CopySettingsDialog
+    open={copySettingsDialogOpen}
+    onConfirm={handleCopySettingsConfirmed}
+    onCancel={() => (copySettingsDialogOpen = false)}
+  />
+
   <ConfirmDialog
     open={confirmingRemoval}
     title="Remove from catalog"
@@ -3314,6 +3357,9 @@
         onSoftProofIntentChange={(v) => (softProofIntent = /** @type {typeof softProofIntent} */ (v))}
         onSoftProofGamutWarningChange={(v) => (softProofGamutWarning = v)}
         onChooseCustomProfile={handleChooseCustomProfile}
+        onCopySettingsRequest={handleCopySettingsRequest}
+        canPasteSettings={copiedSettings !== null}
+        onPasteSettingsRequest={handlePasteSettings}
       />
     </div>
     <MaskToolStrip

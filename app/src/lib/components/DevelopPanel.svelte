@@ -91,6 +91,9 @@
    *   onSoftProofIntentChange?: (value: string) => void,
    *   onSoftProofGamutWarningChange?: (value: boolean) => void,
    *   onChooseCustomProfile?: () => void,
+   *   onCopySettingsRequest: () => void,
+   *   canPasteSettings: boolean,
+   *   onPasteSettingsRequest: () => void,
    * }}
    */
   let {
@@ -167,6 +170,9 @@
     onSoftProofIntentChange,
     onSoftProofGamutWarningChange,
     onChooseCustomProfile,
+    onCopySettingsRequest,
+    canPasteSettings,
+    onPasteSettingsRequest,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -241,7 +247,26 @@
   </svg>
 {/snippet}
 
+{#snippet copySettingsIcon()}
+  <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+    <!-- Two overlapping sheets -- the standard "copy" glyph -->
+    <rect x="5.5" y="5.5" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.3" />
+    <path d="M3.5 10.5 V3.5 A1 1 0 0 1 4.5 2.5 H11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+  </svg>
+{/snippet}
+
+{#snippet pasteSettingsIcon()}
+  <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+    <!-- Clipboard with a clip at top -- the standard "paste" glyph -->
+    <rect x="4" y="3.5" width="8" height="10.5" rx="1" stroke="currentColor" stroke-width="1.3" />
+    <rect x="6" y="1.5" width="4" height="2.5" rx="0.6" fill="currentColor" />
+    <line x1="6" y1="8" x2="10" y2="8" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
+    <line x1="6" y1="10.5" x2="10" y2="10.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
+  </svg>
+{/snippet}
+
 <div class="panel">
+  <div class="panel-scroll">
   <div class="panel-header">
     <span class="panel-title">Edit</span>
     <button class="reset-btn" type="button" disabled={!hasEdits} onclick={onResetRequest}>Reset</button>
@@ -1198,17 +1223,85 @@
       </p>
     </div>
   </details>
+  </div>
+
+  <div class="panel-footer">
+    <button
+      type="button"
+      class="footer-icon-btn"
+      onclick={onCopySettingsRequest}
+      title="Copy Settings"
+      aria-label="Copy Settings"
+    >
+      {@render copySettingsIcon()}
+    </button>
+    <button
+      type="button"
+      class="footer-icon-btn"
+      onclick={onPasteSettingsRequest}
+      disabled={!canPasteSettings}
+      title="Paste Settings"
+      aria-label="Paste Settings"
+    >
+      {@render pasteSettingsIcon()}
+    </button>
+  </div>
 </div>
 
 <style>
   .panel {
     width: 240px;
     flex: none;
+    display: flex;
+    flex-direction: column;
     background: var(--bg-panel);
     border-left: 1px solid var(--border-subtle);
+    overflow: hidden;
+  }
+  /* Everything scrolls except .panel-footer below -- Copy/Paste Settings
+     needs to stay reachable without scrolling past every adjustment
+     section (user feedback: it was buried at the bottom of the scroll
+     as a collapsible section originally). */
+  .panel-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 14px 12px;
+  }
+  .panel-footer {
+    flex: none;
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .footer-icon-btn {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 26px;
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-s);
+  }
+  .footer-icon-btn:hover {
+    filter: brightness(1.15);
+    background: var(--accent);
+    color: #fff;
+  }
+  .footer-icon-btn:disabled {
+    cursor: default;
+    filter: none;
+    color: var(--text-tertiary);
+    background: transparent;
+    border-color: var(--border-strong);
+    opacity: 0.6;
   }
   .panel-header {
     display: flex;
@@ -1317,6 +1410,12 @@
     color: var(--accent-strong);
     background: var(--accent-soft);
     text-align: center;
+  }
+  .preset-action-btn:disabled {
+    cursor: default;
+    color: var(--text-tertiary);
+    background: transparent;
+    opacity: 0.6;
   }
   .preset-list {
     list-style: none;

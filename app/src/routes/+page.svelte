@@ -58,9 +58,12 @@
     setEditStack,
     getHistory,
     restoreHistoryEntry,
+    previewHistoryEntry,
     addSnapshot,
     getSnapshots,
     restoreSnapshot,
+    previewSnapshot,
+    previewEditStack,
     deleteSnapshot,
     presetEligibleOps,
     applyPresetOps,
@@ -950,12 +953,23 @@
   /** Applying a preset to the currently open Develop image is an
    * immediate, discrete action (like Reset/mask-delete), not a debounced
    * slider drag -- flushes right away under its own label. */
-  function handleApplyPreset(/** @type {number} */ presetId) {
+  async function handleApplyPreset(/** @type {number} */ presetId) {
+    clearPreview();
     if (developVersionId === null) return;
     const preset = presets.find((p) => p.id === presetId);
     if (!preset) return;
+    const versionId = developVersionId;
     editStack = applyPresetOps(editStack, preset.edit_stack);
-    flushEditStack(`Apply Preset: ${preset.name}`);
+    // Same immediate-regen pattern restoreTo/handleRestoreSnapshot already
+    // follow -- this is a jump-to-a-different-look commit, not a slider
+    // drag, so the Library grid thumbnail shouldn't have to wait for the
+    // "leaving Develop" checkpoint (switchModule/openDevelop) to catch up.
+    // Awaited first, same unawaited-dependent-IPC-calls hazard openDevelop's
+    // own flush/regen pair guards against (regenerateThumbnailFor re-reads
+    // the edit stack fresh from the catalog, so it must not race the write
+    // it's meant to reflect).
+    await flushEditStack(`Apply Preset: ${preset.name}`);
+    regenerateThumbnailFor(versionId);
   }
 
   async function handleExportPreset(/** @type {number} */ presetId) {
@@ -1075,10 +1089,14 @@
    * open in Develop -- an immediate, discrete action (like Apply
    * Preset), flushed right away rather than going through the slider
    * debounce. */
-  function handlePasteSettings() {
+  async function handlePasteSettings() {
     if (!copiedSettings || developVersionId === null) return;
+    const versionId = developVersionId;
     editStack = applyPresetOps(editStack, copiedSettings);
-    flushEditStack("Paste Settings");
+    // Same immediate-regen reasoning (and awaited-first ordering) as
+    // handleApplyPreset's own comment.
+    await flushEditStack("Paste Settings");
+    regenerateThumbnailFor(versionId);
     statusMessage = "Pasted settings";
   }
 
@@ -1283,11 +1301,84 @@
   let canUndo = $derived(historyIndex > 0);
   let canRedo = $derived(historyIndex < history.length - 1);
 
+  // History/Snapshot/Preset hover-preview (M4.5): a small rendered
+  // thumbnail in the rail's own preview box, NOT a swap of the live
+  // `editStack` -- an earlier version of this feature did swap `editStack`
+  // (reusing DevelopCanvas's existing reactive WebGPU render for free),
+  // but that meant every hover drove the full interactive canvas pipeline,
+  // the same cost as a real edit, just to preview one. This instead
+  // reuses the existing CPU-rendered "graded" preview tier
+  // (`preview_cache::ensure_graded_preview_for_hash`, the same one
+  // Library's Loupe view already uses) at draft resolution, cached by
+  // content hash + stack hash -- cheap after the first hover of any given
+  // entry, and never touches the main canvas at all. `previewToken`
+  // invalidates a still-in-flight render once the user has moved to a
+  // different row (or left) before it resolves; debounced so quickly
+  // scanning across rows doesn't fire one render per row passed over.
+  let previewUrl = $state(/** @type {string | null} */ (null));
+  let previewToken = 0;
+  let previewDebounceTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+
+  /** mouseleave handler, AND the first thing every real commit path
+   * (restoreTo, handleRestoreSnapshot, handleApplyPreset) calls -- a click
+   * can land before a stray mouseleave fires, and the stale preview
+   * thumbnail should disappear the instant the click actually commits,
+   * not linger until the pointer happens to leave. */
+  function clearPreview() {
+    previewToken++;
+    if (previewDebounceTimer !== null) {
+      clearTimeout(previewDebounceTimer);
+      previewDebounceTimer = null;
+    }
+    previewUrl = null;
+  }
+
+  function schedulePreview(/** @type {() => Promise<import('$lib/api/develop.js').DevelopPreviewInfo>} */ fetchPreview) {
+    if (developImagePath === null) return;
+    const token = ++previewToken;
+    if (previewDebounceTimer !== null) clearTimeout(previewDebounceTimer);
+    previewDebounceTimer = setTimeout(() => {
+      fetchPreview()
+        .then((info) => {
+          if (token === previewToken) previewUrl = convertFileSrc(info.path);
+        })
+        .catch(() => {});
+    }, 120);
+  }
+
+  function handlePeekHistory(/** @type {number} */ index) {
+    if (developVersionId === null || developImagePath === null || index < 0 || index >= history.length) return;
+    const versionId = developVersionId;
+    const entryId = history[index].id;
+    const path = developImagePath;
+    const contentHash = developImageContentHash;
+    schedulePreview(() => previewHistoryEntry(versionId, entryId, path, contentHash));
+  }
+
+  function handlePeekSnapshot(/** @type {number} */ snapshotId) {
+    if (developVersionId === null || developImagePath === null) return;
+    const versionId = developVersionId;
+    const path = developImagePath;
+    const contentHash = developImageContentHash;
+    schedulePreview(() => previewSnapshot(versionId, snapshotId, path, contentHash));
+  }
+
+  function handlePeekPreset(/** @type {number} */ presetId) {
+    if (developImagePath === null) return;
+    const preset = presets.find((p) => p.id === presetId);
+    if (!preset) return;
+    const mergedStack = applyPresetOps(editStack, preset.edit_stack);
+    const path = developImagePath;
+    const contentHash = developImageContentHash;
+    schedulePreview(() => previewEditStack(path, contentHash, mergedStack));
+  }
+
   /** Moves the live edit stack to `history[index]` -- undo, redo, and a
    * History-panel row click are all this same call, just with a
    * different `index`. See `history`/`historyIndex`'s own doc comment for
    * why this needs no server-side cursor concept at all. */
   async function restoreTo(/** @type {number} */ index) {
+    clearPreview();
     if (developVersionId === null || index < 0 || index >= history.length) return;
     const versionId = developVersionId;
     const entryId = history[index].id;
@@ -1331,6 +1422,7 @@
    * "Restore Snapshot: {name}" row, so this jumps historyIndex straight
    * to newest rather than searching for that row's position. */
   async function handleRestoreSnapshot(/** @type {number} */ snapshotId) {
+    clearPreview();
     if (developVersionId === null) return;
     const versionId = developVersionId;
     if (persistTimer !== null) {
@@ -3352,6 +3444,17 @@
         onCreateSnapshotRequest={() => (creatingSnapshot = true)}
         onRestoreSnapshot={handleRestoreSnapshot}
         onDeleteSnapshot={handleDeleteSnapshot}
+        {presets}
+        onApplyPreset={handleApplyPreset}
+        onSaveCurrentAsPresetRequest={handleSaveCurrentAsPresetRequest}
+        onExportPreset={handleExportPreset}
+        onDeletePresetRequest={handleDeletePresetRequest}
+        onImportPresetRequest={handleImportPresetRequest}
+        onPeekHistory={handlePeekHistory}
+        onPeekSnapshot={handlePeekSnapshot}
+        onPeekPreset={handlePeekPreset}
+        onPeekEnd={clearPreview}
+        {previewUrl}
       />
       <DevelopCanvas
         imagePath={developImagePath}
@@ -3479,12 +3582,6 @@
         onLumaNRChange={handleLumaNRChange}
         {colorNR}
         onColorNRChange={handleColorNRChange}
-        {presets}
-        onApplyPreset={handleApplyPreset}
-        onSaveCurrentAsPresetRequest={handleSaveCurrentAsPresetRequest}
-        onExportPreset={handleExportPreset}
-        onDeletePresetRequest={handleDeletePresetRequest}
-        onImportPresetRequest={handleImportPresetRequest}
         {softProofEnabled}
         {softProofTarget}
         {softProofCustomProfilePath}

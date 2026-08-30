@@ -1395,6 +1395,20 @@ impl Catalog {
         Ok(serde_json::from_str(&json).expect("stored edit stacks are always valid JSON"))
     }
 
+    /// Read-only counterpart to `restore_history_entry`, for the History
+    /// panel's hover-preview (M4.5): a hover must be able to show a past
+    /// entry's resulting look WITHOUT writing it back to `image_versions`
+    /// -- only an actual click (still going through `restore_history_entry`)
+    /// should commit.
+    pub fn peek_history_entry(&self, version_id: i64, history_id: i64) -> Result<EditStack> {
+        let json: String = self.conn.query_row(
+            "SELECT edit_stack_json FROM edit_history WHERE id = ?1 AND version_id = ?2",
+            params![history_id, version_id],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&json).expect("stored edit stacks are always valid JSON"))
+    }
+
     /// Saves the version's CURRENT edit stack as a new named snapshot.
     /// No uniqueness constraint on `name` -- real Lightroom allows
     /// duplicate snapshot names too.
@@ -1452,6 +1466,18 @@ impl Catalog {
         let label = format!("Restore Snapshot: {name}");
         let history = self.record_edit_stack(version_id, &stack, Some(&label))?;
         Ok((stack, history))
+    }
+
+    /// Read-only counterpart to `restore_snapshot`, same hover-preview
+    /// purpose as `peek_history_entry` above -- never touches
+    /// `image_versions` or `edit_history`.
+    pub fn peek_snapshot(&self, version_id: i64, snapshot_id: i64) -> Result<EditStack> {
+        let json: String = self.conn.query_row(
+            "SELECT edit_stack_json FROM snapshots WHERE id = ?1 AND version_id = ?2",
+            params![snapshot_id, version_id],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&json).expect("stored edit stacks are always valid JSON"))
     }
 
     pub fn delete_snapshot(&self, version_id: i64, snapshot_id: i64) -> Result<()> {
@@ -2465,6 +2491,27 @@ mod tests {
     }
 
     #[test]
+    fn peek_history_entry_returns_the_stack_but_never_writes_it_back() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog.add_image("/a.CR3").unwrap();
+        let version_id = catalog.add_edit_stack(image_id, &EditStack::empty()).unwrap();
+
+        let history = catalog
+            .record_edit_stack(version_id, &stack_with("exposure", 0.5), Some("Exposure"))
+            .unwrap();
+        let entry_id = history[0].id;
+        catalog.record_edit_stack(version_id, &stack_with("exposure", 0.9), Some("Exposure 2")).unwrap();
+
+        let peeked = catalog.peek_history_entry(version_id, entry_id).unwrap();
+
+        assert_eq!(peeked, stack_with("exposure", 0.5));
+        // Unlike restore_history_entry, the live stack (and history) must
+        // be completely untouched by a peek.
+        assert_eq!(catalog.get_edit_stack(version_id).unwrap(), stack_with("exposure", 0.9));
+        assert_eq!(catalog.get_history(version_id).unwrap().len(), 2);
+    }
+
+    #[test]
     fn snapshots_round_trip_and_can_be_deleted() {
         let catalog = Catalog::open_in_memory().unwrap();
         let image_id = catalog.add_image("/a.CR3").unwrap();
@@ -2513,6 +2560,25 @@ mod tests {
         // silent side channel outside the undo system.
         assert_eq!(history.last().unwrap().label, "Restore Snapshot: Checkpoint");
         assert_eq!(catalog.get_history(version_id).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn peek_snapshot_returns_the_stack_but_never_writes_it_back() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog.add_image("/a.CR3").unwrap();
+        let version_id = catalog.add_edit_stack(image_id, &EditStack::empty()).unwrap();
+
+        catalog.record_edit_stack(version_id, &stack_with("exposure", 0.5), Some("Exposure")).unwrap();
+        let snap = catalog.add_snapshot(version_id, "Checkpoint").unwrap();
+        catalog.record_edit_stack(version_id, &stack_with("exposure", 0.9), Some("Exposure 2")).unwrap();
+
+        let peeked = catalog.peek_snapshot(version_id, snap.id).unwrap();
+
+        assert_eq!(peeked, stack_with("exposure", 0.5));
+        // Unlike restore_snapshot, a peek must not touch the live stack or
+        // add a history row.
+        assert_eq!(catalog.get_edit_stack(version_id).unwrap(), stack_with("exposure", 0.9));
+        assert_eq!(catalog.get_history(version_id).unwrap().len(), 2);
     }
 
     #[test]

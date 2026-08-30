@@ -633,6 +633,107 @@ fn restore_history_entry(
         .map_err(|e| e.to_string())
 }
 
+/// Renders a small graded-preview thumbnail for a PAST history entry's
+/// resulting look (M4.5 hover-preview) -- merges `Catalog::peek_history_entry`'s
+/// read-only lookup (never writes to `image_versions`, unlike
+/// `restore_history_entry` above) with a render into one round trip,
+/// rather than a separate "fetch the stack" + "render it" pair of calls.
+/// Reuses `preview_cache::ensure_graded_preview_for_hash` -- the SAME
+/// draft-tier, content-hash-cached preview Library's Loupe view already
+/// renders (`get_graded_develop_preview` below) -- so a hover never has
+/// to drive the full interactive Develop canvas (DevelopCanvas.svelte's
+/// own WebGPU pipeline) just to preview a look; only this one small
+/// static image is produced, and it's cached by content hash + stack
+/// hash, so re-hovering the same entry is free after the first time.
+#[tauri::command]
+async fn preview_history_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: i64,
+    history_id: i64,
+    path: String,
+    content_hash: Option<String>,
+) -> Result<DevelopPreviewInfo, String> {
+    let catalog = state.catalog.clone();
+    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stack = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            catalog.peek_history_entry(version_id, history_id).map_err(|e| e.to_string())?
+        };
+        preview_cache::ensure_graded_preview_for_hash(
+            std::path::Path::new(&path),
+            content_hash.as_deref().unwrap_or(""),
+            &stack,
+            &previews_dir,
+        )
+        .map_err(|e| e.user_message())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Same hover-preview purpose as `preview_history_entry` above, for a
+/// snapshot -- see that command's own doc comment.
+#[tauri::command]
+async fn preview_snapshot(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: i64,
+    snapshot_id: i64,
+    path: String,
+    content_hash: Option<String>,
+) -> Result<DevelopPreviewInfo, String> {
+    let catalog = state.catalog.clone();
+    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stack = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            catalog.peek_snapshot(version_id, snapshot_id).map_err(|e| e.to_string())?
+        };
+        preview_cache::ensure_graded_preview_for_hash(
+            std::path::Path::new(&path),
+            content_hash.as_deref().unwrap_or(""),
+            &stack,
+            &previews_dir,
+        )
+        .map_err(|e| e.user_message())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Renders a small graded-preview thumbnail for an ARBITRARY, not-yet-
+/// applied `EditStack` -- backs the Preset hover-preview (M4.5): unlike
+/// History/Snapshot entries, a preset's ops are already fully in memory
+/// on the frontend (`PresetEntry.edit_stack`), so JS merges it onto the
+/// currently open image's real edit stack itself (`applyPresetOps`) and
+/// this command only needs to render the resulting look, not look
+/// anything up in the catalog.
+#[tauri::command]
+async fn preview_edit_stack(
+    app: AppHandle,
+    path: String,
+    content_hash: Option<String>,
+    stack: EditStack,
+) -> Result<DevelopPreviewInfo, String> {
+    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_cache::ensure_graded_preview_for_hash(
+            std::path::Path::new(&path),
+            content_hash.as_deref().unwrap_or(""),
+            &stack,
+            &previews_dir,
+        )
+        .map_err(|e| e.user_message())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn add_snapshot(state: State<'_, AppState>, version_id: i64, name: String) -> Result<SnapshotEntry, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
@@ -1161,9 +1262,12 @@ pub fn run() {
             lookup_lens_profile,
             get_history,
             restore_history_entry,
+            preview_history_entry,
             add_snapshot,
             get_snapshots,
             restore_snapshot,
+            preview_snapshot,
+            preview_edit_stack,
             delete_snapshot,
             create_preset,
             list_presets,

@@ -90,3 +90,50 @@ jobs:
 
       - run: npm ci
       - run: npm run check
+
+  e2e:
+    name: E2E (WebdriverIO)
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same two platforms as rust-core -- the embedded WebDriver
+        # provider (tauri-plugin-wdio-webdriver) supports macOS/Windows/
+        # Linux, but this project only targets the first two (PRD §5).
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      # Same LibRaw-via-vcpkg step rust-core uses -- the e2e build compiles
+      # the full app (src-tauri), which needs it too. See that job's own
+      # comment for why VCPKG_ROOT is set explicitly.
+      - name: Install LibRaw via vcpkg (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+
+      # Builds the debug binary with the wdio-webdriver feature + e2e
+      # capability/config (see tauri.e2e.conf.json, Cargo.toml's
+      # wdio-webdriver feature) and runs the WebdriverIO suite against it.
+      - run: npm run test:e2e

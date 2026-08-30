@@ -1,0 +1,16 @@
+{
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "e2e",
+          "description": "Additional capability for e2e test builds only — grants the embedded WebDriver plugin's permission. Only merged in via --config tauri.e2e.conf.json, and only takes effect when the app is also built with --features wdio-webdriver (see app/e2e).",
+          "windows": ["main"],
+          "permissions": ["wdio-webdriver:default"]
+        }
+      ]
+    }
+  }
+}

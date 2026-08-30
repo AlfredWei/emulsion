@@ -1069,17 +1069,54 @@
     statusMessage = "Copied settings";
   }
 
-  /** Both buttons live at the bottom of DevelopPanel (Develop-only), so
-   * paste only ever targets the image currently open in Develop -- an
-   * immediate, discrete action (like Apply Preset), flushed right away
-   * rather than going through the slider debounce. Applying a copied
-   * selection to a Library batch is Milestone M4.5's separate "batch
-   * apply" slice, not this one. */
+  /** The Copy/Paste Settings buttons live at the bottom of DevelopPanel
+   * (Develop-only), so paste there only ever targets the image currently
+   * open in Develop -- an immediate, discrete action (like Apply
+   * Preset), flushed right away rather than going through the slider
+   * debounce. */
   function handlePasteSettings() {
     if (!copiedSettings || developVersionId === null) return;
     editStack = applyPresetOps(editStack, copiedSettings);
     flushEditStack("Paste Settings");
     statusMessage = "Pasted settings";
+  }
+
+  // Guards "Paste Settings to Selection" while a batch paste is in
+  // flight, same narrow race-mitigation purpose as applyingPreset above.
+  let pastingSettingsToSelection = $state(false);
+
+  /** M4.5 batch apply: applies the SAME in-memory clipboard Copy
+   * Settings filled (not a Preset) across every Library-selected image
+   * in one action. Mirrors handleApplyPresetToSelection's exact shape --
+   * frontend-orchestrated, non-atomic-across-the-batch getEditStack ->
+   * applyPresetOps merge -> setEditStack -> regenerateThumbnail per
+   * target, with the same re-sync-if-the-open-Develop-image-was-a-target
+   * guard -- rather than inventing a second batch pattern. */
+  async function handlePasteSettingsToSelection() {
+    if (!copiedSettings) return;
+    const targets = [...selectedIds];
+    if (targets.length === 0) return;
+    const settingsToApply = copiedSettings;
+    pastingSettingsToSelection = true;
+    try {
+      await Promise.all(
+        targets.map(async (versionId) => {
+          const current = await getEditStack(versionId);
+          const merged = applyPresetOps(current, settingsToApply);
+          await setEditStack(versionId, merged, "Paste Settings");
+          const path = await regenerateThumbnail(versionId);
+          if (path) patchLocal(versionId, { thumbnail_path: path });
+        }),
+      );
+      if (developVersionId !== null && targets.includes(developVersionId)) {
+        editStack = await getEditStack(developVersionId);
+      }
+      statusMessage = `Pasted settings to ${targets.length} photo${targets.length === 1 ? "" : "s"}`;
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Paste settings failed: ${e}`;
+    } finally {
+      pastingSettingsToSelection = false;
+    }
   }
 
   // What Export would act on right now: the open Develop image, or every
@@ -2845,6 +2882,14 @@
         <option value={preset.id}>{preset.name}</option>
       {/each}
     </select>
+    <button
+      class="import-btn secondary"
+      onclick={handlePasteSettingsToSelection}
+      disabled={activeModule !== "library" || selectedIds.size === 0 || !copiedSettings || pastingSettingsToSelection}
+      title={copiedSettings ? "Paste the copied Develop settings onto every selected photo" : "Copy Settings in Develop first"}
+    >
+      {pastingSettingsToSelection ? "Pasting…" : "Paste Settings to Selection"}
+    </button>
     <button
       class="remove-btn"
       onclick={() => (confirmingRemoval = true)}

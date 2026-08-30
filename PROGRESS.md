@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M4.5 Slice 2 — Batch Apply (2026-08-30)
+
+Second M4.5 slice: applies the in-memory Copy Settings clipboard from Slice 1 across every Library-selected image in one action, not just the single image open in Develop.
+
+- **New `handlePasteSettingsToSelection` in `+page.svelte`**: same shape as `handleApplyPresetToSelection` (and the batch path Slice 1 originally built into `handlePasteSettings` before it was narrowed to Develop-only) — per-target `getEditStack → applyPresetOps → setEditStack → regenerateThumbnail`, non-atomic across the batch, `pastingSettingsToSelection` guard against a race with opening Develop mid-batch, and the same re-sync-if-the-open-Develop-image-was-a-target guard. No new merge strategy; reuses `applyPresetOps` unchanged.
+- **New "Paste Settings to Selection" button** in the Library titlebar next to "Apply Preset…" — enabled only when `copiedSettings` is set and at least one image is selected in Library.
+- **Verification**: `npm run check` 0 errors/0 warnings across 258 files. 88/88 Vitest, 253/253 Rust tests, both unchanged (no new pure function to unit-test — `handlePasteSettingsToSelection` is component-level orchestration, matching `handleApplyPresetToSelection`'s own no-dedicated-test convention). **Verified interactively** against a rebuilt `.app`: copied settings from an edited photo in Develop, selected 3 photos in Library via keyboard range-select (click + Shift+Right×2 — mouse Cmd/Shift-click was unreliable in this computer-use environment, closing the gap Slice 1 had left unverified), clicked "Paste Settings to Selection", confirmed "Pasted settings to 3 photos" and all three thumbnails visibly updated, then opened one of the previously-untouched photos in Develop and confirmed its Basic panel and History both show the exact pasted values (Exposure -0.25, Contrast -8, Highlights -9, Shadows +11) matching the source.
+
 ## M4.5 Slice 1 — Copy/Paste Develop Settings (2026-08-30)
 
 First M4.5 slice. Lets a photographer copy a chosen subset of one image's Develop settings and paste them onto another image (Develop-open) or a Library multi-selection (batch), without saving a named Preset first.

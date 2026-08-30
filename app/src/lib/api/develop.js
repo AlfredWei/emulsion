@@ -287,11 +287,20 @@ export function restoreHistoryEntry(/** @type {number} */ versionId, /** @type {
   return invoke("restore_history_entry", { versionId, historyId });
 }
 
-/** Read-only counterpart to `restoreHistoryEntry`, for hover-preview
- * (M4.5) -- never writes to the catalog.
- * @returns {Promise<EditStack>} */
-export function peekHistoryEntry(/** @type {number} */ versionId, /** @type {number} */ historyId) {
-  return invoke("peek_history_entry", { versionId, historyId });
+/** Renders a small graded-preview thumbnail for a PAST history entry's
+ * resulting look (M4.5 hover-preview) -- read-only, never writes to the
+ * catalog. Deliberately returns a rendered image (the same draft-tier
+ * preview Library's Loupe view already uses), not the raw `EditStack`,
+ * so the History panel's preview thumbnail never has to drive the full
+ * interactive Develop canvas just to show a hover.
+ * @returns {Promise<DevelopPreviewInfo>} */
+export function previewHistoryEntry(
+  /** @type {number} */ versionId,
+  /** @type {number} */ historyId,
+  /** @type {string} */ path,
+  /** @type {string | null} */ contentHash,
+) {
+  return invoke("preview_history_entry", { versionId, historyId, path, contentHash });
 }
 
 /** @returns {Promise<SnapshotEntry>} */
@@ -312,11 +321,31 @@ export function restoreSnapshot(/** @type {number} */ versionId, /** @type {numb
   return invoke("restore_snapshot", { versionId, snapshotId });
 }
 
-/** Read-only counterpart to `restoreSnapshot`, same hover-preview purpose
- * as `peekHistoryEntry` above.
- * @returns {Promise<EditStack>} */
-export function peekSnapshot(/** @type {number} */ versionId, /** @type {number} */ snapshotId) {
-  return invoke("peek_snapshot", { versionId, snapshotId });
+/** Same hover-preview purpose as `previewHistoryEntry` above, for a
+ * snapshot.
+ * @returns {Promise<DevelopPreviewInfo>} */
+export function previewSnapshot(
+  /** @type {number} */ versionId,
+  /** @type {number} */ snapshotId,
+  /** @type {string} */ path,
+  /** @type {string | null} */ contentHash,
+) {
+  return invoke("preview_snapshot", { versionId, snapshotId, path, contentHash });
+}
+
+/** Renders a small graded-preview thumbnail for an ARBITRARY, not-yet-
+ * applied `EditStack` -- the Preset hover-preview's entry point (M4.5):
+ * unlike History/Snapshot entries, a preset's ops are already fully in
+ * memory (`PresetEntry.edit_stack`), so the caller merges it onto the
+ * currently open image's real edit stack itself (`applyPresetOps`) and
+ * only needs Rust to render the resulting look, not look anything up.
+ * @returns {Promise<DevelopPreviewInfo>} */
+export function previewEditStack(
+  /** @type {string} */ path,
+  /** @type {string | null} */ contentHash,
+  /** @type {EditStack} */ stack,
+) {
+  return invoke("preview_edit_stack", { path, contentHash, stack });
 }
 
 /** @returns {Promise<void>} */

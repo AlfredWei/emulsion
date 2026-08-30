@@ -58,11 +58,12 @@
     setEditStack,
     getHistory,
     restoreHistoryEntry,
-    peekHistoryEntry,
+    previewHistoryEntry,
     addSnapshot,
     getSnapshots,
     restoreSnapshot,
-    peekSnapshot,
+    previewSnapshot,
+    previewEditStack,
     deleteSnapshot,
     presetEligibleOps,
     applyPresetOps,
@@ -953,7 +954,7 @@
    * immediate, discrete action (like Reset/mask-delete), not a debounced
    * slider drag -- flushes right away under its own label. */
   function handleApplyPreset(/** @type {number} */ presetId) {
-    endPreview();
+    clearPreview();
     if (developVersionId === null) return;
     const preset = presets.find((p) => p.id === presetId);
     if (!preset) return;
@@ -1286,82 +1287,76 @@
   let canUndo = $derived(historyIndex > 0);
   let canRedo = $derived(historyIndex < history.length - 1);
 
-  // History/Snapshot/Preset hover-preview (M4.5): swaps `editStack` itself
-  // rather than adding a second "displayed stack" concept -- every
-  // grading prop DevelopCanvas/DevelopPanel receive is already `$derived`
-  // from `editStack`, so this reuses the exact reactive pipeline a real
-  // edit already goes through, with zero new wiring on the render side.
-  // `editStackBeforePreview` is the one true un-previewed value, captured
-  // only once per hover run (a second hover mid-preview must merge onto
-  // the REAL stack, not onto whatever the previous hover happened to be
-  // showing); `previewToken` invalidates a still-in-flight peek IPC call
-  // once the user has moved on to a different row (or committed) before
-  // it resolves.
-  let editStackBeforePreview = /** @type {import('$lib/api/develop.js').EditStack | null} */ (null);
+  // History/Snapshot/Preset hover-preview (M4.5): a small rendered
+  // thumbnail in the rail's own preview box, NOT a swap of the live
+  // `editStack` -- an earlier version of this feature did swap `editStack`
+  // (reusing DevelopCanvas's existing reactive WebGPU render for free),
+  // but that meant every hover drove the full interactive canvas pipeline,
+  // the same cost as a real edit, just to preview one. This instead
+  // reuses the existing CPU-rendered "graded" preview tier
+  // (`preview_cache::ensure_graded_preview_for_hash`, the same one
+  // Library's Loupe view already uses) at draft resolution, cached by
+  // content hash + stack hash -- cheap after the first hover of any given
+  // entry, and never touches the main canvas at all. `previewToken`
+  // invalidates a still-in-flight render once the user has moved to a
+  // different row (or left) before it resolves; debounced so quickly
+  // scanning across rows doesn't fire one render per row passed over.
+  let previewUrl = $state(/** @type {string | null} */ (null));
   let previewToken = 0;
   let previewDebounceTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
 
-  function beginPreview(/** @type {import('$lib/api/develop.js').EditStack} */ stack) {
-    if (editStackBeforePreview === null) editStackBeforePreview = editStack;
-    editStack = stack;
-  }
-
-  /** Ends whatever preview is active (mouseleave), AND is the first thing
-   * every real commit path (restoreTo, handleRestoreSnapshot,
-   * handleApplyPreset) calls -- a click can land while a preview is still
-   * showing (no guaranteed mouseleave-before-click DOM ordering), so
-   * every commit must first collapse back to the true pre-hover stack
-   * before computing its own real change, or it would silently compute
-   * that change on top of a preview instead of the actual prior edit. */
-  function endPreview() {
+  /** mouseleave handler, AND the first thing every real commit path
+   * (restoreTo, handleRestoreSnapshot, handleApplyPreset) calls -- a click
+   * can land before a stray mouseleave fires, and the stale preview
+   * thumbnail should disappear the instant the click actually commits,
+   * not linger until the pointer happens to leave. */
+  function clearPreview() {
     previewToken++;
     if (previewDebounceTimer !== null) {
       clearTimeout(previewDebounceTimer);
       previewDebounceTimer = null;
     }
-    if (editStackBeforePreview !== null) {
-      editStack = editStackBeforePreview;
-      editStackBeforePreview = null;
-    }
+    previewUrl = null;
   }
 
-  /** History/Snapshot peeks need a real IPC round trip (`peekHistoryEntry`/
-   * `peekSnapshot`) -- debounced so quickly scanning across rows doesn't
-   * fire one request per row; Presets don't need this (see
-   * `handlePeekPreset`) since the full stack is already in memory. */
-  function schedulePeek(/** @type {() => Promise<import('$lib/api/develop.js').EditStack | null>} */ fetchStack) {
+  function schedulePreview(/** @type {() => Promise<import('$lib/api/develop.js').DevelopPreviewInfo>} */ fetchPreview) {
+    if (developImagePath === null) return;
     const token = ++previewToken;
     if (previewDebounceTimer !== null) clearTimeout(previewDebounceTimer);
     previewDebounceTimer = setTimeout(() => {
-      fetchStack()
-        .then((stack) => {
-          if (stack && token === previewToken) beginPreview(stack);
+      fetchPreview()
+        .then((info) => {
+          if (token === previewToken) previewUrl = convertFileSrc(info.path);
         })
         .catch(() => {});
     }, 120);
   }
 
   function handlePeekHistory(/** @type {number} */ index) {
-    if (developVersionId === null || index < 0 || index >= history.length) return;
+    if (developVersionId === null || developImagePath === null || index < 0 || index >= history.length) return;
     const versionId = developVersionId;
     const entryId = history[index].id;
-    schedulePeek(() => peekHistoryEntry(versionId, entryId));
+    const path = developImagePath;
+    const contentHash = developImageContentHash;
+    schedulePreview(() => previewHistoryEntry(versionId, entryId, path, contentHash));
   }
 
   function handlePeekSnapshot(/** @type {number} */ snapshotId) {
-    if (developVersionId === null) return;
+    if (developVersionId === null || developImagePath === null) return;
     const versionId = developVersionId;
-    schedulePeek(() => peekSnapshot(versionId, snapshotId));
+    const path = developImagePath;
+    const contentHash = developImageContentHash;
+    schedulePreview(() => previewSnapshot(versionId, snapshotId, path, contentHash));
   }
 
-  /** Presets are global and already fully in memory (`PresetEntry.edit_stack`,
-   * see catalog.rs's own doc comment on why it skips History/Snapshots'
-   * list-then-fetch split) -- no IPC, no debounce, applies instantly. */
   function handlePeekPreset(/** @type {number} */ presetId) {
-    if (developVersionId === null) return;
+    if (developImagePath === null) return;
     const preset = presets.find((p) => p.id === presetId);
     if (!preset) return;
-    beginPreview(applyPresetOps(editStackBeforePreview ?? editStack, preset.edit_stack));
+    const mergedStack = applyPresetOps(editStack, preset.edit_stack);
+    const path = developImagePath;
+    const contentHash = developImageContentHash;
+    schedulePreview(() => previewEditStack(path, contentHash, mergedStack));
   }
 
   /** Moves the live edit stack to `history[index]` -- undo, redo, and a
@@ -1369,7 +1364,7 @@
    * different `index`. See `history`/`historyIndex`'s own doc comment for
    * why this needs no server-side cursor concept at all. */
   async function restoreTo(/** @type {number} */ index) {
-    endPreview();
+    clearPreview();
     if (developVersionId === null || index < 0 || index >= history.length) return;
     const versionId = developVersionId;
     const entryId = history[index].id;
@@ -1413,7 +1408,7 @@
    * "Restore Snapshot: {name}" row, so this jumps historyIndex straight
    * to newest rather than searching for that row's position. */
   async function handleRestoreSnapshot(/** @type {number} */ snapshotId) {
-    endPreview();
+    clearPreview();
     if (developVersionId === null) return;
     const versionId = developVersionId;
     if (persistTimer !== null) {
@@ -3444,7 +3439,8 @@
         onPeekHistory={handlePeekHistory}
         onPeekSnapshot={handlePeekSnapshot}
         onPeekPreset={handlePeekPreset}
-        onPeekEnd={endPreview}
+        onPeekEnd={clearPreview}
+        {previewUrl}
       />
       <DevelopCanvas
         imagePath={developImagePath}

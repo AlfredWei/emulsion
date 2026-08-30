@@ -9,12 +9,20 @@
    * 200px/border-right/overflow-y shell (see +page.svelte's own `.rail`
    * CSS) -- Develop had no left rail at all before M3.
    *
-   * Hovering any History/Snapshot/Preset row (M4.5) fires the matching
-   * `onPeek*` callback so the parent can show that entry's resulting look
-   * on the canvas without committing to it -- `onPeekEnd` on mouseleave
-   * reverts. This component has no opinion on how the preview itself
-   * works (it doesn't hold or fetch any EditStack); it only reports hover
-   * enter/leave.
+   * Layout (M4.5): a small preview thumbnail is pinned at the very top,
+   * above a History/Presets tab strip (Snapshots lives inside the
+   * History tab, alongside its own "jump to a different state"
+   * sibling) -- only the tab's own content scrolls underneath, same
+   * fixed-header/scrolling-body split `DevelopPanel.svelte`'s own footer
+   * already established.
+   *
+   * Hovering any History/Snapshot/Preset row fires the matching
+   * `onPeek*` callback so the parent can render that entry's resulting
+   * look into `previewUrl`, shown in the thumbnail box above --
+   * `onPeekEnd` on mouseleave clears it. This component has no opinion
+   * on how the preview image itself is produced (it doesn't hold or
+   * fetch any EditStack or drive any canvas); it only reports hover
+   * enter/leave and displays whatever URL it's given.
    * @type {{
    *   history: import('$lib/api/develop.js').HistoryEntry[],
    *   historyIndex: number,
@@ -33,6 +41,7 @@
    *   onPeekSnapshot: (id: number) => void,
    *   onPeekPreset: (id: number) => void,
    *   onPeekEnd: () => void,
+   *   previewUrl: string | null,
    * }}
    */
   let {
@@ -53,7 +62,10 @@
     onPeekSnapshot,
     onPeekPreset,
     onPeekEnd,
+    previewUrl,
   } = $props();
+
+  let activeTab = $state(/** @type {"history" | "presets"} */ ("history"));
 
   // SQLite's datetime('now') is UTC with no timezone suffix -- appending
   // "Z" is what tells JS's Date parser that, rather than silently
@@ -66,109 +78,127 @@
 </script>
 
 <div class="history-rail">
-  <div class="section-label">History</div>
-  <div class="entry-list">
-    {#if history.length === 0}
-      <div class="empty">No edits yet</div>
+  <div class="preview-box">
+    {#if previewUrl}
+      <img src={previewUrl} alt="" />
+    {:else}
+      <div class="preview-placeholder">Hover a row to preview</div>
     {/if}
-    {#each history as entry, index (entry.id)}
-      <button
-        type="button"
-        class="entry"
-        class:current={index === historyIndex}
-        onclick={() => onJumpTo(index)}
-        onmouseenter={() => onPeekHistory(index)}
-        onmouseleave={onPeekEnd}
-      >
-        <span class="entry-label">{entry.label}</span>
-        <span class="entry-time">{formatTime(entry.created_at)}</span>
-      </button>
-    {/each}
   </div>
 
-  <div class="collections-header snapshots-header">
-    <div class="section-label">Snapshots</div>
-    <button type="button" class="rail-action" onclick={onCreateSnapshotRequest} title="Create Snapshot">+</button>
-  </div>
-  <div class="entry-list">
-    {#if snapshots.length === 0}
-      <div class="empty">No snapshots</div>
-    {/if}
-    {#each snapshots as snapshot (snapshot.id)}
-      <div class="snapshot-row">
-        <button
-          type="button"
-          class="entry snapshot-entry"
-          onclick={() => onRestoreSnapshot(snapshot.id)}
-          onmouseenter={() => onPeekSnapshot(snapshot.id)}
-          onmouseleave={onPeekEnd}
-        >
-          <span class="entry-label">{snapshot.name}</span>
-          <span class="entry-time">{formatTime(snapshot.created_at)}</span>
-        </button>
-        <button
-          type="button"
-          class="rail-action delete"
-          onclick={() => onDeleteSnapshot(snapshot.id)}
-          title="Delete Snapshot"
-        >
-          ×
-        </button>
-      </div>
-    {/each}
-  </div>
-
-  <div class="collections-header snapshots-header">
-    <div class="section-label">Presets</div>
-  </div>
-  <div class="preset-actions">
-    <button type="button" class="preset-action-btn" onclick={onSaveCurrentAsPresetRequest}>
-      Save Current as Preset…
+  <div class="tab-bar">
+    <button type="button" class="tab-btn" class:active={activeTab === "history"} onclick={() => (activeTab = "history")}>
+      History
     </button>
-    <button type="button" class="preset-action-btn" onclick={onImportPresetRequest}>Import…</button>
+    <button type="button" class="tab-btn" class:active={activeTab === "presets"} onclick={() => (activeTab = "presets")}>
+      Presets
+    </button>
   </div>
-  {#if presets.length === 0}
-    <div class="empty">No presets yet</div>
-  {:else}
-    <ul class="preset-list">
-      {#each presets as preset (preset.id)}
-        <li class="preset-row">
+
+  <div class="rail-scroll">
+    {#if activeTab === "history"}
+      <div class="section-label">History</div>
+      <div class="entry-list">
+        {#if history.length === 0}
+          <div class="empty">No edits yet</div>
+        {/if}
+        {#each history as entry, index (entry.id)}
           <button
             type="button"
-            class="preset-name-btn"
-            onclick={() => onApplyPreset(preset.id)}
-            onmouseenter={() => onPeekPreset(preset.id)}
+            class="entry"
+            class:current={index === historyIndex}
+            onclick={() => onJumpTo(index)}
+            onmouseenter={() => onPeekHistory(index)}
             onmouseleave={onPeekEnd}
-            title="Apply {preset.name}"
           >
-            {preset.name}
+            <span class="entry-label">{entry.label}</span>
+            <span class="entry-time">{formatTime(entry.created_at)}</span>
           </button>
-          <div class="preset-row-actions">
-            <button type="button" class="preset-icon-btn" onclick={() => onExportPreset(preset.id)} title="Export">
-              ⇩
+        {/each}
+      </div>
+
+      <div class="collections-header snapshots-header">
+        <div class="section-label">Snapshots</div>
+        <button type="button" class="rail-action" onclick={onCreateSnapshotRequest} title="Create Snapshot">+</button>
+      </div>
+      <div class="entry-list">
+        {#if snapshots.length === 0}
+          <div class="empty">No snapshots</div>
+        {/if}
+        {#each snapshots as snapshot (snapshot.id)}
+          <div class="snapshot-row">
+            <button
+              type="button"
+              class="entry snapshot-entry"
+              onclick={() => onRestoreSnapshot(snapshot.id)}
+              onmouseenter={() => onPeekSnapshot(snapshot.id)}
+              onmouseleave={onPeekEnd}
+            >
+              <span class="entry-label">{snapshot.name}</span>
+              <span class="entry-time">{formatTime(snapshot.created_at)}</span>
             </button>
             <button
               type="button"
-              class="preset-icon-btn delete"
-              onclick={() => onDeletePresetRequest(preset.id)}
-              title="Delete"
+              class="rail-action delete"
+              onclick={() => onDeleteSnapshot(snapshot.id)}
+              title="Delete Snapshot"
             >
               ×
             </button>
           </div>
-        </li>
-      {/each}
-    </ul>
-    <!-- Known limitation (see develop.js's applyPresetOps doc comment):
-         each preset op wholly REPLACES the matching op on the target
-         image, so an HSL/Tone Curve/Split Toning-bearing preset zeroes
-         out any of the target's own untouched adjustments in that same
-         category, not just the ones the preset itself set. -->
-    <p class="preset-note">
-      Applying a preset replaces matching adjustment categories (e.g. all HSL bands) entirely -- it does not merge
-      partial changes.
-    </p>
-  {/if}
+        {/each}
+      </div>
+    {:else}
+      <div class="preset-actions">
+        <button type="button" class="preset-action-btn" onclick={onSaveCurrentAsPresetRequest}>
+          Save Current as Preset…
+        </button>
+        <button type="button" class="preset-action-btn" onclick={onImportPresetRequest}>Import…</button>
+      </div>
+      {#if presets.length === 0}
+        <div class="empty">No presets yet</div>
+      {:else}
+        <ul class="preset-list">
+          {#each presets as preset (preset.id)}
+            <li class="preset-row">
+              <button
+                type="button"
+                class="preset-name-btn"
+                onclick={() => onApplyPreset(preset.id)}
+                onmouseenter={() => onPeekPreset(preset.id)}
+                onmouseleave={onPeekEnd}
+                title="Apply {preset.name}"
+              >
+                {preset.name}
+              </button>
+              <div class="preset-row-actions">
+                <button type="button" class="preset-icon-btn" onclick={() => onExportPreset(preset.id)} title="Export">
+                  ⇩
+                </button>
+                <button
+                  type="button"
+                  class="preset-icon-btn delete"
+                  onclick={() => onDeletePresetRequest(preset.id)}
+                  title="Delete"
+                >
+                  ×
+                </button>
+              </div>
+            </li>
+          {/each}
+        </ul>
+        <!-- Known limitation (see develop.js's applyPresetOps doc comment):
+             each preset op wholly REPLACES the matching op on the target
+             image, so an HSL/Tone Curve/Split Toning-bearing preset zeroes
+             out any of the target's own untouched adjustments in that same
+             category, not just the ones the preset itself set. -->
+        <p class="preset-note">
+          Applying a preset replaces matching adjustment categories (e.g. all HSL bands) entirely -- it does not merge
+          partial changes.
+        </p>
+      {/if}
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -177,9 +207,66 @@
     flex: none;
     background: var(--bg-panel);
     border-right: 1px solid var(--border-subtle);
-    padding: 14px 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .preview-box {
+    flex: none;
+    margin: 10px 10px 0;
+    aspect-ratio: 4 / 3;
+    background: #000;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .preview-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .preview-placeholder {
+    color: var(--text-tertiary);
+    font-size: 10.5px;
+    text-align: center;
+    padding: 8px;
+  }
+  .tab-bar {
+    flex: none;
+    display: flex;
+    margin: 10px 10px 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .tab-btn {
+    all: unset;
+    box-sizing: border-box;
+    flex: 1;
+    text-align: center;
+    cursor: pointer;
+    padding: 7px 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    border-bottom: 2px solid transparent;
+  }
+  .tab-btn:hover {
+    color: var(--text-secondary);
+  }
+  .tab-btn.active {
+    color: var(--accent-strong);
+    border-bottom-color: var(--accent-strong);
+  }
+  .rail-scroll {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    padding: 10px 10px 14px;
     display: flex;
     flex-direction: column;
     gap: 4px;

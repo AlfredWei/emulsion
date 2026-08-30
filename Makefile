@@ -1,4 +1,4 @@
-.PHONY: help install dev test build check spike spike-revert clean
+.PHONY: help install dev test test-frontend test-e2e build check spike spike-revert clean
 
 APP_DIR := app
 TAURI_CONF := $(APP_DIR)/src-tauri/tauri.conf.json
@@ -8,6 +8,8 @@ help:
 	@echo "  make install       Install frontend dependencies (npm install)"
 	@echo "  make dev           Start the app (Tauri dev window + Vite dev server)"
 	@echo "  make test          Run the Rust core test suite (cargo test --lib)"
+	@echo "  make test-frontend Run the frontend unit test suite (vitest)"
+	@echo "  make test-e2e      Run the WebdriverIO e2e suite against a real debug build"
 	@echo "  make build         Production build (installer/bundle for this OS)"
 	@echo "  make check         Svelte/TS type-check the frontend"
 	@echo "  make spike         Start the app pointed at the M0 WebGPU spike page"
@@ -22,6 +24,12 @@ dev:
 
 test:
 	cd $(APP_DIR)/src-tauri && cargo test --lib
+
+test-frontend:
+	cd $(APP_DIR) && npm test
+
+test-e2e:
+	cd $(APP_DIR) && npm run test:e2e
 
 build:
 	cd $(APP_DIR) && npm run tauri build

@@ -1,6 +1,7 @@
 <script>
   import { open } from "@tauri-apps/plugin-dialog";
   import { exportImages } from "$lib/api/export.js";
+  import { openFolder } from "$lib/api/system.js";
 
   /**
    * Batch-capable since M2 Slice 3 -- `items` is the whole selection (or
@@ -18,25 +19,52 @@
   let quality = $state(90);
   let exporting = $state(false);
   let statusMessage = $state("");
+  let revealWhenDone = $state(true);
+  // M4.5: real per-file progress, not a single opaque "Exporting…" state.
+  // `progressCurrent`/`progressFileName` track the item CURRENTLY being
+  // exported (1-indexed, so it reads as "2 of 5" rather than "1 of 5"
+  // while the second file is actually mid-export).
+  let progressCurrent = $state(0);
+  let progressTotal = $state(0);
+  let progressFileName = $state("");
 
   async function pickDestination() {
     const dir = await open({ directory: true, multiple: false });
     if (dir) destinationDir = /** @type {string} */ (dir);
   }
 
+  /** @param {string} path */
+  function fileNameOf(path) {
+    return path.split(/[\\/]/).pop() ?? path;
+  }
+
+  /** M4.5: exports one item per `exportImages` call instead of the whole
+   * batch in a single invoke -- lets the UI update between items for real
+   * progress. Sequential, not `Promise.all`, matching this app's own
+   * "deliberately sequential, not a worker pool" caution elsewhere for
+   * full-resolution decode work (preview_cache.rs's own doc comment) --
+   * several full-res RAW decodes running concurrently would spike
+   * CPU/memory for no real benefit, since Rust's underlying loop was
+   * always sequential anyway. */
   async function handleExport() {
     if (!items || items.length === 0 || !destinationDir) return;
     exporting = true;
     statusMessage = "";
+    progressCurrent = 0;
+    progressTotal = items.length;
+    const options = {
+      destination_dir: destinationDir,
+      long_edge: longEdge.trim() ? Number(longEdge) : null,
+      quality,
+    };
+    const results = /** @type {import('$lib/api/export.js').ExportResult[]} */ ([]);
     try {
-      const results = await exportImages(
-        items.map((item) => ({ path: item.path, version_id: item.version_id })),
-        {
-          destination_dir: destinationDir,
-          long_edge: longEdge.trim() ? Number(longEdge) : null,
-          quality,
-        },
-      );
+      for (const item of items) {
+        progressCurrent += 1;
+        progressFileName = fileNameOf(item.path);
+        const [result] = await exportImages([{ path: item.path, version_id: item.version_id }], options);
+        results.push(result);
+      }
       const failed = results.filter((r) => r.error);
       if (results.length === 1) {
         // Keep the single-image message shape people already know.
@@ -47,6 +75,18 @@
         statusMessage =
           `Exported ${results.length - failed.length} of ${results.length}` +
           (failed.length > 0 ? ` — first failure: ${failed[0].error}` : "");
+      }
+      // Isolated from the export loop's own try/catch above -- a failure
+      // opening the destination folder (e.g. a permission error) must
+      // never overwrite the export's own success/failure message with a
+      // misleading "Export failed", since the export itself already
+      // finished by this point.
+      if (revealWhenDone && failed.length < results.length) {
+        try {
+          await openFolder(destinationDir);
+        } catch (/** @type {any} */ e) {
+          statusMessage += ` (couldn't open destination folder: ${e})`;
+        }
       }
     } catch (/** @type {any} */ e) {
       statusMessage = `Export failed: ${e}`;
@@ -94,7 +134,19 @@
         />
       </div>
 
-      {#if statusMessage}
+      <label class="checkbox-row">
+        <input type="checkbox" bind:checked={revealWhenDone} disabled={exporting} />
+        Show in file manager when done
+      </label>
+
+      {#if exporting}
+        <div class="progress-row">
+          <progress value={progressCurrent} max={progressTotal}></progress>
+          <span class="progress-label">
+            Exporting {progressCurrent} of {progressTotal}{progressFileName ? ` — ${progressFileName}` : ""}
+          </span>
+        </div>
+      {:else if statusMessage}
         <div class="status">{statusMessage}</div>
       {/if}
 
@@ -149,7 +201,7 @@
     font-size: 11px;
     color: var(--text-secondary);
   }
-  input,
+  input:not([type="checkbox"]),
   .folder-btn {
     all: unset;
     box-sizing: border-box;
@@ -174,6 +226,31 @@
     font-family: var(--font-mono);
     color: var(--text-secondary);
     word-break: break-all;
+  }
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .progress-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  progress {
+    width: 100%;
+    height: 6px;
+    accent-color: var(--accent);
+  }
+  .progress-label {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .actions {
     display: flex;

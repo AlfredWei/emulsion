@@ -33,6 +33,12 @@ kamadak-exif = "0.6.1"
 lensfun = "0.7.0"
 bytemuck = "1.25"
 printpdf = { version = "0.12.7", default-features = false }
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+
+[features]
+# Embedded WebDriver server for e2e UI testing (app/e2e/) — opt-in only, never
+# enabled in a release build. Build with `--features wdio-webdriver` for e2e runs.
+wdio-webdriver = ["dep:tauri-plugin-wdio-webdriver"]
 
 # Patched fork of rsraw-sys so RAW decoding builds on Windows/MSVC via a
 # vcpkg-linked LibRaw instead of upstream's from-source compile (which

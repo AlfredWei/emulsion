@@ -287,6 +287,13 @@ export function restoreHistoryEntry(/** @type {number} */ versionId, /** @type {
   return invoke("restore_history_entry", { versionId, historyId });
 }
 
+/** Read-only counterpart to `restoreHistoryEntry`, for hover-preview
+ * (M4.5) -- never writes to the catalog.
+ * @returns {Promise<EditStack>} */
+export function peekHistoryEntry(/** @type {number} */ versionId, /** @type {number} */ historyId) {
+  return invoke("peek_history_entry", { versionId, historyId });
+}
+
 /** @returns {Promise<SnapshotEntry>} */
 export function addSnapshot(/** @type {number} */ versionId, /** @type {string} */ name) {
   return invoke("add_snapshot", { versionId, name });
@@ -303,6 +310,13 @@ export function getSnapshots(/** @type {number} */ versionId) {
  * @returns {Promise<[EditStack, HistoryEntry[]]>} */
 export function restoreSnapshot(/** @type {number} */ versionId, /** @type {number} */ snapshotId) {
   return invoke("restore_snapshot", { versionId, snapshotId });
+}
+
+/** Read-only counterpart to `restoreSnapshot`, same hover-preview purpose
+ * as `peekHistoryEntry` above.
+ * @returns {Promise<EditStack>} */
+export function peekSnapshot(/** @type {number} */ versionId, /** @type {number} */ snapshotId) {
+  return invoke("peek_snapshot", { versionId, snapshotId });
 }
 
 /** @returns {Promise<void>} */

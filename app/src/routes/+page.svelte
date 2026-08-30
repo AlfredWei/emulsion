@@ -58,9 +58,11 @@
     setEditStack,
     getHistory,
     restoreHistoryEntry,
+    peekHistoryEntry,
     addSnapshot,
     getSnapshots,
     restoreSnapshot,
+    peekSnapshot,
     deleteSnapshot,
     presetEligibleOps,
     applyPresetOps,
@@ -951,6 +953,7 @@
    * immediate, discrete action (like Reset/mask-delete), not a debounced
    * slider drag -- flushes right away under its own label. */
   function handleApplyPreset(/** @type {number} */ presetId) {
+    endPreview();
     if (developVersionId === null) return;
     const preset = presets.find((p) => p.id === presetId);
     if (!preset) return;
@@ -1283,11 +1286,90 @@
   let canUndo = $derived(historyIndex > 0);
   let canRedo = $derived(historyIndex < history.length - 1);
 
+  // History/Snapshot/Preset hover-preview (M4.5): swaps `editStack` itself
+  // rather than adding a second "displayed stack" concept -- every
+  // grading prop DevelopCanvas/DevelopPanel receive is already `$derived`
+  // from `editStack`, so this reuses the exact reactive pipeline a real
+  // edit already goes through, with zero new wiring on the render side.
+  // `editStackBeforePreview` is the one true un-previewed value, captured
+  // only once per hover run (a second hover mid-preview must merge onto
+  // the REAL stack, not onto whatever the previous hover happened to be
+  // showing); `previewToken` invalidates a still-in-flight peek IPC call
+  // once the user has moved on to a different row (or committed) before
+  // it resolves.
+  let editStackBeforePreview = /** @type {import('$lib/api/develop.js').EditStack | null} */ (null);
+  let previewToken = 0;
+  let previewDebounceTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+
+  function beginPreview(/** @type {import('$lib/api/develop.js').EditStack} */ stack) {
+    if (editStackBeforePreview === null) editStackBeforePreview = editStack;
+    editStack = stack;
+  }
+
+  /** Ends whatever preview is active (mouseleave), AND is the first thing
+   * every real commit path (restoreTo, handleRestoreSnapshot,
+   * handleApplyPreset) calls -- a click can land while a preview is still
+   * showing (no guaranteed mouseleave-before-click DOM ordering), so
+   * every commit must first collapse back to the true pre-hover stack
+   * before computing its own real change, or it would silently compute
+   * that change on top of a preview instead of the actual prior edit. */
+  function endPreview() {
+    previewToken++;
+    if (previewDebounceTimer !== null) {
+      clearTimeout(previewDebounceTimer);
+      previewDebounceTimer = null;
+    }
+    if (editStackBeforePreview !== null) {
+      editStack = editStackBeforePreview;
+      editStackBeforePreview = null;
+    }
+  }
+
+  /** History/Snapshot peeks need a real IPC round trip (`peekHistoryEntry`/
+   * `peekSnapshot`) -- debounced so quickly scanning across rows doesn't
+   * fire one request per row; Presets don't need this (see
+   * `handlePeekPreset`) since the full stack is already in memory. */
+  function schedulePeek(/** @type {() => Promise<import('$lib/api/develop.js').EditStack | null>} */ fetchStack) {
+    const token = ++previewToken;
+    if (previewDebounceTimer !== null) clearTimeout(previewDebounceTimer);
+    previewDebounceTimer = setTimeout(() => {
+      fetchStack()
+        .then((stack) => {
+          if (stack && token === previewToken) beginPreview(stack);
+        })
+        .catch(() => {});
+    }, 120);
+  }
+
+  function handlePeekHistory(/** @type {number} */ index) {
+    if (developVersionId === null || index < 0 || index >= history.length) return;
+    const versionId = developVersionId;
+    const entryId = history[index].id;
+    schedulePeek(() => peekHistoryEntry(versionId, entryId));
+  }
+
+  function handlePeekSnapshot(/** @type {number} */ snapshotId) {
+    if (developVersionId === null) return;
+    const versionId = developVersionId;
+    schedulePeek(() => peekSnapshot(versionId, snapshotId));
+  }
+
+  /** Presets are global and already fully in memory (`PresetEntry.edit_stack`,
+   * see catalog.rs's own doc comment on why it skips History/Snapshots'
+   * list-then-fetch split) -- no IPC, no debounce, applies instantly. */
+  function handlePeekPreset(/** @type {number} */ presetId) {
+    if (developVersionId === null) return;
+    const preset = presets.find((p) => p.id === presetId);
+    if (!preset) return;
+    beginPreview(applyPresetOps(editStackBeforePreview ?? editStack, preset.edit_stack));
+  }
+
   /** Moves the live edit stack to `history[index]` -- undo, redo, and a
    * History-panel row click are all this same call, just with a
    * different `index`. See `history`/`historyIndex`'s own doc comment for
    * why this needs no server-side cursor concept at all. */
   async function restoreTo(/** @type {number} */ index) {
+    endPreview();
     if (developVersionId === null || index < 0 || index >= history.length) return;
     const versionId = developVersionId;
     const entryId = history[index].id;
@@ -1331,6 +1413,7 @@
    * "Restore Snapshot: {name}" row, so this jumps historyIndex straight
    * to newest rather than searching for that row's position. */
   async function handleRestoreSnapshot(/** @type {number} */ snapshotId) {
+    endPreview();
     if (developVersionId === null) return;
     const versionId = developVersionId;
     if (persistTimer !== null) {
@@ -3352,6 +3435,16 @@
         onCreateSnapshotRequest={() => (creatingSnapshot = true)}
         onRestoreSnapshot={handleRestoreSnapshot}
         onDeleteSnapshot={handleDeleteSnapshot}
+        {presets}
+        onApplyPreset={handleApplyPreset}
+        onSaveCurrentAsPresetRequest={handleSaveCurrentAsPresetRequest}
+        onExportPreset={handleExportPreset}
+        onDeletePresetRequest={handleDeletePresetRequest}
+        onImportPresetRequest={handleImportPresetRequest}
+        onPeekHistory={handlePeekHistory}
+        onPeekSnapshot={handlePeekSnapshot}
+        onPeekPreset={handlePeekPreset}
+        onPeekEnd={endPreview}
       />
       <DevelopCanvas
         imagePath={developImagePath}
@@ -3479,12 +3572,6 @@
         onLumaNRChange={handleLumaNRChange}
         {colorNR}
         onColorNRChange={handleColorNRChange}
-        {presets}
-        onApplyPreset={handleApplyPreset}
-        onSaveCurrentAsPresetRequest={handleSaveCurrentAsPresetRequest}
-        onExportPreset={handleExportPreset}
-        onDeletePresetRequest={handleDeletePresetRequest}
-        onImportPresetRequest={handleImportPresetRequest}
         {softProofEnabled}
         {softProofTarget}
         {softProofCustomProfilePath}

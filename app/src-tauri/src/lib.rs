@@ -633,6 +633,21 @@ fn restore_history_entry(
         .map_err(|e| e.to_string())
 }
 
+/// See `Catalog::peek_history_entry`'s doc comment: read-only, never
+/// writes to `image_versions`.
+#[tauri::command]
+fn peek_history_entry(state: State<'_, AppState>, version_id: i64, history_id: i64) -> Result<EditStack, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.peek_history_entry(version_id, history_id).map_err(|e| e.to_string())
+}
+
+/// See `Catalog::peek_snapshot`'s doc comment: read-only.
+#[tauri::command]
+fn peek_snapshot(state: State<'_, AppState>, version_id: i64, snapshot_id: i64) -> Result<EditStack, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.peek_snapshot(version_id, snapshot_id).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn add_snapshot(state: State<'_, AppState>, version_id: i64, name: String) -> Result<SnapshotEntry, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
@@ -1161,9 +1176,11 @@ pub fn run() {
             lookup_lens_profile,
             get_history,
             restore_history_entry,
+            peek_history_entry,
             add_snapshot,
             get_snapshots,
             restore_snapshot,
+            peek_snapshot,
             delete_snapshot,
             create_preset,
             list_presets,

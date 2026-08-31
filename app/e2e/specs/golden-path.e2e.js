@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findCellByName, clickEl, openDevelopFor } from "../helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(__dirname, "../../../test_image/Field-corn-Liechtenstein-landscape.jpg");
@@ -33,19 +34,6 @@ const FIXTURE_NAME = "Field-corn-Liechtenstein-landscape";
  * interaction (opening Develop, editing Exposure, the Export button
  * enabling) still drives the real UI.
  */
-function findFixtureCell() {
-  return $(`//div[contains(concat(' ', @class, ' '), ' cell ')][.//span[contains(@class, 'file-name') and contains(text(), '${FIXTURE_NAME}')]]`);
-}
-
-/** A WebdriverIO `.click()` (real pointer-down/up actions) intermittently
- * doesn't register in this embedded-WebDriver + WKWebView combination.
- * Dispatching the DOM method directly is what actually reaches Svelte's
- * `onclick` handlers reliably here. */
-async function clickEl(elOrPromise) {
-  const el = await elOrPromise;
-  await browser.execute((e) => e.click(), el);
-}
-
 describe("Golden path: Import -> Library -> Develop -> Export", () => {
   let exportDir;
 
@@ -68,28 +56,12 @@ describe("Golden path: Import -> Library -> Develop -> Export", () => {
     // so a reload is needed for the Library grid to pick it up.
     await browser.refresh();
 
-    const cell = await findFixtureCell();
+    const cell = await findCellByName(FIXTURE_NAME);
     await cell.waitForExist({ timeout: 20000 });
   });
 
   it("opens Develop, adjusts Exposure, and reflects the new value", async () => {
-    // A real WebdriverIO `.doubleClick()` (two synthetic clicks) doesn't
-    // reliably land inside the WebKit/WKWebView native double-click
-    // timing window, so the app's `ondblclick` handler never fires even
-    // though the two underlying clicks do (visible only as the cell
-    // becoming selected). Dispatching a real `dblclick` DOM event directly
-    // sidesteps that timing dependency entirely. This opens Library's
-    // Loupe view (single-image), not Develop itself -- Loupe's own
-    // "Develop →" button (LibraryImageViewer.svelte) is the actual entry
-    // point into the Develop module.
-    const cell = await findFixtureCell();
-    await browser.execute((el) => {
-      el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
-    }, cell);
-
-    const developButton = await $(".hud-develop-btn");
-    await developButton.waitForExist({ timeout: 10000 });
-    await clickEl(developButton);
+    await openDevelopFor(FIXTURE_NAME);
 
     const exposureInput = await $("#exposure");
     await exposureInput.waitForExist({ timeout: 20000 });

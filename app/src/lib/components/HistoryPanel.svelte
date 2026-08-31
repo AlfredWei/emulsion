@@ -42,6 +42,7 @@
    *   onPeekPreset: (id: number) => void,
    *   onPeekEnd: () => void,
    *   previewUrl: string | null,
+   *   width?: number,
    * }}
    */
   let {
@@ -63,6 +64,7 @@
     onPeekPreset,
     onPeekEnd,
     previewUrl,
+    width = 200,
   } = $props();
 
   let activeTab = $state(/** @type {"history" | "presets"} */ ("history"));
@@ -77,7 +79,7 @@
   }
 </script>
 
-<div class="history-rail">
+<div class="history-rail" style="width: {width}px">
   <div class="preview-box">
     {#if previewUrl}
       <img src={previewUrl} alt="" />
@@ -203,7 +205,7 @@
 
 <style>
   .history-rail {
-    width: 200px;
+    /* width set inline from the `width` prop (M4.5: drag-resizable) */
     flex: none;
     background: var(--bg-panel);
     border-right: 1px solid var(--border-subtle);

@@ -31,6 +31,15 @@
   import PrintLayoutView from "$lib/components/PrintLayoutView.svelte";
   import { getStoredShortcuts } from "$lib/shortcuts.js";
   import {
+    getStoredPanelWidths,
+    saveStoredPanelWidths,
+    clamp as clampPanelWidth,
+    HISTORY_PANEL_MIN_WIDTH,
+    HISTORY_PANEL_MAX_WIDTH,
+    DEVELOP_PANEL_MIN_WIDTH,
+    DEVELOP_PANEL_MAX_WIDTH,
+  } from "$lib/panelLayout.js";
+  import {
     importFolder,
     importFiles,
     getSupportedExtensions,
@@ -160,6 +169,12 @@
   let libraryZoomLevel = $state(1);
   let imageViewerRef = $state(/** @type {any} */ (null));
   let shortcuts = $state(getStoredShortcuts());
+  // M4.5: Develop's left (History) and right (adjustments) rail widths,
+  // drag-resizable, persisted across sessions -- see panelLayout.js.
+  let panelWidths = $state(getStoredPanelWidths());
+  let panelResizeState = $state(
+    /** @type {{ which: "history" | "develop", startX: number, startWidth: number } | null} */ (null),
+  );
   let compareCandidateId = $state(/** @type {number | null} */ (null));
   let importing = $state(false);
   let statusMessage = $state("");
@@ -3011,6 +3026,43 @@
       window.removeEventListener("shortcuts-updated", onShortcutsUpdated);
     };
   });
+
+  // M4.5: drag-resize for Develop's History (left) and adjustments (right)
+  // rails -- same pointerdown/pointermove/pointerup + setPointerCapture
+  // skeleton as DevelopCanvas.svelte's crop-handle dragging (the
+  // try/catch there is for the same reason: setPointerCapture can throw
+  // and must not abort the drag-state assignment).
+  function handlePanelResizePointerDown(/** @type {PointerEvent} */ e, /** @type {"history" | "develop"} */ which) {
+    e.preventDefault();
+    panelResizeState = { which, startX: e.clientX, startWidth: panelWidths[which] };
+    try {
+      /** @type {HTMLElement} */ (e.currentTarget).setPointerCapture(e.pointerId);
+    } catch {
+      // Non-fatal -- see DevelopCanvas's crop-handle drag for why.
+    }
+  }
+
+  function handlePanelResizePointerMove(/** @type {PointerEvent} */ e) {
+    if (!panelResizeState) return;
+    const { which, startX, startWidth } = panelResizeState;
+    // History sits on the left (dragging right grows it); the adjustments
+    // panel sits on the right (dragging right shrinks it) -- opposite sign.
+    const dx = e.clientX - startX;
+    const delta = which === "history" ? dx : -dx;
+    const [min, max] =
+      which === "history" ? [HISTORY_PANEL_MIN_WIDTH, HISTORY_PANEL_MAX_WIDTH] : [DEVELOP_PANEL_MIN_WIDTH, DEVELOP_PANEL_MAX_WIDTH];
+    panelWidths = { ...panelWidths, [which]: clampPanelWidth(startWidth + delta, min, max) };
+  }
+
+  function handlePanelResizePointerUp(/** @type {PointerEvent} */ e) {
+    try {
+      /** @type {HTMLElement} */ (e.currentTarget).releasePointerCapture(e.pointerId);
+    } catch {
+      // Non-fatal -- see DevelopCanvas's crop-handle drag for why.
+    }
+    if (panelResizeState) saveStoredPanelWidths(panelWidths);
+    panelResizeState = null;
+  }
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} onkeyup={handleGlobalKeyup} onblur={() => (spacePanning = false)} />
@@ -3455,7 +3507,17 @@
         onPeekPreset={handlePeekPreset}
         onPeekEnd={clearPreview}
         {previewUrl}
+        width={panelWidths.history}
       />
+      <div
+        class="panel-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize History panel"
+        onpointerdown={(e) => handlePanelResizePointerDown(e, "history")}
+        onpointermove={handlePanelResizePointerMove}
+        onpointerup={handlePanelResizePointerUp}
+      ></div>
       <DevelopCanvas
         imagePath={developImagePath}
         imageContentHash={developImageContentHash}
@@ -3524,7 +3586,17 @@
           onResampleColor={handleResampleColorToggle}
         />
       {/if}
+      <div
+        class="panel-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize adjustments panel"
+        onpointerdown={(e) => handlePanelResizePointerDown(e, "develop")}
+        onpointermove={handlePanelResizePointerMove}
+        onpointerup={handlePanelResizePointerUp}
+      ></div>
       <DevelopPanel
+        width={panelWidths.develop}
         {histogramData}
         {showClippingOverlay}
         onToggleClippingOverlay={handleToggleClippingOverlay}
@@ -3807,6 +3879,25 @@
     display: flex;
     min-height: 0;
     position: relative;
+  }
+  /* M4.5: drag handle between Develop's History/adjustments rails and the
+     canvas. A 1px visible line sits inside a wider invisible hit area
+     (negative margin) so the actual pixel-precise drag target is easier
+     to grab than a bare 1px border would be. */
+  .panel-resize-handle {
+    flex: none;
+    width: 1px;
+    margin: 0 -3px;
+    padding: 0 3px;
+    background-clip: content-box;
+    background-color: transparent;
+    cursor: ew-resize;
+    position: relative;
+    z-index: 5;
+  }
+  .panel-resize-handle:hover,
+  .panel-resize-handle:active {
+    background-color: var(--accent);
   }
   .library-view-container {
     flex: 1;

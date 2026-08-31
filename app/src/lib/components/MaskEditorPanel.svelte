@@ -1,5 +1,6 @@
 <script>
   import { OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
+  import { nudgeValue } from "$lib/stepMath.js";
 
   /**
    * Floating panel for the currently-selected mask (M3 Slice 5) -- not a
@@ -52,6 +53,37 @@
   );
 </script>
 
+<!-- Step-nudge (up/down) buttons, same as DevelopPanel.svelte's own
+     snippet of the same name (M4.5 Slice 7) -- duplicated rather than
+     shared across the two components, since they don't otherwise share
+     any markup or a parent module. -->
+{#snippet stepButtons(
+  /** @type {number} */ value,
+  /** @type {number} */ step,
+  /** @type {number} */ min,
+  /** @type {number} */ max,
+  /** @type {(value: number) => void} */ onChange,
+)}
+  <div class="step-buttons">
+    <button
+      type="button"
+      class="step-btn"
+      tabindex="-1"
+      aria-label="Increase"
+      disabled={value >= max}
+      onclick={() => onChange(nudgeValue(value, 1, step, min, max))}
+    >▲</button>
+    <button
+      type="button"
+      class="step-btn"
+      tabindex="-1"
+      aria-label="Decrease"
+      disabled={value <= min}
+      onclick={() => onChange(nudgeValue(value, -1, step, min, max))}
+    >▼</button>
+  </div>
+{/snippet}
+
 <div class="panel" role="dialog" aria-label="{title} adjustments">
   <div class="header">
     <span class="title">{title}</span>
@@ -99,6 +131,7 @@
         oninput={(e) => onChange({ exposure: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.exposure >= 0 ? "+" : ""}{mask.exposure.toFixed(2)}</span>
+      {@render stepButtons(mask.exposure, 0.05, -5, 5, (v) => onChange({ exposure: v }))}
     </div>
     <div class="row">
       <label for="mask-contrast">Contrast</label>
@@ -112,6 +145,7 @@
         oninput={(e) => onChange({ contrast: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.contrast >= 0 ? "+" : ""}{mask.contrast}</span>
+      {@render stepButtons(mask.contrast, 1, -100, 100, (v) => onChange({ contrast: v }))}
     </div>
     <div class="row">
       <label for="mask-saturation">Saturation</label>
@@ -125,6 +159,7 @@
         oninput={(e) => onChange({ saturation: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.saturation >= 0 ? "+" : ""}{mask.saturation}</span>
+      {@render stepButtons(mask.saturation, 1, -100, 100, (v) => onChange({ saturation: v }))}
     </div>
   {/if}
   {#if mask.op !== "brush_mask" && mask.op !== "luminance_range_mask" && mask.op !== "color_range_mask"}
@@ -140,6 +175,7 @@
         oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.feather}</span>
+      {@render stepButtons(mask.feather, 1, 0, 100, (v) => onChange({ feather: v }))}
     </div>
   {/if}
 
@@ -164,6 +200,7 @@
         oninput={(e) => onChange({ rangeMin: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.rangeMin}</span>
+      {@render stepButtons(mask.rangeMin, 1, 0, 100, (v) => onChange({ rangeMin: v }))}
     </div>
     <div class="row">
       <label for="mask-range-max">Max</label>
@@ -178,6 +215,7 @@
         oninput={(e) => onChange({ rangeMax: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.rangeMax}</span>
+      {@render stepButtons(mask.rangeMax, 1, 0, 100, (v) => onChange({ rangeMax: v }))}
     </div>
     <div class="row">
       <label for="mask-range-feather">Feather</label>
@@ -191,6 +229,7 @@
         oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.feather}</span>
+      {@render stepButtons(mask.feather, 1, 0, 100, (v) => onChange({ feather: v }))}
     </div>
   {/if}
 
@@ -238,6 +277,7 @@
         oninput={(e) => onChange({ range: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.range}</span>
+      {@render stepButtons(mask.range, 1, 0, 100, (v) => onChange({ range: v }))}
     </div>
     <div class="row">
       <label for="mask-color-feather">Feather</label>
@@ -251,6 +291,7 @@
         oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.feather}</span>
+      {@render stepButtons(mask.feather, 1, 0, 100, (v) => onChange({ feather: v }))}
     </div>
   {/if}
 
@@ -271,6 +312,7 @@
         oninput={(e) => onChange({ pupilSize: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.pupilSize}</span>
+      {@render stepButtons(mask.pupilSize, 1, 0, 100, (v) => onChange({ pupilSize: v }))}
     </div>
     <div class="row">
       <label for="mask-red-eye-darken">Darken</label>
@@ -284,6 +326,7 @@
         oninput={(e) => onChange({ darken: Number(e.currentTarget.value) })}
       />
       <span class="val">{mask.darken}</span>
+      {@render stepButtons(mask.darken, 1, 0, 100, (v) => onChange({ darken: v }))}
     </div>
   {/if}
 
@@ -444,12 +487,37 @@
     background: var(--accent-soft);
   }
   .row .val {
-    width: 38px;
+    width: 32px;
     text-align: right;
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     font-size: 10.5px;
     color: var(--text-tertiary);
+  }
+  .step-buttons {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 12px;
+  }
+  .step-btn {
+    appearance: none;
+    -webkit-appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    font-size: 7px;
+    line-height: 1;
+    padding: 1px 0;
+    cursor: pointer;
+  }
+  .step-btn:hover:not(:disabled) {
+    color: var(--accent-strong);
+  }
+  .step-btn:disabled {
+    color: var(--text-tertiary);
+    opacity: 0.3;
+    cursor: default;
   }
   .invert-row {
     display: flex;

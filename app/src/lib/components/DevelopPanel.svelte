@@ -7,6 +7,7 @@
     IDENTITY_HSL_BANDS,
     WB_PRESETS,
   } from "$lib/api/develop.js";
+  import { nudgeValue } from "$lib/stepMath.js";
 
   /**
    * @type {{
@@ -255,6 +256,39 @@
   </svg>
 {/snippet}
 
+<!-- Step-nudge (up/down) buttons for a slider (M4.5 Slice 7): fine
+     single-step adjustment beyond drag precision. `onChange` always takes
+     the new plain number -- callers wrap patch-shaped handlers (e.g.
+     `onVignetteChange`) in a small arrow at the call site, same as their
+     own `oninput` already does. -->
+{#snippet stepButtons(
+  /** @type {number} */ value,
+  /** @type {number} */ step,
+  /** @type {number} */ min,
+  /** @type {number} */ max,
+  /** @type {(value: number) => void} */ onChange,
+  /** @type {boolean} */ disabledExtra = false,
+)}
+  <div class="step-buttons">
+    <button
+      type="button"
+      class="step-btn"
+      tabindex="-1"
+      aria-label="Increase"
+      disabled={value >= max || disabledExtra}
+      onclick={() => onChange(nudgeValue(value, 1, step, min, max))}
+    >▲</button>
+    <button
+      type="button"
+      class="step-btn"
+      tabindex="-1"
+      aria-label="Decrease"
+      disabled={value <= min || disabledExtra}
+      onclick={() => onChange(nudgeValue(value, -1, step, min, max))}
+    >▼</button>
+  </div>
+{/snippet}
+
 <div class="panel" style="width: {width}px">
   <div class="panel-scroll">
   <div class="panel-header">
@@ -320,6 +354,7 @@
           oninput={(e) => onTemperatureChange?.(Number(e.currentTarget.value))}
         />
         <span class="val">{temperature >= 0 ? "+" : ""}{temperature}</span>
+        {@render stepButtons(temperature, 1, -100, 100, (v) => onTemperatureChange?.(v))}
       </div>
 
       <div class="row">
@@ -334,6 +369,7 @@
           oninput={(e) => onTintChange?.(Number(e.currentTarget.value))}
         />
         <span class="val">{tint >= 0 ? "+" : ""}{tint}</span>
+        {@render stepButtons(tint, 1, -100, 100, (v) => onTintChange?.(v))}
       </div>
 
       <!-- Tone -->
@@ -364,6 +400,7 @@
           oninput={(e) => onExposureChange(Number(e.currentTarget.value))}
         />
         <span class="val">{exposure >= 0 ? "+" : ""}{exposure.toFixed(2)}</span>
+        {@render stepButtons(exposure, 0.05, -5, 5, onExposureChange)}
       </div>
       <div class="row">
         <label for="contrast">Contrast</label>
@@ -377,6 +414,7 @@
           oninput={(e) => onContrastChange(Number(e.currentTarget.value))}
         />
         <span class="val">{contrast >= 0 ? "+" : ""}{contrast}</span>
+        {@render stepButtons(contrast, 1, -100, 100, onContrastChange)}
       </div>
       <div class="row">
         <label for="highlights">Highlights</label>
@@ -390,6 +428,7 @@
           oninput={(e) => onHighlightsChange?.(Number(e.currentTarget.value))}
         />
         <span class="val">{highlights >= 0 ? "+" : ""}{highlights}</span>
+        {@render stepButtons(highlights, 1, -100, 100, (v) => onHighlightsChange?.(v))}
       </div>
       <div class="row">
         <label for="shadows">Shadows</label>
@@ -403,6 +442,7 @@
           oninput={(e) => onShadowsChange?.(Number(e.currentTarget.value))}
         />
         <span class="val">{shadows >= 0 ? "+" : ""}{shadows}</span>
+        {@render stepButtons(shadows, 1, -100, 100, (v) => onShadowsChange?.(v))}
       </div>
       <div class="row">
         <label for="whites">Whites</label>
@@ -416,6 +456,7 @@
           oninput={(e) => onWhitesChange?.(Number(e.currentTarget.value))}
         />
         <span class="val">{whites >= 0 ? "+" : ""}{whites}</span>
+        {@render stepButtons(whites, 1, -100, 100, (v) => onWhitesChange?.(v))}
       </div>
       <div class="row">
         <label for="blacks">Blacks</label>
@@ -429,6 +470,7 @@
           oninput={(e) => onBlacksChange?.(Number(e.currentTarget.value))}
         />
         <span class="val">{blacks >= 0 ? "+" : ""}{blacks}</span>
+        {@render stepButtons(blacks, 1, -100, 100, (v) => onBlacksChange?.(v))}
       </div>
 
       <!-- Presence -->
@@ -447,6 +489,7 @@
           oninput={(e) => onSaturationChange(Number(e.currentTarget.value))}
         />
         <span class="val">{saturation >= 0 ? "+" : ""}{saturation}</span>
+        {@render stepButtons(saturation, 1, -100, 100, onSaturationChange)}
       </div>
     </div>
   </details>
@@ -506,6 +549,7 @@
               oninput={(e) => onHslBandChange(bandName, { hue: Number(e.currentTarget.value) })}
             />
             <span class="val">{band.hue >= 0 ? "+" : ""}{band.hue}</span>
+            {@render stepButtons(band.hue, 1, -100, 100, (v) => onHslBandChange(bandName, { hue: v }))}
           </div>
           <div class="row">
             <label for="hsl-{bandName}-sat">Sat</label>
@@ -519,6 +563,7 @@
               oninput={(e) => onHslBandChange(bandName, { saturation: Number(e.currentTarget.value) })}
             />
             <span class="val">{band.saturation >= 0 ? "+" : ""}{band.saturation}</span>
+            {@render stepButtons(band.saturation, 1, -100, 100, (v) => onHslBandChange(bandName, { saturation: v }))}
           </div>
           <div class="row">
             <label for="hsl-{bandName}-lum">Lum</label>
@@ -532,6 +577,7 @@
               oninput={(e) => onHslBandChange(bandName, { luminance: Number(e.currentTarget.value) })}
             />
             <span class="val">{band.luminance >= 0 ? "+" : ""}{band.luminance}</span>
+            {@render stepButtons(band.luminance, 1, -100, 100, (v) => onHslBandChange(bandName, { luminance: v }))}
           </div>
         </div>
       {/each}
@@ -568,6 +614,7 @@
             oninput={(e) => onSplitToningZoneChange("shadows", { hue: Number(e.currentTarget.value) })}
           />
           <span class="val">{splitToning.shadows.hue}</span>
+          {@render stepButtons(splitToning.shadows.hue, 1, 0, 360, (v) => onSplitToningZoneChange("shadows", { hue: v }))}
         </div>
         <div class="row">
           <label for="st-shadow-sat">Sat</label>
@@ -581,6 +628,7 @@
             oninput={(e) => onSplitToningZoneChange("shadows", { saturation: Number(e.currentTarget.value) })}
           />
           <span class="val">{splitToning.shadows.saturation}</span>
+          {@render stepButtons(splitToning.shadows.saturation, 1, 0, 100, (v) => onSplitToningZoneChange("shadows", { saturation: v }))}
         </div>
       </div>
       <div class="split-zone">
@@ -610,6 +658,7 @@
             oninput={(e) => onSplitToningZoneChange("highlights", { hue: Number(e.currentTarget.value) })}
           />
           <span class="val">{splitToning.highlights.hue}</span>
+          {@render stepButtons(splitToning.highlights.hue, 1, 0, 360, (v) => onSplitToningZoneChange("highlights", { hue: v }))}
         </div>
         <div class="row">
           <label for="st-highlight-sat">Sat</label>
@@ -623,6 +672,7 @@
             oninput={(e) => onSplitToningZoneChange("highlights", { saturation: Number(e.currentTarget.value) })}
           />
           <span class="val">{splitToning.highlights.saturation}</span>
+          {@render stepButtons(splitToning.highlights.saturation, 1, 0, 100, (v) => onSplitToningZoneChange("highlights", { saturation: v }))}
         </div>
       </div>
       <div class="row">
@@ -637,6 +687,7 @@
           oninput={(e) => onSplitToningBalanceChange(Number(e.currentTarget.value))}
         />
         <span class="val">{splitToning.balance >= 0 ? "+" : ""}{splitToning.balance}</span>
+        {@render stepButtons(splitToning.balance, 1, -100, 100, onSplitToningBalanceChange)}
       </div>
     </div>
   </details>
@@ -656,6 +707,7 @@
           oninput={(e) => onTextureChange(Number(e.currentTarget.value))}
         />
         <span class="val">{texture}</span>
+        {@render stepButtons(texture, 1, -100, 100, onTextureChange)}
       </div>
       <div class="row">
         <label for="clarity-amount">Clarity</label>
@@ -669,6 +721,7 @@
           oninput={(e) => onClarityChange(Number(e.currentTarget.value))}
         />
         <span class="val">{clarity}</span>
+        {@render stepButtons(clarity, 1, -100, 100, onClarityChange)}
       </div>
     </div>
   </details>
@@ -688,6 +741,7 @@
           oninput={(e) => onDehazeChange(Number(e.currentTarget.value))}
         />
         <span class="val">{dehaze}</span>
+        {@render stepButtons(dehaze, 1, 0, 100, onDehazeChange)}
       </div>
     </div>
   </details>
@@ -707,6 +761,7 @@
           oninput={(e) => onSharpenChange({ amount: Number(e.currentTarget.value) })}
         />
         <span class="val">{sharpen.amount}</span>
+        {@render stepButtons(sharpen.amount, 1, 0, 100, (v) => onSharpenChange({ amount: v }))}
       </div>
       <div class="row">
         <label for="sharpen-radius">Radius</label>
@@ -720,6 +775,7 @@
           oninput={(e) => onSharpenChange({ radius: Number(e.currentTarget.value) })}
         />
         <span class="val">{sharpen.radius}</span>
+        {@render stepButtons(sharpen.radius, 1, 0, 100, (v) => onSharpenChange({ radius: v }))}
       </div>
       <div class="row">
         <label for="sharpen-detail">Detail</label>
@@ -733,6 +789,7 @@
           oninput={(e) => onSharpenChange({ detail: Number(e.currentTarget.value) })}
         />
         <span class="val">{sharpen.detail}</span>
+        {@render stepButtons(sharpen.detail, 1, 0, 100, (v) => onSharpenChange({ detail: v }))}
       </div>
       <div class="row">
         <label for="sharpen-masking">Masking</label>
@@ -746,6 +803,7 @@
           oninput={(e) => onSharpenChange({ masking: Number(e.currentTarget.value) })}
         />
         <span class="val">{sharpen.masking}</span>
+        {@render stepButtons(sharpen.masking, 1, 0, 100, (v) => onSharpenChange({ masking: v }))}
       </div>
     </div>
   </details>
@@ -766,6 +824,7 @@
           oninput={(e) => onLumaNRChange({ amount: Number(e.currentTarget.value) })}
         />
         <span class="val">{lumaNR.amount}</span>
+        {@render stepButtons(lumaNR.amount, 1, 0, 100, (v) => onLumaNRChange({ amount: v }))}
       </div>
       <div class="row">
         <label for="luma-nr-detail">Detail</label>
@@ -779,6 +838,7 @@
           oninput={(e) => onLumaNRChange({ detail: Number(e.currentTarget.value) })}
         />
         <span class="val">{lumaNR.detail}</span>
+        {@render stepButtons(lumaNR.detail, 1, 0, 100, (v) => onLumaNRChange({ detail: v }))}
       </div>
       <div class="row">
         <label for="luma-nr-contrast">Contrast</label>
@@ -792,6 +852,7 @@
           oninput={(e) => onLumaNRChange({ contrast: Number(e.currentTarget.value) })}
         />
         <span class="val">{lumaNR.contrast}</span>
+        {@render stepButtons(lumaNR.contrast, 1, 0, 100, (v) => onLumaNRChange({ contrast: v }))}
       </div>
       <div class="subsection-label">Color</div>
       <div class="row">
@@ -806,6 +867,7 @@
           oninput={(e) => onColorNRChange({ amount: Number(e.currentTarget.value) })}
         />
         <span class="val">{colorNR.amount}</span>
+        {@render stepButtons(colorNR.amount, 1, 0, 100, (v) => onColorNRChange({ amount: v }))}
       </div>
       <div class="row">
         <label for="color-nr-detail">Detail</label>
@@ -819,6 +881,7 @@
           oninput={(e) => onColorNRChange({ detail: Number(e.currentTarget.value) })}
         />
         <span class="val">{colorNR.detail}</span>
+        {@render stepButtons(colorNR.detail, 1, 0, 100, (v) => onColorNRChange({ detail: v }))}
       </div>
     </div>
   </details>
@@ -838,6 +901,7 @@
           oninput={(e) => onVignetteChange({ amount: Number(e.currentTarget.value) })}
         />
         <span class="val">{vignette.amount}</span>
+        {@render stepButtons(vignette.amount, 1, -100, 100, (v) => onVignetteChange({ amount: v }))}
       </div>
       <div class="row">
         <label for="vignette-midpoint">Midpoint</label>
@@ -851,6 +915,7 @@
           oninput={(e) => onVignetteChange({ midpoint: Number(e.currentTarget.value) })}
         />
         <span class="val">{vignette.midpoint}</span>
+        {@render stepButtons(vignette.midpoint, 1, 0, 100, (v) => onVignetteChange({ midpoint: v }))}
       </div>
       <div class="row">
         <label for="vignette-feather">Feather</label>
@@ -864,6 +929,7 @@
           oninput={(e) => onVignetteChange({ feather: Number(e.currentTarget.value) })}
         />
         <span class="val">{vignette.feather}</span>
+        {@render stepButtons(vignette.feather, 1, 0, 100, (v) => onVignetteChange({ feather: v }))}
       </div>
     </div>
   </details>
@@ -883,6 +949,7 @@
           oninput={(e) => onGrainChange({ amount: Number(e.currentTarget.value) })}
         />
         <span class="val">{grain.amount}</span>
+        {@render stepButtons(grain.amount, 1, 0, 100, (v) => onGrainChange({ amount: v }))}
       </div>
       <div class="row">
         <label for="grain-size">Size</label>
@@ -896,6 +963,7 @@
           oninput={(e) => onGrainChange({ size: Number(e.currentTarget.value) })}
         />
         <span class="val">{grain.size}</span>
+        {@render stepButtons(grain.size, 1, 0, 100, (v) => onGrainChange({ size: v }))}
       </div>
       <div class="row">
         <label for="grain-roughness">Roughness</label>
@@ -909,6 +977,7 @@
           oninput={(e) => onGrainChange({ roughness: Number(e.currentTarget.value) })}
         />
         <span class="val">{grain.roughness}</span>
+        {@render stepButtons(grain.roughness, 1, 0, 100, (v) => onGrainChange({ roughness: v }))}
       </div>
     </div>
   </details>
@@ -942,6 +1011,7 @@
           oninput={(e) => onLensCorrectionChange({ distortion_amount: Number(e.currentTarget.value) })}
         />
         <span class="val">{lensCorrection.distortion_amount}</span>
+        {@render stepButtons(lensCorrection.distortion_amount, 1, 0, 100, (v) => onLensCorrectionChange({ distortion_amount: v }), !lensCorrection.profile_enabled)}
       </div>
       <div class="row">
         <label for="lens-vignette-amount">Vignetting</label>
@@ -956,6 +1026,7 @@
           oninput={(e) => onLensCorrectionChange({ vignette_amount: Number(e.currentTarget.value) })}
         />
         <span class="val">{lensCorrection.vignette_amount}</span>
+        {@render stepButtons(lensCorrection.vignette_amount, 1, 0, 100, (v) => onLensCorrectionChange({ vignette_amount: v }), !lensCorrection.profile_enabled)}
       </div>
       <div class="row">
         <label for="lens-ca-amount">Chromatic Aberration</label>
@@ -970,6 +1041,7 @@
           oninput={(e) => onLensCorrectionChange({ ca_amount: Number(e.currentTarget.value) })}
         />
         <span class="val">{lensCorrection.ca_amount}</span>
+        {@render stepButtons(lensCorrection.ca_amount, 1, 0, 100, (v) => onLensCorrectionChange({ ca_amount: v }), !lensCorrection.profile_enabled)}
       </div>
       <div class="subsection-label">Manual</div>
       <div class="row">
@@ -984,6 +1056,7 @@
           oninput={(e) => onLensCorrectionChange({ manual_distortion: Number(e.currentTarget.value) })}
         />
         <span class="val">{lensCorrection.manual_distortion}</span>
+        {@render stepButtons(lensCorrection.manual_distortion, 1, -100, 100, (v) => onLensCorrectionChange({ manual_distortion: v }))}
       </div>
       <div class="row">
         <label for="lens-manual-ca">Chromatic Aberration</label>
@@ -997,6 +1070,7 @@
           oninput={(e) => onLensCorrectionChange({ manual_ca: Number(e.currentTarget.value) })}
         />
         <span class="val">{lensCorrection.manual_ca}</span>
+        {@render stepButtons(lensCorrection.manual_ca, 1, -100, 100, (v) => onLensCorrectionChange({ manual_ca: v }))}
       </div>
       <!-- No manual vignette control here on purpose -- it would be the
            exact same radial-gain formula the Vignette section above
@@ -1021,6 +1095,7 @@
           oninput={(e) => onPerspectiveChange({ vertical: Number(e.currentTarget.value) })}
         />
         <span class="val">{perspective.vertical}</span>
+        {@render stepButtons(perspective.vertical, 1, -100, 100, (v) => onPerspectiveChange({ vertical: v }))}
       </div>
       <div class="row">
         <label for="perspective-horizontal">Horizontal</label>
@@ -1034,6 +1109,7 @@
           oninput={(e) => onPerspectiveChange({ horizontal: Number(e.currentTarget.value) })}
         />
         <span class="val">{perspective.horizontal}</span>
+        {@render stepButtons(perspective.horizontal, 1, -100, 100, (v) => onPerspectiveChange({ horizontal: v }))}
       </div>
       <div class="row">
         <label for="perspective-rotate">Rotate</label>
@@ -1047,6 +1123,7 @@
           oninput={(e) => onPerspectiveChange({ rotate: Number(e.currentTarget.value) })}
         />
         <span class="val">{perspective.rotate}</span>
+        {@render stepButtons(perspective.rotate, 0.1, -10, 10, (v) => onPerspectiveChange({ rotate: v }))}
       </div>
       <div class="row">
         <label for="perspective-aspect">Aspect</label>
@@ -1060,6 +1137,7 @@
           oninput={(e) => onPerspectiveChange({ aspect: Number(e.currentTarget.value) })}
         />
         <span class="val">{perspective.aspect}</span>
+        {@render stepButtons(perspective.aspect, 1, -100, 100, (v) => onPerspectiveChange({ aspect: v }))}
       </div>
       <div class="row">
         <label for="perspective-scale">Scale</label>
@@ -1073,6 +1151,7 @@
           oninput={(e) => onPerspectiveChange({ scale: Number(e.currentTarget.value) })}
         />
         <span class="val">{perspective.scale}</span>
+        {@render stepButtons(perspective.scale, 1, 50, 150, (v) => onPerspectiveChange({ scale: v }))}
       </div>
       <!-- No auto-crop here on purpose -- Vertical/Horizontal/Rotate can
            reveal blank corners; the existing Crop tool (Develop's own
@@ -1364,12 +1443,37 @@
     outline-offset: 2px;
   }
   .row .val {
-    width: 42px;
+    width: 36px;
     text-align: right;
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     font-size: 10.5px;
     color: var(--text-tertiary);
+  }
+  .step-buttons {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 12px;
+  }
+  .step-btn {
+    appearance: none;
+    -webkit-appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    font-size: 7px;
+    line-height: 1;
+    padding: 1px 0;
+    cursor: pointer;
+  }
+  .step-btn:hover:not(:disabled) {
+    color: var(--accent-strong);
+  }
+  .step-btn:disabled {
+    color: var(--text-tertiary);
+    opacity: 0.3;
+    cursor: default;
   }
   .hsl-band {
     padding: 6px 4px 10px;

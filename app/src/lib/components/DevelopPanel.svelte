@@ -88,6 +88,7 @@
    *   onCopySettingsRequest: () => void,
    *   canPasteSettings: boolean,
    *   onPasteSettingsRequest: () => void,
+   *   width?: number,
    * }}
    */
   let {
@@ -161,6 +162,7 @@
     onCopySettingsRequest,
     canPasteSettings,
     onPasteSettingsRequest,
+    width = 240,
   } = $props();
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
@@ -253,7 +255,7 @@
   </svg>
 {/snippet}
 
-<div class="panel">
+<div class="panel" style="width: {width}px">
   <div class="panel-scroll">
   <div class="panel-header">
     <span class="panel-title">Edit</span>
@@ -1184,7 +1186,7 @@
 
 <style>
   .panel {
-    width: 240px;
+    /* width set inline from the `width` prop (M4.5: drag-resizable) */
     flex: none;
     display: flex;
     flex-direction: column;

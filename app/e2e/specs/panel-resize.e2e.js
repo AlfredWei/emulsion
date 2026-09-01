@@ -52,59 +52,61 @@ describe("Develop panel resize", () => {
     await historyRail.waitForExist({ timeout: 20000 });
   });
 
-  function readPanelWidths() {
-    return browser.execute(() => ({
-      historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
-      developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
-    }));
-  }
-
   /** Dispatches a synthetic drag on the nth `.panel-resize-handle`
    * (0 = History's, on the left; 1 = the adjustments panel's, on the
    * right) by `dx` screen pixels, and returns the resulting widths of
    * `.history-rail` and the develop `.panel`. */
   async function dragHandle(/** @type {0 | 1} */ index, /** @type {number} */ dx) {
-    const before = await readPanelWidths();
-    await browser.execute(
-      (i, delta) => {
+    // Everything below (dispatch + wait-for-change poll) runs inside a
+    // single browser.execute call rather than as separate WebDriver
+    // commands. That matters here specifically: @wdio/tauri-service's
+    // ensureActiveWindowFocus check (see wdio.conf.js's own comment on it)
+    // runs before *every* WebDriver command and, on CI's macOS runner,
+    // routinely eats a full 5s retrying a Tauri core.invoke that isn't
+    // available yet -- confirmed by the "Tauri core.invoke not available
+    // after 5s timeout" WARNs recurring every ~5-6s throughout this spec's
+    // CI runs. A Node-side poll loop (browser.waitUntil, or manually
+    // re-calling browser.execute) pays that ~5s tax on *every single poll
+    // iteration*, which silently turned a nominal 20s wait into only 3-4
+    // real attempts and made it look like the drag "never" registered.
+    // Dispatching and polling together in one script pays that tax once
+    // and then polls with real millisecond granularity inside the browser,
+    // with its own generous internal deadline.
+    return browser.execute(
+      async (i, delta) => {
         const handle = document.querySelectorAll(".panel-resize-handle")[i];
         const rect = handle.getBoundingClientRect();
         const startX = rect.left + rect.width / 2;
         const y = rect.top + rect.height / 2;
         const base = { bubbles: true, cancelable: true, pointerId: 1, clientY: y };
+        const read = () => ({
+          historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
+          developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
+        });
+        const before = read();
+
         handle.dispatchEvent(new PointerEvent("pointerdown", { ...base, clientX: startX }));
         handle.dispatchEvent(new PointerEvent("pointermove", { ...base, clientX: startX + delta }));
         handle.dispatchEvent(new PointerEvent("pointerup", { ...base, clientX: startX + delta }));
+
+        // The pointer events update Svelte's $state synchronously, but the
+        // DOM (and so getBoundingClientRect()) doesn't reflect it until a
+        // later paint. There's no CSS transition on these widths (a plain
+        // synchronous reflow), so the first read that differs from
+        // `before` is already the final value -- poll for that instead of
+        // guessing a fixed frame/time budget.
+        const deadline = Date.now() + 15000;
+        let after = before;
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          after = read();
+          if (after.historyWidth !== before.historyWidth || after.developWidth !== before.developWidth) break;
+        }
+        return after;
       },
       index,
       dx,
     );
-    // The pointer events update Svelte's $state synchronously, but the DOM
-    // (and so getBoundingClientRect()) doesn't reflect it until a later
-    // paint -- reading it in the same synchronous tick as the dispatch
-    // above raced the old, pre-drag width. Neither a single
-    // requestAnimationFrame wait nor polling for two *consecutive equal*
-    // reads is reliable here: on CI's macOS runner the paint can lag
-    // enough that both polled reads land before it happens, so two equal
-    // reads of the still-*pre-drag* value get mistaken for "settled."
-    // There's no CSS transition on these widths (a plain synchronous
-    // reflow, confirmed by grepping for `transition` on `.history-rail`/
-    // `.panel`), so the first read that actually differs from `before`
-    // *is* the final value -- wait for that instead of for stability.
-    // The timeout is generous (not the usual few-hundred-ms) because CI's
-    // macOS runner is measurably slower/more CPU-constrained than local
-    // dev here -- the same run's recurring "Tauri core.invoke not
-    // available after 5s timeout" WARNs (a documented, separate polling
-    // tax, see wdio.conf.js) point at a runner where even plain
-    // reactivity/paint can lag several seconds, not milliseconds.
-    await browser.waitUntil(
-      async () => {
-        const next = await readPanelWidths();
-        return next.historyWidth !== before.historyWidth || next.developWidth !== before.developWidth;
-      },
-      { timeout: 20000, interval: 100, timeoutMsg: "panel width never changed after the simulated drag" },
-    );
-    return readPanelWidths();
   }
 
   it("drag-resizes both rails and persists the resulting widths", async () => {

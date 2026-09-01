@@ -41,6 +41,16 @@ export const config = {
   waitforTimeout: 10000,
   connectionRetryTimeout: 90000,
   connectionRetryCount: 3,
+  // panel-resize.e2e.js occasionally sees a synthetic drag's pointer
+  // events silently have no effect on CI's macOS runner -- confirmed via
+  // a per-test mocha retry (this.retries()) that it's NOT a rare,
+  // independent miss: once one call in a session misses, every retry of
+  // the same test in that same session fails identically, pointing at
+  // some accumulated per-session state rather than a one-off timing
+  // fluke. A per-test retry that reuses the same session can't recover
+  // from that; retrying the whole spec file gets a genuinely fresh
+  // session/webview instead.
+  specFileRetries: 2,
 
   framework: "mocha",
   mochaOpts: {

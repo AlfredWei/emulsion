@@ -128,16 +128,7 @@ describe("Develop panel resize", () => {
     );
   }
 
-  it("drag-resizes both rails and persists the resulting widths", async function () {
-    // Even with a generous per-drag deadline (above), CI's macOS runner
-    // occasionally still misses a synthetic drag's pointer events
-    // entirely -- rare enough, and always failing the same way (the
-    // read comes back exactly *unchanged*, never a wrong value), that a
-    // real product bug would be surprising; a mocha retry is the
-    // standard way to absorb that kind of environment-specific flake
-    // without masking an actual regression (a real bug would fail
-    // consistently, not just sometimes).
-    this.retries(2);
+  it("drag-resizes both rails and persists the resulting widths", async () => {
     const beforeWidths = await browser.execute(() => ({
       historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
       developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
@@ -161,8 +152,7 @@ describe("Develop panel resize", () => {
     expect(stored.develop).toBe(afterDevelopDrag.developWidth);
   });
 
-  it("clamps drags beyond the configured min/max bounds", async function () {
-    this.retries(2);
+  it("clamps drags beyond the configured min/max bounds", async () => {
     const grownPastMax = await dragHandle(0, 100000);
     expect(grownPastMax.historyWidth).toBe(400); // HISTORY_PANEL_MAX_WIDTH, panelLayout.js
 

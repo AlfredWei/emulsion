@@ -106,8 +106,16 @@ describe("Develop panel resize", () => {
         // later paint. There's no CSS transition on these widths (a plain
         // synchronous reflow), so the first read that differs from
         // `before` is already the final value -- poll for that instead of
-        // guessing a fixed frame/time budget.
-        const deadline = Date.now() + 15000;
+        // guessing a fixed frame/time budget. 15s wasn't consistently
+        // enough on CI's macOS runner: across repeated CI runs, whichever
+        // dragHandle call happens to fail always reads back exactly the
+        // *unchanged* pre-drag value (never a wrong-but-different one),
+        // with no fixed position in the sequence -- the signature of a
+        // runner that's occasionally too CPU-starved to flush the update
+        // within the window, not a logic bug in the drag itself. Widened
+        // well past what local dev ever needs (two calls per test still
+        // fit inside mochaOpts.timeout's 120s).
+        const deadline = Date.now() + 45000;
         let after = before;
         while (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 50));

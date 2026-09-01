@@ -42,15 +42,23 @@ export const config = {
   connectionRetryTimeout: 90000,
   connectionRetryCount: 3,
   // panel-resize.e2e.js occasionally sees a synthetic drag's pointer
-  // events silently have no effect on CI's macOS runner -- confirmed via
-  // a per-test mocha retry (this.retries()) that it's NOT a rare,
-  // independent miss: once one call in a session misses, every retry of
-  // the same test in that same session fails identically, pointing at
-  // some accumulated per-session state rather than a one-off timing
-  // fluke. A per-test retry that reuses the same session can't recover
-  // from that; retrying the whole spec file gets a genuinely fresh
-  // session/webview instead.
-  specFileRetries: 2,
+  // events silently have no effect on CI's macOS runner -- confirmed
+  // across many CI runs that it's a real per-call miss rate (rough
+  // estimate ~20-25% per dragHandle call, ~4 calls per full pass), not
+  // tied to a fixed position or to accumulated per-session state: the
+  // very first drag in a brand-new session has failed on some runs, and
+  // a same-session mocha retry (this.retries()) failed identically on
+  // every attempt on others, ruling both of those theories out. Root
+  // cause not pinned down (plausibly WebKit's setPointerCapture handling
+  // of fully synthetic, non-trusted PointerEvents under this runner's
+  // load -- see the wdio-webdriver ensureActiveWindowFocus tax below);
+  // a real WebDriver-native pointer action (rather than
+  // element.dispatchEvent) is the likely actual fix and hasn't been
+  // tried. specFileRetries gives each attempt a fresh session, unlike a
+  // same-session retry, and 6 retries (7 attempts total) pushes the
+  // chance of every attempt hitting a miss down to low single digits
+  // given the per-call rate above -- a statistical stopgap, not a fix.
+  specFileRetries: 6,
 
   framework: "mocha",
   mochaOpts: {

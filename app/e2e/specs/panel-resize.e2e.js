@@ -52,13 +52,20 @@ describe("Develop panel resize", () => {
     await historyRail.waitForExist({ timeout: 20000 });
   });
 
+  function readPanelWidths() {
+    return browser.execute(() => ({
+      historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
+      developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
+    }));
+  }
+
   /** Dispatches a synthetic drag on the nth `.panel-resize-handle`
    * (0 = History's, on the left; 1 = the adjustments panel's, on the
    * right) by `dx` screen pixels, and returns the resulting widths of
    * `.history-rail` and the develop `.panel`. */
   async function dragHandle(/** @type {0 | 1} */ index, /** @type {number} */ dx) {
-    return browser.execute(
-      async (i, delta) => {
+    await browser.execute(
+      (i, delta) => {
         const handle = document.querySelectorAll(".panel-resize-handle")[i];
         const rect = handle.getBoundingClientRect();
         const startX = rect.left + rect.width / 2;
@@ -67,19 +74,31 @@ describe("Develop panel resize", () => {
         handle.dispatchEvent(new PointerEvent("pointerdown", { ...base, clientX: startX }));
         handle.dispatchEvent(new PointerEvent("pointermove", { ...base, clientX: startX + delta }));
         handle.dispatchEvent(new PointerEvent("pointerup", { ...base, clientX: startX + delta }));
-        // The pointer events update Svelte's $state synchronously, but the
-        // DOM (and so getBoundingClientRect()) doesn't reflect it until
-        // the next paint -- reading it in the same synchronous tick as
-        // the dispatch above raced the old, pre-drag width.
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        return {
-          historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
-          developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
-        };
       },
       index,
       dx,
     );
+    // The pointer events update Svelte's $state synchronously, but the DOM
+    // (and so getBoundingClientRect()) doesn't reflect it until a later
+    // paint -- reading it in the same synchronous tick as the dispatch
+    // above raced the old, pre-drag width. A single requestAnimationFrame
+    // wait was enough locally but not on CI's macOS runner (a slower or
+    // differently-scheduled WebKit build), where the very next read still
+    // observed the pre-drag value. Poll from the Node side instead of
+    // guessing a fixed frame count: keep reading until two consecutive
+    // reads agree, which is correct regardless of how many paints the
+    // update actually takes.
+    let widths = await readPanelWidths();
+    await browser.waitUntil(
+      async () => {
+        const next = await readPanelWidths();
+        const stable = next.historyWidth === widths.historyWidth && next.developWidth === widths.developWidth;
+        widths = next;
+        return stable;
+      },
+      { timeout: 5000, interval: 50 },
+    );
+    return widths;
   }
 
   it("drag-resizes both rails and persists the resulting widths", async () => {

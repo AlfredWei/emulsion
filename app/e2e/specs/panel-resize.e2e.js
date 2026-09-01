@@ -91,12 +91,18 @@ describe("Develop panel resize", () => {
     // reflow, confirmed by grepping for `transition` on `.history-rail`/
     // `.panel`), so the first read that actually differs from `before`
     // *is* the final value -- wait for that instead of for stability.
+    // The timeout is generous (not the usual few-hundred-ms) because CI's
+    // macOS runner is measurably slower/more CPU-constrained than local
+    // dev here -- the same run's recurring "Tauri core.invoke not
+    // available after 5s timeout" WARNs (a documented, separate polling
+    // tax, see wdio.conf.js) point at a runner where even plain
+    // reactivity/paint can lag several seconds, not milliseconds.
     await browser.waitUntil(
       async () => {
         const next = await readPanelWidths();
         return next.historyWidth !== before.historyWidth || next.developWidth !== before.developWidth;
       },
-      { timeout: 5000, interval: 50, timeoutMsg: "panel width never changed after the simulated drag" },
+      { timeout: 20000, interval: 100, timeoutMsg: "panel width never changed after the simulated drag" },
     );
     return readPanelWidths();
   }

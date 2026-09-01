@@ -52,6 +52,18 @@ describe("Develop panel resize", () => {
     await historyRail.waitForExist({ timeout: 20000 });
   });
 
+  // Each drag gets its own synthetic pointerId rather than reusing 1 for
+  // every call. Reusing one on CI's macOS runner: the first two dragHandle
+  // calls in a run (across both tests) reliably registered, but every call
+  // after that silently had no effect (the read came back unchanged, not
+  // erroring) -- consistent with WebKit's real setPointerCapture/
+  // releasePointerCapture bookkeeping (handlePanelResizePointerDown/Up,
+  // +page.svelte) not fully resetting between synthetic, non-hardware
+  // pointer sessions that share an ID, even though each cycle's own
+  // capture/release calls succeed individually. A fresh ID per call
+  // sidesteps that and also matches how a real OS assigns pointer IDs.
+  let nextPointerId = 1;
+
   /** Dispatches a synthetic drag on the nth `.panel-resize-handle`
    * (0 = History's, on the left; 1 = the adjustments panel's, on the
    * right) by `dx` screen pixels, and returns the resulting widths of
@@ -73,12 +85,12 @@ describe("Develop panel resize", () => {
     // and then polls with real millisecond granularity inside the browser,
     // with its own generous internal deadline.
     return browser.execute(
-      async (i, delta) => {
+      async (i, delta, pointerId) => {
         const handle = document.querySelectorAll(".panel-resize-handle")[i];
         const rect = handle.getBoundingClientRect();
         const startX = rect.left + rect.width / 2;
         const y = rect.top + rect.height / 2;
-        const base = { bubbles: true, cancelable: true, pointerId: 1, clientY: y };
+        const base = { bubbles: true, cancelable: true, pointerId, clientY: y };
         const read = () => ({
           historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
           developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
@@ -106,6 +118,7 @@ describe("Develop panel resize", () => {
       },
       index,
       dx,
+      nextPointerId++,
     );
   }
 

@@ -64,6 +64,7 @@ describe("Develop panel resize", () => {
    * right) by `dx` screen pixels, and returns the resulting widths of
    * `.history-rail` and the develop `.panel`. */
   async function dragHandle(/** @type {0 | 1} */ index, /** @type {number} */ dx) {
+    const before = await readPanelWidths();
     await browser.execute(
       (i, delta) => {
         const handle = document.querySelectorAll(".panel-resize-handle")[i];
@@ -81,24 +82,23 @@ describe("Develop panel resize", () => {
     // The pointer events update Svelte's $state synchronously, but the DOM
     // (and so getBoundingClientRect()) doesn't reflect it until a later
     // paint -- reading it in the same synchronous tick as the dispatch
-    // above raced the old, pre-drag width. A single requestAnimationFrame
-    // wait was enough locally but not on CI's macOS runner (a slower or
-    // differently-scheduled WebKit build), where the very next read still
-    // observed the pre-drag value. Poll from the Node side instead of
-    // guessing a fixed frame count: keep reading until two consecutive
-    // reads agree, which is correct regardless of how many paints the
-    // update actually takes.
-    let widths = await readPanelWidths();
+    // above raced the old, pre-drag width. Neither a single
+    // requestAnimationFrame wait nor polling for two *consecutive equal*
+    // reads is reliable here: on CI's macOS runner the paint can lag
+    // enough that both polled reads land before it happens, so two equal
+    // reads of the still-*pre-drag* value get mistaken for "settled."
+    // There's no CSS transition on these widths (a plain synchronous
+    // reflow, confirmed by grepping for `transition` on `.history-rail`/
+    // `.panel`), so the first read that actually differs from `before`
+    // *is* the final value -- wait for that instead of for stability.
     await browser.waitUntil(
       async () => {
         const next = await readPanelWidths();
-        const stable = next.historyWidth === widths.historyWidth && next.developWidth === widths.developWidth;
-        widths = next;
-        return stable;
+        return next.historyWidth !== before.historyWidth || next.developWidth !== before.developWidth;
       },
-      { timeout: 5000, interval: 50 },
+      { timeout: 5000, interval: 50, timeoutMsg: "panel width never changed after the simulated drag" },
     );
-    return widths;
+    return readPanelWidths();
   }
 
   it("drag-resizes both rails and persists the resulting widths", async () => {

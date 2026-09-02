@@ -90,7 +90,15 @@ describe("Develop panel resize", () => {
         const rect = handle.getBoundingClientRect();
         const startX = rect.left + rect.width / 2;
         const y = rect.top + rect.height / 2;
-        const base = { bubbles: true, cancelable: true, pointerId, clientY: y };
+        // isPrimary/pointerType matter: a real mouse-originated pointer is
+        // always isPrimary:true, pointerType:"mouse", but `new
+        // PointerEvent(...)` defaults isPrimary to false and pointerType to
+        // "" unless given explicitly. WebKit's setPointerCapture handling
+        // (handlePanelResizePointerDown/Up, +page.svelte) may not treat a
+        // non-primary synthetic pointer consistently -- a plausible source
+        // of the intermittent no-op drags seen on CI's macOS runner, where
+        // the read comes back exactly unchanged rather than erroring.
+        const base = { bubbles: true, cancelable: true, pointerId, isPrimary: true, pointerType: "mouse", clientY: y };
         const read = () => ({
           historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
           developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,

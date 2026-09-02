@@ -539,6 +539,25 @@
           : "sRGB",
   );
 
+  // M5 Slice 1: GPU/CPU fallback. `gpuFallbackActive` is reported up by
+  // DevelopCanvas's own `onGpuFallback` callback the moment its WebGPU
+  // device acquisition fails (or, symmetrically, flips back false if a
+  // later image's acquisition succeeds) -- this component never probes
+  // `navigator.gpu` itself. `cpuFallbackPreviewUrl` is populated by the
+  // debounced effect below, same "compute a static preview CPU-side and
+  // hand DevelopCanvas a URL" shape as `softProofPreviewUrl` above, just
+  // driven by GPU availability instead of a proofing toggle.
+  let gpuFallbackActive = $state(false);
+  let cpuFallbackPreviewUrl = $state(/** @type {string | null} */ (null));
+  function handleGpuFallback(/** @type {boolean} */ active) {
+    gpuFallbackActive = active;
+    // A mask/crop tool selected before GPU became unavailable would
+    // otherwise linger as "active" while its own panel/handles never
+    // render (MaskToolStrip's buttons are disabled going forward, but
+    // this clears whatever was already selected).
+    if (active) activeTool = null;
+  }
+
   /** Mirrors the existing single-file picker precedent (`handleImportPresetRequest`
    * below), just with an ICC/ICM extension filter instead of JSON. Selecting a
    * new custom profile also switches `softProofTarget` to "custom" -- picking
@@ -742,6 +761,46 @@
 
     return () => {
       if (softProofTimer) clearTimeout(softProofTimer);
+    };
+  });
+
+  // M5 Slice 1: GPU/CPU fallback preview -- same debounced-CPU-render shape
+  // as the soft-proof effect just above (250ms settle, re-fires on any
+  // `editStack` change), driven by `gpuFallbackActive` instead of a
+  // proofing toggle. `previewEditStack` (the same CPU pipeline M4.5's
+  // History/Preset hover-preview already uses) is called with the FULL
+  // current `editStack`, since this is the primary canvas content in
+  // fallback mode, not a peek -- unlike `schedulePreview`'s 120ms
+  // hover-tuned debounce, this matches `scheduleFlush`'s own 250ms
+  // "settled after a drag" window, since re-rendering CPU-side on every
+  // slider tick is exactly the cost GPU was chosen to avoid.
+  let gpuFallbackTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+  $effect(() => {
+    void editStack;
+    const path = developImagePath;
+    const contentHash = developImageContentHash;
+    const active = gpuFallbackActive;
+    const stack = editStack;
+
+    if (gpuFallbackTimer) clearTimeout(gpuFallbackTimer);
+
+    if (!active || path === null) {
+      cpuFallbackPreviewUrl = null;
+      return;
+    }
+
+    gpuFallbackTimer = setTimeout(() => {
+      previewEditStack(path, contentHash, stack)
+        .then((preview) => {
+          cpuFallbackPreviewUrl = convertFileSrc(preview.path);
+        })
+        .catch(() => {
+          cpuFallbackPreviewUrl = null;
+        });
+    }, 250);
+
+    return () => {
+      if (gpuFallbackTimer) clearTimeout(gpuFallbackTimer);
     };
   });
 
@@ -3573,6 +3632,8 @@
         {softProofPreviewUrl}
         {softProofLoading}
         {softProofProfileLabel}
+        {cpuFallbackPreviewUrl}
+        onGpuFallback={handleGpuFallback}
       />
       {#if selectedMask}
         <MaskEditorPanel
@@ -3679,6 +3740,7 @@
       {eraseMode}
       {spotBrushSize}
       {maskOverlaysVisible}
+      gpuUnavailable={gpuFallbackActive}
       onToolToggle={(tool) => (activeTool = activeTool === tool ? null : tool)}
       onMaskSelect={(id) => (selectedMaskId = id)}
       onBrushSizeChange={(v) => (brushSize = v)}

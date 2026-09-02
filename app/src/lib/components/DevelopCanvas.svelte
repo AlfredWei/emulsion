@@ -4,6 +4,7 @@
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
   import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, nativeCropClipSize, scrollTargetForNativeFocus, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { binHistogramPixels } from "$lib/histogramMath.js";
+  import { classifyGpuFailure } from "$lib/gpuFallback.js";
 
   const MAX_MASKS = 8;
 
@@ -78,6 +79,8 @@
    *   softProofPreviewUrl?: string | null,
    *   softProofLoading?: boolean,
    *   softProofProfileLabel?: string,
+   *   cpuFallbackPreviewUrl?: string | null,
+   *   onGpuFallback?: (active: boolean) => void,
    * }}
    */
   let {
@@ -135,13 +138,21 @@
     softProofPreviewUrl = null,
     softProofLoading = false,
     softProofProfileLabel = "",
+    cpuFallbackPreviewUrl = null,
+    onGpuFallback,
   } = $props();
 
   let canvasEl = $state(/** @type {HTMLCanvasElement | null} */ (null));
   let wrapEl = $state(/** @type {HTMLDivElement | null} */ (null));
   let overlayEl = $state(/** @type {HTMLDivElement | null} */ (null));
-  let status = $state("loading"); // "loading" | "ready" | "error"
+  let status = $state("loading"); // "loading" | "ready" | "error" | "cpu-fallback"
   let errorMessage = $state("");
+  // M5 Slice 1 (GPU/CPU fallback): set only when `status === "cpu-fallback"`,
+  // i.e. `initGpu`'s own device-acquisition step threw -- see
+  // `classifyGpuFailure`'s own doc comment for why only THAT failure class
+  // (not a later shader-compile error, which means WebGPU itself is fine)
+  // routes here. Drives the on-canvas banner's tooltip.
+  let fallbackInfo = $state(/** @type {import('$lib/gpuFallback.js').GpuFallbackInfo | null} */ (null));
   // M4 Smart Previews: true when the currently-loaded preview is a
   // fallback served because the source file itself couldn't be read (see
   // getDevelopPreview's own doc comment) -- drives the on-canvas banner
@@ -4009,6 +4020,32 @@
     writeAdjustmentsAndRender();
   }
 
+  /** M5 Slice 1: the CPU-fallback counterpart of `loadImage` above -- there
+   * is no GPU device to upload a bitmap to, so this only needs the source's
+   * true pixel dimensions (for `onSourceDimensions`, e.g. crop-aspect-ratio
+   * math elsewhere), NOT the pixel bytes themselves. `getDevelopPreview`
+   * is a pure, unedited decode either way (see its own doc comment) --
+   * reusing it here costs nothing new; the actual graded/cropped image the
+   * fallback banner shows comes from `cpuFallbackPreviewUrl`, a prop
+   * `+page.svelte` populates via `previewEditStack` (mirrors how
+   * `softProofPreviewUrl` is computed there), NOT fetched by this
+   * component -- this component has no access to the full `EditStack`
+   * object, only decomposed per-field props. Best-effort: a failure here
+   * (e.g. the source file itself is unreadable) still leaves the fallback
+   * banner and `cpuFallbackPreviewUrl` working; only the aspect-ratio math
+   * that depends on real source dimensions would be affected, and that's
+   * moot anyway while Crop is disabled in fallback mode. */
+  async function loadCpuFallbackDimensions(/** @type {string} */ path) {
+    try {
+      const preview = await getDevelopPreview(path, imageContentHash);
+      sourceWidth = preview.width;
+      sourceHeight = preview.height;
+      onSourceDimensions?.(preview.width, preview.height);
+    } catch {
+      // best-effort only, see doc comment above
+    }
+  }
+
   /** Lazily fetches and swaps in the native-resolution 1:1 tier for the
    * CURRENTLY loaded image, the first time it's actually zoomed to 100%
    * (triggered by the $effect below, not called directly from pointer
@@ -4578,8 +4615,27 @@
     zoomMode = "fit";
 
     (async () => {
+      // M5 Slice 1: only a failure to ACQUIRE the GPU device itself (no
+      // `navigator.gpu`, no adapter, or `requestDevice()` rejecting --
+      // `initGpu`'s own three throw/rejection sites) routes into CPU
+      // fallback. A shader-compile failure or a later `uncapturederror`
+      // does NOT throw from `initGpu` -- both mean WebGPU itself works
+      // fine and this is a real app/shader bug, so they keep setting
+      // `status = "error"` exactly as before this slice (see their own
+      // doc comments inside `initGpu`), never masked as an environment gap.
+      if (!device) {
+        try {
+          await initGpu(canvas);
+        } catch (/** @type {any} */ e) {
+          status = "cpu-fallback";
+          fallbackInfo = classifyGpuFailure(e);
+          onGpuFallback?.(true);
+          await loadCpuFallbackDimensions(path);
+          return;
+        }
+      }
+      onGpuFallback?.(false);
       try {
-        if (!device) await initGpu(canvas);
         await loadImage(path);
       } catch (/** @type {any} */ e) {
         status = "error";
@@ -4755,6 +4811,7 @@
       class:cropped={showCommittedCropPreview}
       class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper" || activeTool === "spot" || activeTool === "red_eye"}
       class:space-pan={spacePanning}
+      class:hidden={status === "cpu-fallback"}
       style={showCommittedCropPreview
         ? `width:${100 / crop.width}%; height:${100 / crop.height}%; left:${(-crop.x * 100) / crop.width}%; top:${(-crop.y * 100) / crop.height}%; transform: rotate(${crop.angle}deg);`
         : activeTool === "crop"
@@ -5084,6 +5141,22 @@
     <div class="overlay">Decoding…</div>
   {:else if status === "error"}
     <div class="overlay error">{errorMessage}</div>
+  {:else if status === "cpu-fallback"}
+    <!-- M5 Slice 1: no WebGPU device could be acquired (see
+         `classifyGpuFailure`) -- Develop stays usable via a CPU-rendered
+         static preview instead of erroring out entirely. `cpuFallbackPreviewUrl`
+         is computed by +page.svelte (debounced on `editStack` changes,
+         via `previewEditStack`, mirroring how `softProofPreviewUrl` is
+         already computed there) rather than by this component, since only
+         +page.svelte holds the full `EditStack` object this needs. -->
+    {#if cpuFallbackPreviewUrl}
+      <img class="cpu-fallback-image" src={cpuFallbackPreviewUrl} alt="Preview (GPU unavailable)" draggable="false" />
+    {:else}
+      <div class="overlay">Rendering preview…</div>
+    {/if}
+    <div class="cpu-fallback-badge" title={fallbackInfo?.message ?? ""}>
+      ⚠ GPU acceleration unavailable — preview updates after you stop adjusting, not live while dragging
+    </div>
   {/if}
 </div>
 
@@ -5152,6 +5225,13 @@
   }
   canvas.space-pan:active {
     cursor: grabbing;
+  }
+  /* M5 Slice 1: no WebGPU context is ever configured onto this canvas in
+     CPU-fallback mode (see `initGpu`'s own failure classification) -- left
+     visible it would just show as a blank default-sized box behind
+     `.cpu-fallback-image`. */
+  canvas.hidden {
+    display: none;
   }
   /* Crop & Straighten (M3): inactive by default (`display:contents`
      removes this wrapper from the layout tree entirely, so canvas's own
@@ -5440,6 +5520,40 @@
     position: absolute;
     top: 14px;
     left: 14px;
+    padding: 5px 10px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--label-yellow);
+    background: rgba(20, 18, 16, 0.85);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    pointer-events: none;
+    z-index: 2;
+  }
+  /* M5 Slice 1: CPU-fallback preview -- the static, debounced-re-rendered
+     substitute for the live WGSL canvas, same `.canvas-wrap` box the real
+     canvas normally fills (`object-fit: contain` since this is a
+     pre-rendered PNG at a fixed draft resolution, not a native-sized
+     backing store like the canvas). */
+  .cpu-fallback-image {
+    max-width: 100%;
+    max-height: 100%;
+    margin: auto;
+    border-radius: 2px;
+    box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.7);
+    object-fit: contain;
+  }
+  /* Shares `.smart-preview-badge`'s top-left slot's general placement
+     style but sits bottom-left instead, so it can't collide with a Smart
+     Preview badge (both conditions COULD theoretically be true at once --
+     GPU unavailable AND the source file unreachable -- though that's an
+     edge case, not one this slice specifically tests). */
+  .cpu-fallback-badge {
+    position: absolute;
+    bottom: 14px;
+    left: 14px;
+    max-width: calc(100% - 28px);
     padding: 5px 10px;
     font-family: var(--font-mono);
     font-size: 10.5px;

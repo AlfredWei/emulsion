@@ -52,33 +52,87 @@ describe("Develop panel resize", () => {
     await historyRail.waitForExist({ timeout: 20000 });
   });
 
+  // Each drag gets its own synthetic pointerId rather than reusing 1 for
+  // every call. Reusing one on CI's macOS runner: the first two dragHandle
+  // calls in a run (across both tests) reliably registered, but every call
+  // after that silently had no effect (the read came back unchanged, not
+  // erroring) -- consistent with WebKit's real setPointerCapture/
+  // releasePointerCapture bookkeeping (handlePanelResizePointerDown/Up,
+  // +page.svelte) not fully resetting between synthetic, non-hardware
+  // pointer sessions that share an ID, even though each cycle's own
+  // capture/release calls succeed individually. A fresh ID per call
+  // sidesteps that and also matches how a real OS assigns pointer IDs.
+  let nextPointerId = 1;
+
   /** Dispatches a synthetic drag on the nth `.panel-resize-handle`
    * (0 = History's, on the left; 1 = the adjustments panel's, on the
    * right) by `dx` screen pixels, and returns the resulting widths of
    * `.history-rail` and the develop `.panel`. */
   async function dragHandle(/** @type {0 | 1} */ index, /** @type {number} */ dx) {
+    // Everything below (dispatch + wait-for-change poll) runs inside a
+    // single browser.execute call rather than as separate WebDriver
+    // commands. That matters here specifically: @wdio/tauri-service's
+    // ensureActiveWindowFocus check (see wdio.conf.js's own comment on it)
+    // runs before *every* WebDriver command and, on CI's macOS runner,
+    // routinely eats a full 5s retrying a Tauri core.invoke that isn't
+    // available yet -- confirmed by the "Tauri core.invoke not available
+    // after 5s timeout" WARNs recurring every ~5-6s throughout this spec's
+    // CI runs. A Node-side poll loop (browser.waitUntil, or manually
+    // re-calling browser.execute) pays that ~5s tax on *every single poll
+    // iteration*, which silently turned a nominal 20s wait into only 3-4
+    // real attempts and made it look like the drag "never" registered.
+    // Dispatching and polling together in one script pays that tax once
+    // and then polls with real millisecond granularity inside the browser,
+    // with its own generous internal deadline.
     return browser.execute(
-      async (i, delta) => {
+      async (i, delta, pointerId) => {
         const handle = document.querySelectorAll(".panel-resize-handle")[i];
         const rect = handle.getBoundingClientRect();
         const startX = rect.left + rect.width / 2;
         const y = rect.top + rect.height / 2;
-        const base = { bubbles: true, cancelable: true, pointerId: 1, clientY: y };
+        // isPrimary/pointerType matter: a real mouse-originated pointer is
+        // always isPrimary:true, pointerType:"mouse", but `new
+        // PointerEvent(...)` defaults isPrimary to false and pointerType to
+        // "" unless given explicitly. WebKit's setPointerCapture handling
+        // (handlePanelResizePointerDown/Up, +page.svelte) may not treat a
+        // non-primary synthetic pointer consistently -- a plausible source
+        // of the intermittent no-op drags seen on CI's macOS runner, where
+        // the read comes back exactly unchanged rather than erroring.
+        const base = { bubbles: true, cancelable: true, pointerId, isPrimary: true, pointerType: "mouse", clientY: y };
+        const read = () => ({
+          historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
+          developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
+        });
+        const before = read();
+
         handle.dispatchEvent(new PointerEvent("pointerdown", { ...base, clientX: startX }));
         handle.dispatchEvent(new PointerEvent("pointermove", { ...base, clientX: startX + delta }));
         handle.dispatchEvent(new PointerEvent("pointerup", { ...base, clientX: startX + delta }));
+
         // The pointer events update Svelte's $state synchronously, but the
-        // DOM (and so getBoundingClientRect()) doesn't reflect it until
-        // the next paint -- reading it in the same synchronous tick as
-        // the dispatch above raced the old, pre-drag width.
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        return {
-          historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
-          developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
-        };
+        // DOM (and so getBoundingClientRect()) doesn't reflect it until a
+        // later paint. There's no CSS transition on these widths (a plain
+        // synchronous reflow), so the first read that differs from
+        // `before` is already the final value -- poll for that instead of
+        // guessing a fixed frame/time budget. On CI's macOS runner this
+        // occasionally never resolves at all (not just slowly -- 45s
+        // wasn't any more successful than 15s, so it's a rare missed
+        // event, not a slow flush); the calling `it()` retries on
+        // failure to absorb that, so this budget just needs to be well
+        // past what local dev ever needs, not try to outlast a stall
+        // that isn't going to end.
+        const deadline = Date.now() + 15000;
+        let after = before;
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          after = read();
+          if (after.historyWidth !== before.historyWidth || after.developWidth !== before.developWidth) break;
+        }
+        return after;
       },
       index,
       dx,
+      nextPointerId++,
     );
   }
 

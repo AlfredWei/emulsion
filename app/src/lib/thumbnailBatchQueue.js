@@ -16,7 +16,7 @@ import { regenerateThumbnail } from './api/develop.js';
 /** @type {Set<number>} */
 let pendingVersionIds = new Set();
 
-/** @type {number | null} */
+/** @type {ReturnType<typeof setTimeout> | null} */
 let debounceTimer = null;
 
 const DEBOUNCE_DELAY_MS = 150;

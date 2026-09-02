@@ -26,6 +26,7 @@
    *   spotBrushSize: number,
    *   eraseMode: boolean,
    *   maskOverlaysVisible: boolean,
+   *   gpuUnavailable?: boolean,
    *   onToolToggle: (tool: string) => void,
    *   onMaskSelect: (id: string) => void,
    *   onBrushSizeChange: (value: number) => void,
@@ -54,6 +55,7 @@
     spotBrushSize,
     eraseMode,
     maskOverlaysVisible,
+    gpuUnavailable = false,
     onToolToggle,
     onMaskSelect,
     onBrushSizeChange,
@@ -130,7 +132,8 @@
     class="tool icon"
     class:active={activeTool === "crop"}
     type="button"
-    title="Crop & Straighten"
+    disabled={gpuUnavailable}
+    title={gpuUnavailable ? "Crop & Straighten -- unavailable without GPU acceleration" : "Crop & Straighten"}
     aria-label="Crop & Straighten"
     onclick={() => onToolToggle("crop")}
   >
@@ -144,8 +147,8 @@
     class="tool icon"
     class:active={activeTool === "linear_gradient"}
     type="button"
-    disabled={atCap && activeTool !== "linear_gradient"}
-    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Linear Gradient"}
+    disabled={gpuUnavailable || (atCap && activeTool !== "linear_gradient")}
+    title={gpuUnavailable ? "Linear Gradient -- unavailable without GPU acceleration" : atCap ? `Maximum ${MAX_MASKS} masks reached` : "Linear Gradient"}
     aria-label="Linear Gradient"
     onclick={() => onToolToggle("linear_gradient")}
   >
@@ -159,8 +162,8 @@
     class="tool icon"
     class:active={activeTool === "radial_gradient"}
     type="button"
-    disabled={atCap && activeTool !== "radial_gradient"}
-    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Radial Gradient"}
+    disabled={gpuUnavailable || (atCap && activeTool !== "radial_gradient")}
+    title={gpuUnavailable ? "Radial Gradient -- unavailable without GPU acceleration" : atCap ? `Maximum ${MAX_MASKS} masks reached` : "Radial Gradient"}
     aria-label="Radial Gradient"
     onclick={() => onToolToggle("radial_gradient")}
   >
@@ -173,8 +176,8 @@
     class="tool icon"
     class:active={activeTool === "brush"}
     type="button"
-    disabled={atCap && activeTool !== "brush"}
-    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Brush"}
+    disabled={gpuUnavailable || (atCap && activeTool !== "brush")}
+    title={gpuUnavailable ? "Brush -- unavailable without GPU acceleration" : atCap ? `Maximum ${MAX_MASKS} masks reached` : "Brush"}
     aria-label="Brush"
     onclick={() => onToolToggle("brush")}
   >
@@ -186,8 +189,8 @@
   <button
     class="tool icon"
     type="button"
-    disabled={atCap}
-    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Luminance Range -- creates immediately, no canvas interaction needed (this mask has no geometry, real Lightroom's own behavior for this kind)"}
+    disabled={gpuUnavailable || atCap}
+    title={gpuUnavailable ? "Luminance Range -- unavailable without GPU acceleration" : atCap ? `Maximum ${MAX_MASKS} masks reached` : "Luminance Range -- creates immediately, no canvas interaction needed (this mask has no geometry, real Lightroom's own behavior for this kind)"}
     aria-label="Luminance Range"
     onclick={onCreateLuminanceRange}
   >
@@ -207,8 +210,8 @@
     class="tool icon"
     class:active={activeTool === "color_range"}
     type="button"
-    disabled={atCap && activeTool !== "color_range"}
-    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Color Range -- click a point on the image to sample its color and create a mask selecting similar colors"}
+    disabled={gpuUnavailable || (atCap && activeTool !== "color_range")}
+    title={gpuUnavailable ? "Color Range -- unavailable without GPU acceleration" : atCap ? `Maximum ${MAX_MASKS} masks reached` : "Color Range -- click a point on the image to sample its color and create a mask selecting similar colors"}
     aria-label="Color Range"
     onclick={() => onToolToggle("color_range")}
   >
@@ -222,8 +225,8 @@
     class="tool icon"
     class:active={activeTool === "spot"}
     type="button"
-    disabled={atCap && activeTool !== "spot"}
-    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Spot Removal (Healing/Clone) -- click-drag to paint over a blemish"}
+    disabled={gpuUnavailable || (atCap && activeTool !== "spot")}
+    title={gpuUnavailable ? "Spot Removal -- unavailable without GPU acceleration" : atCap ? `Maximum ${MAX_MASKS} masks reached` : "Spot Removal (Healing/Clone) -- click-drag to paint over a blemish"}
     aria-label="Spot Removal"
     onclick={() => onToolToggle("spot")}
   >
@@ -236,8 +239,8 @@
     class="tool icon"
     class:active={activeTool === "red_eye"}
     type="button"
-    disabled={atCap && activeTool !== "red_eye"}
-    title={atCap ? `Maximum ${MAX_MASKS} masks reached` : "Red Eye Correction -- click-drag an oval over the eye"}
+    disabled={gpuUnavailable || (atCap && activeTool !== "red_eye")}
+    title={gpuUnavailable ? "Red Eye Correction -- unavailable without GPU acceleration" : atCap ? `Maximum ${MAX_MASKS} masks reached` : "Red Eye Correction -- click-drag an oval over the eye"}
     aria-label="Red Eye Correction"
     onclick={() => onToolToggle("red_eye")}
   >

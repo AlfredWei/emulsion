@@ -1,6 +1,6 @@
 # Emulsion
 
-*A local-first Lightroom Classic replacement — working title.*
+*A local-first photo library & RAW editor — working title.*
 
 [![CI](https://github.com/AlfredWei/emulsion/actions/workflows/ci.yml/badge.svg)](https://github.com/AlfredWei/emulsion/actions/workflows/ci.yml)
 

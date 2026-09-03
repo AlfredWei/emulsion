@@ -67,4 +67,4 @@ Still genuinely untested on Windows: the in-webview WebGPU rendering path (ADR-0
 
 ## License
 
-Not yet decided — tracked as an open decision in [MILESTONES.md M7](PRD/MILESTONES.md#m7--polish-extensibility-10-launch). This is currently a private repository.
+[MIT](LICENSE)

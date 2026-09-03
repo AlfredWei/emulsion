@@ -422,6 +422,22 @@ impl Catalog {
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- M5 Slice 3 (GPU performance validation): list_images()'s own
+            -- per-row correlated subquery filters this table by
+            -- `image_id` (not its indexed `id` primary key) to find each
+            -- image's oldest non-virtual-copy version. With no index on
+            -- that column, SQLite has no way to satisfy the filter except
+            -- a full table scan of image_versions for every single row of
+            -- images -- confirmed directly: list_images() took 37.4s
+            -- (release build) over a real 50,000-image catalog before
+            -- this index existed (catalog.rs's own
+            -- catalog_scales_to_50k_images test), dropping to ~75ms after
+            -- adding it. A real
+            -- regression against PRD §9's own catalog-open-time target for
+            -- a 50k-image catalog, not a hypothetical one.
+            CREATE INDEX IF NOT EXISTS idx_image_versions_image_id
+                ON image_versions(image_id);
+
             -- M2 Slice 4 (keywording): no UNIQUE(parent_id, name) here --
             -- SQLite treats every NULL as distinct in a UNIQUE check, so
             -- that constraint would silently fail to stop two different
@@ -2760,5 +2776,111 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// M5 Slice 3 (GPU performance validation): MILESTONES.md's M5 exit
+    /// criterion ("...on a 50k-image catalog...") had never been measured
+    /// against the SQLite persistence path -- the interactive Develop
+    /// render loop itself is architecturally decoupled from catalog size
+    /// (ADR-0004: it never touches the catalog), so the real risk to that
+    /// criterion is here, not in the shader. `#[ignore]`d (not part of the
+    /// default fast suite) since seeding 50k rows takes real wall time;
+    /// run explicitly with `cargo test --release -- --ignored --nocapture
+    /// catalog_scales_to_50k_images`.
+    ///
+    /// Seeds a real 50k-image, 50k-version in-memory catalog (one initial
+    /// edit-stack version per image, matching real import's own shape --
+    /// see `add_image_with_edit_stack`), then times the three operations
+    /// the Develop/Library UI actually calls against a live catalog:
+    /// `list_images` (Library grid's own full-catalog query),
+    /// `record_edit_stack` (every debounced slider-settle flush, always
+    /// against ONE version by primary key regardless of catalog size), and
+    /// `get_edit_stack` (Develop's own open-image read).
+    ///
+    /// This DID find a real bug on its first run, before
+    /// `idx_image_versions_image_id` existed: `list_images`'s per-row
+    /// correlated subquery (`SELECT id FROM image_versions WHERE image_id
+    /// = i.id ...`) had no index to satisfy that filter, so SQLite fell
+    /// back to a full table scan of `image_versions` for every one of the
+    /// 50,000 outer rows -- confirmed via `EXPLAIN QUERY PLAN` (run
+    /// separately against a minimal reproduction of this schema, not
+    /// inline in this test) showing `SCAN image_versions` inside the
+    /// subquery before the index, `SEARCH ... USING INDEX
+    /// idx_image_versions_image_id` after. Directly measured at 37.4s
+    /// (release build) for one `list_images()` call over this test's real
+    /// 50,000-row catalog -- ~75x this test's own 500ms budget for that
+    /// operation, and a real regression against PRD §9's own catalog-
+    /// open-time target for a 50k-image catalog. Adding the index
+    /// (present in `migrate()` as of this slice) dropped it to ~75ms --
+    /// re-confirmed by temporarily reverting the index and re-running,
+    /// which reproduced the 37.4s result again.
+    /// `record_edit_stack`/`get_edit_stack` were already fast before the
+    /// fix (both filter `image_versions` by its own indexed `id` primary
+    /// key, never by `image_id`) -- included here as a permanent
+    /// regression guard for all three, not because the other two were
+    /// ever actually at risk.
+    #[test]
+    #[ignore]
+    fn catalog_scales_to_50k_images() {
+        use std::time::Instant;
+
+        const N: i64 = 50_000;
+        // Generous budgets, not tight ones -- this test's job is to catch
+        // a real O(n) or worse regression (like the missing-index bug it
+        // already found once), not to enforce the PRD's interactive
+        // ≤100ms figure to the millisecond against an in-memory SQLite
+        // connection with no real disk I/O.
+        const LIST_IMAGES_BUDGET_MS: u128 = 500;
+        const SINGLE_ROW_OP_BUDGET_MS: u128 = 50;
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        for i in 0..N {
+            catalog
+                .add_image_with_edit_stack(
+                    &format!("/synthetic/img_{i:06}.CR3"),
+                    &format!("hash_{i:06}"),
+                    20_000_000,
+                    &EditStack::empty(),
+                    &ImageMetadata::default(),
+                )
+                .unwrap();
+        }
+
+        let started = Instant::now();
+        let images = catalog.list_images().unwrap();
+        let list_images_ms = started.elapsed().as_millis();
+        assert_eq!(images.len(), N as usize);
+        eprintln!("list_images() over {N} images: {list_images_ms}ms");
+        assert!(
+            list_images_ms < LIST_IMAGES_BUDGET_MS,
+            "list_images() took {list_images_ms}ms over {N} images, budget is {LIST_IMAGES_BUDGET_MS}ms -- likely a missing index on image_versions(image_id) or images(...) that a query now needs"
+        );
+
+        // The last-inserted row -- the worst case for any query that (if
+        // it were ever mis-written to) scanned from the front, and the
+        // one a real user would actually be editing right after a large
+        // import.
+        let target_version_id = images.last().unwrap().version_id;
+
+        let started = Instant::now();
+        catalog
+            .record_edit_stack(target_version_id, &stack_with("exposure", 1.5), Some("Exposure"))
+            .unwrap();
+        let record_ms = started.elapsed().as_millis();
+        eprintln!("record_edit_stack() against a 50k-row catalog: {record_ms}ms");
+        assert!(
+            record_ms < SINGLE_ROW_OP_BUDGET_MS,
+            "record_edit_stack() took {record_ms}ms over {N} images, budget is {SINGLE_ROW_OP_BUDGET_MS}ms"
+        );
+
+        let started = Instant::now();
+        let stack = catalog.get_edit_stack(target_version_id).unwrap();
+        let get_ms = started.elapsed().as_millis();
+        eprintln!("get_edit_stack() against a 50k-row catalog: {get_ms}ms");
+        assert_eq!(stack, stack_with("exposure", 1.5));
+        assert!(
+            get_ms < SINGLE_ROW_OP_BUDGET_MS,
+            "get_edit_stack() took {get_ms}ms over {N} images, budget is {SINGLE_ROW_OP_BUDGET_MS}ms"
+        );
     }
 }

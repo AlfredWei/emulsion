@@ -4644,6 +4644,29 @@
     })();
   });
 
+  /** M5 Slice 3 (GPU performance validation): rolling buffer of real
+   * slider-edit -> GPU-submitted-work-complete render latencies, in ms.
+   * Read by `e2e/specs/develop-performance.e2e.js` via `window`, not used
+   * by the UI itself -- this is instrumentation, not a feature. Timed from
+   * the reactive effect's own fire (immediately after the bound
+   * `$state` change a slider's `oninput` handler makes) rather than from
+   * the DOM input event itself, so it excludes input-dispatch and Svelte's
+   * state-to-effect-flush overhead -- both sub-millisecond in practice,
+   * see the perf spec's own doc comment -- and measures the actual
+   * GPU-bound cost of the render pipeline, which dominates it. */
+  let renderLatencySamples = /** @type {{ ts: number, ms: number }[]} */ ([]);
+  const RENDER_LATENCY_SAMPLE_CAP = 100;
+
+  function recordRenderLatency(/** @type {number} */ startedAt) {
+    const capturedDevice = device;
+    if (!capturedDevice) return;
+    capturedDevice.queue.onSubmittedWorkDone().then(() => {
+      renderLatencySamples.push({ ts: Date.now(), ms: performance.now() - startedAt });
+      if (renderLatencySamples.length > RENDER_LATENCY_SAMPLE_CAP) renderLatencySamples.shift();
+      if (typeof window !== "undefined") /** @type {any} */ (window).__developRenderPerf = renderLatencySamples;
+    });
+  }
+
   $effect(() => {
     // Re-run whenever an adjustment or the mask list changes -- reads, not
     // a re-fetch. selectedMaskId/showMaskOverlay are included specifically
@@ -4677,7 +4700,11 @@
     void colorNR;
     void showClippingOverlay;
     void showOriginal;
-    if (status === "ready") writeAdjustmentsAndRender();
+    if (status === "ready") {
+      const startedAt = performance.now();
+      writeAdjustmentsAndRender();
+      recordRenderLatency(startedAt);
+    }
   });
 
   // Before/after preview: a transient "Original"/"Edited" badge, shown

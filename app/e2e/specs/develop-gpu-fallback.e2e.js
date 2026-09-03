@@ -96,12 +96,30 @@ describe("Develop GPU/CPU fallback", () => {
     const before = await browser.execute(() => document.querySelector(".cpu-fallback-image")?.src ?? null);
     expect(before).not.toBeNull();
 
-    await browser.execute(() => {
+    // Like golden-path.e2e.js's own Exposure test, this fixture's edit
+    // stack is not reset between local runs, and this same test always
+    // drives Exposure to whatever `target` it lands on -- a hardcoded
+    // literal here would risk a repeat local run finding Exposure already
+    // left at that exact value by the PRIOR run. That would make the
+    // resulting edit stack byte-identical to what's already persisted,
+    // which hashes to the SAME cache key `ensure_graded_preview_for_hash`
+    // (preview_cache.rs) already has on disk -- it short-circuits on an
+    // existing `out_path` rather than re-rendering, so `.cpu-fallback-image`
+    // would resolve to the exact same cached PNG path and its `src` would
+    // never change, even though a real debounced round-trip happened.
+    // Computing `target` relative to whatever's already there (never the
+    // literal `before` value) sidesteps this regardless of accumulated
+    // catalog state. CI runners are always fresh, so this never comes up
+    // there either way.
+    const currentExposure = await browser.execute(() => Number(document.getElementById("exposure").value));
+    const target = currentExposure >= 4 ? currentExposure - 2 : currentExposure + 2; // stay within [-5, 5]
+
+    await browser.execute((value) => {
       const el = document.getElementById("exposure");
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-      setter.call(el, "1.5");
+      setter.call(el, String(value));
       el.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    }, target);
 
     const after = await browser.execute((prev) => {
       return new Promise((resolve) => {

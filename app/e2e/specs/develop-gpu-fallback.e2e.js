@@ -17,11 +17,15 @@ const FIXTURE_NAME = "Smiling-woman-pink-shirt-portrait";
  * `gpuFallback.js`, ADR-0004's dated Update section, and
  * RFC-0002-develop-gpu-cpu-fallback.md.
  *
- * This dev/CI machine has real, working WebGPU (that's the whole reason a
- * CPU fallback needs forcing to exercise at all), so `navigator.gpu` is
+ * On machines with real, working WebGPU (macOS CI, most local dev), a CPU
+ * fallback needs forcing to exercise at all, so `navigator.gpu` is
  * monkeypatched out immediately after the page loads, before Develop is
  * ever opened -- `initGpu` isn't called until an image is actually opened
- * in Develop, so this is well ahead of that.
+ * in Develop, so this is well ahead of that. On GitHub Actions'
+ * windows-latest runner specifically, WebGPU isn't available for real
+ * (confirmed empirically -- see develop-cpu-gpu-parity.e2e.js's own guard
+ * for the spec that surfaced this), so the monkeypatch there is redundant
+ * but harmless: either way this spec forces and asserts the fallback path.
  */
 describe("Develop GPU/CPU fallback", () => {
   before(async () => {

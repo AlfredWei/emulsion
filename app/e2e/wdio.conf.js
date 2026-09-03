@@ -42,23 +42,32 @@ export const config = {
   connectionRetryTimeout: 90000,
   connectionRetryCount: 3,
   // panel-resize.e2e.js occasionally sees a synthetic drag's pointer
-  // events silently have no effect on CI's macOS runner -- confirmed
-  // across many CI runs that every attempt tends to have at least one
-  // miss (7/7 full-session attempts each failed at least one of the 4
-  // dragHandle calls with specFileRetries: 6), too consistent to be
-  // independent bad luck. The dispatched PointerEvents were missing
-  // `isPrimary`/`pointerType` (defaults to false/"" without them, unlike
-  // a real mouse pointer), which WebKit's setPointerCapture handling
-  // (handlePanelResizePointerDown/Up, +page.svelte) may not treat
-  // consistently for a non-primary synthetic pointer -- the likely real
-  // fix, now set explicitly in panel-resize.e2e.js. NOT a case for
-  // switching to WebdriverIO's native pointer actions instead of
+  // events silently have no effect (or a transient mid-reflow width) on
+  // CI's macOS runner -- confirmed across many CI runs that every attempt
+  // tends to have at least one miss (7/7 full-session attempts each failed
+  // at least one of the 4 dragHandle calls with specFileRetries: 6), too
+  // consistent to be independent bad luck. The dispatched PointerEvents
+  // were missing `isPrimary`/`pointerType` (defaults to false/"" without
+  // them, unlike a real mouse pointer), which WebKit's setPointerCapture
+  // handling (handlePanelResizePointerDown/Up, +page.svelte) may not treat
+  // consistently for a non-primary synthetic pointer -- fixed by setting
+  // both explicitly in panel-resize.e2e.js, which measurably helped (CI
+  // runs went from 0/N clean attempts to a mix of pass/fail per test) but,
+  // confirmed on this project's first real post-billing-fix CI run
+  // (2026-09-03), did NOT fully close the gap on its own: all 4 attempts
+  // at specFileRetries: 3 still had at least one of the two tests fail,
+  // each landing on a width that matched neither the pre-drag value nor
+  // any legal clamped/dragged outcome -- consistent with the dragHandle
+  // poll (panel-resize.e2e.js) occasionally reading a mid-reflow width,
+  // now also hardened to require two consecutive matching reads. NOT a
+  // case for switching to WebdriverIO's native pointer actions instead of
   // dispatchEvent: helpers.js documents the opposite finding already
   // (real WebDriver clicks are the *unreliable* mechanism in this
   // embedded-WebDriver + WKWebView combination, dispatchEvent is the
-  // established workaround). Kept a modest retry count as a safety net
-  // in case the isPrimary fix doesn't fully close the gap.
-  specFileRetries: 3,
+  // established workaround). Back to the original, empirically-needed
+  // retry count as a safety net now that we have direct evidence 3 isn't
+  // consistently enough.
+  specFileRetries: 6,
 
   framework: "mocha",
   mochaOpts: {

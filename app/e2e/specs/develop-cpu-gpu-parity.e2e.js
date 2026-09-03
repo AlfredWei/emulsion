@@ -112,8 +112,33 @@ describe("Develop CPU/GPU parity", () => {
   let contentHash;
   let canvasEl;
 
-  before(async () => {
+  before(async function () {
     await browser.setTimeout({ script: 90000 });
+
+    // This spec's whole premise is comparing a LIVE GPU render against the
+    // CPU one -- meaningless on a runner where WebGPU isn't available, since
+    // DevelopCanvas.svelte then takes M5 Slice 1's CPU-fallback path (see
+    // develop-gpu-fallback.e2e.js) and there's no GPU render to read a
+    // hover-pixel from at all. Confirmed empirically on GitHub Actions'
+    // windows-latest runner: `navigator.gpu` init fails there for real (not
+    // forced, unlike develop-gpu-fallback.e2e.js's own monkeypatch), which
+    // otherwise showed up as every scenario below throwing "GPU hover-pixel
+    // readback never stabilized" after a full 15s poll timeout each --
+    // replicating `initGpu`'s own adapter-acquisition check directly here,
+    // before importing the fixture, skips fast instead of failing slow.
+    const gpuAvailable = await browser.execute(async () => {
+      if (!navigator.gpu) return false;
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        return !!adapter;
+      } catch {
+        return false;
+      }
+    });
+    if (!gpuAvailable) {
+      this.skip();
+    }
+
     await browser.execute(
       async (fixturePath) => window.__TAURI__.core.invoke("import_files", { paths: [fixturePath] }),
       FIXTURE_PATH,

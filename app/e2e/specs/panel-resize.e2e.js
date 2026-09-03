@@ -111,22 +111,36 @@ describe("Develop panel resize", () => {
 
         // The pointer events update Svelte's $state synchronously, but the
         // DOM (and so getBoundingClientRect()) doesn't reflect it until a
-        // later paint. There's no CSS transition on these widths (a plain
-        // synchronous reflow), so the first read that differs from
-        // `before` is already the final value -- poll for that instead of
-        // guessing a fixed frame/time budget. On CI's macOS runner this
-        // occasionally never resolves at all (not just slowly -- 45s
-        // wasn't any more successful than 15s, so it's a rare missed
-        // event, not a slow flush); the calling `it()` retries on
-        // failure to absorb that, so this budget just needs to be well
-        // past what local dev ever needs, not try to outlast a stall
-        // that isn't going to end.
+        // later paint -- poll for a change instead of guessing a fixed
+        // frame/time budget. On CI's macOS runner this occasionally never
+        // resolves at all (not just slowly -- 45s wasn't any more
+        // successful than 15s, so it's a rare missed event, not a slow
+        // flush); the calling `it()` retries on failure to absorb that, so
+        // this budget just needs to be well past what local dev ever
+        // needs, not try to outlast a stall that isn't going to end.
+        //
+        // Require two consecutive matching reads before accepting a
+        // changed value, not just the first read that differs from
+        // `before` -- confirmed via real CI runs that a single-read check
+        // occasionally returns a value that's neither `before` nor any
+        // sane final width (e.g. reading 280 when every legal outcome here
+        // is 160/300/400), consistent with catching layout mid-reflow
+        // across the same rAF tick that both pointermove and pointerup
+        // fire in. Same "poll until two reads agree" pattern already
+        // proven for the GPU histogram readback in
+        // develop-cpu-gpu-parity.e2e.js's readGpuPixel.
         const deadline = Date.now() + 15000;
         let after = before;
+        let prev = null;
         while (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 50));
-          after = read();
-          if (after.historyWidth !== before.historyWidth || after.developWidth !== before.developWidth) break;
+          const current = read();
+          const changed = current.historyWidth !== before.historyWidth || current.developWidth !== before.developWidth;
+          if (changed && prev && current.historyWidth === prev.historyWidth && current.developWidth === prev.developWidth) {
+            after = current;
+            break;
+          }
+          prev = current;
         }
         return after;
       },

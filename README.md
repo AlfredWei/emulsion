@@ -1,8 +1,10 @@
 # Emulsion
 
-*A local-first Lightroom Classic replacement — working title.*
+*A local-first photo library & RAW editor — working title.*
 
 [![CI](https://github.com/AlfredWei/emulsion/actions/workflows/ci.yml/badge.svg)](https://github.com/AlfredWei/emulsion/actions/workflows/ci.yml)
+
+![Emulsion demo](emulsion.gif)
 
 Emulsion is a desktop app for photographers to import, organize, non-destructively edit, and export their photo libraries — including camera RAW — without a subscription or a cloud account. The catalog and the pixels stay on your own disk; there's no server component anywhere in the design.
 

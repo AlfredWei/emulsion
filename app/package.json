@@ -1,7 +1,7 @@
 {
   "name": "emulsion",
   "version": "0.1.0",
-  "description": "Local-first Lightroom Classic replacement",
+  "description": "Local-first, non-destructive photo library and RAW editor",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

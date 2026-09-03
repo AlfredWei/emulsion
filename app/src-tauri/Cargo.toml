@@ -1,7 +1,7 @@
 [package]
 name = "emulsion"
 version = "0.1.0"
-description = "Local-first Lightroom Classic replacement — Rust core (catalog, RAW decode, export)"
+description = "Local-first photo library and RAW editor — Rust core (catalog, RAW decode, export)"
 authors = ["Alfred Wei"]
 edition = "2021"
 

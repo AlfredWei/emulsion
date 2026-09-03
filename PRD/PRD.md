@@ -1,5 +1,5 @@
 # PRD — [Working Title] Photo Library & RAW Editor
-### A local-first Lightroom Classic replacement
+### A local-first, non-destructive RAW photo workflow
 
 Status: Draft v0.1 · Owner: TBD · Last updated: 2026-07-25
 
@@ -7,13 +7,13 @@ Status: Draft v0.1 · Owner: TBD · Last updated: 2026-07-25
 
 ## 1. Vision
 
-A desktop application for photographers to **import, organize, non-destructively edit, and export** their photo libraries — including camera RAW files — without depending on a subscription or a cloud account. It should feel like the tool Lightroom Classic used to be before every workflow assumed a Creative Cloud login: fast, local, and owned by the person using it.
+A desktop application for photographers to **import, organize, non-destructively edit, and export** their photo libraries — including camera RAW files — without depending on a subscription or a cloud account. It should feel fast, local, and fully owned by the person using it — the way desktop creative software used to work, before every workflow assumed a cloud login.
 
 The catalog and the pixels are always on the user's own disk. There is no server component in this product's roadmap.
 
 ## 2. Goals
 
-- Replace Lightroom Classic's **core workflow** — import, cull, organize, develop, export — for a single photographer working on one machine.
+- Cover the **core RAW workflow** — import, cull, organize, develop, export — for a single photographer working on one machine.
 - Be **non-destructive** end-to-end: originals are never modified; every edit is reversible instruction data.
 - Support the **breadth of camera RAW formats** photographers actually use, via a proven decoding library rather than reinventing RAW decode.
 - Be **fast** at library scale (tens of thousands of images) and **fast** per-image in Develop (sub-100ms adjustment feedback on modern hardware).
@@ -25,7 +25,7 @@ The catalog and the pixels are always on the user's own disk. There is no server
 - No mobile companion app.
 - No social/sharing features (no built-in publish-to-web-service).
 - No video editing beyond basic trim/organize (this is a *photo* tool).
-- Not attempting pixel-perfect algorithmic parity with Adobe's proprietary demosaic/color science — "very good," not "bit-identical to Lightroom."
+- Not attempting pixel-perfect algorithmic parity with any proprietary demosaic/color science implementation — "very good," not "bit-identical to a specific commercial tool."
 
 See [MILESTONES.md](MILESTONES.md) for what's deferred *within* scope vs. excluded permanently.
 

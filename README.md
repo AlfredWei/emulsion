@@ -4,6 +4,8 @@
 
 [![CI](https://github.com/AlfredWei/emulsion/actions/workflows/ci.yml/badge.svg)](https://github.com/AlfredWei/emulsion/actions/workflows/ci.yml)
 
+![Emulsion demo](emulsion.gif)
+
 Emulsion is a desktop app for photographers to import, organize, non-destructively edit, and export their photo libraries — including camera RAW — without a subscription or a cloud account. The catalog and the pixels stay on your own disk; there's no server component anywhere in the design.
 
 **Status: M0 complete, M1 in progress (Slices 1–2 of 5 done).** See [PROGRESS.md](PROGRESS.md) for exactly what's confirmed, what's deferred, and what's next. Not yet a usable app — see [Current state](#current-state-what-youll-actually-see) below before you go looking for features.

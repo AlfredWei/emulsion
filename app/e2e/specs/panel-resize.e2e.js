@@ -99,10 +99,24 @@ describe("Develop panel resize", () => {
         // of the intermittent no-op drags seen on CI's macOS runner, where
         // the read comes back exactly unchanged rather than erroring.
         const base = { bubbles: true, cancelable: true, pointerId, isPrimary: true, pointerType: "mouse", clientY: y };
-        const read = () => ({
-          historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
-          developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
-        });
+        // `read()` intentionally captures BOTH a layout-dependent value
+        // (getBoundingClientRect(), which needs a real reflow) and the raw
+        // inline `style` attribute (a plain DOM property write, needs no
+        // layout/paint at all) for the same element -- temporary diagnostic
+        // to tell apart "Svelte's reactive effect never wrote the DOM at
+        // all" from "it wrote the DOM but a reflow/paint never caught up",
+        // since CI's failure mode (this comment's own investigation) never
+        // pinned down which of those it is. See the deadline branch below.
+        const read = () => {
+          const historyEl = document.querySelector(".develop-body > .history-rail");
+          const developEl = document.querySelector(".develop-body > .panel");
+          return {
+            historyWidth: historyEl.getBoundingClientRect().width,
+            developWidth: developEl.getBoundingClientRect().width,
+            historyStyleWidth: historyEl.style.width,
+            developStyleWidth: developEl.style.width,
+          };
+        };
         const before = read();
 
         handle.dispatchEvent(new PointerEvent("pointerdown", { ...base, clientX: startX }));
@@ -132,15 +146,50 @@ describe("Develop panel resize", () => {
         const deadline = Date.now() + 15000;
         let after = before;
         let prev = null;
+        // Diagnostic only: the poll index (not wall time -- CI and local
+        // run at different speeds) at which the raw `style` attribute
+        // first differed from `before`, vs. the index at which
+        // getBoundingClientRect() first differed. If styleChangedAtPoll
+        // stays null, Svelte's reactive effect never wrote the DOM at all
+        // (an event-handling/state problem); if it's non-null but
+        // rectChangedAtPoll lags far behind or also stays null, the DOM
+        // write happened but layout/paint never caught up (a
+        // rendering-pipeline problem) -- see `read()`'s own comment.
+        const styleKey = i === 0 ? "historyStyleWidth" : "developStyleWidth";
+        const rectKey = i === 0 ? "historyWidth" : "developWidth";
+        let styleChangedAtPoll = null;
+        let rectChangedAtPoll = null;
+        let pollIndex = 0;
         while (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 50));
+          pollIndex++;
           const current = read();
+          if (styleChangedAtPoll === null && current[styleKey] !== before[styleKey]) {
+            styleChangedAtPoll = pollIndex;
+          }
+          if (rectChangedAtPoll === null && current[rectKey] !== before[rectKey]) {
+            rectChangedAtPoll = pollIndex;
+          }
           const changed = current.historyWidth !== before.historyWidth || current.developWidth !== before.developWidth;
           if (changed && prev && current.historyWidth === prev.historyWidth && current.developWidth === prev.developWidth) {
             after = current;
             break;
           }
           prev = current;
+        }
+        if (after === before) {
+          // Never resolved -- surface everything needed to tell the two
+          // failure classes apart, rather than letting the caller's plain
+          // `expect(...).toBe(...)` report only "still 200" with no clue
+          // why. See this function's file-level comment for the two
+          // candidate explanations this is meant to distinguish.
+          const stored = localStorage.getItem("emulsion_develop_panel_widths_v1");
+          throw new Error(
+            `dragHandle(${i}, ${delta}) timed out after ${pollIndex} polls. ` +
+              `before=${JSON.stringify(before)} lastRead=${JSON.stringify(prev)} ` +
+              `styleChangedAtPoll=${styleChangedAtPoll} rectChangedAtPoll=${rectChangedAtPoll} ` +
+              `localStorage[panel_widths]=${stored}`,
+          );
         }
         return after;
       },

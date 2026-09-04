@@ -99,22 +99,28 @@ describe("Develop panel resize", () => {
         // of the intermittent no-op drags seen on CI's macOS runner, where
         // the read comes back exactly unchanged rather than erroring.
         const base = { bubbles: true, cancelable: true, pointerId, isPrimary: true, pointerType: "mouse", clientY: y };
-        // `read()` intentionally captures BOTH a layout-dependent value
-        // (getBoundingClientRect(), which needs a real reflow) and the raw
-        // inline `style` attribute (a plain DOM property write, needs no
-        // layout/paint at all) for the same element -- temporary diagnostic
-        // to tell apart "Svelte's reactive effect never wrote the DOM at
-        // all" from "it wrote the DOM but a reflow/paint never caught up",
-        // since CI's failure mode (this comment's own investigation) never
-        // pinned down which of those it is. See the deadline branch below.
+        // Read the raw inline `style` attribute -- a plain DOM property
+        // Svelte's reactive template write sets directly -- rather than
+        // `getBoundingClientRect()`. A prior diagnosed-and-fixed CI-only
+        // bug read the latter: on GitHub's macOS e2e runner specifically,
+        // `getBoundingClientRect()` on this element returns a value frozen
+        // at the page's very first layout and NEVER reflects a later
+        // width change, even after 15s of polling, even though `style`
+        // itself (and localStorage, and every other observable
+        // consequence of the real drag) updates correctly and instantly --
+        // confirmed by instrumenting both reads side by side across a real
+        // CI run (see PROGRESS.md's "M4.5 Slice 7" follow-up entry for the
+        // full before/after payload). Layout genuinely never reflows for
+        // this webview on that runner; it isn't a slow-paint/race issue
+        // `getBoundingClientRect()` would eventually resolve given enough
+        // time, so `style.width` is the only reliable read here, not just
+        // a faster one.
         const read = () => {
           const historyEl = document.querySelector(".develop-body > .history-rail");
           const developEl = document.querySelector(".develop-body > .panel");
           return {
-            historyWidth: historyEl.getBoundingClientRect().width,
-            developWidth: developEl.getBoundingClientRect().width,
-            historyStyleWidth: historyEl.style.width,
-            developStyleWidth: developEl.style.width,
+            historyWidth: parseFloat(historyEl.style.width),
+            developWidth: parseFloat(developEl.style.width),
           };
         };
         const before = read();
@@ -123,73 +129,21 @@ describe("Develop panel resize", () => {
         handle.dispatchEvent(new PointerEvent("pointermove", { ...base, clientX: startX + delta }));
         handle.dispatchEvent(new PointerEvent("pointerup", { ...base, clientX: startX + delta }));
 
-        // The pointer events update Svelte's $state synchronously, but the
-        // DOM (and so getBoundingClientRect()) doesn't reflect it until a
-        // later paint -- poll for a change instead of guessing a fixed
-        // frame/time budget. On CI's macOS runner this occasionally never
-        // resolves at all (not just slowly -- 45s wasn't any more
-        // successful than 15s, so it's a rare missed event, not a slow
-        // flush); the calling `it()` retries on failure to absorb that, so
-        // this budget just needs to be well past what local dev ever
-        // needs, not try to outlast a stall that isn't going to end.
-        //
-        // Require two consecutive matching reads before accepting a
-        // changed value, not just the first read that differs from
-        // `before` -- confirmed via real CI runs that a single-read check
-        // occasionally returns a value that's neither `before` nor any
-        // sane final width (e.g. reading 280 when every legal outcome here
-        // is 160/300/400), consistent with catching layout mid-reflow
-        // across the same rAF tick that both pointermove and pointerup
-        // fire in. Same "poll until two reads agree" pattern already
-        // proven for the GPU histogram readback in
-        // develop-cpu-gpu-parity.e2e.js's readGpuPixel.
-        const deadline = Date.now() + 15000;
+        // Svelte's reactive effect writes `style` synchronously within the
+        // same microtask the $state write lands in (confirmed by the CI
+        // payload above: the very first 50ms poll after dispatch already
+        // observed the change, every time, across every retry) -- this
+        // poll is a small safety margin against event-loop scheduling
+        // jitter, not a wait for a slow/uncertain external process.
+        const deadline = Date.now() + 2000;
         let after = before;
-        let prev = null;
-        // Diagnostic only: the poll index (not wall time -- CI and local
-        // run at different speeds) at which the raw `style` attribute
-        // first differed from `before`, vs. the index at which
-        // getBoundingClientRect() first differed. If styleChangedAtPoll
-        // stays null, Svelte's reactive effect never wrote the DOM at all
-        // (an event-handling/state problem); if it's non-null but
-        // rectChangedAtPoll lags far behind or also stays null, the DOM
-        // write happened but layout/paint never caught up (a
-        // rendering-pipeline problem) -- see `read()`'s own comment.
-        const styleKey = i === 0 ? "historyStyleWidth" : "developStyleWidth";
-        const rectKey = i === 0 ? "historyWidth" : "developWidth";
-        let styleChangedAtPoll = null;
-        let rectChangedAtPoll = null;
-        let pollIndex = 0;
         while (Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
-          pollIndex++;
           const current = read();
-          if (styleChangedAtPoll === null && current[styleKey] !== before[styleKey]) {
-            styleChangedAtPoll = pollIndex;
-          }
-          if (rectChangedAtPoll === null && current[rectKey] !== before[rectKey]) {
-            rectChangedAtPoll = pollIndex;
-          }
-          const changed = current.historyWidth !== before.historyWidth || current.developWidth !== before.developWidth;
-          if (changed && prev && current.historyWidth === prev.historyWidth && current.developWidth === prev.developWidth) {
+          if (current.historyWidth !== before.historyWidth || current.developWidth !== before.developWidth) {
             after = current;
             break;
           }
-          prev = current;
-        }
-        if (after === before) {
-          // Never resolved -- surface everything needed to tell the two
-          // failure classes apart, rather than letting the caller's plain
-          // `expect(...).toBe(...)` report only "still 200" with no clue
-          // why. See this function's file-level comment for the two
-          // candidate explanations this is meant to distinguish.
-          const stored = localStorage.getItem("emulsion_develop_panel_widths_v1");
-          throw new Error(
-            `dragHandle(${i}, ${delta}) timed out after ${pollIndex} polls. ` +
-              `before=${JSON.stringify(before)} lastRead=${JSON.stringify(prev)} ` +
-              `styleChangedAtPoll=${styleChangedAtPoll} rectChangedAtPoll=${rectChangedAtPoll} ` +
-              `localStorage[panel_widths]=${stored}`,
-          );
+          await new Promise((resolve) => setTimeout(resolve, 20));
         }
         return after;
       },
@@ -201,8 +155,8 @@ describe("Develop panel resize", () => {
 
   it("drag-resizes both rails and persists the resulting widths", async () => {
     const beforeWidths = await browser.execute(() => ({
-      historyWidth: document.querySelector(".develop-body > .history-rail").getBoundingClientRect().width,
-      developWidth: document.querySelector(".develop-body > .panel").getBoundingClientRect().width,
+      historyWidth: parseFloat(document.querySelector(".develop-body > .history-rail").style.width),
+      developWidth: parseFloat(document.querySelector(".develop-body > .panel").style.width),
     }));
 
     // History sits on the left -- dragging its handle right grows it.

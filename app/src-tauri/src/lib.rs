@@ -17,7 +17,7 @@ use catalog::{
     ImageSummary, KeywordNode, KeywordRef, PresetEntry, SnapshotEntry,
 };
 use export::{ExportOptions, ExportResult};
-use import::ImportSummary;
+use import::{ImportProgress, ImportSummary};
 use preview_cache::DevelopPreviewInfo;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
@@ -58,12 +58,16 @@ async fn import_folder(
 
     let summary = {
         let catalog = catalog.clone();
+        let progress_app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let catalog = catalog.lock().map_err(|e| e.to_string())?;
-            Ok::<_, String>(import::scan_and_import(
+            Ok::<_, String>(import::scan_and_import_with_progress(
                 std::path::Path::new(&path),
                 &catalog,
                 &thumbnail_dir,
+                |current, total| {
+                    let _ = progress_app.emit("import-progress", ImportProgress { current, total });
+                },
             ))
         })
         .await
@@ -106,10 +110,18 @@ async fn import_files(
 
     let summary = {
         let catalog = catalog.clone();
+        let progress_app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let paths: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
             let catalog = catalog.lock().map_err(|e| e.to_string())?;
-            Ok::<_, String>(import::import_paths(&paths, &catalog, &thumbnail_dir))
+            Ok::<_, String>(import::import_paths_with_progress(
+                &paths,
+                &catalog,
+                &thumbnail_dir,
+                |current, total| {
+                    let _ = progress_app.emit("import-progress", ImportProgress { current, total });
+                },
+            ))
         })
         .await
         .map_err(|e| e.to_string())?

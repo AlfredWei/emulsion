@@ -54,6 +54,7 @@
     setContact,
     removeImages,
     mergeHdrBracket,
+    mergePanorama,
     listAllImageKeywords,
     createCollection,
     createCollectionWithImages,
@@ -2074,6 +2075,39 @@
     }
   }
 
+  // Panorama merge (M5, RFC-0004). Same guard/status/refresh shape as
+  // handleMergeHdrBracket above -- the only real difference is no
+  // RAW-only client pre-check (any format works for a stitch) and the
+  // dedupe-by-image_id reasoning still applies unchanged.
+  let mergingPanorama = $state(false);
+
+  /** Stitches the current Library selection (2+ photos, in whatever
+   * order the user selected them -- unlike HDR merge, that order DOES
+   * matter here: adjacent selections are assumed to overlap, see
+   * mergePanorama's own doc comment) into one new wide composite,
+   * cataloged exactly like an HDR merge result. */
+  async function handleMergePanorama() {
+    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
+    if (imageIds.length < 2) return;
+    mergingPanorama = true;
+    statusMessage = "";
+    try {
+      const resultImageId = await mergePanorama(imageIds);
+      await refresh();
+      const merged = images.find((img) => img.image_id === resultImageId);
+      if (merged) {
+        selectedId = merged.version_id;
+        selectedIds = new Set([merged.version_id]);
+        prioritizeThumbnail(merged.version_id);
+      }
+      statusMessage = `Stitched ${imageIds.length} photos into one panorama`;
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Panorama merge failed: ${e}`;
+    } finally {
+      mergingPanorama = false;
+    }
+  }
+
   // Collections (M2 Slice 5). Rename/edit-existing-smart-collection-rules
   // UI is deliberately deferred (matching this codebase's precedent for
   // `add_image_with_metadata`/`add_edit_stack` -- a lower-level building
@@ -3343,6 +3377,15 @@
     >
       <span class="icon" aria-hidden="true">HDR</span>
       <span class="label">{mergingHdr ? "Merging…" : `Merge to HDR…${selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}`}</span>
+    </button>
+    <button
+      class="icon-btn merge-panorama-btn"
+      onclick={handleMergePanorama}
+      disabled={activeModule !== "library" || selectedIds.size < 2 || mergingPanorama}
+      title="Merge to Panorama — stitch 2+ overlapping photos, selected in capture order, into one wide composite"
+    >
+      <span class="icon" aria-hidden="true">PAN</span>
+      <span class="label">{mergingPanorama ? "Stitching…" : `Merge to Panorama…${selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}`}</span>
     </button>
     <button
       class="icon-btn danger remove-btn"

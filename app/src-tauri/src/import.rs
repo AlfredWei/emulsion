@@ -182,10 +182,20 @@ pub fn import_paths_with_progress<F: FnMut(usize, usize)>(
 
             match format {
                 ImageFormat::Raw => {
+                    // See raw_decode::LIBRAW_LOCK's own comment: LibRaw isn't
+                    // safely reentrant across threads, and this open (plus
+                    // extract_and_write_thumbnail's extract_thumbs() below)
+                    // can run concurrently with a Develop preview decode, an
+                    // HDR merge, or an on-demand priority thumbnail on
+                    // another spawn_blocking task. Metadata extraction reads
+                    // only already-open header fields (no further LibRaw
+                    // calls), so the lock doesn't need to span it.
+                    let raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
                     let Ok(mut raw_image) = RawImage::open(&bytes) else {
                         summary.failed += 1;
                         break 'file;
                     };
+                    drop(raw_lock);
 
                     // M2 Slice 2: free to call here -- RawImage::open() already
                     // populated the header fields this reads, no unpack()/
@@ -207,9 +217,10 @@ pub fn import_paths_with_progress<F: FnMut(usize, usize)>(
                     };
                     let _ = catalog.set_import_batch(image_id, import_batch);
 
-                    if let Some(thumb_path) =
-                        extract_and_write_thumbnail(&mut raw_image, image_id, thumbnail_dir)
-                    {
+                    let raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
+                    let thumb_result = extract_and_write_thumbnail(&mut raw_image, image_id, thumbnail_dir);
+                    drop(raw_lock);
+                    if let Some(thumb_path) = thumb_result {
                         let _ = catalog.set_thumbnail_path(image_id, &thumb_path.to_string_lossy());
                     }
                 }

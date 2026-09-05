@@ -9,6 +9,24 @@
 use crate::source_decode::DecodedPreview;
 use rsraw::{RawImage, BIT_DEPTH_16, BIT_DEPTH_8};
 use std::path::Path;
+use std::sync::Mutex;
+
+/// LibRaw is not safely reentrant across threads: parts of its internal
+/// processing (inherited from the legacy dcraw core it wraps) rely on
+/// non-thread-local state that concurrent decodes can corrupt. Found via
+/// a real, reproducible Windows CI failure -- `cargo test`'s default
+/// parallel execution ran two of this module's tests' decodes at the
+/// same time, and one's output buffer came back at exactly half the
+/// correct size (the other decode's `output_bps` setting had leaked
+/// across). Every real LibRaw call anywhere in this crate -- open
+/// through process/extract_thumbs -- must take this lock, not just the
+/// two functions below: `import.rs`'s embedded-thumbnail extraction
+/// during import runs on its own `spawn_blocking` task and can race a
+/// `decode()`/`decode_linear()` call from a concurrent Develop preview,
+/// HDR merge, or (since this project's on-demand priority-thumbnail
+/// feature) an `ensure_thumbnail` call deliberately racing a background
+/// backfill pass.
+pub(crate) static LIBRAW_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
@@ -26,6 +44,7 @@ pub enum DecodeError {
 
 fn decode(path: &Path, half_size: bool) -> Result<DecodedPreview, DecodeError> {
     let bytes = std::fs::read(path)?;
+    let _guard = LIBRAW_LOCK.lock().unwrap();
 
     let mut image = RawImage::open(&bytes).map_err(|e| DecodeError::LibRaw(e.to_string()))?;
     image.set_half_size(half_size);
@@ -85,6 +104,7 @@ pub struct DecodedLinear {
 
 pub fn decode_linear(path: &Path) -> Result<DecodedLinear, DecodeError> {
     let bytes = std::fs::read(path)?;
+    let _guard = LIBRAW_LOCK.lock().unwrap();
 
     let mut image = RawImage::open(&bytes).map_err(|e| DecodeError::LibRaw(e.to_string()))?;
     // Fixed (not auto) white balance so color stays consistent frame-to-

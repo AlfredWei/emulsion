@@ -776,7 +776,13 @@ mod tests {
         for path in &paths {
             let bytes = std::fs::read(path).expect("bracket member should be readable");
             let hash = blake3::hash(&bytes).to_hex().to_string();
-            let raw_image = rsraw::RawImage::open(&bytes).expect("real bracket file should open");
+            // See raw_decode::LIBRAW_LOCK's own comment -- LibRaw isn't
+            // safely reentrant across threads, and cargo test can run this
+            // concurrently with another gated real-RAW test.
+            let raw_image = {
+                let _raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
+                rsraw::RawImage::open(&bytes).expect("real bracket file should open")
+            };
             let file_metadata = crate::metadata::extract_from_raw(&raw_image);
             let image_id = catalog
                 .add_image_with_edit_stack(

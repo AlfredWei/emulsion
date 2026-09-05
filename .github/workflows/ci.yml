@@ -38,10 +38,30 @@ jobs:
       # runners ship vcpkg pre-installed with VCPKG_INSTALLATION_ROOT set --
       # this step assumes that rather than bootstrapping vcpkg fresh; if
       # this fails, that assumption is what to check first.
+      #
+      # The libraw port version is pinned to 0.21.3 -- the exact version
+      # vendored at app/src-tauri/vendor/rsraw-sys/LibRaw (see its
+      # libraw_version.h) -- because the Rust FFI struct layout for
+      # libraw_data_t/libraw_output_params_t is bindgen-generated from that
+      # vendored header. Leaving the runner's preinstalled vcpkg registry
+      # unpinned let it silently drift to newer libraw releases (e.g.
+      # 0.22.1): a real CI run resolved that version and every write
+      # through the Rust struct (raw_decode.rs's `output_bps = 16`,
+      # `gamm`/`no_auto_bright`, etc.) landed on the wrong in-memory offset,
+      # because 0.21.3's and 0.22.1's struct layouts don't agree. That's
+      # what made `linear_decode_produces_a_darker_unbrightened_buffer...`
+      # fail: LibRaw kept processing at 8-bit despite the 16-bit request
+      # (confirmed via a temporary diagnostic dump of ProcessedImage's
+      # Debug output on a real Windows run -- see PROGRESS.md). A LIBRAW_LOCK
+      # mutex was tried first on the (wrong) assumption this was a
+      # cross-thread race; it didn't fix it, which is what led to adding
+      # the diagnostic and finding the real cause here.
       - name: Install LibRaw via vcpkg (Windows only)
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin cdf98aaa2411f565eacb3c7566e5e20542ae151a
+          git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports/libraw
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
           # The vcpkg *crate* (used by rsraw-sys's build.rs) looks for
           # VCPKG_ROOT specifically -- the runner only sets
@@ -128,13 +148,15 @@ jobs:
         with:
           workspaces: app/src-tauri
 
-      # Same LibRaw-via-vcpkg step rust-core uses -- the e2e build compiles
-      # the full app (src-tauri), which needs it too. See that job's own
-      # comment for why VCPKG_ROOT is set explicitly.
+      # Same LibRaw-via-vcpkg step rust-core uses (including the libraw
+      # version pin -- see that job's own comment for why) -- the e2e build
+      # compiles the full app (src-tauri), which needs it too.
       - name: Install LibRaw via vcpkg (Windows only)
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin cdf98aaa2411f565eacb3c7566e5e20542ae151a
+          git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports/libraw
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
 

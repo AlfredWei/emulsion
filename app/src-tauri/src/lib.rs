@@ -288,13 +288,27 @@ fn set_geo_location(
 /// `RemovedImage` doesn't even carry the source path). File cleanup is
 /// best-effort *after* the transaction commits: a failed unlink leaves an
 /// orphaned file (the same accepted-orphan class as preview_cache.rs's
-/// documented non-eviction), never a half-removed catalog row. Preview
-/// deletion by content_hash is safe because import's `find_by_hash` dedupe
-/// guarantees no second row shares a hash. Known, accepted race: a
+/// documented non-eviction), never a half-removed catalog row.
+///
+/// Cleanup is prefix-based, not a fixed list of filenames: thumbnails are
+/// named `{image_id}.jpg` (`import.rs`'s plain thumbnail) or
+/// `{image_id}-{stack_hash8}.jpg` (its edited-thumbnail variant, one new
+/// file per distinct edit stack the image has ever had), and previews are
+/// named `{content_hash}.png` / `{content_hash}_full.png` /
+/// `{content_hash}_{stack_hash8}_graded.png` /
+/// `{content_hash}_{stack_hash8}_proof_{settings_key}.png`
+/// (`preview_cache.rs`) -- every one of those is a real, still-reachable
+/// filename this app itself can produce for one image, and a fixed
+/// two-filename list here silently left every graded/soft-proof variant
+/// (and every edited-thumbnail variant beyond the current one) as a
+/// permanent orphan on removal. `{content_hash}` is a fixed-length blake3
+/// hex digest, so a `starts_with` prefix match against it can't
+/// accidentally match a different image's files. Known, accepted race: a
 /// background thumbnail/preview pass snapshotted before this removal can
-/// re-create a file for a just-removed image -- an orphan on disk, bounded
-/// to the one in-flight pass; rows can't be resurrected (those passes only
-/// UPDATE by image_id, which matches nothing after the DELETE).
+/// still write a *new* file for a just-removed image after this scan
+/// already ran -- an orphan on disk, bounded to the one in-flight pass;
+/// rows can't be resurrected (those passes only UPDATE by image_id, which
+/// matches nothing after the DELETE).
 #[tauri::command]
 async fn remove_images(
     app: AppHandle,
@@ -303,6 +317,7 @@ async fn remove_images(
 ) -> Result<(), String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let removed = {
@@ -311,37 +326,54 @@ async fn remove_images(
         };
 
         for image in removed {
-            if let Some(thumbnail_path) = image.thumbnail_path {
-                if let Err(e) = std::fs::remove_file(&thumbnail_path) {
-                    eprintln!("thumbnail cleanup failed for {thumbnail_path}: {e}");
-                }
-            }
+            // A plain `starts_with(image_id)` prefix check would be unsafe
+            // here (unlike the content-hash case below): image_id "5" is a
+            // literal string prefix of "50.jpg", "512-abcd1234.jpg", etc,
+            // so removing one image could delete a completely different
+            // image's thumbnails. Match either the exact plain filename or
+            // the edited-variant prefix WITH its separator included.
+            let plain_name = format!("{}.jpg", image.id);
+            let edited_prefix = format!("{}-", image.id);
+            remove_matching_files(&thumbnail_dir, |name| name == plain_name || name.starts_with(&edited_prefix));
+
             if let Some(content_hash) = image.content_hash {
-                let preview_path = previews_dir.join(format!("{content_hash}.png"));
-                if preview_path.exists() {
-                    if let Err(e) = std::fs::remove_file(&preview_path) {
-                        eprintln!("preview cleanup failed for {}: {e}", preview_path.display());
-                    }
-                }
-                // The lazily-built 1:1 tier (preview_cache::ensure_develop_full_preview)
-                // -- only exists if this image was ever zoomed to 100%, but when it
-                // does exist it's a large, uncapped native-resolution PNG that would
-                // otherwise become a permanent orphan on removal.
-                let full_preview_path = previews_dir.join(format!(
-                    "{content_hash}{}.png",
-                    preview_cache::DEVELOP_FULL_PREVIEW_SUFFIX
-                ));
-                if full_preview_path.exists() {
-                    if let Err(e) = std::fs::remove_file(&full_preview_path) {
-                        eprintln!("full-preview cleanup failed for {}: {e}", full_preview_path.display());
-                    }
-                }
+                // Safe as a plain prefix match: content_hash is a
+                // fixed-length blake3 hex digest, so two different hashes
+                // can never have one be a literal prefix of the other.
+                remove_matching_files(&previews_dir, |name| name.starts_with(&content_hash));
             }
         }
         Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Deletes every entry directly inside `dir` whose filename satisfies
+/// `matches` -- shared by `remove_images`'s thumbnail and preview cleanup,
+/// both of which need to catch every derived-cache variant an image can
+/// have, not just the one filename the catalog happens to point at.
+/// Best-effort per file and per directory read, same as the rest of this
+/// command: a missing/unreadable `dir` (e.g. nothing was ever generated
+/// there) or one file that can't be removed is logged, never surfaced as a
+/// command failure.
+fn remove_matching_files(dir: &std::path::Path, matches: impl Fn(&str) -> bool) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            eprintln!("cache cleanup: could not read {}: {e}", dir.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if matches(&name.to_string_lossy()) {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                eprintln!("cache cleanup failed for {}: {e}", entry.path().display());
+            }
+        }
+    }
 }
 
 /// HDR merge (M5, RFC-0003): merges `image_ids` (>= 2, all RAW, in the
@@ -1539,4 +1571,98 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("emulsion-remove-images-test-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn touch(dir: &std::path::Path, name: &str) {
+        std::fs::write(dir.join(name), b"x").unwrap();
+    }
+
+    /// The bug this test pins: a plain `starts_with(image_id.to_string())`
+    /// prefix check (an earlier draft of this cleanup) would delete image 5's
+    /// files AND wrongly sweep up "50.jpg"/"512-....jpg" -- a different
+    /// image's thumbnails -- because "5" is a literal string prefix of "50"
+    /// and "512". Removing image 5 must delete exactly its own plain and
+    /// edited-thumbnail-variant files, and touch nothing belonging to a
+    /// numerically-prefixed sibling id.
+    #[test]
+    fn removing_a_thumbnail_does_not_sweep_up_a_numerically_prefixed_sibling_id() {
+        let dir = test_dir("thumbnail-prefix-safety");
+        touch(&dir, "5.jpg");
+        touch(&dir, "5-aaaa1111.jpg");
+        touch(&dir, "5-bbbb2222.jpg");
+        touch(&dir, "50.jpg");
+        touch(&dir, "512-cccc3333.jpg");
+
+        let plain_name = "5.jpg".to_string();
+        let edited_prefix = "5-".to_string();
+        remove_matching_files(&dir, |name| name == plain_name || name.starts_with(&edited_prefix));
+
+        let remaining: std::collections::BTreeSet<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            remaining,
+            ["50.jpg", "512-cccc3333.jpg"].into_iter().map(String::from).collect(),
+            "only image 5's own files should be removed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A removed image's Develop preview cache can have several files under
+    /// the same content_hash -- the draft tier, the lazily-built full-res
+    /// tier, and one graded/soft-proof variant per distinct edit stack or
+    /// proof profile it was ever viewed with. All of them must go; only a
+    /// different image's (different-hash) files must survive.
+    #[test]
+    fn removing_a_preview_deletes_every_variant_under_its_content_hash() {
+        let dir = test_dir("preview-hash-variants");
+        let hash = "a".repeat(64);
+        let other_hash = "b".repeat(64);
+        touch(&dir, &format!("{hash}.png"));
+        touch(&dir, &format!("{hash}_full.png"));
+        touch(&dir, &format!("{hash}_abcd1234_graded.png"));
+        touch(&dir, &format!("{hash}_abcd1234_proof_deadbeef.png"));
+        touch(&dir, &format!("{other_hash}.png"));
+        touch(&dir, &format!("{other_hash}_full.png"));
+
+        remove_matching_files(&dir, |name| name.starts_with(&hash));
+
+        let remaining: std::collections::BTreeSet<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            remaining,
+            [format!("{other_hash}.png"), format!("{other_hash}_full.png")]
+                .into_iter()
+                .collect(),
+            "every variant under the removed image's hash should be gone; the other image's untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `remove_images` calls this against `thumbnail_dir`/`previews_dir`,
+    /// neither of which is guaranteed to exist yet (e.g. an image removed
+    /// before any thumbnail was ever generated) -- must be a quiet no-op,
+    /// not a panic or a surfaced command error.
+    #[test]
+    fn matching_against_a_nonexistent_directory_is_a_quiet_no_op() {
+        let dir = std::env::temp_dir().join("emulsion-remove-images-test-does-not-exist");
+        let _ = std::fs::remove_dir_all(&dir);
+        remove_matching_files(&dir, |_| true);
+    }
 }

@@ -142,6 +142,7 @@ pub struct ImageSummary {
 /// includes the source path -- removal must not even be *handed* the means
 /// to touch an original.
 pub struct RemovedImage {
+    pub id: i64,
     pub thumbnail_path: Option<String>,
     pub content_hash: Option<String>,
 }
@@ -890,6 +891,7 @@ impl Catalog {
                     params![image_id],
                     |row| {
                         Ok(RemovedImage {
+                            id: image_id,
                             thumbnail_path: row.get(0)?,
                             content_hash: row.get(1)?,
                         })

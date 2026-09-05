@@ -1246,6 +1246,52 @@ impl Catalog {
         tx.commit()
     }
 
+    /// The user's chosen override for where thumbnails + the Develop
+    /// preview cache live (Settings > Storage) -- `None` means "use the
+    /// OS default app-data directory", the same `settings` KV table
+    /// pattern as `get_backup_settings`. Deliberately just this one key,
+    /// not a `StorageSettings` struct like `BackupSettings` -- there's
+    /// only ever this single value to round-trip.
+    pub fn get_cache_dir(&self) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'cache_dir'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    }
+
+    pub fn set_cache_dir(&self, dir: Option<&str>) -> Result<()> {
+        match dir {
+            Some(v) => self.conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('cache_dir', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![v],
+            ),
+            None => self
+                .conn
+                .execute("DELETE FROM settings WHERE key = 'cache_dir'", []),
+        }?;
+        Ok(())
+    }
+
+    /// Used by `storage::move_cache_dir` after physically moving thumbnail
+    /// files to a new directory: every `images.thumbnail_path` starting
+    /// with `old_prefix` is rewritten to start with `new_prefix` instead,
+    /// so the catalog's stored (absolute) paths keep pointing at real
+    /// files. Returns the number of rows changed. A plain string
+    /// prefix-replace, not a full reparse -- `thumbnail_path` is always
+    /// `<thumbnail_dir>/<image_id>.jpg` (see `import::generate_thumbnail_file`),
+    /// so the directory component is always exactly this prefix.
+    pub fn rewrite_thumbnail_path_prefix(&self, old_prefix: &str, new_prefix: &str) -> Result<usize> {
+        self.conn.execute(
+            "UPDATE images SET thumbnail_path = ?2 || substr(thumbnail_path, ?3)
+             WHERE thumbnail_path LIKE ?1 || '%'",
+            params![old_prefix, new_prefix, old_prefix.len() as i64 + 1],
+        )
+    }
+
     /// Writes a timestamped, independently-openable copy of this catalog
     /// to `dest_dir` (PRD §7.6). Uses `rusqlite::backup::Backup` -- SQLite's
     /// real Online Backup API, walking the source's pager rather than raw
@@ -2477,6 +2523,50 @@ mod tests {
         let settings = catalog.get_backup_settings().unwrap();
         assert_eq!(settings.folder, None);
         assert_eq!(settings.last_backup_at, None);
+    }
+
+    #[test]
+    fn cache_dir_defaults_to_none_and_round_trips_through_set_and_clear() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        assert_eq!(catalog.get_cache_dir().unwrap(), None);
+
+        catalog.set_cache_dir(Some("/Volumes/BigDrive/emulsion-cache")).unwrap();
+        assert_eq!(
+            catalog.get_cache_dir().unwrap(),
+            Some("/Volumes/BigDrive/emulsion-cache".to_string())
+        );
+
+        // Setting it again (not just clearing) must overwrite, not insert
+        // a duplicate row under the same PRIMARY KEY.
+        catalog.set_cache_dir(Some("/other/path")).unwrap();
+        assert_eq!(catalog.get_cache_dir().unwrap(), Some("/other/path".to_string()));
+
+        catalog.set_cache_dir(None).unwrap();
+        assert_eq!(catalog.get_cache_dir().unwrap(), None);
+    }
+
+    #[test]
+    fn rewrite_thumbnail_path_prefix_updates_only_matching_rows() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let moved = catalog.add_image("/photo-a.jpg").unwrap();
+        let untouched = catalog.add_image("/photo-b.jpg").unwrap();
+        catalog.set_thumbnail_path(moved, "/old/thumbnails/1.jpg").unwrap();
+        catalog.set_thumbnail_path(untouched, "/other/thumbnails/2.jpg").unwrap();
+
+        let changed = catalog
+            .rewrite_thumbnail_path_prefix("/old/thumbnails", "/new/location/thumbnails")
+            .unwrap();
+        assert_eq!(changed, 1);
+
+        assert_eq!(
+            catalog.get_thumbnail_path(moved).unwrap(),
+            Some("/new/location/thumbnails/1.jpg".to_string())
+        );
+        // A different, non-matching prefix must be left completely alone.
+        assert_eq!(
+            catalog.get_thumbnail_path(untouched).unwrap(),
+            Some("/other/thumbnails/2.jpg".to_string())
+        );
     }
 
     #[test]

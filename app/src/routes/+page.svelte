@@ -3183,8 +3183,14 @@
     </div>
     <div class="spacer"></div>
     {#if activeModule === "library" && activeCollectionId !== null && activeCollection && !activeCollection.is_smart}
-      <button class="remove-btn" onclick={handleRemoveFromCollection} disabled={selectedIds.size === 0}>
-        Remove from Collection{selectedIds.size > 1 ? ` (${selectedIds.size})` : ""}
+      <button
+        class="icon-btn remove-from-collection-btn"
+        onclick={handleRemoveFromCollection}
+        disabled={selectedIds.size === 0}
+        title={`Remove from Collection${selectedIds.size > 1 ? ` (${selectedIds.size})` : ""}`}
+      >
+        <span class="icon" aria-hidden="true">OUT</span>
+        <span class="label">Remove from Collection{selectedIds.size > 1 ? ` (${selectedIds.size})` : ""}</span>
       </button>
     {/if}
     <select
@@ -3217,36 +3223,48 @@
       {/each}
     </select>
     <button
-      class="import-btn secondary"
+      class="icon-btn paste-settings-btn"
       onclick={handlePasteSettingsToSelection}
       disabled={activeModule !== "library" || selectedIds.size === 0 || !copiedSettings || pastingSettingsToSelection}
-      title={copiedSettings ? "Paste the copied Develop settings onto every selected photo" : "Copy Settings in Develop first"}
+      title={copiedSettings ? "Paste Settings to Selection — paste the copied Develop settings onto every selected photo" : "Copy Settings in Develop first"}
     >
-      {pastingSettingsToSelection ? "Pasting…" : "Paste Settings to Selection"}
+      <span class="icon" aria-hidden="true">PST</span>
+      <span class="label">{pastingSettingsToSelection ? "Pasting…" : "Paste Settings to Selection"}</span>
     </button>
     <button
-      class="import-btn secondary"
+      class="icon-btn merge-hdr-btn"
       onclick={handleMergeHdrBracket}
       disabled={activeModule !== "library" || selectedIds.size < 2 || mergingHdr}
-      title="Merge 2+ RAW exposures of the same scene into one HDR image"
+      title="Merge to HDR — combine 2+ RAW exposures of the same scene into one HDR image"
     >
-      {mergingHdr ? "Merging…" : `Merge to HDR…${selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}`}
+      <span class="icon" aria-hidden="true">HDR</span>
+      <span class="label">{mergingHdr ? "Merging…" : `Merge to HDR…${selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}`}</span>
     </button>
     <button
-      class="remove-btn"
+      class="icon-btn danger remove-btn"
       onclick={() => (confirmingRemoval = true)}
       disabled={activeModule !== "library" || selectedIds.size === 0}
+      title={`Remove${selectedIds.size > 1 ? ` (${selectedIds.size})` : ""} — remove from the catalog (source files stay on disk)`}
     >
-      Remove{selectedIds.size > 1 ? ` (${selectedIds.size})` : ""}
+      <span class="icon" aria-hidden="true">DEL</span>
+      <span class="label">Remove{selectedIds.size > 1 ? ` (${selectedIds.size})` : ""}</span>
     </button>
-    <button class="export-btn" onclick={handleExportClick} disabled={currentExportItems.length === 0}>
-      Export{currentExportItems.length > 1 ? ` (${currentExportItems.length})` : ""}…
+    <button
+      class="icon-btn export-btn"
+      onclick={handleExportClick}
+      disabled={currentExportItems.length === 0}
+      title={`Export${currentExportItems.length > 1 ? ` (${currentExportItems.length})` : ""}…`}
+    >
+      <span class="icon" aria-hidden="true">EXP</span>
+      <span class="label">Export{currentExportItems.length > 1 ? ` (${currentExportItems.length})` : ""}…</span>
     </button>
-    <button class="import-btn secondary" onclick={handleImportFiles} disabled={importing}>
-      {importing ? "Importing…" : "Import Files…"}
+    <button class="icon-btn import-files-btn" onclick={handleImportFiles} disabled={importing} title={importing ? "Importing…" : "Import Files…"}>
+      <span class="icon" aria-hidden="true">FILE</span>
+      <span class="label">{importing ? "Importing…" : "Import Files…"}</span>
     </button>
-    <button class="import-btn" onclick={handleImportFolder} disabled={importing}>
-      {importing ? "Importing…" : "Import Folder…"}
+    <button class="icon-btn accent import-folder-btn" onclick={handleImportFolder} disabled={importing} title={importing ? "Importing…" : "Import Folder…"}>
+      <span class="icon" aria-hidden="true">DIR</span>
+      <span class="label">{importing ? "Importing…" : "Import Folder…"}</span>
     </button>
     <button class="settings-btn" title="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
   </div>
@@ -3915,25 +3933,78 @@
   .spacer {
     flex: 1;
   }
-  .import-btn {
+  /* Toolbar icon buttons (M5.x toolbar-crowding fix): a short bold
+   * monogram badge (OUT/PST/HDR/DEL/EXP/FILE/DIR) by default, not a
+   * pictograph -- deliberately, confirmed the hard way in this
+   * environment's own browser preview: emoji-range glyphs (📋🗑📤📄📁)
+   * rendered as blank/missing-glyph boxes, while plain BMP symbols and
+   * text always render everywhere, in any font, on any platform. Matches
+   * this file's own existing plain-glyph precedent (⚙, ★, ×) rather than
+   * gambling on a color-emoji font being present. The full text label is
+   * always present in the DOM (so it's still announced to screen readers
+   * and still searchable in e2e specs via textContent) but visually
+   * collapsed to zero width, and expands into view on hover/focus.
+   * `title` duplicates the label as an immediate native tooltip, since
+   * the hover-expand transition alone has a brief delay before the full
+   * text is legible. */
+  .icon-btn {
     all: unset;
     cursor: pointer;
-    padding: 6px 14px;
+    /* Flex items with any non-visible `overflow` get an automatic
+       min-width of 0 (CSS Flexbox §4.5), which would let the titlebar's
+       flex-shrink silently clip a hover-expanded label at a narrow
+       window width instead of the toolbar simply needing more room --
+       `flex: none` opts these out of shrinking altogether so the
+       collapsed AND expanded states always render their full content. */
+    flex: none;
+    display: flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 8px;
     font-size: 11.5px;
     font-weight: 600;
     border-radius: 6px;
-    background: var(--accent-soft);
-    color: var(--accent-strong);
-    border: 1px solid var(--accent);
-  }
-  .import-btn:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-  .import-btn.secondary {
-    background: transparent;
     color: var(--text-secondary);
     border: 1px solid var(--border-strong);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .icon-btn .icon {
+    flex: none;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    line-height: 1;
+  }
+  .icon-btn .label {
+    display: inline-block;
+    max-width: 0;
+    margin-left: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition:
+      max-width 0.18s ease,
+      margin-left 0.18s ease,
+      opacity 0.12s ease;
+  }
+  .icon-btn:hover .label,
+  .icon-btn:focus-visible .label {
+    max-width: 220px;
+    margin-left: 7px;
+    opacity: 1;
+  }
+  .icon-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .icon-btn.accent {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    border-color: var(--accent);
+  }
+  .icon-btn.danger:not(:disabled):hover {
+    color: var(--label-red);
+    border-color: var(--label-red);
   }
   .settings-btn {
     all: unset;
@@ -3950,26 +4021,6 @@
   }
   .settings-btn:hover {
     color: var(--text-primary);
-  }
-  .export-btn,
-  .remove-btn {
-    all: unset;
-    cursor: pointer;
-    padding: 6px 14px;
-    font-size: 11.5px;
-    font-weight: 600;
-    border-radius: 6px;
-    color: var(--text-secondary);
-    border: 1px solid var(--border-strong);
-  }
-  .remove-btn:not(:disabled):hover {
-    color: var(--label-red);
-    border-color: var(--label-red);
-  }
-  .export-btn:disabled,
-  .remove-btn:disabled {
-    opacity: 0.6;
-    cursor: default;
   }
   .status {
     flex: none;

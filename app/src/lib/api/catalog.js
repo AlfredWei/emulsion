@@ -140,6 +140,16 @@ export function mergeHdrBracket(/** @type {number[]} */ imageIds) {
   return invoke("merge_hdr_bracket", { imageIds });
 }
 
+/** Panorama merge (M5, RFC-0004): stitches 2+ overlapping images (in the
+ * given left-to-right/right-to-left capture-order selection -- adjacent
+ * selections are assumed to overlap, no auto-ordering) into one wide
+ * composite, cataloged as a new image. Unlike HDR merge, any format
+ * works (no RAW-only requirement). @returns {Promise<number>} the new
+ * stitched image's id */
+export function mergePanorama(/** @type {number[]} */ imageIds) {
+  return invoke("merge_panorama", { imageIds });
+}
+
 /**
  * @typedef {Object} KeywordRef
  * @property {number} id

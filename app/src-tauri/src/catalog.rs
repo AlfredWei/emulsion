@@ -838,6 +838,28 @@ impl Catalog {
         Ok(())
     }
 
+    /// Reads back the provenance rows `add_hdr_merge_sources` wrote for
+    /// one merge result, ordered by `ordinal` -- the natural read
+    /// counterpart to that write-only method. Kept as real pub API ready
+    /// for a future "Show HDR sources" UI (same "no UI trigger yet"
+    /// precedent as `add_image_with_metadata`'s own doc comment) --
+    /// exercised today by this file's own test plus `hdr_merge.rs`'s
+    /// real-bracket end-to-end test, which (being a different module)
+    /// has no access to this one's private `conn` field.
+    #[allow(dead_code)]
+    pub fn get_hdr_merge_sources(&self, result_image_id: i64) -> Result<Vec<(i64, i32, f32, i32, i32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_image_id, ordinal, ev_offset, dx, dy FROM hdr_merge_sources
+             WHERE result_image_id = ?1 ORDER BY ordinal",
+        )?;
+        let rows = stmt
+            .query_map(params![result_image_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?
+            .collect();
+        rows
+    }
+
     /// Non-destructive removal (M2 Slice 3): deletes catalog rows only --
     /// the user's source file is NEVER touched (hard PRD constraint), and
     /// the app-owned derived files (thumbnail, cached Develop preview) are
@@ -1899,17 +1921,7 @@ mod tests {
             .add_hdr_merge_sources(result, &[(a, 0, 0.0, 0, 0), (b, 1, -1.0, -3, 2)])
             .unwrap();
 
-        let rows: Vec<(i64, i32, f64, i64, i64)> = catalog
-            .conn
-            .prepare("SELECT source_image_id, ordinal, ev_offset, dx, dy FROM hdr_merge_sources WHERE result_image_id = ?1 ORDER BY ordinal")
-            .unwrap()
-            .query_map(params![result], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-            })
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-
+        let rows = catalog.get_hdr_merge_sources(result).unwrap();
         assert_eq!(rows, vec![(a, 0, 0.0, 0, 0), (b, 1, -1.0, -3, 2)]);
     }
 

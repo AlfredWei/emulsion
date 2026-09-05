@@ -735,4 +735,118 @@ mod tests {
         let result = merge_bracket(&inputs);
         assert!(matches!(result, Err(HdrMergeError::MissingExposureInfo(_))));
     }
+
+    /// Real end-to-end test (RFC-0003 §4), gated behind
+    /// `EMULSION_TEST_HDR_BRACKET_DIR` rather than a fixture committed to
+    /// the repo -- same "large, third-party provenance" reasoning as
+    /// `raw_decode.rs`'s own `EMULSION_TEST_RAW_SAMPLE`-gated tests, one
+    /// level up (a whole directory of 2+ real RAW files shot as one
+    /// bracket, not a single file). No such directory exists in this
+    /// environment as of this writing (see PROGRESS.md) -- this test is
+    /// therefore locally-verified-only for now, matching this project's
+    /// own precedent for a gap a CI environment genuinely can't cover
+    /// (e.g. the Windows-hardware-only GPU checks), documented rather
+    /// than silently skipped with no record.
+    ///
+    /// Exercises the full pipeline `merge_hdr_bracket` (lib.rs) drives,
+    /// catalog integration included -- not just `merge_bracket` in
+    /// isolation -- by replicating that command's own orchestration
+    /// directly against a real in-memory catalog (no Tauri
+    /// AppHandle/State needed for that, unlike the real command).
+    #[test]
+    fn merges_a_real_bracket_and_catalogs_the_result_with_provenance() {
+        let Ok(dir) = std::env::var("EMULSION_TEST_HDR_BRACKET_DIR") else {
+            eprintln!(
+                "skipping: set EMULSION_TEST_HDR_BRACKET_DIR=/path/to/bracket/dir \
+                 (2+ real RAW files shot as one exposure bracket) to run this test"
+            );
+            return;
+        };
+
+        let catalog = crate::catalog::Catalog::open_in_memory().expect("in-memory catalog opens");
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .expect("bracket dir should be readable")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| crate::source_decode::ImageFormat::from_path(p) == Some(crate::source_decode::ImageFormat::Raw))
+            .collect();
+        paths.sort();
+        assert!(paths.len() >= 2, "bracket dir must contain at least 2 RAW files, found {}", paths.len());
+
+        let mut image_ids = Vec::new();
+        for path in &paths {
+            let bytes = std::fs::read(path).expect("bracket member should be readable");
+            let hash = blake3::hash(&bytes).to_hex().to_string();
+            let raw_image = rsraw::RawImage::open(&bytes).expect("real bracket file should open");
+            let file_metadata = crate::metadata::extract_from_raw(&raw_image);
+            let image_id = catalog
+                .add_image_with_edit_stack(
+                    &path.to_string_lossy(),
+                    &hash,
+                    bytes.len() as i64,
+                    &crate::catalog::EditStack::empty(),
+                    &file_metadata,
+                )
+                .expect("cataloging a real bracket member should succeed");
+            image_ids.push(image_id);
+        }
+
+        let inputs: Vec<BracketInput> = image_ids
+            .iter()
+            .map(|&id| {
+                let info = catalog.get_image_exposure_info(id).unwrap().expect("row exists");
+                BracketInput {
+                    path: PathBuf::from(&info.path),
+                    iso: info.iso,
+                    aperture: info.aperture,
+                    shutter_speed: info.shutter_speed,
+                }
+            })
+            .collect();
+
+        let merged = merge_bracket(&inputs).expect("a real bracket should merge successfully");
+        assert!(merged.image.width() > 0 && merged.image.height() > 0, "merged JPEG should have plausible dimensions");
+
+        let jpeg_bytes = {
+            let tmp_path = std::env::temp_dir().join(format!("emulsion-hdr-merge-test-{}.jpg", std::process::id()));
+            merged.image.save(&tmp_path).expect("merged result should encode to a valid JPEG");
+            let bytes = std::fs::read(&tmp_path).unwrap();
+            let _ = std::fs::remove_file(&tmp_path);
+            bytes
+        };
+        let content_hash = blake3::hash(&jpeg_bytes).to_hex().to_string();
+        let result_metadata = crate::metadata::ImageMetadata {
+            width: Some(merged.image.width()),
+            height: Some(merged.image.height()),
+            ..Default::default()
+        };
+        let result_image_id = catalog
+            .add_image_with_edit_stack(
+                "/tmp/merged.jpg",
+                &content_hash,
+                jpeg_bytes.len() as i64,
+                &crate::catalog::EditStack::empty(),
+                &result_metadata,
+            )
+            .expect("merged result should catalog successfully");
+
+        let reference_ev = merged.evs[merged.reference_idx];
+        let sources: Vec<(i64, i32, f32, i32, i32)> = image_ids
+            .iter()
+            .enumerate()
+            .map(|(i, &source_id)| {
+                let (dx, dy) = merged.offsets[i];
+                (source_id, i as i32, merged.evs[i] - reference_ev, dx, dy)
+            })
+            .collect();
+        catalog.add_hdr_merge_sources(result_image_id, &sources).expect("provenance rows should insert successfully");
+
+        // "the catalog gained exactly one new images row" (RFC-0003 §4).
+        assert_eq!(
+            catalog.list_images().unwrap().len(),
+            image_ids.len() + 1,
+            "catalog should have gained exactly one new row beyond the bracket members"
+        );
+        // "...plus the correct number of hdr_merge_sources rows" (ibid).
+        assert_eq!(catalog.get_hdr_merge_sources(result_image_id).unwrap().len(), image_ids.len());
+    }
 }

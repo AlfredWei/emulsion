@@ -737,16 +737,16 @@ mod tests {
     }
 
     /// Real end-to-end test (RFC-0003 §4), gated behind
-    /// `EMULSION_TEST_HDR_BRACKET_DIR` rather than a fixture committed to
-    /// the repo -- same "large, third-party provenance" reasoning as
-    /// `raw_decode.rs`'s own `EMULSION_TEST_RAW_SAMPLE`-gated tests, one
-    /// level up (a whole directory of 2+ real RAW files shot as one
-    /// bracket, not a single file). No such directory exists in this
-    /// environment as of this writing (see PROGRESS.md) -- this test is
-    /// therefore locally-verified-only for now, matching this project's
-    /// own precedent for a gap a CI environment genuinely can't cover
-    /// (e.g. the Windows-hardware-only GPU checks), documented rather
-    /// than silently skipped with no record.
+    /// `EMULSION_TEST_HDR_BRACKET_DIR` (a whole directory of 2+ real RAW
+    /// files shot as one bracket, not a single file, unlike
+    /// `raw_decode.rs`'s own single-file `EMULSION_TEST_RAW_SAMPLE`).
+    /// Genuine CC0 bracket sets turned out to be unfindable (raw.pixls.us
+    /// explicitly refuses bracket series by policy) -- as of 2026-09-06 a
+    /// small, individually-license-verified CC BY 4.0 exception IS
+    /// committed at `test_image/hdr-bracket-cc-by/` (see its own
+    /// ATTRIBUTION.md), and CI points this env var at it directly (no
+    /// download step needed, unlike the raw.pixls.us sample), so this
+    /// test now runs for real on every CI run, not just locally.
     ///
     /// Exercises the full pipeline `merge_hdr_bracket` (lib.rs) drives,
     /// catalog integration included -- not just `merge_bracket` in

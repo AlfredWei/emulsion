@@ -143,7 +143,6 @@ pub struct ImageSummary {
 /// to touch an original.
 pub struct RemovedImage {
     pub id: i64,
-    pub thumbnail_path: Option<String>,
     pub content_hash: Option<String>,
 }
 
@@ -865,9 +864,12 @@ impl Catalog {
     /// the user's source file is NEVER touched (hard PRD constraint), and
     /// the app-owned derived files (thumbnail, cached Develop preview) are
     /// the *caller's* cleanup concern, which is why each removed image's
-    /// `thumbnail_path`/`content_hash` is returned: file-on-disk concerns
-    /// live in the command layer, not here, matching how thumbnail writes
-    /// already sit outside catalog.rs.
+    /// `id`/`content_hash` is returned: file-on-disk concerns live in the
+    /// command layer, not here, matching how thumbnail writes already sit
+    /// outside catalog.rs. The command layer derives every thumbnail/
+    /// preview filename an image can have from just these two fields
+    /// (`{id}.jpg`/`{id}-*` for thumbnails, `{content_hash}*` for
+    /// previews) rather than needing the exact current thumbnail_path.
     ///
     /// One transaction for the whole batch, child rows deleted explicitly
     /// before parents -- deliberately NOT relying on `ON DELETE CASCADE`
@@ -887,13 +889,12 @@ impl Catalog {
         for &image_id in image_ids {
             let row: Option<RemovedImage> = tx
                 .query_row(
-                    "SELECT thumbnail_path, content_hash FROM images WHERE id = ?1",
+                    "SELECT content_hash FROM images WHERE id = ?1",
                     params![image_id],
                     |row| {
                         Ok(RemovedImage {
                             id: image_id,
-                            thumbnail_path: row.get(0)?,
-                            content_hash: row.get(1)?,
+                            content_hash: row.get(0)?,
                         })
                     },
                 )
@@ -2125,12 +2126,11 @@ mod tests {
         let remove_id = catalog
             .add_image_with_edit_stack("/remove.CR3", "hash-remove", 200, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
             .unwrap();
-        catalog.set_thumbnail_path(remove_id, "/thumbs/2.jpg").unwrap();
 
         let removed = catalog.remove_images(&[remove_id]).unwrap();
 
         assert_eq!(removed.len(), 1);
-        assert_eq!(removed[0].thumbnail_path.as_deref(), Some("/thumbs/2.jpg"));
+        assert_eq!(removed[0].id, remove_id);
         assert_eq!(removed[0].content_hash.as_deref(), Some("hash-remove"));
 
         let images = catalog.list_images().unwrap();

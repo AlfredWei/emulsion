@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findCellByName } from "../helpers.js";
+import { findCellByName, findCellByNameAnywhere } from "../helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_A = path.resolve(__dirname, "../../../test_image/Field-corn-Liechtenstein-landscape.jpg");
@@ -68,8 +68,17 @@ describe("HDR merge: Library selection gating + backend round-trip", () => {
       [FIXTURE_A, FIXTURE_B],
     );
     await browser.refresh();
-    await (await findCellByName(NAME_A)).waitForExist({ timeout: 20000 });
-    await (await findCellByName(NAME_B)).waitForExist({ timeout: 20000 });
+    // Both fixtures are real repo files already cataloged from many
+    // earlier runs (a duplicate re-import doesn't advance `added_at`),
+    // so they can sink below the Library grid's DOM-virtualized window
+    // as the shared dev catalog accumulates more imports over time --
+    // see findCellByNameAnywhere's own comment (helpers.js) for the full
+    // mechanism and the post-refresh timeout budget it needs.
+    // 45s each (not 60s, as golden-path.e2e.js/panel-resize.e2e.js use)
+    // -- two of these run sequentially here, and mochaOpts.timeout
+    // (wdio.conf.js) caps the whole "before" hook at 120000ms.
+    await (await findCellByNameAnywhere(NAME_A, { timeout: 45000 })).waitForExist({ timeout: 5000 });
+    await (await findCellByNameAnywhere(NAME_B, { timeout: 45000 })).waitForExist({ timeout: 5000 });
   });
 
   it("is disabled with 0 or 1 photos selected, enabled at 2+", async () => {

@@ -110,6 +110,13 @@ export function removeImages(/** @type {number[]} */ imageIds) {
   return invoke("remove_images", { imageIds });
 }
 
+/** HDR merge (M5, RFC-0003): merges 2+ RAW images (in the given order)
+ * into one radiometrically-merged, tone-mapped JPEG, cataloged as a new
+ * image. @returns {Promise<number>} the new merged image's id */
+export function mergeHdrBracket(/** @type {number[]} */ imageIds) {
+  return invoke("merge_hdr_bracket", { imageIds });
+}
+
 /**
  * @typedef {Object} KeywordRef
  * @property {number} id

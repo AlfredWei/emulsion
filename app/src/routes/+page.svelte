@@ -51,6 +51,7 @@
     setCopyright,
     setContact,
     removeImages,
+    mergeHdrBracket,
     listAllImageKeywords,
     createCollection,
     createCollectionWithImages,
@@ -1965,6 +1966,43 @@
     }
   }
 
+  // HDR merge (M5, RFC-0003). Guards the button/re-entrancy the same
+  // narrow way applyingPreset/pastingSettingsToSelection do above.
+  let mergingHdr = $state(false);
+
+  /** Merges the current Library selection (2+ RAW photos, in whatever
+   * order `selectedImages` iterates -- see mergeHdrBracket's own doc
+   * comment for why `hdr_merge`'s alignment reference is chosen by EV,
+   * not by this order, so exact click order doesn't matter here) into
+   * one new image, added to the catalog as its own row. Same
+   * await-then-refresh-then-poll shape `runImport` already established
+   * for a freshly-imported image, since the merge result is cataloged
+   * exactly like a JPEG import (thumbnail filled in later by the same
+   * background pass). Deduped by image_id first, same reasoning as
+   * `handleRemoveConfirmed`'s own dedupe: a virtual copy's version_id is
+   * a distinct selection entry but not a distinct source photo. */
+  async function handleMergeHdrBracket() {
+    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
+    if (imageIds.length < 2) return;
+    mergingHdr = true;
+    statusMessage = "";
+    try {
+      const resultImageId = await mergeHdrBracket(imageIds);
+      await refresh();
+      pollUntilThumbnailsReady();
+      const merged = images.find((img) => img.image_id === resultImageId);
+      if (merged) {
+        selectedId = merged.version_id;
+        selectedIds = new Set([merged.version_id]);
+      }
+      statusMessage = `Merged ${imageIds.length} photos into one HDR image`;
+    } catch (/** @type {any} */ e) {
+      statusMessage = `HDR merge failed: ${e}`;
+    } finally {
+      mergingHdr = false;
+    }
+  }
+
   // Collections (M2 Slice 5). Rename/edit-existing-smart-collection-rules
   // UI is deliberately deferred (matching this codebase's precedent for
   // `add_image_with_metadata`/`add_edit_stack` -- a lower-level building
@@ -3185,6 +3223,14 @@
       title={copiedSettings ? "Paste the copied Develop settings onto every selected photo" : "Copy Settings in Develop first"}
     >
       {pastingSettingsToSelection ? "Pasting…" : "Paste Settings to Selection"}
+    </button>
+    <button
+      class="import-btn secondary"
+      onclick={handleMergeHdrBracket}
+      disabled={activeModule !== "library" || selectedIds.size < 2 || mergingHdr}
+      title="Merge 2+ RAW exposures of the same scene into one HDR image"
+    >
+      {mergingHdr ? "Merging…" : `Merge to HDR…${selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}`}
     </button>
     <button
       class="remove-btn"

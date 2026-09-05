@@ -178,6 +178,11 @@
   );
   let compareCandidateId = $state(/** @type {number | null} */ (null));
   let importing = $state(false);
+  // Populated from the backend's "import-progress" event (lib.rs's
+  // import_folder/import_files -- see the listener setup below) while
+  // `importing` is true; null before the first event of a given import
+  // arrives (e.g. a large folder still being walked) or once it finishes.
+  let importProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
   let statusMessage = $state("");
   // M3 Slice 1: general Settings dialog, app-level (not module-scoped, so
   // it's not gated on activeModule like Export/Remove are).
@@ -1631,6 +1636,7 @@
 
   async function runImport(/** @type {() => Promise<import('$lib/api/catalog.js').ImportSummary | null>} */ doImport) {
     importing = true;
+    importProgress = null;
     statusMessage = "";
     try {
       const summary = await doImport();
@@ -1642,6 +1648,7 @@
       statusMessage = `Import failed: ${e}`;
     } finally {
       importing = false;
+      importProgress = null;
     }
   }
 
@@ -3116,10 +3123,26 @@
       // ignore outside Tauri
     }
 
+    // Import progress bar: import_folder/import_files (lib.rs) emit this
+    // once per file as they walk a folder or file list -- see import.rs's
+    // `import_paths_with_progress`. Same try/catch-outside-Tauri precedent
+    // as the listeners above.
+    let unlistenImportProgress = /** @type {(() => void) | undefined} */ (undefined);
+    try {
+      listen("import-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
+        importProgress = event.payload;
+      }).then((fn) => {
+        unlistenImportProgress = fn;
+      });
+    } catch {
+      // ignore outside Tauri
+    }
+
     return () => {
       unlistenClose?.();
       unlistenDragDrop?.();
       unlistenMenu?.();
+      unlistenImportProgress?.();
       window.removeEventListener("shortcuts-updated", onShortcutsUpdated);
     };
   });
@@ -3366,7 +3389,23 @@
     />
   {/if}
 
-  {#if statusMessage}
+  {#if importing}
+    <div
+      class="import-progress"
+      role="progressbar"
+      aria-valuenow={importProgress?.current ?? 0}
+      aria-valuemin="0"
+      aria-valuemax={importProgress?.total ?? 0}
+    >
+      <div
+        class="import-progress-bar"
+        style={`width: ${importProgress && importProgress.total > 0 ? (importProgress.current / importProgress.total) * 100 : 0}%`}
+      ></div>
+      <span class="import-progress-label">
+        {importProgress ? `Importing ${importProgress.current} / ${importProgress.total}…` : "Importing…"}
+      </span>
+    </div>
+  {:else if statusMessage}
     <div class="status">{statusMessage}</div>
   {/if}
 
@@ -4030,6 +4069,31 @@
     color: var(--text-secondary);
     background: var(--bg-panel);
     border-bottom: 1px solid var(--border-subtle);
+  }
+  .import-progress {
+    flex: none;
+    position: relative;
+    height: 26px;
+    padding: 0 14px;
+    display: flex;
+    align-items: center;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-subtle);
+    overflow: hidden;
+  }
+  .import-progress-bar {
+    position: absolute;
+    inset: 0;
+    width: 0%;
+    background: var(--accent-soft);
+    border-right: 1px solid var(--accent);
+    transition: width 0.15s ease;
+  }
+  .import-progress-label {
+    position: relative;
   }
   .body,
   .develop-body,

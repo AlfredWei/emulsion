@@ -26,6 +26,16 @@ pub struct ImportSummary {
     pub failed: usize,
 }
 
+/// Emitted to the frontend as the `import-progress` event (lib.rs) after
+/// each candidate file is processed, so a progress bar can track a large
+/// folder/multi-file import instead of the UI just freezing on "Importing…"
+/// until the whole batch completes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportProgress {
+    pub current: usize,
+    pub total: usize,
+}
+
 fn collect_candidate_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -83,7 +93,27 @@ fn jpeg_bytes_look_valid(bytes: &[u8]) -> bool {
 /// with a `thumbnail_dir` that doesn't exist yet -- it's created if needed.
 /// Shared core for both `scan_and_import` (directory walk) and the
 /// multi-file picker's `import_files` Tauri command (lib.rs).
+///
+/// Plain wrapper over `import_paths_with_progress` for callers that don't
+/// need progress feedback -- only this crate's own tests today, since
+/// lib.rs's Tauri commands both use the `_with_progress` form directly.
+/// Kept as real pub API (`#[allow(dead_code)]`) rather than folded into
+/// tests, same precedent as `catalog.rs`'s `add_image_with_metadata`.
+#[allow(dead_code)]
 pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) -> ImportSummary {
+    import_paths_with_progress(paths, catalog, thumbnail_dir, |_, _| {})
+}
+
+/// Same as `import_paths`, but calls `on_progress(files_done, total_files)`
+/// after every candidate file is processed (imported, skipped, or failed) --
+/// lib.rs's Tauri commands use this to emit the `import-progress` event a
+/// frontend progress bar listens for.
+pub fn import_paths_with_progress<F: FnMut(usize, usize)>(
+    paths: &[PathBuf],
+    catalog: &Catalog,
+    thumbnail_dir: &Path,
+    mut on_progress: F,
+) -> ImportSummary {
     // One id for every image landed by this call -- backs the Library
     // sidebar's "Last Import" source (`import_batch == max(import_batch)`).
     // Wall-clock millis, not an autoincrement counter, since there's no
@@ -104,99 +134,109 @@ pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) 
 
     let mut summary = ImportSummary::default();
     let _ = std::fs::create_dir_all(thumbnail_dir);
+    let total = candidate_paths.len();
 
-    for path in &candidate_paths {
-        let Ok(bytes) = std::fs::read(path) else {
-            summary.failed += 1;
-            continue;
-        };
-
-        let hash = blake3::hash(&bytes).to_hex().to_string();
-
-        match catalog.find_by_hash(&hash) {
-            Ok(Some(_)) => {
-                summary.skipped_duplicates += 1;
-                continue;
-            }
-            Err(_) => {
+    // A labeled block, not the loop itself, so every early-exit path below
+    // (`break 'file`, one per failure/skip case) still falls through to the
+    // single `on_progress` call at the end of each iteration -- the loop
+    // itself never `continue`s, so progress is reported for every candidate
+    // exactly once, regardless of outcome.
+    for (i, path) in candidate_paths.iter().enumerate() {
+        'file: {
+            let Ok(bytes) = std::fs::read(path) else {
                 summary.failed += 1;
-                continue;
-            }
-            Ok(None) => {}
-        }
+                break 'file;
+            };
 
-        let Some(format) = ImageFormat::from_path(path) else {
-            summary.failed += 1;
-            continue;
-        };
-        let path_str = path.to_string_lossy().to_string();
+            let hash = blake3::hash(&bytes).to_hex().to_string();
 
-        match format {
-            ImageFormat::Raw => {
-                let Ok(mut raw_image) = RawImage::open(&bytes) else {
-                    summary.failed += 1;
-                    continue;
-                };
-
-                // M2 Slice 2: free to call here -- RawImage::open() already
-                // populated the header fields this reads, no unpack()/
-                // process() needed (confirmed against rsraw's own source).
-                let file_metadata = metadata::extract_from_raw(&raw_image);
-
-                // Atomic (M1 Slice 6): both rows (+ metadata, M2 Slice 2)
-                // in one transaction, so a crash partway through can't
-                // leave a permanently-orphaned or inconsistently-tagged row.
-                let Ok(image_id) = catalog.add_image_with_edit_stack(
-                    &path_str,
-                    &hash,
-                    bytes.len() as i64,
-                    &EditStack::empty(),
-                    &file_metadata,
-                ) else {
-                    summary.failed += 1;
-                    continue;
-                };
-                let _ = catalog.set_import_batch(image_id, import_batch);
-
-                if let Some(thumb_path) =
-                    extract_and_write_thumbnail(&mut raw_image, image_id, thumbnail_dir)
-                {
-                    let _ = catalog.set_thumbnail_path(image_id, &thumb_path.to_string_lossy());
+            match catalog.find_by_hash(&hash) {
+                Ok(Some(_)) => {
+                    summary.skipped_duplicates += 1;
+                    break 'file;
                 }
-            }
-            ImageFormat::Jpeg => {
-                if !jpeg_bytes_look_valid(&bytes) {
+                Err(_) => {
                     summary.failed += 1;
-                    continue;
+                    break 'file;
                 }
+                Ok(None) => {}
+            }
 
-                // M2 Slice 2: a fresh EXIF read, deliberately not shared
-                // with jpeg_decode.rs's orientation read -- that one only
-                // happens later, during the background thumbnail pass, not
-                // here at import time.
-                let file_metadata = metadata::extract_from_jpeg(&bytes);
+            let Some(format) = ImageFormat::from_path(path) else {
+                summary.failed += 1;
+                break 'file;
+            };
+            let path_str = path.to_string_lossy().to_string();
 
-                // thumbnail_path stays NULL here -- generate_missing_thumbnails
-                // fills it in on a background pass. A full JPEG decode is
-                // categorically heavier than RAW's cheap embedded-thumb
-                // extraction (no demosaic to skip); running it synchronously
-                // inside this loop would visibly slow a JPEG-heavy import
-                // with zero progress feedback, unlike RAW's import path today.
-                match catalog
-                    .add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty(), &file_metadata)
-                {
-                    Ok(image_id) => {
-                        let _ = catalog.set_import_batch(image_id, import_batch);
-                    }
-                    Err(_) => {
+            match format {
+                ImageFormat::Raw => {
+                    let Ok(mut raw_image) = RawImage::open(&bytes) else {
                         summary.failed += 1;
-                        continue;
+                        break 'file;
+                    };
+
+                    // M2 Slice 2: free to call here -- RawImage::open() already
+                    // populated the header fields this reads, no unpack()/
+                    // process() needed (confirmed against rsraw's own source).
+                    let file_metadata = metadata::extract_from_raw(&raw_image);
+
+                    // Atomic (M1 Slice 6): both rows (+ metadata, M2 Slice 2)
+                    // in one transaction, so a crash partway through can't
+                    // leave a permanently-orphaned or inconsistently-tagged row.
+                    let Ok(image_id) = catalog.add_image_with_edit_stack(
+                        &path_str,
+                        &hash,
+                        bytes.len() as i64,
+                        &EditStack::empty(),
+                        &file_metadata,
+                    ) else {
+                        summary.failed += 1;
+                        break 'file;
+                    };
+                    let _ = catalog.set_import_batch(image_id, import_batch);
+
+                    if let Some(thumb_path) =
+                        extract_and_write_thumbnail(&mut raw_image, image_id, thumbnail_dir)
+                    {
+                        let _ = catalog.set_thumbnail_path(image_id, &thumb_path.to_string_lossy());
+                    }
+                }
+                ImageFormat::Jpeg => {
+                    if !jpeg_bytes_look_valid(&bytes) {
+                        summary.failed += 1;
+                        break 'file;
+                    }
+
+                    // M2 Slice 2: a fresh EXIF read, deliberately not shared
+                    // with jpeg_decode.rs's orientation read -- that one only
+                    // happens later, during the background thumbnail pass, not
+                    // here at import time.
+                    let file_metadata = metadata::extract_from_jpeg(&bytes);
+
+                    // thumbnail_path stays NULL here -- generate_missing_thumbnails
+                    // fills it in on a background pass. A full JPEG decode is
+                    // categorically heavier than RAW's cheap embedded-thumb
+                    // extraction (no demosaic to skip); running it synchronously
+                    // inside this loop would visibly slow a JPEG-heavy import
+                    // with zero progress feedback, unlike RAW's import path today.
+                    match catalog
+                        .add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty(), &file_metadata)
+                    {
+                        Ok(image_id) => {
+                            let _ = catalog.set_import_batch(image_id, import_batch);
+                        }
+                        Err(_) => {
+                            summary.failed += 1;
+                            break 'file;
+                        }
                     }
                 }
             }
+
+            summary.imported += 1;
         }
 
-        summary.imported += 1;
+        on_progress(i + 1, total);
     }
 
     summary
@@ -204,8 +244,23 @@ pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) 
 
 /// Scan `dir` recursively and import every supported file found. Thin
 /// wrapper over `import_paths` -- see that for the real per-file logic.
+/// Only this crate's own tests call this form today (lib.rs's
+/// `import_folder` command uses `scan_and_import_with_progress` directly);
+/// kept as real pub API, same precedent as `import_paths` above.
+#[allow(dead_code)]
 pub fn scan_and_import(dir: &Path, catalog: &Catalog, thumbnail_dir: &Path) -> ImportSummary {
-    import_paths(&collect_candidate_files(dir), catalog, thumbnail_dir)
+    scan_and_import_with_progress(dir, catalog, thumbnail_dir, |_, _| {})
+}
+
+/// Same as `scan_and_import`, but forwards per-file progress -- see
+/// `import_paths_with_progress`.
+pub fn scan_and_import_with_progress<F: FnMut(usize, usize)>(
+    dir: &Path,
+    catalog: &Catalog,
+    thumbnail_dir: &Path,
+    on_progress: F,
+) -> ImportSummary {
+    import_paths_with_progress(&collect_candidate_files(dir), catalog, thumbnail_dir, on_progress)
 }
 
 /// Background pass (M2 Slice 1): fills in `thumbnail_path` for any
@@ -376,6 +431,31 @@ mod tests {
         assert_eq!(summary.skipped_duplicates, 0);
         assert_eq!(summary.failed, 0); // .txt isn't even a candidate extension
         assert!(catalog.list_images().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn progress_callback_fires_once_per_candidate_file_in_order() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("progress");
+        // Mixed outcomes (one skip-by-extension via a non-candidate file
+        // alongside two failures) -- on_progress must still fire exactly
+        // once per *candidate* file (the .txt is filtered out before
+        // candidates are even counted, same as non_raw_files_are_skipped_not_fatal),
+        // regardless of whether each one succeeds, fails, or is a duplicate.
+        std::fs::write(dir.join("a.dng"), b"not really a DNG").unwrap();
+        std::fs::write(dir.join("b.dng"), b"also not really a DNG").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"not a candidate at all").unwrap();
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let calls = std::cell::RefCell::new(Vec::new());
+        let summary = scan_and_import_with_progress(&dir, &catalog, &thumb_dir, |current, total| {
+            calls.borrow_mut().push((current, total));
+        });
+
+        assert_eq!(summary.failed, 2);
+        let calls = calls.into_inner();
+        assert_eq!(calls, vec![(1, 2), (2, 2)]);
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }

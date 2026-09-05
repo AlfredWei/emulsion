@@ -1341,6 +1341,17 @@ impl Catalog {
         Ok(())
     }
 
+    /// Used by the on-demand "jump the queue" thumbnail path
+    /// (`import::ensure_thumbnail`) to check, under the lock, whether the
+    /// background backfill pass has already generated this image's
+    /// thumbnail by the time the request is served -- an indexed
+    /// single-row lookup by primary key, not `list_images()`'s full-table
+    /// join, since this is a per-click hot path.
+    pub fn get_thumbnail_path(&self, image_id: i64) -> Result<Option<String>> {
+        self.conn
+            .query_row("SELECT thumbnail_path FROM images WHERE id = ?1", params![image_id], |row| row.get(0))
+    }
+
     /// Tags a just-inserted image with the batch id `import_paths` computed
     /// once for the whole import call -- a separate step from
     /// `add_image_with_edit_stack`'s own insert transaction (rather than a

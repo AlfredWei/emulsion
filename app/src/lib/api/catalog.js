@@ -42,6 +42,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} imported
  * @property {number} skipped_duplicates
  * @property {number} failed
+ * @property {number} import_batch
  */
 
 /** @returns {Promise<ImportSummary>} */
@@ -60,6 +61,28 @@ export function importFiles(/** @type {string[]} */ paths) {
  * @returns {Promise<string[]>} */
 export function getSupportedExtensions() {
   return invoke("get_supported_extensions");
+}
+
+/** Backfills thumbnails for images tagged with `importBatch`
+ * (ImportSummary.import_batch) that don't have one yet, emitting
+ * "thumbnail-progress" events as it goes. Awaited by runImport right
+ * after importFolder/importFiles resolves, so the import progress bar
+ * stays up until that import's own photos are all backfilled -- scoped to
+ * the batch, not the whole catalog, so an unrelated pre-existing backlog
+ * elsewhere can't make an unrelated new import wait on it.
+ * @returns {Promise<void>} */
+export function backfillMissingThumbnails(/** @type {number} */ importBatch) {
+  return invoke("backfill_missing_thumbnails", { importBatch });
+}
+
+/** On-demand "jump the queue" thumbnail generation for one image -- called
+ * when opening Loupe/Develop on a photo the background backfill pass
+ * above hasn't reached yet, so it doesn't have to wait behind the rest of
+ * the catalog. Returns the thumbnail path (freshly generated, or already
+ * -present if the backfill pass got there first) or null if generation
+ * failed. @returns {Promise<string | null>} */
+export function ensureThumbnail(/** @type {number} */ versionId) {
+  return invoke("ensure_thumbnail", { versionId });
 }
 
 /** @returns {Promise<ImageSummary[]>} */

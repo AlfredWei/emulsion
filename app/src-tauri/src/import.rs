@@ -24,6 +24,18 @@ pub struct ImportSummary {
     pub imported: usize,
     pub skipped_duplicates: usize,
     pub failed: usize,
+    /// The batch id every image landed by this call was tagged with (see
+    /// `import_paths_with_progress`'s own doc comment) -- lets the
+    /// frontend scope the post-import thumbnail backfill
+    /// (`backfill_missing_thumbnails`) to just THIS import, not the whole
+    /// catalog. Real, previously-undiscovered finding from building that
+    /// scoping: an unrelated pre-existing backlog on a real dev catalog
+    /// (33 un-thumbnailed photos from an earlier real-folder import) made
+    /// a whole-catalog-scoped backfill take multiple minutes in a debug
+    /// build -- every future import, even a single new file, would have
+    /// had to wait out that same unrelated backlog before its own
+    /// progress bar could finish.
+    pub import_batch: i64,
 }
 
 /// Emitted to the frontend as the `import-progress` event (lib.rs) after
@@ -132,7 +144,7 @@ pub fn import_paths_with_progress<F: FnMut(usize, usize)>(
         }
     }
 
-    let mut summary = ImportSummary::default();
+    let mut summary = ImportSummary { import_batch, ..Default::default() };
     let _ = std::fs::create_dir_all(thumbnail_dir);
     let total = candidate_paths.len();
 
@@ -282,53 +294,143 @@ pub fn scan_and_import_with_progress<F: FnMut(usize, usize)>(
 const THUMBNAIL_MAX_DIMENSION: u32 = 1024;
 
 pub fn generate_missing_thumbnails(catalog: &Arc<Mutex<Catalog>>, thumbnail_dir: &Path) {
-    let images = {
+    generate_missing_thumbnails_with_progress(catalog, thumbnail_dir, None, |_, _| {})
+}
+
+/// Same as `generate_missing_thumbnails`, but calls
+/// `on_progress(images_done, total_images)` after every candidate image is
+/// processed (thumbnail written or generation failed) -- same "fires once
+/// per candidate regardless of outcome" contract as
+/// `import_paths_with_progress`'s own `on_progress`, so a frontend progress
+/// bar can track this background pass the same way it already tracks the
+/// import scan itself. `total` is fixed up front (candidates missing a
+/// thumbnail at the moment this pass started), not recomputed as it goes.
+///
+/// `import_batch`, when `Some`, additionally restricts candidates to
+/// images tagged with that exact batch (see `ImportSummary::import_batch`)
+/// -- lib.rs's `backfill_missing_thumbnails` command uses this to scope a
+/// post-import backfill to just the images that import landed, not the
+/// whole catalog. Real motivation, not speculative: an unrelated
+/// pre-existing backlog on a real dev catalog made a whole-catalog-scoped
+/// backfill take multiple minutes -- every future import, even a single
+/// new file, would otherwise have to wait out that same backlog before
+/// its own progress bar could finish. `None` keeps the original
+/// whole-catalog behavior, used by the startup catch-up pass and the
+/// post-remove reimport backstop (lib.rs), neither of which has a single
+/// "this batch" to scope to.
+pub fn generate_missing_thumbnails_with_progress<F: FnMut(usize, usize)>(
+    catalog: &Arc<Mutex<Catalog>>,
+    thumbnail_dir: &Path,
+    import_batch: Option<i64>,
+    mut on_progress: F,
+) {
+    let images: Vec<_> = {
         let Ok(catalog) = catalog.lock() else { return };
-        catalog.list_images().unwrap_or_default()
+        catalog
+            .list_images()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|image| image.thumbnail_path.is_none())
+            .filter(|image| import_batch.is_none_or(|batch| image.import_batch == Some(batch)))
+            .collect()
     };
     let _ = std::fs::create_dir_all(thumbnail_dir);
+    let total = images.len();
 
-    for image in images {
-        if image.thumbnail_path.is_some() {
-            continue;
-        }
-
-        let path = Path::new(&image.path);
-        let decoded = match source_decode::decode_preview(path) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("thumbnail generation failed for {}: {e}", image.path);
-                continue;
+    for (i, image) in images.into_iter().enumerate() {
+        'image: {
+            // Re-check under the lock (cheap indexed lookup, not another
+            // full list_images() scan) rather than trusting the snapshot
+            // above -- `ensure_thumbnail`'s on-demand "jump the queue" path
+            // can race ahead of this loop and fill in exactly this image's
+            // thumbnail between when the candidate list was captured and
+            // when this iteration runs, and re-decoding a large RAW file
+            // just to overwrite an already-correct result is real wasted
+            // work worth skipping, not just a correctness nicety.
+            let already_done = catalog.lock().ok().and_then(|c| c.get_thumbnail_path(image.image_id).ok()).flatten();
+            if already_done.is_some() {
+                break 'image;
             }
-        };
-        let Some(source) = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
-        else {
-            eprintln!(
-                "thumbnail generation failed for {}: decoded buffer size mismatch",
-                image.path
-            );
-            continue;
-        };
 
-        let (w, h) = (source.width(), source.height());
-        let resized = if w.max(h) > THUMBNAIL_MAX_DIMENSION {
-            let scale = THUMBNAIL_MAX_DIMENSION as f64 / w.max(h) as f64;
-            let target_w = ((w as f64) * scale).round().max(1.0) as u32;
-            let target_h = ((h as f64) * scale).round().max(1.0) as u32;
-            image::imageops::resize(&source, target_w, target_h, image::imageops::FilterType::Triangle)
-        } else {
-            source
-        };
+            let Some(out_path) = generate_thumbnail_file(image.image_id, Path::new(&image.path), thumbnail_dir)
+            else {
+                break 'image;
+            };
 
-        let out_path = thumbnail_dir.join(format!("{}.jpg", image.image_id));
-        if let Err(e) = resized.save(&out_path) {
-            eprintln!("thumbnail generation failed for {}: {e}", image.path);
-            continue;
+            let Ok(catalog) = catalog.lock() else { return };
+            let _ = catalog.set_thumbnail_path(image.image_id, &out_path.to_string_lossy());
         }
 
-        let Ok(catalog) = catalog.lock() else { return };
-        let _ = catalog.set_thumbnail_path(image.image_id, &out_path.to_string_lossy());
+        on_progress(i + 1, total);
     }
+}
+
+/// Decodes `path` fresh (unedited) and writes a `THUMBNAIL_MAX_DIMENSION`-
+/// capped JPEG thumbnail to `thumbnail_dir/{image_id}.jpg`. Pure
+/// filesystem/decode work, no catalog access -- callers persist the
+/// returned path themselves via `Catalog::set_thumbnail_path`. Shared by
+/// the background backfill pass above and the on-demand single-image path
+/// below (`ensure_thumbnail`), so both produce byte-for-byte the same kind
+/// of thumbnail regardless of which one actually generated it.
+fn generate_thumbnail_file(image_id: i64, path: &Path, thumbnail_dir: &Path) -> Option<PathBuf> {
+    let decoded = match source_decode::decode_preview(path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("thumbnail generation failed for {}: {e}", path.display());
+            return None;
+        }
+    };
+    let Some(source) = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb) else {
+        eprintln!("thumbnail generation failed for {}: decoded buffer size mismatch", path.display());
+        return None;
+    };
+
+    let (w, h) = (source.width(), source.height());
+    let resized = if w.max(h) > THUMBNAIL_MAX_DIMENSION {
+        let scale = THUMBNAIL_MAX_DIMENSION as f64 / w.max(h) as f64;
+        let target_w = ((w as f64) * scale).round().max(1.0) as u32;
+        let target_h = ((h as f64) * scale).round().max(1.0) as u32;
+        image::imageops::resize(&source, target_w, target_h, image::imageops::FilterType::Triangle)
+    } else {
+        source
+    };
+
+    let out_path = thumbnail_dir.join(format!("{image_id}.jpg"));
+    if let Err(e) = resized.save(&out_path) {
+        eprintln!("thumbnail generation failed for {}: {e}", path.display());
+        return None;
+    }
+    Some(out_path)
+}
+
+/// On-demand "jump the queue" thumbnail generation for ONE image: opening
+/// Loupe/Develop on a photo the background backfill pass above hasn't
+/// reached yet (it's a strict FIFO walk of the whole catalog, so the last
+/// photo in a large just-imported folder can wait a long time) used to
+/// mean staring at a blank grid placeholder for exactly the photo the user
+/// is actively looking at, for as long as the queue took to get there.
+/// This generates and persists that one image's thumbnail immediately,
+/// independent of wherever the background pass currently is -- called by
+/// lib.rs's `ensure_thumbnail` command, keyed by `version_id` (what the
+/// frontend already has on hand for the open image) via
+/// `Catalog::get_version_source` to resolve the owning `image_id` + path.
+///
+/// Re-checks `thumbnail_path` under the lock immediately before doing any
+/// decode work (not just relying on the frontend to only call this for a
+/// currently-null thumbnail) so a request that lands after the background
+/// pass already finished this same image is a cheap no-op, not a
+/// redundant decode.
+pub fn ensure_thumbnail(catalog: &Arc<Mutex<Catalog>>, version_id: i64, thumbnail_dir: &Path) -> Option<String> {
+    let source = catalog.lock().ok()?.get_version_source(version_id).ok()?;
+    if let Some(existing) = catalog.lock().ok()?.get_thumbnail_path(source.image_id).ok().flatten() {
+        return Some(existing);
+    }
+
+    let _ = std::fs::create_dir_all(thumbnail_dir);
+    let out_path = generate_thumbnail_file(source.image_id, Path::new(&source.path), thumbnail_dir)?;
+    let out_path_str = out_path.to_string_lossy().into_owned();
+    catalog.lock().ok()?.set_thumbnail_path(source.image_id, &out_path_str).ok()?;
+    Some(out_path_str)
 }
 
 /// Thumbnail refresh after a Develop edit: unlike `generate_missing_thumbnails`
@@ -518,6 +620,132 @@ mod tests {
         let images = catalog.lock().unwrap().list_images().unwrap();
         assert!(images[0].thumbnail_path.is_some(), "background pass should have filled in the thumbnail");
         assert!(Path::new(images[0].thumbnail_path.as_ref().unwrap()).exists());
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// Same contract as `progress_callback_fires_once_per_candidate_file_in_order`,
+    /// for the background thumbnail-backfill pass: `on_progress` must fire
+    /// exactly once per image that's actually missing a thumbnail (not once
+    /// per image in the whole catalog), in order, regardless of whether
+    /// each one succeeds or fails, with `total` fixed at the count of
+    /// candidates when the pass started.
+    #[test]
+    fn thumbnail_progress_callback_fires_once_per_missing_thumbnail_in_order() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("thumbnail-progress");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([120, 90, 60]))
+            .save(dir.join("a.jpg"))
+            .unwrap();
+        image::RgbImage::from_pixel(200, 100, image::Rgb([10, 20, 30]))
+            .save(dir.join("b.jpg"))
+            .unwrap();
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let summary = scan_and_import(&dir, &catalog, &thumb_dir);
+        assert_eq!(summary.imported, 2);
+        // Both JPEGs land with no thumbnail yet (see
+        // imports_a_real_jpeg_and_backfills_its_thumbnail_in_the_background) --
+        // both are real candidates for the pass below.
+
+        let catalog = Arc::new(Mutex::new(catalog));
+        let calls = std::cell::RefCell::new(Vec::new());
+        generate_missing_thumbnails_with_progress(&catalog, &thumb_dir, None, |current, total| {
+            calls.borrow_mut().push((current, total));
+        });
+
+        assert_eq!(calls.into_inner(), vec![(1, 2), (2, 2)]);
+        let images = catalog.lock().unwrap().list_images().unwrap();
+        assert!(images.iter().all(|img| img.thumbnail_path.is_some()));
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// Real regression guard for the backlog this scoping was added to fix
+    /// (see `generate_missing_thumbnails_with_progress`'s own doc comment):
+    /// a `Some(import_batch)` pass must touch ONLY images tagged with that
+    /// batch, leaving an unrelated missing thumbnail from a DIFFERENT
+    /// batch completely untouched (not counted in `total`, not generated).
+    #[test]
+    fn batch_scoped_backfill_ignores_missing_thumbnails_from_a_different_batch() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("batch-scoped");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([1, 2, 3])).save(dir.join("old.jpg")).unwrap();
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let old_summary = scan_and_import(&dir, &catalog, &thumb_dir);
+        assert_eq!(old_summary.imported, 1);
+
+        let dir2 = dir.parent().unwrap().join("scan2");
+        std::fs::create_dir_all(&dir2).unwrap();
+        image::RgbImage::from_pixel(200, 100, image::Rgb([4, 5, 6])).save(dir2.join("new.jpg")).unwrap();
+        let new_summary = scan_and_import(&dir2, &catalog, &thumb_dir);
+        assert_eq!(new_summary.imported, 1);
+
+        let catalog = Arc::new(Mutex::new(catalog));
+        let calls = std::cell::RefCell::new(Vec::new());
+        generate_missing_thumbnails_with_progress(&catalog, &thumb_dir, Some(new_summary.import_batch), |current, total| {
+            calls.borrow_mut().push((current, total));
+        });
+
+        // Exactly one candidate (the new batch's own image) -- the old
+        // batch's image is invisible to this call entirely, not just
+        // skipped after being counted.
+        assert_eq!(calls.into_inner(), vec![(1, 1)]);
+
+        let images = catalog.lock().unwrap().list_images().unwrap();
+        let old_image = images.iter().find(|img| img.path.ends_with("old.jpg")).unwrap();
+        let new_image = images.iter().find(|img| img.path.ends_with("new.jpg")).unwrap();
+        assert!(old_image.thumbnail_path.is_none(), "an unrelated older batch's missing thumbnail must be left alone");
+        assert!(new_image.thumbnail_path.is_some(), "the scoped batch's own image must still get its thumbnail");
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// `ensure_thumbnail` (the "jump the queue" on-demand path Loupe/Develop
+    /// call when opening a photo the background backfill pass hasn't
+    /// reached yet) must generate and persist a real thumbnail for exactly
+    /// the requested image, keyed by version_id like the frontend's own
+    /// `get_graded_develop_preview` call.
+    #[test]
+    fn ensure_thumbnail_generates_and_persists_a_thumbnail_for_one_image_on_demand() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("ensure-thumbnail");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([200, 150, 50])).save(dir.join("a.jpg")).unwrap();
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let summary = scan_and_import(&dir, &catalog, &thumb_dir);
+        assert_eq!(summary.imported, 1);
+
+        let images = catalog.list_images().unwrap();
+        assert!(images[0].thumbnail_path.is_none());
+        let version_id = images[0].version_id;
+
+        let catalog = Arc::new(Mutex::new(catalog));
+        let path = ensure_thumbnail(&catalog, version_id, &thumb_dir).expect("should generate a thumbnail");
+        assert!(Path::new(&path).exists());
+
+        let images = catalog.lock().unwrap().list_images().unwrap();
+        assert_eq!(images[0].thumbnail_path.as_deref(), Some(path.as_str()));
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// A second call for the same already-thumbnailed image must be a
+    /// cheap no-op (return the existing path) rather than re-decoding and
+    /// silently overwriting it -- this is the exact race `generate_missing_thumbnails_with_progress`'s
+    /// own re-check guards against from the other direction.
+    #[test]
+    fn ensure_thumbnail_is_a_no_op_when_a_thumbnail_already_exists() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("ensure-thumbnail-noop");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([1, 2, 3])).save(dir.join("a.jpg")).unwrap();
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let summary = scan_and_import(&dir, &catalog, &thumb_dir);
+        assert_eq!(summary.imported, 1);
+        let version_id = catalog.list_images().unwrap()[0].version_id;
+
+        let catalog = Arc::new(Mutex::new(catalog));
+        let first = ensure_thumbnail(&catalog, version_id, &thumb_dir).unwrap();
+        let second = ensure_thumbnail(&catalog, version_id, &thumb_dir).unwrap();
+        assert_eq!(first, second);
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }

@@ -74,20 +74,17 @@ async fn import_folder(
         .map_err(|e| e.to_string())?
     }?;
 
-    // Fire-and-forget: pre-generate Develop previews and backfill any
-    // missing thumbnails (M1 Slice 4 / M2 Slice 1, see preview_cache.rs /
-    // import.rs) for the whole catalog in the background, rather than
-    // making every Develop open pay for a fresh decode or leaving JPEG
-    // imports permanently thumbnail-less. Not awaited -- doesn't delay
-    // this command's response.
+    // Fire-and-forget: pre-generate Develop previews for the whole catalog
+    // in the background, rather than making every Develop open pay for a
+    // fresh decode. Not awaited -- doesn't delay this command's response.
+    // Thumbnail backfill is a SEPARATE, explicitly-awaited step now (see
+    // `backfill_missing_thumbnails` below) -- the frontend's import
+    // progress bar stays up through that call too, so "import done" and
+    // "every thumbnail ready" are the same moment from the user's
+    // perspective, not "done" followed by an untracked silent wait.
     let previews_dir = app_data_dir.join("previews");
-    let thumbnail_dir_for_bg = app_data_dir.join("thumbnails");
-    let catalog_for_thumbs = catalog.clone();
     tauri::async_runtime::spawn_blocking(move || {
         preview_cache::pregenerate_missing(&catalog, &previews_dir);
-    });
-    tauri::async_runtime::spawn_blocking(move || {
-        import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir_for_bg);
     });
 
     Ok(summary)
@@ -127,17 +124,64 @@ async fn import_files(
         .map_err(|e| e.to_string())?
     }?;
 
+    // See import_folder's own comment: preview pregeneration stays
+    // fire-and-forget, thumbnail backfill is now a separate awaited step.
     let previews_dir = app_data_dir.join("previews");
-    let thumbnail_dir_for_bg = app_data_dir.join("thumbnails");
-    let catalog_for_thumbs = catalog.clone();
     tauri::async_runtime::spawn_blocking(move || {
         preview_cache::pregenerate_missing(&catalog, &previews_dir);
     });
-    tauri::async_runtime::spawn_blocking(move || {
-        import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir_for_bg);
-    });
 
     Ok(summary)
+}
+
+/// Backfills thumbnails for every cataloged image that doesn't have one
+/// yet (import.rs's `generate_missing_thumbnails_with_progress`), emitting
+/// a `"thumbnail-progress"` event per image so the frontend's import
+/// progress bar can stay visible through this phase too -- previously this
+/// ran fire-and-forget from inside `import_folder`/`import_files` with no
+/// progress signal at all, so the progress bar disappeared the moment
+/// cataloging finished even though freshly-imported JPEGs could still be
+/// blank placeholders in the Library grid for a while longer. Called
+/// explicitly by the frontend right after `import_folder`/`import_files`
+/// resolves, and awaited -- once THIS command's promise resolves, every
+/// thumbnail that import's own batch needed is on disk.
+///
+/// Scoped to `import_batch` (`ImportSummary::import_batch`, the batch id
+/// that import's own images were tagged with) rather than the whole
+/// catalog -- see `generate_missing_thumbnails_with_progress`'s own doc
+/// comment for the real backlog this scoping was found to matter for: an
+/// unrelated pre-existing backlog elsewhere in the catalog must never make
+/// an unrelated NEW import's own progress bar wait on it.
+#[tauri::command]
+async fn backfill_missing_thumbnails(app: AppHandle, state: State<'_, AppState>, import_batch: i64) -> Result<(), String> {
+    let catalog = state.catalog.clone();
+    let thumbnail_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("thumbnails");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        import::generate_missing_thumbnails_with_progress(&catalog, &thumbnail_dir, Some(import_batch), |current, total| {
+            let _ = app.emit("thumbnail-progress", ImportProgress { current, total });
+        });
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// On-demand "jump the queue" thumbnail generation for one image (see
+/// import.rs's `ensure_thumbnail` for the full reasoning): called when the
+/// frontend opens Loupe or Develop on a photo whose `thumbnail_path` is
+/// still null, so that photo's own thumbnail exists as soon as possible
+/// regardless of how far behind it the background backfill pass is.
+/// Returns the thumbnail path (freshly generated, or already-present if
+/// the backfill pass got there first) so the frontend can patch its local
+/// image list without a full `list_images()` round trip.
+#[tauri::command]
+async fn ensure_thumbnail(app: AppHandle, state: State<'_, AppState>, version_id: i64) -> Result<Option<String>, String> {
+    let catalog = state.catalog.clone();
+    let thumbnail_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("thumbnails");
+
+    tauri::async_runtime::spawn_blocking(move || import::ensure_thumbnail(&catalog, version_id, &thumbnail_dir))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Backs the "Import Files…" picker dialog's filter list (M2 Slice 1) --
@@ -1383,6 +1427,8 @@ pub fn run() {
             report_spike_result,
             import_folder,
             import_files,
+            backfill_missing_thumbnails,
+            ensure_thumbnail,
             get_supported_extensions,
             list_images,
             set_rating,

@@ -121,6 +121,15 @@ pub fn decode_linear(path: &Path) -> Result<DecodedLinear, DecodeError> {
 
     let width = processed.width();
     let height = processed.height();
+    // TEMPORARY diagnostic for a Windows-CI-only buffer-size mismatch
+    // (`linear.rgb.len() != width*height*3`) that a LIBRAW_LOCK mutex
+    // (ruling out a cross-thread race) did NOT fix -- ProcessedImage's own
+    // Debug impl reports LibRaw's raw `colors`/`bits`/`data_size` fields
+    // directly, which the public DecodedLinear struct doesn't expose. Ship
+    // this in the same commit that removes it once the real cause (a
+    // vcpkg-resolved LibRaw version drift is the leading suspect) is
+    // confirmed from a real Windows CI run's output.
+    eprintln!("EMULSION_DIAG decode_linear: {processed:?}, iter().count()={}", processed.iter().count());
     let rgb = processed.iter().map(|&v| v as f32 / 65535.0).collect();
 
     Ok(DecodedLinear { width, height, rgb })

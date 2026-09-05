@@ -1,6 +1,7 @@
 mod catalog;
 mod develop_engine;
 mod export;
+mod hdr_merge;
 mod import;
 mod jpeg_decode;
 mod lens_profile;

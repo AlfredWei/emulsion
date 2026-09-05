@@ -77,7 +77,7 @@ Per-frame global (x, y) pixel-offset alignment, computed on a luminance proxy (`
 
 1. **Median Threshold Bitmap**: threshold each luminance image at its own median value → a 1-bit-per-pixel bitmap. Thresholding at each image's *own* median (not a shared absolute threshold) is what makes this comparable across different exposures without needing the EV-scaling from §3.2 applied first — the whole point of Ward's technique.
 2. **Exclusion bitmap**: pixels within a small band of the median (e.g. ±4/255-equivalent) are excluded from the comparison — these are the pixels most likely to flip bits from sensor noise alone, which would otherwise inject false mismatches into the alignment search.
-3. **Image pyramid**: build a small stack of half-resolution downscales (reusing `image::imageops::resize`, `FilterType::Triangle` — matches the resize filter already used elsewhere in this codebase, e.g. `preview_cache.rs`) of the luminance buffer, coarsest last.
+3. **Image pyramid**: build a small stack of half-resolution downscales of the luminance buffer, coarsest last. The very first, arbitrary-ratio downscale (capping the long side to a fixed max before pyramid-building even starts) reuses `image::imageops::resize`/`FilterType::Triangle` (matches the resize filter already used elsewhere in this codebase, e.g. `preview_cache.rs`), but each subsequent exact-half halving inside the pyramid itself uses a plain, explicit 2×2 box average instead — a general resize filter's own sub-pixel sample-alignment convention turned out to introduce a small but consistent (not noise-like) bias that compounds across several halvings into a real integer-pixel alignment error, confirmed empirically during implementation. A box average has no such ambiguity: each output pixel is exactly the mean of one well-defined 2×2 input block, identically at every level.
 4. **Hierarchical search**: at the coarsest level, exhaustively search a small offset window (e.g. ±4px) around (0,0), scoring each candidate by counting `(bitmap_a XOR bitmap_b) AND NOT (exclusion_a OR exclusion_b)` set bits (fewer mismatches = better alignment) between the reference frame and the candidate frame. The winning offset is doubled and used as the search center for the next-finer level's own small window, refining down to full resolution. This is the standard MTB pyramid search (Ward, *"Fast, Robust Image Registration for Compositing High Dynamic Range Photographs from Hand-Held Exposures,"* 2003) — a well-established published technique, not a novel algorithm being designed from scratch here.
 
 The bracket member with EV closest to the group's median EV is chosen as the alignment reference (every other frame aligns to it) — an arbitrary-but-reasonable choice (avoids picking either extreme, which tend to have the least reliable midtone detail to align against).
@@ -90,11 +90,13 @@ For each output pixel, combine the aligned, EV-scaled linear radiance from every
 
 ```
 weight(z) = triangle function peaking at z = 0.5, zero at z <= 0.0 or z >= 1.0
-radiance_i(x, y) = decoded_linear_i(x - dx_i, y - dy_i) * 2^(-(ev_i - ev_ref))
+radiance_i(x, y) = decoded_linear_i(x - dx_i, y - dy_i) * 2^(ev_i - ev_ref)
 merged(x, y) = Σ_i [ weight(decoded_linear_i(x-dx_i, y-dy_i)) * radiance_i(x, y) ]
                ─────────────────────────────────────────────────────────────
                Σ_i [ weight(decoded_linear_i(x-dx_i, y-dy_i)) ]
 ```
+
+A HIGHER EV setting (bigger aperture number / faster shutter / lower ISO gain) admits LESS light, so for the same scene radiance its raw reading is SMALLER by a factor of `2^EV` — recovering a radiance-proportional value means multiplying back UP by `2^EV`, i.e. `2^(ev_i - ev_ref)`, not its inverse.
 
 The weight is evaluated on the **original, unscaled** decoded value (before EV-scaling) — this is what makes it a genuine "how reliable is this frame's data at this pixel" signal: a pixel near black in its own source frame carries little real signal above sensor noise floor regardless of that frame's EV, and a pixel near the sensor's own clipping ceiling carries no real information at all, in either case independent of how bright or dark that frame happens to be overall. An aligned-offset sample that falls outside a frame's bounds is excluded from that pixel's sum (frames don't need to fully overlap after alignment, just their shared region). If every frame's weight is zero at a given pixel (a genuinely all-clipped-or-all-black column across every bracket member, or an out-of-bounds edge strip after alignment where a majority of frames don't overlap), fall back to the single frame with weight closest to its own peak.
 

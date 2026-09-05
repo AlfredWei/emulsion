@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findCellByName, clickEl, openDevelopFor } from "../helpers.js";
+import { findCellByNameAnywhere, clickEl, openDevelopFor } from "../helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(__dirname, "../../../test_image/Field-corn-Liechtenstein-landscape.jpg");
@@ -15,6 +15,13 @@ const FIXTURE_NAME = "Field-corn-Liechtenstein-landscape";
  * rather than assuming the grid is otherwise empty, and tolerates the
  * "already in library" duplicate-import outcome. CI runners are always
  * fresh, so this never comes up there.
+ *
+ * Because that duplicate re-import never advances the fixture's
+ * `added_at`, and the Library grid sorts newest-first and is DOM-
+ * virtualized (LibraryGrid.svelte), the fixture's cell can end up outside
+ * the initially-rendered window once enough other imports (real photos,
+ * other e2e specs' fixtures) accumulate above it -- `findCellByNameAnywhere`
+ * (helpers.js) scrolls to find it wherever it currently sits.
  *
  * Native OS file/folder pickers (Import Files…, Export's destination
  * picker) are outside the webview and cannot be driven by WebDriver.
@@ -56,8 +63,19 @@ describe("Golden path: Import -> Library -> Develop -> Export", () => {
     // so a reload is needed for the Library grid to pick it up.
     await browser.refresh();
 
-    const cell = await findCellByName(FIXTURE_NAME);
-    await cell.waitForExist({ timeout: 20000 });
+    // Immediately after this refresh, the shared dev catalog's accumulated
+    // size (70+ images today) means the freshly-reloaded webview has many
+    // thumbnails to fetch over Tauri's asset protocol at once -- observed
+    // directly (via a temporary diagnostic spec) to make the WebDriver
+    // service's own internal "is the Tauri bridge back up yet" check
+    // (@wdio/tauri-service, logged as "Tauri core.invoke not available
+    // after 5s timeout") take up to ~20s to settle before the first
+    // WebdriverIO element command ($/.waitForExist/.isExisting) resolves
+    // at all. A 20s budget for findCellByNameAnywhere was entirely eaten
+    // by that one-time settle cost, leaving no time to actually scroll --
+    // a generous budget here absorbs both the settle and the search.
+    const cell = await findCellByNameAnywhere(FIXTURE_NAME, { timeout: 60000 });
+    await cell.waitForExist({ timeout: 5000 });
   });
 
   it("opens Develop, adjusts Exposure, and reflects the new value", async () => {

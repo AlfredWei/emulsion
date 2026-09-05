@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findCellByName, openDevelopFor } from "../helpers.js";
+import { findCellByNameAnywhere, openDevelopFor } from "../helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // A different fixture from golden-path.e2e.js's, purely to avoid the two
@@ -44,8 +44,15 @@ describe("Develop panel resize", () => {
     await browser.execute((key) => localStorage.removeItem(key), STORAGE_KEY);
     await browser.refresh();
 
-    const cell = await findCellByName(FIXTURE_NAME);
-    await cell.waitForExist({ timeout: 20000 });
+    // This fixture, like golden-path.e2e.js's, is a real repo file that's
+    // already cataloged from many earlier runs (a duplicate re-import
+    // doesn't advance `added_at`), so it can sink below the Library
+    // grid's DOM-virtualized window as the shared dev catalog accumulates
+    // more imports over time -- see findCellByNameAnywhere's own comment
+    // (helpers.js) for the full mechanism and the post-refresh timeout
+    // budget it needs.
+    const cell = await findCellByNameAnywhere(FIXTURE_NAME, { timeout: 60000 });
+    await cell.waitForExist({ timeout: 5000 });
     await openDevelopFor(FIXTURE_NAME);
 
     const historyRail = await $(".history-rail");

@@ -283,6 +283,10 @@ mod tests {
             return;
         };
         let bytes = std::fs::read(&sample_path).unwrap();
+        // See raw_decode::LIBRAW_LOCK's own comment -- LibRaw isn't safely
+        // reentrant across threads, and cargo test can run this
+        // concurrently with another gated real-RAW test.
+        let _raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
         let image = RawImage::open(&bytes).expect("real RAW sample should open");
 
         let metadata = extract_from_raw(&image);

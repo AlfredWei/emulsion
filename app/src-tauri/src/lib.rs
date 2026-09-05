@@ -11,6 +11,7 @@ mod print;
 mod raw_decode;
 mod soft_proof;
 mod source_decode;
+mod storage;
 
 use catalog::{
     BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, HistoryEntry, ImageKeywordAssignment,
@@ -19,7 +20,9 @@ use catalog::{
 use export::{ExportOptions, ExportResult};
 use import::{ImportProgress, ImportSummary};
 use preview_cache::DevelopPreviewInfo;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use storage::StorageInfo;
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -27,6 +30,27 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// (a single local catalog file, not per-window/per-command connections).
 struct AppState {
     catalog: Arc<Mutex<Catalog>>,
+}
+
+/// Resolves the directory thumbnails/previews are read from and written
+/// to right now: the user's Settings > Storage override
+/// (`storage::move_cache_dir`) if one is set, else the OS's own app-data
+/// directory. Called fresh on every command rather than cached, so a
+/// location change takes effect on the very next operation -- see
+/// `storage::move_cache_dir`'s own doc comment for the one narrow race
+/// this doesn't close.
+fn resolve_cache_root(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<PathBuf, String> {
+    let default_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let catalog = catalog.lock().map_err(|e| e.to_string())?;
+    storage::resolve_cache_root(&catalog, &default_dir).map_err(|e| e.to_string())
+}
+
+fn resolve_thumbnail_dir(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<PathBuf, String> {
+    Ok(resolve_cache_root(app, catalog)?.join("thumbnails"))
+}
+
+fn resolve_previews_dir(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<PathBuf, String> {
+    Ok(resolve_cache_root(app, catalog)?.join("previews"))
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -53,8 +77,7 @@ async fn import_folder(
     path: String,
 ) -> Result<ImportSummary, String> {
     let catalog = state.catalog.clone();
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let thumbnail_dir = app_data_dir.join("thumbnails");
+    let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
 
     let summary = {
         let catalog = catalog.clone();
@@ -74,20 +97,17 @@ async fn import_folder(
         .map_err(|e| e.to_string())?
     }?;
 
-    // Fire-and-forget: pre-generate Develop previews and backfill any
-    // missing thumbnails (M1 Slice 4 / M2 Slice 1, see preview_cache.rs /
-    // import.rs) for the whole catalog in the background, rather than
-    // making every Develop open pay for a fresh decode or leaving JPEG
-    // imports permanently thumbnail-less. Not awaited -- doesn't delay
-    // this command's response.
-    let previews_dir = app_data_dir.join("previews");
-    let thumbnail_dir_for_bg = app_data_dir.join("thumbnails");
-    let catalog_for_thumbs = catalog.clone();
+    // Fire-and-forget: pre-generate Develop previews for the whole catalog
+    // in the background, rather than making every Develop open pay for a
+    // fresh decode. Not awaited -- doesn't delay this command's response.
+    // Thumbnail backfill is a SEPARATE, explicitly-awaited step now (see
+    // `backfill_missing_thumbnails` below) -- the frontend's import
+    // progress bar stays up through that call too, so "import done" and
+    // "every thumbnail ready" are the same moment from the user's
+    // perspective, not "done" followed by an untracked silent wait.
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
     tauri::async_runtime::spawn_blocking(move || {
         preview_cache::pregenerate_missing(&catalog, &previews_dir);
-    });
-    tauri::async_runtime::spawn_blocking(move || {
-        import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir_for_bg);
     });
 
     Ok(summary)
@@ -105,8 +125,7 @@ async fn import_files(
     paths: Vec<String>,
 ) -> Result<ImportSummary, String> {
     let catalog = state.catalog.clone();
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let thumbnail_dir = app_data_dir.join("thumbnails");
+    let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
 
     let summary = {
         let catalog = catalog.clone();
@@ -127,17 +146,64 @@ async fn import_files(
         .map_err(|e| e.to_string())?
     }?;
 
-    let previews_dir = app_data_dir.join("previews");
-    let thumbnail_dir_for_bg = app_data_dir.join("thumbnails");
-    let catalog_for_thumbs = catalog.clone();
+    // See import_folder's own comment: preview pregeneration stays
+    // fire-and-forget, thumbnail backfill is now a separate awaited step.
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
     tauri::async_runtime::spawn_blocking(move || {
         preview_cache::pregenerate_missing(&catalog, &previews_dir);
     });
-    tauri::async_runtime::spawn_blocking(move || {
-        import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir_for_bg);
-    });
 
     Ok(summary)
+}
+
+/// Backfills thumbnails for every cataloged image that doesn't have one
+/// yet (import.rs's `generate_missing_thumbnails_with_progress`), emitting
+/// a `"thumbnail-progress"` event per image so the frontend's import
+/// progress bar can stay visible through this phase too -- previously this
+/// ran fire-and-forget from inside `import_folder`/`import_files` with no
+/// progress signal at all, so the progress bar disappeared the moment
+/// cataloging finished even though freshly-imported JPEGs could still be
+/// blank placeholders in the Library grid for a while longer. Called
+/// explicitly by the frontend right after `import_folder`/`import_files`
+/// resolves, and awaited -- once THIS command's promise resolves, every
+/// thumbnail that import's own batch needed is on disk.
+///
+/// Scoped to `import_batch` (`ImportSummary::import_batch`, the batch id
+/// that import's own images were tagged with) rather than the whole
+/// catalog -- see `generate_missing_thumbnails_with_progress`'s own doc
+/// comment for the real backlog this scoping was found to matter for: an
+/// unrelated pre-existing backlog elsewhere in the catalog must never make
+/// an unrelated NEW import's own progress bar wait on it.
+#[tauri::command]
+async fn backfill_missing_thumbnails(app: AppHandle, state: State<'_, AppState>, import_batch: i64) -> Result<(), String> {
+    let catalog = state.catalog.clone();
+    let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        import::generate_missing_thumbnails_with_progress(&catalog, &thumbnail_dir, Some(import_batch), |current, total| {
+            let _ = app.emit("thumbnail-progress", ImportProgress { current, total });
+        });
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// On-demand "jump the queue" thumbnail generation for one image (see
+/// import.rs's `ensure_thumbnail` for the full reasoning): called when the
+/// frontend opens Loupe or Develop on a photo whose `thumbnail_path` is
+/// still null, so that photo's own thumbnail exists as soon as possible
+/// regardless of how far behind it the background backfill pass is.
+/// Returns the thumbnail path (freshly generated, or already-present if
+/// the backfill pass got there first) so the frontend can patch its local
+/// image list without a full `list_images()` round trip.
+#[tauri::command]
+async fn ensure_thumbnail(app: AppHandle, state: State<'_, AppState>, version_id: i64) -> Result<Option<String>, String> {
+    let catalog = state.catalog.clone();
+    let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
+
+    tauri::async_runtime::spawn_blocking(move || import::ensure_thumbnail(&catalog, version_id, &thumbnail_dir))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Backs the "Import Files…" picker dialog's filter list (M2 Slice 1) --
@@ -236,11 +302,7 @@ async fn remove_images(
     image_ids: Vec<i64>,
 ) -> Result<(), String> {
     let catalog = state.catalog.clone();
-    let previews_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("previews");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let removed = {
@@ -311,10 +373,13 @@ async fn merge_hdr_bracket(
     }
 
     let catalog = state.catalog.clone();
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let merges_dir = app_data_dir.join("merges");
-    let previews_dir = app_data_dir.join("previews");
-    let thumbnail_dir = app_data_dir.join("thumbnails");
+    // merges_dir holds real, irreplaceable output (a merge result IS the
+    // image, not a regenerable cache of one) -- stays in the fixed
+    // app-data location, unlike thumbnails/previews below (Settings >
+    // Storage, resolve_thumbnail_dir/resolve_previews_dir).
+    let merges_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("merges");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
 
     let result_image_id = tauri::async_runtime::spawn_blocking({
         let catalog = catalog.clone();
@@ -569,14 +634,11 @@ fn list_collection_image_ids(state: State<'_, AppState>, collection_id: i64) -> 
 #[tauri::command]
 async fn get_develop_preview(
     app: AppHandle,
+    state: State<'_, AppState>,
     path: String,
     content_hash: Option<String>,
 ) -> Result<DevelopPreviewInfo, String> {
-    let previews_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("previews");
+    let previews_dir = resolve_previews_dir(&app, &state.catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         // user_message(), not to_string() -- a missing/moved/offline
@@ -607,14 +669,11 @@ async fn get_develop_preview(
 #[tauri::command]
 async fn get_develop_full_preview(
     app: AppHandle,
+    state: State<'_, AppState>,
     path: String,
     content_hash: Option<String>,
 ) -> Result<DevelopPreviewInfo, String> {
-    let previews_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("previews");
+    let previews_dir = resolve_previews_dir(&app, &state.catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         // user_message(), not to_string() -- same reasoning as
@@ -649,7 +708,7 @@ async fn get_graded_develop_preview(
     version_id: i64,
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
-    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let (source, stack) = {
@@ -687,7 +746,7 @@ async fn get_soft_proof_preview(
     settings: soft_proof::SoftProofSettings,
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
-    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let (source, stack) = {
@@ -806,7 +865,7 @@ async fn preview_history_entry(
     content_hash: Option<String>,
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
-    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let stack = {
@@ -837,7 +896,7 @@ async fn preview_snapshot(
     content_hash: Option<String>,
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
-    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let stack = {
@@ -866,11 +925,12 @@ async fn preview_snapshot(
 #[tauri::command]
 async fn preview_edit_stack(
     app: AppHandle,
+    state: State<'_, AppState>,
     path: String,
     content_hash: Option<String>,
     stack: EditStack,
 ) -> Result<DevelopPreviewInfo, String> {
-    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+    let previews_dir = resolve_previews_dir(&app, &state.catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         preview_cache::ensure_graded_preview_for_hash(
@@ -989,9 +1049,8 @@ fn export_preset_file(name: String, stack: EditStack, path: String) -> Result<()
 #[tauri::command]
 async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, version_id: i64) -> Result<Option<String>, String> {
     let catalog = state.catalog.clone();
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let previews_dir = app_data_dir.join("previews");
-    let thumbnail_dir = app_data_dir.join("thumbnails");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let (source, stack) = {
@@ -1079,7 +1138,7 @@ async fn get_print_ready_images(
     color_management: print::PrintColorManagement,
 ) -> Result<Vec<print::PrintReadyResult>, String> {
     let catalog = state.catalog.clone();
-    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         // A version_id whose source can't be resolved (deleted from the
@@ -1136,7 +1195,7 @@ struct PrintPdfRequest {
 #[tauri::command]
 async fn export_print_pdf(app: AppHandle, state: State<'_, AppState>, request: PrintPdfRequest) -> Result<(), String> {
     let catalog = state.catalog.clone();
-    let previews_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("previews");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let resolved = {
@@ -1177,6 +1236,36 @@ fn update_backup_settings(state: State<'_, AppState>, settings: BackupSettings) 
         .map_err(|e| e.to_string())?
         .update_backup_settings(&settings)
         .map_err(|e| e.to_string())
+}
+
+/// Settings > Storage: reports where thumbnails + the Develop preview
+/// cache currently live (the user's override if one is set, else the
+/// default) and how much disk space each is using -- the two facts the
+/// Storage settings tab needs to render (PRD's underlying motivation:
+/// these are the two caches most likely to grow into real GBs on a large
+/// library, unlike the catalog database itself).
+#[tauri::command]
+fn get_storage_info(app: AppHandle, state: State<'_, AppState>) -> Result<StorageInfo, String> {
+    let default_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    storage::get_storage_info(&catalog, &default_dir)
+}
+
+/// Moves existing thumbnails + preview-cache files to `new_dir` (or back
+/// to the default app-data location if `new_dir` is `None`), rewrites the
+/// catalog's stored thumbnail paths to match, and persists the choice --
+/// see `storage::move_cache_dir`'s own doc comment for the full mechanics
+/// and the one narrow race it doesn't close. `spawn_blocking`: this walks
+/// and copies real files, potentially many, not a small metadata update.
+#[tauri::command]
+async fn set_cache_dir(app: AppHandle, state: State<'_, AppState>, new_dir: Option<String>) -> Result<StorageInfo, String> {
+    let catalog = state.catalog.clone();
+    let default_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        storage::move_cache_dir(&catalog, &default_dir, new_dir.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Catalog backup (PRD §7.6). `spawn_blocking`, matching `export_images` --
@@ -1364,8 +1453,15 @@ pub fn run() {
             // before these features existed, or left un-pregenerated by an
             // interrupted previous run. Cheap in steady state, fire-and-
             // forget so startup itself isn't delayed.
-            let previews_dir = app_data_dir.join("previews");
-            let thumbnail_dir = app_data_dir.join("thumbnails");
+            // Settings > Storage override, if the user set one on a
+            // previous run -- same resolver every other command uses.
+            // (resolve_*_dir return `Result<_, String>` for command call
+            // sites; `io::Error::other` bridges to this hook's own
+            // `Box<dyn Error>` return type.)
+            let previews_dir =
+                resolve_previews_dir(app.handle(), &catalog).map_err(std::io::Error::other)?;
+            let thumbnail_dir =
+                resolve_thumbnail_dir(app.handle(), &catalog).map_err(std::io::Error::other)?;
             let catalog_for_previews = catalog.clone();
             let catalog_for_thumbs = catalog.clone();
             tauri::async_runtime::spawn_blocking(move || {
@@ -1383,6 +1479,8 @@ pub fn run() {
             report_spike_result,
             import_folder,
             import_files,
+            backfill_missing_thumbnails,
+            ensure_thumbnail,
             get_supported_extensions,
             list_images,
             set_rating,
@@ -1435,6 +1533,8 @@ pub fn run() {
             export_images,
             get_backup_settings,
             update_backup_settings,
+            get_storage_info,
+            set_cache_dir,
             perform_catalog_backup,
         ])
         .run(tauri::generate_context!())

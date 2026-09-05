@@ -43,6 +43,8 @@
     importFolder,
     importFiles,
     getSupportedExtensions,
+    backfillMissingThumbnails,
+    ensureThumbnail,
     listImages,
     setRating,
     setFlag,
@@ -181,8 +183,20 @@
   // Populated from the backend's "import-progress" event (lib.rs's
   // import_folder/import_files -- see the listener setup below) while
   // `importing` is true; null before the first event of a given import
-  // arrives (e.g. a large folder still being walked) or once it finishes.
+  // arrives (e.g. a large folder still being walked) or once the cataloging
+  // phase finishes and the thumbnail-backfill phase (thumbnailProgress,
+  // below) takes over.
   let importProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
+  // Populated from "thumbnail-progress" (lib.rs's backfill_missing_thumbnails)
+  // while runImport awaits that call -- the SECOND phase of the same
+  // progress bar, shown after importProgress's cataloging phase completes.
+  // `importing` stays true through both phases so "import done" and
+  // "every thumbnail ready" read as the same moment, not "done" followed
+  // by an untracked silent wait.
+  let thumbnailProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
+  // Which of the two runImport phases the progress bar should currently
+  // describe -- switched to "thumbnails" once cataloging resolves.
+  let importPhase = $state(/** @type {"cataloging" | "thumbnails"} */ ("cataloging"));
   let statusMessage = $state("");
   // M3 Slice 1: general Settings dialog, app-level (not module-scoped, so
   // it's not gated on activeModule like Export/Remove are).
@@ -1602,22 +1616,22 @@
     images = await listImages();
   }
 
-  // Thumbnail generation for a freshly-imported JPEG (and the RAW backstop
-  // path) runs as a fire-and-forget background pass on the Rust side (see
-  // import.rs's generate_missing_thumbnails) -- it is NOT part of the
-  // import command's own response, so the one-shot refresh() right after
-  // import can only ever show the pre-generation state (thumbnail_path:
-  // NULL). Nothing else ever tells this component to look again, so
-  // without this, a just-imported photo's grid cell stays a blank
-  // placeholder for the rest of the session, even once the backend has
-  // long since finished. Bounded polling (not an open-ended interval) so a
-  // permanently-stuck thumbnail (a real decode failure) doesn't poll
-  // forever -- it just stops trying and leaves the placeholder, which is
-  // the correct outcome in that case.
-  let pollingThumbnails = false;
-  async function pollUntilThumbnailsReady() {
-    if (pollingThumbnails) return;
-    pollingThumbnails = true;
+  // App-startup catch-up ONLY (see the onMount call below) -- lib.rs's
+  // .setup() runs its own fire-and-forget, non-progress-reporting
+  // generate_missing_thumbnails pass once at launch, independent of
+  // anything this component drives. Calling backfillMissingThumbnails()
+  // here too would start a SECOND, fully redundant full-catalog scan
+  // racing the first (both would see the same "missing" candidates before
+  // either finishes writing), so this stays a plain bounded poll that
+  // just waits for .setup()'s own pass to catch up and re-refresh()es --
+  // no progress bar, since this isn't a user-initiated action. Bounded
+  // (not an open-ended interval) so a permanently-stuck thumbnail (a real
+  // decode failure) doesn't poll forever -- it just stops trying and
+  // leaves the placeholder, which is the correct outcome in that case.
+  let pollingThumbnailsOnStartup = false;
+  async function pollUntilThumbnailsReadyOnStartup() {
+    if (pollingThumbnailsOnStartup) return;
+    pollingThumbnailsOnStartup = true;
     try {
       const maxAttempts = 10;
       const intervalMs = 1500;
@@ -1627,8 +1641,33 @@
         await refresh();
       }
     } finally {
-      pollingThumbnails = false;
+      pollingThumbnailsOnStartup = false;
     }
+  }
+
+  /** "Jump the queue" for one image's thumbnail (import.rs's
+   * `ensure_thumbnail`): called wherever the user opens a specific photo
+   * to view it (Loupe, Develop) so that photo's own Library-grid
+   * thumbnail exists as soon as possible, regardless of how far behind it
+   * the background backfill pass (backfillMissingThumbnails, below) is --
+   * previously a photo near the end of a large just-imported folder could
+   * sit behind hundreds of others in that pass's strict FIFO order even
+   * after the user had already looked right at it. Only calls the backend
+   * at all when there's actually a gap to close (`thumbnail_path` is
+   * still null) -- the common case (already has one) stays a pure local
+   * lookup, no IPC round trip. Fire-and-forget: never blocks entering
+   * Loupe/Develop, which already render the real pixels via
+   * getGradedDevelopPreview independent of `thumbnail_path` -- this only
+   * fixes how long the GRID CELL (and filmstrip) keep showing a blank
+   * placeholder for a photo that's already been viewed. */
+  function prioritizeThumbnail(/** @type {number} */ versionId) {
+    const image = images.find((img) => img.version_id === versionId);
+    if (!image || image.thumbnail_path !== null) return;
+    ensureThumbnail(versionId)
+      .then((thumbnailPath) => {
+        if (thumbnailPath) patchLocal(versionId, { thumbnail_path: thumbnailPath });
+      })
+      .catch(() => {});
   }
 
   /** @type {string[] | null} */
@@ -1637,18 +1676,35 @@
   async function runImport(/** @type {() => Promise<import('$lib/api/catalog.js').ImportSummary | null>} */ doImport) {
     importing = true;
     importProgress = null;
+    thumbnailProgress = null;
+    importPhase = "cataloging";
     statusMessage = "";
     try {
       const summary = await doImport();
       if (!summary) return; // user cancelled the dialog
       statusMessage = `Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`;
       await refresh();
-      pollUntilThumbnailsReady();
+      // Cataloging (importProgress, tracked above) is only half of "import
+      // done" from the user's perspective -- a freshly-imported JPEG has
+      // no thumbnail yet at this point (see import.rs's own comment on
+      // why). Awaiting this (rather than the old fire-and-forget +
+      // untracked polling) means the progress bar stays up, with real
+      // per-image feedback, until the Library grid genuinely has nothing
+      // left to backfill (scoped to THIS import's own batch, not the
+      // whole catalog -- see backfillMissingThumbnails's own doc comment).
+      // importPhase switches the progress bar's label over to the
+      // thumbnail count -- importProgress itself is left as whatever it
+      // last was (100%), not cleared, so there's no momentary "0 / 0"
+      // flash between the two phases.
+      importPhase = "thumbnails";
+      await backfillMissingThumbnails(summary.import_batch);
+      await refresh();
     } catch (/** @type {any} */ e) {
       statusMessage = `Import failed: ${e}`;
     } finally {
       importing = false;
       importProgress = null;
+      thumbnailProgress = null;
     }
   }
 
@@ -1996,11 +2052,19 @@
     try {
       const resultImageId = await mergeHdrBracket(imageIds);
       await refresh();
-      pollUntilThumbnailsReady();
       const merged = images.find((img) => img.image_id === resultImageId);
       if (merged) {
         selectedId = merged.version_id;
         selectedIds = new Set([merged.version_id]);
+        // A merge result isn't tagged with an import_batch (it's not from
+        // import_paths_with_progress), so backfillMissingThumbnails'
+        // batch-scoping doesn't apply here -- prioritizeThumbnail's
+        // single-image ensure_thumbnail path is the right tool for
+        // exactly one new image anyway, same as opening Loupe/Develop.
+        // Fire-and-forget, same as the old blind-poll helper this
+        // replaces -- doesn't block this function's own status/selection
+        // update on the merge result's thumbnail.
+        prioritizeThumbnail(merged.version_id);
       }
       statusMessage = `Merged ${imageIds.length} photos into one HDR image`;
     } catch (/** @type {any} */ e) {
@@ -2444,6 +2508,7 @@
     regenerateThumbnailFor(previousVersionId);
     const image = images.find((img) => img.version_id === versionId);
     if (!image) return;
+    prioritizeThumbnail(versionId);
     developVersionId = versionId;
     developImagePath = image.path;
     // Cleared, not left stale, on every open -- the new image's own real
@@ -3002,7 +3067,7 @@
     // / import::generate_missing_thumbnails, both run once in lib.rs's
     // .setup()): this refresh() races against that pass the same way an
     // import's own refresh() races against its own background trigger.
-    refresh().then(pollUntilThumbnailsReady);
+    refresh().then(pollUntilThumbnailsReadyOnStartup);
     refreshCollections();
     refreshPresets();
     listAllImageKeywords().then((assignments) => (allImageKeywords = assignments));
@@ -3138,11 +3203,27 @@
       // ignore outside Tauri
     }
 
+    // Thumbnail-backfill progress bar, second phase of the same bar
+    // (runImport awaits backfillMissingThumbnails right after import
+    // itself resolves) -- lib.rs's backfill_missing_thumbnails emits this
+    // once per image via generate_missing_thumbnails_with_progress.
+    let unlistenThumbnailProgress = /** @type {(() => void) | undefined} */ (undefined);
+    try {
+      listen("thumbnail-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
+        thumbnailProgress = event.payload;
+      }).then((fn) => {
+        unlistenThumbnailProgress = fn;
+      });
+    } catch {
+      // ignore outside Tauri
+    }
+
     return () => {
       unlistenClose?.();
       unlistenDragDrop?.();
       unlistenMenu?.();
       unlistenImportProgress?.();
+      unlistenThumbnailProgress?.();
       window.removeEventListener("shortcuts-updated", onShortcutsUpdated);
     };
   });
@@ -3390,19 +3471,24 @@
   {/if}
 
   {#if importing}
+    {@const progress = importPhase === "thumbnails" ? thumbnailProgress : importProgress}
     <div
       class="import-progress"
       role="progressbar"
-      aria-valuenow={importProgress?.current ?? 0}
+      aria-valuenow={progress?.current ?? 0}
       aria-valuemin="0"
-      aria-valuemax={importProgress?.total ?? 0}
+      aria-valuemax={progress?.total ?? 0}
     >
       <div
         class="import-progress-bar"
-        style={`width: ${importProgress && importProgress.total > 0 ? (importProgress.current / importProgress.total) * 100 : 0}%`}
+        style={`width: ${progress && progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%`}
       ></div>
       <span class="import-progress-label">
-        {importProgress ? `Importing ${importProgress.current} / ${importProgress.total}…` : "Importing…"}
+        {#if importPhase === "thumbnails"}
+          {progress ? `Generating thumbnails ${progress.current} / ${progress.total}…` : "Finishing up…"}
+        {:else}
+          {progress ? `Importing ${progress.current} / ${progress.total}…` : "Importing…"}
+        {/if}
       </span>
     </div>
   {:else if statusMessage}
@@ -3557,6 +3643,7 @@
                 selectedId = vid;
                 selectedIds = new Set([vid]);
                 libraryViewMode = "loupe";
+                prioritizeThumbnail(vid);
               }}
               onRatingChange={handleRatingChange}
               onFlagChange={handleFlagChange}

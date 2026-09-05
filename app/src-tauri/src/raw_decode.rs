@@ -9,6 +9,27 @@
 use crate::source_decode::DecodedPreview;
 use rsraw::{RawImage, BIT_DEPTH_16, BIT_DEPTH_8};
 use std::path::Path;
+use std::sync::Mutex;
+
+/// LibRaw is documented as not safely reentrant across threads: parts of
+/// its internal processing (inherited from the legacy dcraw core it wraps)
+/// rely on non-thread-local state that concurrent decodes can corrupt.
+/// This was the first hypothesis for a real Windows CI failure where a
+/// `decode_linear()` buffer came back at exactly half the expected size --
+/// that turned out to actually be caused by a vcpkg-resolved LibRaw
+/// version mismatch with the vendored header the FFI bindings are
+/// generated from (see ci.yml's libraw vcpkg-install step), not a race;
+/// this lock didn't fix that particular bug. It's kept anyway because the
+/// underlying non-reentrancy is real and independently documented, and
+/// several real call sites do run LibRaw concurrently: `import.rs`'s
+/// embedded-thumbnail extraction during import runs on its own
+/// `spawn_blocking` task and can race a `decode()`/`decode_linear()` call
+/// from a concurrent Develop preview, HDR merge, or (since this project's
+/// on-demand priority-thumbnail feature) an `ensure_thumbnail` call
+/// deliberately racing a background backfill pass. Every real LibRaw call
+/// anywhere in this crate must take this lock, not just the two functions
+/// below.
+pub(crate) static LIBRAW_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
@@ -26,6 +47,7 @@ pub enum DecodeError {
 
 fn decode(path: &Path, half_size: bool) -> Result<DecodedPreview, DecodeError> {
     let bytes = std::fs::read(path)?;
+    let _guard = LIBRAW_LOCK.lock().unwrap();
 
     let mut image = RawImage::open(&bytes).map_err(|e| DecodeError::LibRaw(e.to_string()))?;
     image.set_half_size(half_size);
@@ -85,6 +107,7 @@ pub struct DecodedLinear {
 
 pub fn decode_linear(path: &Path) -> Result<DecodedLinear, DecodeError> {
     let bytes = std::fs::read(path)?;
+    let _guard = LIBRAW_LOCK.lock().unwrap();
 
     let mut image = RawImage::open(&bytes).map_err(|e| DecodeError::LibRaw(e.to_string()))?;
     // Fixed (not auto) white balance so color stays consistent frame-to-

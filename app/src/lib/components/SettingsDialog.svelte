@@ -1,6 +1,7 @@
 <script>
   import { open } from "@tauri-apps/plugin-dialog";
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
+  import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
   import {
     getStoredShortcuts,
     saveStoredShortcuts,
@@ -15,12 +16,17 @@
    */
   let { open: isOpen, onClose } = $props();
 
-  let activeTab = $state(/** @type {"backup" | "shortcuts"} */ ("shortcuts"));
+  let activeTab = $state(/** @type {"backup" | "shortcuts" | "storage"} */ ("shortcuts"));
 
   // Backup settings state
   let settings = $state(/** @type {import('$lib/api/backup.js').BackupSettings | null} */ (null));
   let backingUp = $state(false);
   let backupError = $state("");
+
+  // Storage settings state
+  let storageInfo = $state(/** @type {import('$lib/api/storage.js').StorageInfo | null} */ (null));
+  let movingCache = $state(false);
+  let storageError = $state("");
 
   // Shortcuts settings state
   let shortcuts = $state(getStoredShortcuts());
@@ -30,10 +36,12 @@
   $effect(() => {
     if (isOpen) {
       backupError = "";
+      storageError = "";
       shortcutConflictMessage = "";
       recordingId = null;
       shortcuts = getStoredShortcuts();
       getBackupSettings().then((s) => (settings = s));
+      getStorageInfo().then((s) => (storageInfo = s));
     }
   });
 
@@ -63,6 +71,40 @@
       backupError = `Backup failed: ${e}`;
     } finally {
       backingUp = false;
+    }
+  }
+
+  /** Human-readable size, matching a scale a user actually cares about
+   * for cache cleanup decisions (MB/GB, not raw byte counts). */
+  function formatBytes(/** @type {number} */ bytes) {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+
+  async function handlePickCacheDir() {
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir) return;
+    movingCache = true;
+    storageError = "";
+    try {
+      storageInfo = await setCacheDir(/** @type {string} */ (dir));
+    } catch (/** @type {any} */ e) {
+      storageError = `Couldn't move thumbnails/previews to that folder: ${e}`;
+    } finally {
+      movingCache = false;
+    }
+  }
+
+  async function handleResetCacheDir() {
+    movingCache = true;
+    storageError = "";
+    try {
+      storageInfo = await setCacheDir(null);
+    } catch (/** @type {any} */ e) {
+      storageError = `Couldn't move thumbnails/previews back to the default location: ${e}`;
+    } finally {
+      movingCache = false;
     }
   }
 
@@ -159,6 +201,14 @@
             onclick={() => (activeTab = "backup")}
           >
             Backup
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            class:active={activeTab === "storage"}
+            onclick={() => (activeTab = "storage")}
+          >
+            Storage
           </button>
         </div>
       </div>
@@ -257,6 +307,45 @@
 
           {#if backupError}
             <div class="status">{backupError}</div>
+          {/if}
+        </section>
+      {:else if activeTab === "storage" && storageInfo}
+        <section class="backup-section">
+          <div class="row">
+            <span class="label">Thumbnails &amp; preview cache location</span>
+            <button class="folder-btn" type="button" onclick={handlePickCacheDir} disabled={movingCache}>
+              {storageInfo.effective_dir}
+            </button>
+          </div>
+
+          <div class="storage-usage">
+            <div class="storage-usage-row">
+              <span>Thumbnails</span>
+              <span class="storage-usage-value">{formatBytes(storageInfo.thumbnails_bytes)}</span>
+            </div>
+            <div class="storage-usage-row">
+              <span>Preview cache</span>
+              <span class="storage-usage-value">{formatBytes(storageInfo.previews_bytes)}</span>
+            </div>
+          </div>
+
+          <p class="storage-note">
+            Choosing a new folder moves existing thumbnails and previews there right away, so space is reclaimed on
+            the old drive immediately. Both are safe to move or clear -- they're regenerated automatically as needed.
+          </p>
+
+          <div class="backup-now-row">
+            {#if storageInfo.cache_dir}
+              <button class="secondary" type="button" onclick={handleResetCacheDir} disabled={movingCache}>
+                {movingCache ? "Moving…" : "Reset to Default Location"}
+              </button>
+            {:else if movingCache}
+              <span class="last-backup">Moving…</span>
+            {/if}
+          </div>
+
+          {#if storageError}
+            <div class="status">{storageError}</div>
           {/if}
         </section>
       {/if}
@@ -497,6 +586,33 @@
     color: var(--text-secondary);
     word-break: break-word;
   }
+  .storage-usage {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    padding: 6px 10px;
+  }
+  .storage-usage-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    padding: 3px 0;
+  }
+  .storage-usage-value {
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .storage-note {
+    margin: 0;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--text-tertiary);
+  }
   .actions {
     display: flex;
     justify-content: flex-end;
@@ -515,7 +631,8 @@
     border-radius: 6px;
   }
   .actions button:disabled,
-  .backup-now-row button:disabled {
+  .backup-now-row button:disabled,
+  .folder-btn:disabled {
     opacity: 0.6;
     cursor: default;
   }

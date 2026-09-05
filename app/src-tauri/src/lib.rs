@@ -270,6 +270,144 @@ async fn remove_images(
     .map_err(|e| e.to_string())?
 }
 
+/// HDR merge (M5, RFC-0003): merges `image_ids` (>= 2, all RAW, in the
+/// caller's own bracket order) into one radiometrically-merged, tone-
+/// mapped JPEG, cataloged as a new image with `hdr_merge_sources`
+/// provenance rows (§3.6). `hdr_merge.rs` itself has no catalog
+/// dependency -- this command is the bridge: resolve each id's path/EXIF
+/// from the catalog, run the pure pixel pipeline, then write the result
+/// and its provenance back. Runs on a blocking thread: linear-decoding
+/// several full-resolution RAW files plus the alignment/merge pipeline is
+/// real CPU work, the same class of cost as import's own RAW decode path.
+/// The RAW-only check happens before any decode is attempted, matching
+/// `hdr_merge::merge_bracket`'s own "reject fast on a known-bad input set"
+/// ordering for its EV check.
+///
+/// The result is written to a NEW, content-hashed file under an
+/// app-managed `merges` directory (mirroring `thumbnails`/`previews`) and
+/// cataloged exactly like a JPEG import: `thumbnail_path` stays NULL, so
+/// the existing background `generate_missing_thumbnails` pass picks it up
+/// with no special-casing needed here.
+#[tauri::command]
+async fn merge_hdr_bracket(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    image_ids: Vec<i64>,
+) -> Result<i64, String> {
+    if image_ids.len() < 2 {
+        return Err(format!("HDR merge needs at least 2 images, got {}", image_ids.len()));
+    }
+
+    let catalog = state.catalog.clone();
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let merges_dir = app_data_dir.join("merges");
+    let previews_dir = app_data_dir.join("previews");
+    let thumbnail_dir = app_data_dir.join("thumbnails");
+
+    let result_image_id = tauri::async_runtime::spawn_blocking({
+        let catalog = catalog.clone();
+        move || -> Result<i64, String> {
+            let inputs: Vec<hdr_merge::BracketInput> = {
+                let catalog = catalog.lock().map_err(|e| e.to_string())?;
+                image_ids
+                    .iter()
+                    .map(|&id| {
+                        let info = catalog
+                            .get_image_exposure_info(id)
+                            .map_err(|e| e.to_string())?
+                            .ok_or_else(|| format!("image {id} not found in catalog"))?;
+                        let path = std::path::PathBuf::from(&info.path);
+                        if source_decode::ImageFormat::from_path(&path) != Some(source_decode::ImageFormat::Raw) {
+                            return Err(format!("HDR merge requires RAW files; {} is not RAW", info.path));
+                        }
+                        Ok(hdr_merge::BracketInput {
+                            path,
+                            iso: info.iso,
+                            aperture: info.aperture,
+                            shutter_speed: info.shutter_speed,
+                        })
+                    })
+                    .collect::<Result<_, String>>()?
+            };
+
+            let merged = hdr_merge::merge_bracket(&inputs).map_err(|e| e.to_string())?;
+
+            std::fs::create_dir_all(&merges_dir).map_err(|e| e.to_string())?;
+            // Save-then-hash-then-rename: the encoded JPEG bytes ARE this
+            // image's content, so (unlike every other content_hash in this
+            // codebase, hashed from a pre-existing source file) there's no
+            // hash to compute before the encode happens. A nanosecond-
+            // timestamped temp name keeps concurrent merges from colliding
+            // before the final content-hashed rename.
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let tmp_path = merges_dir.join(format!("tmp-{nanos}.jpg"));
+            merged.image.save(&tmp_path).map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(&tmp_path).map_err(|e| e.to_string())?;
+            let content_hash = blake3::hash(&bytes).to_hex().to_string();
+            let out_path = merges_dir.join(format!("{content_hash}.jpg"));
+            std::fs::rename(&tmp_path, &out_path).map_err(|e| e.to_string())?;
+
+            let result_metadata = metadata::ImageMetadata {
+                width: Some(merged.image.width()),
+                height: Some(merged.image.height()),
+                ..metadata::ImageMetadata::default()
+            };
+
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            let result_image_id = catalog
+                .add_image_with_edit_stack(
+                    &out_path.to_string_lossy(),
+                    &content_hash,
+                    bytes.len() as i64,
+                    &EditStack::empty(),
+                    &result_metadata,
+                )
+                .map_err(|e| e.to_string())?;
+
+            // `ev_offset` is relative to the reference frame (`ev_i -
+            // ev_ref`), not each frame's own absolute EV -- the same
+            // quantity `hdr_merge::merge_radiance` actually exponentiates
+            // to build its radiometric scale factor, so this is the
+            // number that explains *why* the merge weighted each source
+            // the way it did, not just each source's own camera settings
+            // (independently recoverable from its own `images` row
+            // anyway).
+            let reference_ev = merged.evs[merged.reference_idx];
+            let sources: Vec<(i64, i32, f32, i32, i32)> = image_ids
+                .iter()
+                .enumerate()
+                .map(|(i, &source_id)| {
+                    let (dx, dy) = merged.offsets[i];
+                    (source_id, i as i32, merged.evs[i] - reference_ev, dx, dy)
+                })
+                .collect();
+            catalog
+                .add_hdr_merge_sources(result_image_id, &sources)
+                .map_err(|e| e.to_string())?;
+
+            Ok(result_image_id)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Same backstop as import_files: fills in the new image's thumbnail
+    // (and, opportunistically, anything else missing) in the background
+    // rather than blocking this command's own return on it.
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_cache::pregenerate_missing(&catalog, &previews_dir);
+    });
+    let catalog_for_thumbs = state.catalog.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir);
+    });
+
+    Ok(result_image_id)
+}
+
 /// Keywording (M2 Slice 4). Resolves (creating any missing level) a
 /// hierarchical keyword path and assigns the leaf to every image in
 /// `image_ids` -- batches across a multi-selection in one call. Returns
@@ -1243,6 +1381,7 @@ pub fn run() {
             set_contact,
             set_geo_location,
             remove_images,
+            merge_hdr_bracket,
             assign_keyword_path,
             remove_keyword_from_image,
             get_image_keywords,

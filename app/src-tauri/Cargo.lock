@@ -3585,8 +3585,6 @@ dependencies = [
 [[package]]
 name = "rsraw"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30a157a9eba721fbbac42c3a8dcf8b39e63420b17e10390623eb071be59effda"
 dependencies = [
  "chrono",
  "rsraw-sys",

@@ -201,6 +201,16 @@ pub struct VersionSource {
     pub content_hash: Option<String>,
 }
 
+/// Internal to the Rust command layer only (HDR merge, M5) -- never
+/// returned to the frontend. See `get_image_exposure_info`.
+#[derive(Debug, Clone)]
+pub struct ImageExposureInfo {
+    pub path: String,
+    pub iso: Option<u32>,
+    pub aperture: Option<f32>,
+    pub shutter_speed: Option<f32>,
+}
+
 /// Catalog backup preferences (PRD §7.6), round-tripped from the `settings`
 /// key/value table. `last_backup_at` is the due-ness clock: absent means
 /// "never backed up", present is an ISO datetime string the frontend
@@ -556,6 +566,26 @@ impl Catalog {
                 edit_stack_json TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            -- HDR merge (M5, RFC-0003 §3.6): pure provenance -- which
+            -- originals fed a merge, in what order, with what computed
+            -- alignment/EV -- never consulted by any render path. New
+            -- modeling, not a repurposing of `images.stack_id` (confirmed
+            -- unused/unimplemented anywhere) or `image_versions.is_virtual_copy`
+            -- (confirmed to mean 'multiple edit stacks over one file', the
+            -- opposite relationship from 'one file derived from many').
+            -- `source_image_id` deliberately has no FK/CASCADE of its own:
+            -- a source image being removed later shouldn't silently delete
+            -- the *other* provenance rows for the same merge result.
+            CREATE TABLE IF NOT EXISTS hdr_merge_sources (
+                result_image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                source_image_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                ev_offset REAL NOT NULL,
+                dx INTEGER NOT NULL,
+                dy INTEGER NOT NULL,
+                PRIMARY KEY (result_image_id, source_image_id)
+            );
             ",
         )?;
 
@@ -767,6 +797,69 @@ impl Catalog {
             .optional()
     }
 
+    /// One image's path + exposure fields, resolved by id -- the catalog-
+    /// side half of building an `hdr_merge::BracketInput` (RFC-0003 §3.6);
+    /// `hdr_merge.rs` itself has no catalog dependency (see that module's
+    /// own header comment), so the Tauri command layer (`lib.rs`) is what
+    /// bridges the two, calling this once per selected image id.
+    pub fn get_image_exposure_info(&self, image_id: i64) -> Result<Option<ImageExposureInfo>> {
+        self.conn
+            .query_row(
+                "SELECT path, iso, aperture, shutter_speed FROM images WHERE id = ?1",
+                params![image_id],
+                |row| {
+                    Ok(ImageExposureInfo {
+                        path: row.get(0)?,
+                        iso: row.get(1)?,
+                        aperture: row.get(2)?,
+                        shutter_speed: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Records one `hdr_merge_sources` provenance row per bracket member
+    /// (RFC-0003 §3.6) -- `sources` is `(source_image_id, ordinal,
+    /// ev_offset, dx, dy)`, in the caller's own original bracket order.
+    /// All-or-nothing: a partial provenance record for a merge result
+    /// would be actively misleading (looks complete, silently isn't), so
+    /// this is one transaction rather than best-effort per row.
+    pub fn add_hdr_merge_sources(&self, result_image_id: i64, sources: &[(i64, i32, f32, i32, i32)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for &(source_image_id, ordinal, ev_offset, dx, dy) in sources {
+            tx.execute(
+                "INSERT INTO hdr_merge_sources (result_image_id, source_image_id, ordinal, ev_offset, dx, dy)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![result_image_id, source_image_id, ordinal, ev_offset, dx, dy],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Reads back the provenance rows `add_hdr_merge_sources` wrote for
+    /// one merge result, ordered by `ordinal` -- the natural read
+    /// counterpart to that write-only method. Kept as real pub API ready
+    /// for a future "Show HDR sources" UI (same "no UI trigger yet"
+    /// precedent as `add_image_with_metadata`'s own doc comment) --
+    /// exercised today by this file's own test plus `hdr_merge.rs`'s
+    /// real-bracket end-to-end test, which (being a different module)
+    /// has no access to this one's private `conn` field.
+    #[allow(dead_code)]
+    pub fn get_hdr_merge_sources(&self, result_image_id: i64) -> Result<Vec<(i64, i32, f32, i32, i32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_image_id, ordinal, ev_offset, dx, dy FROM hdr_merge_sources
+             WHERE result_image_id = ?1 ORDER BY ordinal",
+        )?;
+        let rows = stmt
+            .query_map(params![result_image_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?
+            .collect();
+        rows
+    }
+
     /// Non-destructive removal (M2 Slice 3): deletes catalog rows only --
     /// the user's source file is NEVER touched (hard PRD constraint), and
     /// the app-owned derived files (thumbnail, cached Develop preview) are
@@ -817,6 +910,14 @@ impl Catalog {
             )?;
             tx.execute(
                 "DELETE FROM collection_images WHERE image_id = ?1",
+                params![image_id],
+            )?;
+            // M5 (HDR merge): same explicit discipline -- both directions,
+            // since a removed image might be a merge's *result* (drop its
+            // whole provenance row set) or one of its *sources* (drop just
+            // that one row; the result and its other sources are unaffected).
+            tx.execute(
+                "DELETE FROM hdr_merge_sources WHERE result_image_id = ?1 OR source_image_id = ?1",
                 params![image_id],
             )?;
             tx.execute("DELETE FROM images WHERE id = ?1", params![image_id])?;
@@ -1783,6 +1884,77 @@ mod tests {
         assert_eq!(source.image_id, image_id);
         assert_eq!(source.path, "/a.CR3");
         assert_eq!(source.content_hash.as_deref(), Some("hash-a"));
+    }
+
+    #[test]
+    fn get_image_exposure_info_resolves_path_and_exif_fields() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let metadata = crate::metadata::ImageMetadata {
+            iso: Some(400),
+            aperture: Some(5.6),
+            shutter_speed: Some(1.0 / 250.0),
+            ..Default::default()
+        };
+        let image_id = catalog
+            .add_image_with_edit_stack("/bracket-a.CR3", "hash-a", 100, &EditStack::empty(), &metadata)
+            .unwrap();
+
+        let info = catalog.get_image_exposure_info(image_id).unwrap().expect("row exists");
+        assert_eq!(info.path, "/bracket-a.CR3");
+        assert_eq!(info.iso, Some(400));
+        assert_eq!(info.aperture, Some(5.6));
+        assert_eq!(info.shutter_speed, Some(1.0 / 250.0));
+
+        assert!(catalog.get_image_exposure_info(image_id + 999).unwrap().is_none());
+    }
+
+    #[test]
+    fn add_hdr_merge_sources_records_one_row_per_bracket_member() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let a = catalog.add_image("/a.CR3").unwrap();
+        let b = catalog.add_image("/b.CR3").unwrap();
+        let result = catalog
+            .add_image_with_edit_stack("/merged.jpg", "hash-merged", 100, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+
+        catalog
+            .add_hdr_merge_sources(result, &[(a, 0, 0.0, 0, 0), (b, 1, -1.0, -3, 2)])
+            .unwrap();
+
+        let rows = catalog.get_hdr_merge_sources(result).unwrap();
+        assert_eq!(rows, vec![(a, 0, 0.0, 0, 0), (b, 1, -1.0, -3, 2)]);
+    }
+
+    /// Removing the merge *result* drops its whole provenance row set;
+    /// removing one *source* only drops that one row, leaving the result
+    /// and its other sources untouched -- see `remove_images`'s own doc
+    /// comment on why this is two explicit directions, not a plain
+    /// `ON DELETE CASCADE` off of `source_image_id`.
+    #[test]
+    fn removing_a_merge_result_or_a_source_cleans_up_hdr_merge_sources_correctly() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let a = catalog.add_image("/a.CR3").unwrap();
+        let b = catalog.add_image("/b.CR3").unwrap();
+        let result = catalog
+            .add_image_with_edit_stack("/merged.jpg", "hash-merged", 100, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+        catalog
+            .add_hdr_merge_sources(result, &[(a, 0, 0.0, 0, 0), (b, 1, -1.0, -3, 2)])
+            .unwrap();
+
+        catalog.remove_images(&[a]).unwrap();
+        let remaining_after_source_removed: i64 = catalog
+            .conn
+            .query_row("SELECT count(*) FROM hdr_merge_sources WHERE result_image_id = ?1", params![result], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining_after_source_removed, 1, "removing one source must only drop that source's own row");
+
+        catalog.remove_images(&[result]).unwrap();
+        let remaining_after_result_removed: i64 = catalog
+            .conn
+            .query_row("SELECT count(*) FROM hdr_merge_sources WHERE result_image_id = ?1", params![result], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining_after_result_removed, 0, "removing the result must drop its whole provenance row set");
     }
 
     #[test]

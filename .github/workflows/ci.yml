@@ -60,17 +60,30 @@ jobs:
       # Fetch the same CC0-licensed sample used to validate this locally
       # (raw.pixls.us requires CC0 for all contributions) so the real
       # decode path actually runs here too, not just on a dev machine.
+      # Best-effort, not a hard job failure: this is a third-party host
+      # outside our control, and a real outage there must never block CI
+      # for an otherwise-passing code change. Confirmed the hard way --
+      # raw.pixls.us was unreachable for over an hour across 3 separate
+      # full CI runs (PR #103), every other check green the whole time
+      # (see PROGRESS.md). The gated tests below already skip cleanly
+      # with a clear message when EMULSION_TEST_RAW_SAMPLE is unset --
+      # exactly the same "a real fixture may not be available" gap this
+      # project already accepts and documents elsewhere (e.g. ADR-0003's
+      # Windows-hardware-only checks) -- so on a download failure, this
+      # step just leaves that env var unset rather than failing the job.
       - name: Download sample RAW file (CC0, raw.pixls.us) for real-file tests
         shell: bash
         run: |
-          curl --retry 3 --retry-delay 5 -fL \
+          if curl --retry 3 --retry-delay 5 -fL \
             -o "${{ runner.temp }}/sample.DNG" \
-            "https://raw.pixls.us/data/Adobe%20DNG%20Converter/Canon%20EOS%205D%20Mark%20III/5G4A9395-compressed-lossless.DNG"
+            "https://raw.pixls.us/data/Adobe%20DNG%20Converter/Canon%20EOS%205D%20Mark%20III/5G4A9395-compressed-lossless.DNG"; then
+            echo "EMULSION_TEST_RAW_SAMPLE=${{ runner.temp }}/sample.DNG" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Could not download the CC0 RAW sample from raw.pixls.us -- real-file-gated tests will skip this run. Treated as a transient external-host issue, not a code problem, unless it persists across many runs."
+          fi
 
       - name: cargo test --lib
         shell: bash
-        env:
-          EMULSION_TEST_RAW_SAMPLE: ${{ runner.temp }}/sample.DNG
         run: cargo test --lib --verbose
 
   frontend-check:

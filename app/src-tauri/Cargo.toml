@@ -45,8 +45,14 @@ wdio-webdriver = ["dep:tauri-plugin-wdio-webdriver"]
 # vcpkg-linked LibRaw instead of upstream's from-source compile (which
 # panics on MSVC). macOS/Linux behavior is unchanged. See
 # vendor/rsraw-sys/PATCH.md and docs/adr/ADR-0003-raw-decoding.md.
+#
+# Patched fork of rsraw itself (not just rsraw-sys), adding a
+# set_linear_output() method HDR merge needs -- the LibRaw params struct
+# it writes to is only reachable from rsraw's own methods. See
+# vendor/rsraw/PATCH.md and docs/rfc/RFC-0003-hdr-merge.md.
 [patch.crates-io]
 rsraw-sys = { path = "vendor/rsraw-sys" }
+rsraw = { path = "vendor/rsraw" }
 
 [dev-dependencies]
 little_exif = "0.6.23"

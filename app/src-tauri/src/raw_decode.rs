@@ -7,7 +7,7 @@
 //! M1 scope (the Export pipeline slice).
 
 use crate::source_decode::DecodedPreview;
-use rsraw::{RawImage, BIT_DEPTH_8};
+use rsraw::{RawImage, BIT_DEPTH_16, BIT_DEPTH_8};
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +64,48 @@ pub fn decode_develop_preview(path: &Path) -> Result<DecodedPreview, DecodeError
     decode(path, true)
 }
 
+/// A genuinely linear-light, non-auto-brightened decode -- HDR merge's own
+/// input (RFC-0003 §3.1), distinct from every other decode path in this
+/// module which produces display-referred, auto-exposed 8-bit output.
+/// RAW-only by construction (this function only exists on `raw_decode`,
+/// never `jpeg_decode`/`source_decode`) -- HDR merge v1 requires every
+/// bracket member to be RAW (see RFC-0003 §2's non-goal on JPEG brackets),
+/// so there is no JPEG counterpart to build.
+pub struct DecodedLinear {
+    pub width: u32,
+    pub height: u32,
+    /// Interleaved RGB, one f32 per channel, normalized by 65535.0 from
+    /// LibRaw's linear 16-bit output. Deliberately NOT clamped to [0, 1] --
+    /// a well-exposed bright frame can legitimately read above 1.0 before
+    /// hdr_merge.rs scales it by that frame's own exposure ratio; clamping
+    /// here would silently discard real highlight data this feature exists
+    /// to preserve.
+    pub rgb: Vec<f32>,
+}
+
+pub fn decode_linear(path: &Path) -> Result<DecodedLinear, DecodeError> {
+    let bytes = std::fs::read(path)?;
+
+    let mut image = RawImage::open(&bytes).map_err(|e| DecodeError::LibRaw(e.to_string()))?;
+    // Fixed (not auto) white balance so color stays consistent frame-to-
+    // frame across a bracket -- auto-WB could legitimately pick a
+    // different white point for a much-brighter or much-darker exposure
+    // of the same scene, which would corrupt the merge's color accuracy
+    // even though each frame's own WB choice would look fine in isolation.
+    image.set_use_camera_wb(true);
+    image.set_linear_output();
+    image.unpack().map_err(|e| DecodeError::LibRaw(e.to_string()))?;
+    let processed = image
+        .process::<BIT_DEPTH_16>()
+        .map_err(|e| DecodeError::LibRaw(e.to_string()))?;
+
+    let width = processed.width();
+    let height = processed.height();
+    let rgb = processed.iter().map(|&v| v as f32 / 65535.0).collect();
+
+    Ok(DecodedLinear { width, height, rgb })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +157,44 @@ mod tests {
         let half = decode_develop_preview(Path::new(&sample_path)).expect("half-size decode succeeds");
         assert!(half.width > 0 && half.height > 0);
         assert_eq!(half.rgb.len(), half.width as usize * half.height as usize * 3);
+    }
+
+    /// RFC-0003's linear decode path -- same real-file/env-var gate as the
+    /// two tests above. Confirms the buffer is the right shape and, more
+    /// importantly, that `no_auto_bright`/linear `gamm` actually took
+    /// effect: a linear decode of a normally-exposed photo should have a
+    /// visibly LOWER mean brightness than a standard auto-brightened
+    /// decode of the same file (auto-bright's whole job is to brighten a
+    /// raw linear signal up to a pleasing display level) -- a real,
+    /// specific regression check, not just "did it return without error".
+    #[test]
+    fn linear_decode_produces_a_darker_unbrightened_buffer_than_standard_decode() {
+        let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else {
+            eprintln!(
+                "skipping: set EMULSION_TEST_RAW_SAMPLE=/path/to/file.DNG to run this test"
+            );
+            return;
+        };
+        let path = Path::new(&sample_path);
+
+        let linear = decode_linear(path).expect("linear decode should succeed on a real RAW file");
+        assert!(linear.width > 0 && linear.height > 0);
+        assert_eq!(linear.rgb.len(), linear.width as usize * linear.height as usize * 3);
+        assert!(
+            linear.rgb.iter().all(|&v| v.is_finite() && v >= 0.0),
+            "linear decode should never produce NaN/negative values"
+        );
+
+        let standard = decode_preview(path).expect("standard decode should also succeed");
+        let linear_mean = linear.rgb.iter().sum::<f32>() / linear.rgb.len() as f32;
+        let standard_mean =
+            standard.rgb.iter().map(|&v| v as f32 / 255.0).sum::<f32>() / standard.rgb.len() as f32;
+        assert!(
+            linear_mean < standard_mean,
+            "linear (no_auto_bright, gamm=[1,1]) decode (mean {linear_mean}) should be darker than \
+             standard auto-brightened decode (mean {standard_mean}) -- if not, set_linear_output() \
+             may not be taking effect"
+        );
     }
 
     /// No sample RAW file is available in this environment yet (see

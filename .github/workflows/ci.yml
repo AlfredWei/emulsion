@@ -102,6 +102,19 @@ jobs:
             echo "::warning::Could not download the CC0 RAW sample from raw.pixls.us -- real-file-gated tests will skip this run. Treated as a transient external-host issue, not a code problem, unless it persists across many runs."
           fi
 
+      # HDR merge's own real-bracket test (hdr_merge.rs, RFC-0003 §4) is
+      # gated behind EMULSION_TEST_HDR_BRACKET_DIR the same way the RAW
+      # decode tests above are gated behind EMULSION_TEST_RAW_SAMPLE --
+      # except this fixture IS committed to the repo
+      # (test_image/hdr-bracket-cc-by/, see its own ATTRIBUTION.md), since
+      # a small (~27MB), individually-license-verified subset of a real
+      # CC BY 4.0 dataset was judged worth the one-time exception to this
+      # repo's otherwise CC0-only test_image/ convention -- no download
+      # step needed here, unlike the raw.pixls.us sample above.
+      - name: Point EMULSION_TEST_HDR_BRACKET_DIR at the committed bracket fixture
+        shell: bash
+        run: echo "EMULSION_TEST_HDR_BRACKET_DIR=${{ github.workspace }}/test_image/hdr-bracket-cc-by" >> "$GITHUB_ENV"
+
       - name: cargo test --lib
         shell: bash
         run: cargo test --lib --verbose

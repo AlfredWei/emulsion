@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Panorama merge: closed the output-location follow-up flagged in the HDR merge fix (2026-09-06)
+
+The HDR merge session below named this as a known-but-unfixed inconsistency: `merge_panorama` (`app/src-tauri/src/lib.rs`) still wrote its stitched result into a hidden `app_data_dir/panoramas` folder, the exact pattern `merge_hdr_bracket` had just been fixed away from. Applied the identical fix.
+
+- **Output location fixed**: `merge_panorama` now writes directly into the SAME folder as the panorama's own reference source frame, named `{reference-stem}-Panorama.jpg` (collision-avoided via `export::unique_output_path`, already reused by HDR merge). Panorama has no single "best" frame the way HDR merge does, but `panorama_merge::stitch` already selects a middle `reference_idx` for its homography chaining (`StitchedImage.reference_idx`) — that source image's own folder is what the output now sits next to. The `panoramas_dir` app-data directory and its save-then-hash-then-rename dance are gone entirely.
+- **Shared helper**: `hdr_merge_output_location` was generalized into `merge_output_location(reference_path, suffix)` (takes the `-HDR`/`-Panorama` suffix as a parameter) rather than duplicating the same parent-dir/stem logic a second time; both merge commands now call the one function.
+- **Verified**: 309/309 Rust tests (up from 307 — 2 new panorama-output-location unit tests mirroring HDR merge's own). `npm run check`: 0 errors/warnings across 365 files (required a fresh `npm install` in this worktree — `app/node_modules` wasn't present here yet).
+
 ## HDR merge: fixed three real bugs found via a live run against the real bracket fixture (2026-09-06)
 
 User ran HDR merge for real (Library titlebar's "HDR" button, against `test_image/hdr-bracket-cc-by/`'s own committed real bracket) and reported it broken three ways: the result looked like the darkest exposure, not a merge; the output file was buried in an app-data folder instead of next to the source RAW files; and the multi-second pipeline had no progress feedback at all.
@@ -10,7 +18,7 @@ User ran HDR merge for real (Library titlebar's "HDR" button, against `test_imag
 - **Output location fixed**: `merge_hdr_bracket` (`app/src-tauri/src/lib.rs`) used to write into a hidden `app_data_dir/merges` folder the user never sees browsing their own project folder. Now writes directly into the SAME folder as the bracket's own reference source file, named `{reference-stem}-HDR.jpg` (collision-avoided via `export::unique_output_path`, made `pub(crate)` and reused rather than duplicated) -- no new folder created anywhere, matching how a real Lightroom-class HDR Merge places its output. New `hdr_merge_output_location` helper + 2 new unit tests pin this exact behavior without needing a full Tauri `AppHandle`.
 - **Progress bar added**: `hdr_merge::merge_bracket` now takes an `on_progress(current, total)` callback, called once per pipeline step (each frame decoded, then align/merge/tone-map -- `total == frame_count + 3`). `merge_hdr_bracket` emits this as a new `"hdr-merge-progress"` event (reusing `ImportProgress`'s `{current, total}` shape, same as `"thumbnail-progress"` already does for a different pipeline); the frontend (`+page.svelte`) shows the same progress-bar treatment import already uses ("Merging HDR bracket 3 / 6…") instead of the button just going quiet for several seconds.
 - **Verified**: 307/307 Rust tests (up from 304 -- new gamma-encoding regression test, 2 new output-location tests), including a real run of `merges_a_real_bracket_and_catalogs_the_result_with_provenance` against the committed CC BY bracket with a temporary brightness/visual diagnostic (removed before commit, same "temporary diagnostic for exactly one run" precedent as the Windows CI investigation). `npm run check`: 0 errors/warnings across 365 files.
-- **Known follow-up, not fixed here**: Panorama merge (`merge_panorama`) still writes into its own `app_data_dir/panoramas` folder -- the identical location pattern being fixed here, but not reported broken and not touched this pass. Flagged as a follow-up, not silently left inconsistent.
+- **Known follow-up, not fixed here**: Panorama merge (`merge_panorama`) still writes into its own `app_data_dir/panoramas` folder -- the identical location pattern being fixed here, but not reported broken and not touched this pass. Flagged as a follow-up, not silently left inconsistent. **Closed** in the entry above.
 
 ## M5 Slice 5 — Panorama merge: hand-rolled feature-based homography stitch (2026-09-06)
 

@@ -3386,27 +3386,30 @@
       class="icon-btn paste-settings-btn"
       onclick={handlePasteSettingsToSelection}
       disabled={activeModule !== "library" || selectedIds.size === 0 || !copiedSettings || pastingSettingsToSelection}
-      title={copiedSettings ? "Paste Settings to Selection — paste the copied Develop settings onto every selected photo" : "Copy Settings in Develop first"}
+      title={pastingSettingsToSelection ? "Pasting…" : copiedSettings ? "Paste Settings to Selection — paste the copied Develop settings onto every selected photo" : "Copy Settings in Develop first"}
     >
-      <span class="icon" aria-hidden="true">PST</span>
+      <span class="glyph" aria-hidden="true">⧉</span>
+      <span class="code" aria-hidden="true">PST</span>
       <span class="label">{pastingSettingsToSelection ? "Pasting…" : "Paste Settings to Selection"}</span>
     </button>
     <button
       class="icon-btn merge-hdr-btn"
       onclick={handleMergeHdrBracket}
       disabled={activeModule !== "library" || selectedIds.size < 2 || mergingHdr}
-      title="Merge to HDR — combine 2+ RAW exposures of the same scene into one HDR image"
+      title={mergingHdr ? "Merging…" : `Merge to HDR — combine 2+ RAW exposures of the same scene into one HDR image${selectedIds.size >= 2 ? ` (${selectedIds.size} selected)` : ""}`}
     >
-      <span class="icon" aria-hidden="true">HDR</span>
+      <span class="glyph" aria-hidden="true">◐</span>
+      <span class="code" aria-hidden="true">HDR</span>
       <span class="label">{mergingHdr ? "Merging…" : `Merge to HDR…${selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}`}</span>
     </button>
     <button
       class="icon-btn merge-panorama-btn"
       onclick={handleMergePanorama}
       disabled={activeModule !== "library" || selectedIds.size < 2 || mergingPanorama}
-      title="Merge to Panorama — stitch 2+ overlapping photos, selected in capture order, into one wide composite"
+      title={mergingPanorama ? "Stitching…" : `Merge to Panorama — stitch 2+ overlapping photos, selected in capture order, into one wide composite${selectedIds.size >= 2 ? ` (${selectedIds.size} selected)` : ""}`}
     >
-      <span class="icon" aria-hidden="true">PAN</span>
+      <span class="glyph" aria-hidden="true">▭</span>
+      <span class="code" aria-hidden="true">PAN</span>
       <span class="label">{mergingPanorama ? "Stitching…" : `Merge to Panorama…${selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}`}</span>
     </button>
     <button
@@ -3415,7 +3418,8 @@
       disabled={activeModule !== "library" || selectedIds.size === 0}
       title={`Remove${selectedIds.size > 1 ? ` (${selectedIds.size})` : ""} — remove from the catalog (source files stay on disk)`}
     >
-      <span class="icon" aria-hidden="true">DEL</span>
+      <span class="glyph" aria-hidden="true">×</span>
+      <span class="code" aria-hidden="true">DEL</span>
       <span class="label">Remove{selectedIds.size > 1 ? ` (${selectedIds.size})` : ""}</span>
     </button>
     <button
@@ -3424,15 +3428,18 @@
       disabled={currentExportItems.length === 0}
       title={`Export${currentExportItems.length > 1 ? ` (${currentExportItems.length})` : ""}…`}
     >
-      <span class="icon" aria-hidden="true">EXP</span>
+      <span class="glyph" aria-hidden="true">↗</span>
+      <span class="code" aria-hidden="true">EXP</span>
       <span class="label">Export{currentExportItems.length > 1 ? ` (${currentExportItems.length})` : ""}…</span>
     </button>
     <button class="icon-btn import-files-btn" onclick={handleImportFiles} disabled={importing} title={importing ? "Importing…" : "Import Files…"}>
-      <span class="icon" aria-hidden="true">FILE</span>
+      <span class="glyph" aria-hidden="true">▤</span>
+      <span class="code" aria-hidden="true">FILE</span>
       <span class="label">{importing ? "Importing…" : "Import Files…"}</span>
     </button>
     <button class="icon-btn accent import-folder-btn" onclick={handleImportFolder} disabled={importing} title={importing ? "Importing…" : "Import Folder…"}>
-      <span class="icon" aria-hidden="true">DIR</span>
+      <span class="glyph" aria-hidden="true">▦</span>
+      <span class="code" aria-hidden="true">DIR</span>
       <span class="label">{importing ? "Importing…" : "Import Folder…"}</span>
     </button>
     <button class="settings-btn" title="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
@@ -4140,69 +4147,69 @@
   .spacer {
     flex: 1;
   }
-  /* Toolbar icon buttons (M5.x toolbar-crowding fix): a short bold
-   * monogram badge (OUT/PST/HDR/DEL/EXP/FILE/DIR) by default, not a
-   * pictograph -- deliberately, confirmed the hard way in this
-   * environment's own browser preview: emoji-range glyphs (📋🗑📤📄📁)
-   * rendered as blank/missing-glyph boxes, while plain BMP symbols and
-   * text always render everywhere, in any font, on any platform. Matches
-   * this file's own existing plain-glyph precedent (⚙, ★, ×) rather than
-   * gambling on a color-emoji font being present. The full text label is
-   * always present in the DOM (so it's still announced to screen readers
-   * and still searchable in e2e specs via textContent) but visually
-   * collapsed to zero width, and expands into view on hover/focus.
-   * `title` duplicates the label as an immediate native tooltip, since
-   * the hover-expand transition alone has a brief delay before the full
-   * text is legible. */
+  /* Toolbar icon buttons: a small pictograph glyph plus a short bold
+   * monogram code (OUT/PST/HDR/DEL/EXP/FILE/DIR), both always visible --
+   * no hover-expand transition, since a prior version of that design was
+   * dropped when almost no one triggered it in practice. Both are plain
+   * BMP symbols, not emoji-range pictographs -- deliberately, confirmed
+   * the hard way in this environment's own browser preview: emoji-range
+   * glyphs (📋🗑📤📄📁) rendered as blank/missing-glyph boxes, while plain
+   * BMP symbols and text always render everywhere, in any font, on any
+   * platform. Matches this file's own existing plain-glyph precedent (⚙,
+   * ★, ×) rather than gambling on a color-emoji font being present. The
+   * full descriptive text is always present in the DOM (so it's still
+   * announced to screen readers and still searchable in e2e specs via
+   * textContent) but visually hidden; `title` carries the same text as an
+   * immediate native tooltip. */
   .icon-btn {
     all: unset;
     cursor: pointer;
-    /* Flex items with any non-visible `overflow` get an automatic
-       min-width of 0 (CSS Flexbox §4.5), which would let the titlebar's
-       flex-shrink silently clip a hover-expanded label at a narrow
-       window width instead of the toolbar simply needing more room --
-       `flex: none` opts these out of shrinking altogether so the
-       collapsed AND expanded states always render their full content. */
     flex: none;
     display: flex;
     align-items: center;
+    gap: 5px;
     height: 30px;
-    padding: 0 8px;
-    font-size: 11.5px;
-    font-weight: 600;
+    padding: 0 9px;
     border-radius: 6px;
     color: var(--text-secondary);
     border: 1px solid var(--border-strong);
     overflow: hidden;
     white-space: nowrap;
   }
-  .icon-btn .icon {
+  .icon-btn .glyph {
     flex: none;
-    font-size: 9.5px;
+    font-size: 12px;
+    line-height: 1;
+  }
+  .icon-btn .code {
+    flex: none;
+    font-size: 10.5px;
     font-weight: 800;
     letter-spacing: 0.03em;
     line-height: 1;
   }
   .icon-btn .label {
-    display: inline-block;
-    max-width: 0;
-    margin-left: 0;
-    opacity: 0;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
     overflow: hidden;
-    transition:
-      max-width 0.18s ease,
-      margin-left 0.18s ease,
-      opacity 0.12s ease;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
-  .icon-btn:hover .label,
-  .icon-btn:focus-visible .label {
-    max-width: 220px;
-    margin-left: 7px;
-    opacity: 1;
+  .icon-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
   }
   .icon-btn:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  .icon-btn:disabled:hover {
+    color: var(--text-secondary);
+    border-color: var(--border-strong);
   }
   .icon-btn.accent {
     background: var(--accent-soft);

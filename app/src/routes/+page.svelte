@@ -2033,6 +2033,12 @@
   // HDR merge (M5, RFC-0003). Guards the button/re-entrancy the same
   // narrow way applyingPreset/pastingSettingsToSelection do above.
   let mergingHdr = $state(false);
+  // Populated from "hdr-merge-progress" (lib.rs's merge_hdr_bracket, via
+  // hdr_merge::merge_bracket's own on_progress callback) while mergingHdr
+  // is true -- one step per RAW frame decoded, plus align/merge/tone-map,
+  // so the multi-second pipeline shows real movement instead of looking
+  // hung. Same shape/precedent as importProgress/thumbnailProgress above.
+  let hdrMergeProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
 
   /** Merges the current Library selection (2+ RAW photos, in whatever
    * order `selectedImages` iterates -- see mergeHdrBracket's own doc
@@ -2049,6 +2055,7 @@
     const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
     if (imageIds.length < 2) return;
     mergingHdr = true;
+    hdrMergeProgress = null;
     statusMessage = "";
     try {
       const resultImageId = await mergeHdrBracket(imageIds);
@@ -2072,6 +2079,7 @@
       statusMessage = `HDR merge failed: ${e}`;
     } finally {
       mergingHdr = false;
+      hdrMergeProgress = null;
     }
   }
 
@@ -3252,12 +3260,26 @@
       // ignore outside Tauri
     }
 
+    // HDR merge progress bar: lib.rs's merge_hdr_bracket emits this once
+    // per pipeline step (see hdrMergeProgress's own doc comment above).
+    let unlistenHdrMergeProgress = /** @type {(() => void) | undefined} */ (undefined);
+    try {
+      listen("hdr-merge-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
+        hdrMergeProgress = event.payload;
+      }).then((fn) => {
+        unlistenHdrMergeProgress = fn;
+      });
+    } catch {
+      // ignore outside Tauri
+    }
+
     return () => {
       unlistenClose?.();
       unlistenDragDrop?.();
       unlistenMenu?.();
       unlistenImportProgress?.();
       unlistenThumbnailProgress?.();
+      unlistenHdrMergeProgress?.();
       window.removeEventListener("shortcuts-updated", onShortcutsUpdated);
     };
   });
@@ -3532,6 +3554,22 @@
         {:else}
           {progress ? `Importing ${progress.current} / ${progress.total}…` : "Importing…"}
         {/if}
+      </span>
+    </div>
+  {:else if mergingHdr}
+    <div
+      class="import-progress"
+      role="progressbar"
+      aria-valuenow={hdrMergeProgress?.current ?? 0}
+      aria-valuemin="0"
+      aria-valuemax={hdrMergeProgress?.total ?? 0}
+    >
+      <div
+        class="import-progress-bar"
+        style={`width: ${hdrMergeProgress && hdrMergeProgress.total > 0 ? (hdrMergeProgress.current / hdrMergeProgress.total) * 100 : 0}%`}
+      ></div>
+      <span class="import-progress-label">
+        {hdrMergeProgress ? `Merging HDR bracket ${hdrMergeProgress.current} / ${hdrMergeProgress.total}…` : "Merging HDR bracket…"}
       </span>
     </div>
   {:else if statusMessage}

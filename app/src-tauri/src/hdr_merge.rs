@@ -366,17 +366,45 @@ pub fn merge_radiance(frames: &[DecodedLinear], offsets: &[(i32, i32)], evs: &[f
     out
 }
 
+/// IEC 61966-2-1 sRGB OETF (scene/display-linear -> gamma-encoded),
+/// applied once per channel AFTER Reinhard compression, below. Without
+/// this, `tone_map`'s output bytes ARE scene-linear light values, which
+/// every real image viewer/JPEG decoder instead interprets as
+/// ALREADY-gamma-encoded sRGB -- confirmed the hard way against a real
+/// bracket: raw sensor linear data for a normally-exposed midtone reads
+/// far below the "0.5 = midtone" a viewer assumes for gamma-encoded
+/// pixels (an 18%-gray scene is roughly 0.15-0.2 in this linear domain,
+/// not ~0.5), so the un-gamma-encoded merge output rendered as a barely-
+/// distinguishable-from-black image -- indistinguishable in practice from
+/// the darkest bracket member's own (also un-gamma-encoded) raw data,
+/// regardless of which frame actually contributed most weight to the
+/// merge. This is the same linear -> display transform every standard RAW
+/// decode path already gets for free from LibRaw's own `gamm` parameter
+/// (deliberately disabled for THIS module's linear decode, RFC-0003 §3.1)
+/// -- `tone_map` has to apply it explicitly instead, since nothing else in
+/// this pipeline ever will.
+fn srgb_encode(linear: f32) -> f32 {
+    if linear <= 0.0031308 {
+        12.92 * linear
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 /// Global Reinhard tone-mapping (`L_out = L_in / (1 + L_in)`, per
 /// channel) -- monotonic and bounded to `[0, 1)` for any non-negative
 /// finite input, unlike a naive linear rescale-by-max which needs prior
-/// knowledge of the buffer's own maximum. RFC-0003 §3.5.
+/// knowledge of the buffer's own maximum -- followed by `srgb_encode`
+/// (see its own doc comment for why that second step is required, not
+/// optional). RFC-0003 §3.5.
 pub fn tone_map(radiance: &[f32], width: u32, height: u32) -> RgbImage {
     let mut img = RgbImage::new(width, height);
     for (i, pixel) in img.pixels_mut().enumerate() {
         for c in 0..3 {
             let l = radiance[i * 3 + c].max(0.0);
-            let mapped = l / (1.0 + l);
-            pixel[c] = (mapped * 255.0).round().clamp(0.0, 255.0) as u8;
+            let reinhard = l / (1.0 + l);
+            let encoded = srgb_encode(reinhard);
+            pixel[c] = (encoded * 255.0).round().clamp(0.0, 255.0) as u8;
         }
     }
     img
@@ -387,7 +415,16 @@ pub fn tone_map(radiance: &[f32], width: u32, height: u32) -> RgbImage {
 /// (§3.5). The catalog/file-writing half (§3.6) is the caller's job
 /// (`lib.rs`'s `merge_hdr_bracket` command) -- this function has no
 /// catalog dependency and produces an in-memory `RgbImage`.
-pub fn merge_bracket(inputs: &[BracketInput]) -> Result<MergedImage, HdrMergeError> {
+///
+/// `on_progress(current, total)` is called once per completed step
+/// (one per frame decoded, then one each for alignment/radiance
+/// merge/tone mapping -- `total == inputs.len() + 3`), so a caller can
+/// drive a determinate progress bar through this multi-second pipeline
+/// instead of it looking hung; tests that don't care pass `|_, _| {}`.
+pub fn merge_bracket(
+    inputs: &[BracketInput],
+    mut on_progress: impl FnMut(usize, usize),
+) -> Result<MergedImage, HdrMergeError> {
     if inputs.len() < 2 {
         return Err(HdrMergeError::NotEnoughFrames(inputs.len()));
     }
@@ -400,11 +437,18 @@ pub fn merge_bracket(inputs: &[BracketInput]) -> Result<MergedImage, HdrMergeErr
         })
         .collect::<Result<_, _>>()?;
 
+    let total_steps = inputs.len() + 3;
+    let mut step = 0usize;
+    on_progress(step, total_steps);
+
     let frames: Vec<DecodedLinear> = inputs
         .iter()
         .map(|input| {
-            raw_decode::decode_linear(&input.path)
-                .map_err(|e| HdrMergeError::Decode(input.path.display().to_string(), e.to_string()))
+            let decoded = raw_decode::decode_linear(&input.path)
+                .map_err(|e| HdrMergeError::Decode(input.path.display().to_string(), e.to_string()))?;
+            step += 1;
+            on_progress(step, total_steps);
+            Ok(decoded)
         })
         .collect::<Result<_, _>>()?;
 
@@ -429,8 +473,14 @@ pub fn merge_bracket(inputs: &[BracketInput]) -> Result<MergedImage, HdrMergeErr
         .expect("evs is non-empty, checked by NotEnoughFrames above");
 
     let offsets = align_bracket(&frames, reference_idx);
+    step += 1;
+    on_progress(step, total_steps);
     let radiance = merge_radiance(&frames, &offsets, &evs, reference_idx);
+    step += 1;
+    on_progress(step, total_steps);
     let image = tone_map(&radiance, w0, h0);
+    step += 1;
+    on_progress(step, total_steps);
 
     Ok(MergedImage { image, reference_idx, evs, offsets })
 }
@@ -710,6 +760,29 @@ mod tests {
     }
 
     #[test]
+    fn tone_map_srgb_encodes_a_well_exposed_linear_midtone_to_a_reasonably_bright_value() {
+        // A raw-linear reading for an 18%-gray, correctly-exposed scene
+        // sits well below the "0.5 = midtone" a viewer expects of an
+        // already-gamma-encoded pixel -- roughly 0.15-0.2 here, not ~0.5
+        // (this domain is proportional to captured light, not perceptual
+        // brightness). Before srgb_encode was added, this rendered as
+        // near-black (~39/255): confirmed the hard way against a real
+        // bracket, where a properly radiometrically-merged result was
+        // visually indistinguishable from the darkest source frame for
+        // exactly this reason -- every frame's own linear data is dark in
+        // this domain, regardless of which one the merge actually weighted
+        // most heavily.
+        let radiance = vec![0.18f32, 0.18, 0.18];
+        let img = tone_map(&radiance, 1, 1);
+        let pixel = img.get_pixel(0, 0);
+        assert!(
+            pixel[0] > 90,
+            "a well-exposed linear midtone should render as a reasonably bright display value, got {}",
+            pixel[0]
+        );
+    }
+
+    #[test]
     fn merge_bracket_rejects_fewer_than_two_frames() {
         let inputs = vec![BracketInput {
             path: PathBuf::from("/nonexistent.dng"),
@@ -717,7 +790,7 @@ mod tests {
             aperture: Some(8.0),
             shutter_speed: Some(0.01),
         }];
-        let result = merge_bracket(&inputs);
+        let result = merge_bracket(&inputs, |_, _| {});
         assert!(matches!(result, Err(HdrMergeError::NotEnoughFrames(1))));
     }
 
@@ -732,7 +805,7 @@ mod tests {
             BracketInput { path: PathBuf::from("/a.dng"), iso: Some(100), aperture: Some(8.0), shutter_speed: Some(0.01) },
             BracketInput { path: PathBuf::from("/b.dng"), iso: None, aperture: Some(8.0), shutter_speed: Some(0.005) },
         ];
-        let result = merge_bracket(&inputs);
+        let result = merge_bracket(&inputs, |_, _| {});
         assert!(matches!(result, Err(HdrMergeError::MissingExposureInfo(_))));
     }
 
@@ -809,7 +882,7 @@ mod tests {
             })
             .collect();
 
-        let merged = merge_bracket(&inputs).expect("a real bracket should merge successfully");
+        let merged = merge_bracket(&inputs, |_, _| {}).expect("a real bracket should merge successfully");
         assert!(merged.image.width() > 0 && merged.image.height() > 0, "merged JPEG should have plausible dimensions");
 
         let jpeg_bytes = {

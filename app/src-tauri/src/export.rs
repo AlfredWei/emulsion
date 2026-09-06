@@ -55,7 +55,7 @@ pub enum ExportError {
 /// Export button while a request is in flight is what actually prevents
 /// this app from double-firing the same export, so that's an accepted,
 /// not a fixed, race.
-fn unique_output_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+pub(crate) fn unique_output_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     let candidate = dir.join(format!("{stem}.{ext}"));
     if !candidate.exists() {
         return candidate;

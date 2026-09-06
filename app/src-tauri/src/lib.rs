@@ -6,6 +6,7 @@ mod import;
 mod jpeg_decode;
 mod lens_profile;
 mod metadata;
+mod panorama_merge;
 mod preview_cache;
 mod print;
 mod raw_decode;
@@ -506,6 +507,116 @@ async fn merge_hdr_bracket(
     // Same backstop as import_files: fills in the new image's thumbnail
     // (and, opportunistically, anything else missing) in the background
     // rather than blocking this command's own return on it.
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_cache::pregenerate_missing(&catalog, &previews_dir);
+    });
+    let catalog_for_thumbs = state.catalog.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir);
+    });
+
+    Ok(result_image_id)
+}
+
+/// Panorama merge (M5, RFC-0004): stitches `image_ids` (>= 2, in the
+/// caller's own capture-order selection -- adjacent selections are
+/// assumed to overlap, RFC-0004 §2's named "no auto-ordering" limitation)
+/// into one wide composite, cataloged as a new image with
+/// `panorama_merge_sources` provenance rows (§3.6). Unlike HDR merge, any
+/// decoded format works here (no RAW-only, no linear decode, no EV) --
+/// `panorama_merge.rs` itself has no catalog dependency, matching
+/// `hdr_merge.rs`'s own layering. Runs on a blocking thread: feature
+/// detection/matching/RANSAC across several full-resolution photos is
+/// real CPU work, the same class of cost as HDR merge's own pipeline.
+///
+/// The result is written to a NEW, content-hashed file under an
+/// app-managed `panoramas` directory (mirroring `merges`/`thumbnails`/
+/// `previews`) and cataloged exactly like a JPEG import: `thumbnail_path`
+/// stays NULL, picked up by the existing background thumbnail pass.
+#[tauri::command]
+async fn merge_panorama(app: AppHandle, state: State<'_, AppState>, image_ids: Vec<i64>) -> Result<i64, String> {
+    if image_ids.len() < 2 {
+        return Err(format!("panorama merge needs at least 2 images, got {}", image_ids.len()));
+    }
+
+    let catalog = state.catalog.clone();
+    // panoramas_dir holds real, irreplaceable output (same reasoning as
+    // merge_hdr_bracket's own merges_dir) -- fixed app-data location,
+    // unlike thumbnails/previews below.
+    let panoramas_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("panoramas");
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
+
+    let result_image_id = tauri::async_runtime::spawn_blocking({
+        let catalog = catalog.clone();
+        move || -> Result<i64, String> {
+            let paths: Vec<PathBuf> = {
+                let catalog = catalog.lock().map_err(|e| e.to_string())?;
+                image_ids
+                    .iter()
+                    .map(|&id| {
+                        catalog
+                            .get_image_path(id)
+                            .map_err(|e| e.to_string())?
+                            .map(PathBuf::from)
+                            .ok_or_else(|| format!("image {id} not found in catalog"))
+                    })
+                    .collect::<Result<_, String>>()?
+            };
+
+            let stitched = panorama_merge::stitch(&paths).map_err(|e| e.to_string())?;
+
+            std::fs::create_dir_all(&panoramas_dir).map_err(|e| e.to_string())?;
+            // Same save-then-hash-then-rename shape as merge_hdr_bracket:
+            // the encoded JPEG bytes ARE this image's content, so there's
+            // no pre-existing source file to hash before the encode.
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let tmp_path = panoramas_dir.join(format!("tmp-{nanos}.jpg"));
+            stitched.image.save(&tmp_path).map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(&tmp_path).map_err(|e| e.to_string())?;
+            let content_hash = blake3::hash(&bytes).to_hex().to_string();
+            let out_path = panoramas_dir.join(format!("{content_hash}.jpg"));
+            std::fs::rename(&tmp_path, &out_path).map_err(|e| e.to_string())?;
+
+            let result_metadata = metadata::ImageMetadata {
+                width: Some(stitched.image.width()),
+                height: Some(stitched.image.height()),
+                ..metadata::ImageMetadata::default()
+            };
+
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            let result_image_id = catalog
+                .add_image_with_edit_stack(
+                    &out_path.to_string_lossy(),
+                    &content_hash,
+                    bytes.len() as i64,
+                    &EditStack::empty(),
+                    &result_metadata,
+                )
+                .map_err(|e| e.to_string())?;
+
+            let sources: Vec<(i64, i32, String)> = image_ids
+                .iter()
+                .enumerate()
+                .map(|(i, &source_id)| {
+                    let homography_json = serde_json::to_string(&stitched.homographies[i]).unwrap_or_default();
+                    (source_id, i as i32, homography_json)
+                })
+                .collect();
+            catalog
+                .add_panorama_merge_sources(result_image_id, &sources)
+                .map_err(|e| e.to_string())?;
+
+            Ok(result_image_id)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Same backstop as merge_hdr_bracket/import_files.
     tauri::async_runtime::spawn_blocking(move || {
         preview_cache::pregenerate_missing(&catalog, &previews_dir);
     });
@@ -1524,6 +1635,7 @@ pub fn run() {
             set_geo_location,
             remove_images,
             merge_hdr_bracket,
+            merge_panorama,
             assign_keyword_path,
             remove_keyword_from_image,
             get_image_keywords,

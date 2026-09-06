@@ -586,6 +586,22 @@ impl Catalog {
                 dy INTEGER NOT NULL,
                 PRIMARY KEY (result_image_id, source_image_id)
             );
+
+            -- Panorama merge (M5, RFC-0004 §3.6): same pure-provenance
+            -- framing as hdr_merge_sources just above -- which originals
+            -- fed a stitch, in what order, with what final reference-
+            -- space homography -- never consulted by any render path.
+            -- `homography_json` is a JSON array of the 9 row-major matrix
+            -- values: unlike HDR's dx/dy/ev_offset, nothing else in the
+            -- catalog ever queries into individual matrix cells, so
+            -- there's no reason to model them as separate columns.
+            CREATE TABLE IF NOT EXISTS panorama_merge_sources (
+                result_image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                source_image_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                homography_json TEXT NOT NULL,
+                PRIMARY KEY (result_image_id, source_image_id)
+            );
             ",
         )?;
 
@@ -860,6 +876,51 @@ impl Catalog {
         rows
     }
 
+    /// One image's path, resolved by id -- the catalog-side half of
+    /// building `panorama_merge::stitch`'s own `&[PathBuf]` input (RFC-
+    /// 0004 §3.6). Deliberately narrower than `get_image_exposure_info`:
+    /// panorama stitching needs no EXIF, unlike HDR merge's EV, so
+    /// reusing that method here would be a layering smell (this caller
+    /// asking for fields it never looks at).
+    pub fn get_image_path(&self, image_id: i64) -> Result<Option<String>> {
+        self.conn
+            .query_row("SELECT path FROM images WHERE id = ?1", params![image_id], |row| row.get(0))
+            .optional()
+    }
+
+    /// Records one `panorama_merge_sources` provenance row per stitched
+    /// frame (RFC-0004 §3.6) -- `sources` is `(source_image_id, ordinal,
+    /// homography_json)`, in the caller's own original selection order.
+    /// All-or-nothing, same reasoning as `add_hdr_merge_sources`: a
+    /// partial provenance record would be actively misleading.
+    pub fn add_panorama_merge_sources(&self, result_image_id: i64, sources: &[(i64, i32, String)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (source_image_id, ordinal, homography_json) in sources {
+            tx.execute(
+                "INSERT INTO panorama_merge_sources (result_image_id, source_image_id, ordinal, homography_json)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![result_image_id, source_image_id, ordinal, homography_json],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Reads back the provenance rows `add_panorama_merge_sources` wrote
+    /// for one stitch result, ordered by `ordinal` -- same "ready for a
+    /// future UI, no trigger yet" precedent as `get_hdr_merge_sources`.
+    #[allow(dead_code)]
+    pub fn get_panorama_merge_sources(&self, result_image_id: i64) -> Result<Vec<(i64, i32, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_image_id, ordinal, homography_json FROM panorama_merge_sources
+             WHERE result_image_id = ?1 ORDER BY ordinal",
+        )?;
+        let rows = stmt
+            .query_map(params![result_image_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect();
+        rows
+    }
+
     /// Non-destructive removal (M2 Slice 3): deletes catalog rows only --
     /// the user's source file is NEVER touched (hard PRD constraint), and
     /// the app-owned derived files (thumbnail, cached Develop preview) are
@@ -921,6 +982,12 @@ impl Catalog {
             // that one row; the result and its other sources are unaffected).
             tx.execute(
                 "DELETE FROM hdr_merge_sources WHERE result_image_id = ?1 OR source_image_id = ?1",
+                params![image_id],
+            )?;
+            // M5 (panorama merge): same both-directions discipline as
+            // hdr_merge_sources just above.
+            tx.execute(
+                "DELETE FROM panorama_merge_sources WHERE result_image_id = ?1 OR source_image_id = ?1",
                 params![image_id],
             )?;
             tx.execute("DELETE FROM images WHERE id = ?1", params![image_id])?;
@@ -2013,6 +2080,64 @@ mod tests {
         let remaining_after_result_removed: i64 = catalog
             .conn
             .query_row("SELECT count(*) FROM hdr_merge_sources WHERE result_image_id = ?1", params![result], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining_after_result_removed, 0, "removing the result must drop its whole provenance row set");
+    }
+
+    #[test]
+    fn get_image_path_resolves_by_id_and_is_none_for_an_unknown_id() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog.add_image("/a.jpg").unwrap();
+
+        assert_eq!(catalog.get_image_path(image_id).unwrap(), Some("/a.jpg".to_string()));
+        assert!(catalog.get_image_path(image_id + 999).unwrap().is_none());
+    }
+
+    #[test]
+    fn add_panorama_merge_sources_records_one_row_per_frame() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let a = catalog.add_image("/a.jpg").unwrap();
+        let b = catalog.add_image("/b.jpg").unwrap();
+        let result = catalog
+            .add_image_with_edit_stack("/pano.jpg", "hash-pano", 100, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+
+        catalog
+            .add_panorama_merge_sources(result, &[(a, 0, "[1,0,0,0,1,0,0,0,1]".to_string()), (b, 1, "[1,0,10,0,1,0,0,0,1]".to_string())])
+            .unwrap();
+
+        let rows = catalog.get_panorama_merge_sources(result).unwrap();
+        assert_eq!(
+            rows,
+            vec![(a, 0, "[1,0,0,0,1,0,0,0,1]".to_string()), (b, 1, "[1,0,10,0,1,0,0,0,1]".to_string())]
+        );
+    }
+
+    /// Same both-directions removal contract as HDR merge's own
+    /// `removing_a_merge_result_or_a_source_cleans_up_hdr_merge_sources_correctly`.
+    #[test]
+    fn removing_a_panorama_result_or_a_source_cleans_up_panorama_merge_sources_correctly() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let a = catalog.add_image("/a.jpg").unwrap();
+        let b = catalog.add_image("/b.jpg").unwrap();
+        let result = catalog
+            .add_image_with_edit_stack("/pano.jpg", "hash-pano", 100, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+        catalog
+            .add_panorama_merge_sources(result, &[(a, 0, "[]".to_string()), (b, 1, "[]".to_string())])
+            .unwrap();
+
+        catalog.remove_images(&[a]).unwrap();
+        let remaining_after_source_removed: i64 = catalog
+            .conn
+            .query_row("SELECT count(*) FROM panorama_merge_sources WHERE result_image_id = ?1", params![result], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining_after_source_removed, 1, "removing one source must only drop that source's own row");
+
+        catalog.remove_images(&[result]).unwrap();
+        let remaining_after_result_removed: i64 = catalog
+            .conn
+            .query_row("SELECT count(*) FROM panorama_merge_sources WHERE result_image_id = ?1", params![result], |r| r.get(0))
             .unwrap();
         assert_eq!(remaining_after_result_removed, 0, "removing the result must drop its whole provenance row set");
     }

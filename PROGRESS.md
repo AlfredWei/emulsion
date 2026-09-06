@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5 Slice 6 — Face detection & People view: RFC drafted, not yet implemented (2026-09-06)
+
+Picked as the next M5 slice (user chose it over the other two remaining M5 scope items, "basic video handling" and "plugin/extensibility API v0", via an explicit question). Unlike HDR/Panorama merge, this genuinely needs an ML model + inference runtime (not a hand-rollable algorithm), so per this project's M5 RFC practice, [RFC-0005](docs/rfc/RFC-0005-face-detection-people-view.md) was drafted before any implementation — currently open on branch `docs/m5-slice6-face-detection-rfc`, not yet merged.
+
+- **Recommended architecture**: `tract` (pure-Rust ONNX inference) over `ort` (ONNX Runtime's native-library bindings) — informed directly by this project's own Windows/MSVC LibRaw linking saga (ADR-0003); avoids reintroducing that same class of native-FFI cross-platform risk for a second dependency. A small mobile-class ONNX detector (bbox + landmarks) feeds a compact metric-learning embedding model (ArcFace/MobileFaceNet-class); a hand-rolled incremental centroid-threshold clustering step (no new dependency, same "compact + directly testable" precedent as HDR/Panorama's own hand-rolled math) groups embeddings into `people`.
+- **Three open questions flagged for explicit user decision before implementation starts** (RFC §5): (1) exact model files/source/license — pretrained face-model licensing is a messier landscape than this project's existing native deps and needs real verification, not assumed from the model *family* recommendation alone; (2) real-photo test data for end-to-end clustering — a genuinely new **privacy/consent** question this project hasn't faced before (CC0/CC-BY licensing, which sufficed for HDR/Panorama's static-scene fixtures, doesn't by itself make it appropriate to commit photos of real identifiable people for a face-recognition feature); (3) whether model weights get committed to the repo or fetched-once-and-cached.
+- **Not yet done**: no implementation code, no new ADR (RFC §6 recommends a new `ADR-0007` once shipped, since no existing ADR governs an ML-inference-runtime decision), no real model/license research performed yet — this session only produced the design document.
+
 ## Panorama merge: closed the output-location follow-up flagged in the HDR merge fix (2026-09-06)
 
 The HDR merge session below named this as a known-but-unfixed inconsistency: `merge_panorama` (`app/src-tauri/src/lib.rs`) still wrote its stitched result into a hidden `app_data_dir/panoramas` folder, the exact pattern `merge_hdr_bracket` had just been fixed away from. Applied the identical fix.

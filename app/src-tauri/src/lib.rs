@@ -377,6 +377,21 @@ fn remove_matching_files(dir: &std::path::Path, matches: impl Fn(&str) -> bool) 
     }
 }
 
+/// Where an HDR merge result should be written: the reference source
+/// frame's own parent directory, and a `{stem}-HDR` filename stem derived
+/// from that frame's own name (collision-avoidance is `unique_output_path`'s
+/// job, called separately by the caller) -- pulled out of
+/// `merge_hdr_bracket` itself so this filename/location decision is
+/// directly unit-testable without a Tauri `AppHandle`.
+fn hdr_merge_output_location(reference_path: &std::path::Path) -> (PathBuf, String) {
+    let dest_dir = match reference_path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let stem = reference_path.file_stem().and_then(|s| s.to_str()).unwrap_or("HDR-Merge");
+    (dest_dir, format!("{stem}-HDR"))
+}
+
 /// HDR merge (M5, RFC-0003): merges `image_ids` (>= 2, all RAW, in the
 /// caller's own bracket order) into one radiometrically-merged, tone-
 /// mapped JPEG, cataloged as a new image with `hdr_merge_sources`
@@ -390,11 +405,19 @@ fn remove_matching_files(dir: &std::path::Path, matches: impl Fn(&str) -> bool) 
 /// `hdr_merge::merge_bracket`'s own "reject fast on a known-bad input set"
 /// ordering for its EV check.
 ///
-/// The result is written to a NEW, content-hashed file under an
-/// app-managed `merges` directory (mirroring `thumbnails`/`previews`) and
-/// cataloged exactly like a JPEG import: `thumbnail_path` stays NULL, so
-/// the existing background `generate_missing_thumbnails` pass picks it up
-/// with no special-casing needed here.
+/// The result is written directly into the SAME folder as the bracket's
+/// own reference source frame (`merged.reference_idx`) -- no new
+/// app-managed directory, matching how a real Lightroom-class HDR Merge
+/// writes its output right next to the originals rather than into a
+/// hidden cache location the user never sees in Finder/Explorer. Filename
+/// is the reference frame's own stem plus `-HDR` (collision-avoided via
+/// `export::unique_output_path`, the same helper Export already uses for
+/// this exact "don't clobber an existing file" problem), not a content
+/// hash -- there's no existing source file to hash before this encode
+/// happens, but there's no reason the *filename* needs to be opaque
+/// either. Cataloged exactly like a JPEG import: `thumbnail_path` stays
+/// NULL, so the existing background `generate_missing_thumbnails` pass
+/// picks it up with no special-casing needed here.
 #[tauri::command]
 async fn merge_hdr_bracket(
     app: AppHandle,
@@ -406,11 +429,6 @@ async fn merge_hdr_bracket(
     }
 
     let catalog = state.catalog.clone();
-    // merges_dir holds real, irreplaceable output (a merge result IS the
-    // image, not a regenerable cache of one) -- stays in the fixed
-    // app-data location, unlike thumbnails/previews below (Settings >
-    // Storage, resolve_thumbnail_dir/resolve_previews_dir).
-    let merges_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("merges");
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
     let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
 
@@ -440,25 +458,23 @@ async fn merge_hdr_bracket(
                     .collect::<Result<_, String>>()?
             };
 
-            let merged = hdr_merge::merge_bracket(&inputs).map_err(|e| e.to_string())?;
+            // Emits "hdr-merge-progress" ({current, total}) once per
+            // pipeline step (decode each frame, then align/merge/tone-map)
+            // -- see hdr_merge::merge_bracket's own doc comment. Reusing
+            // ImportProgress's shape, same as thumbnail-progress already
+            // does for a completely different event name/pipeline.
+            let progress_app = app.clone();
+            let merged = hdr_merge::merge_bracket(&inputs, move |current, total| {
+                let _ = progress_app.emit("hdr-merge-progress", ImportProgress { current, total });
+            })
+            .map_err(|e| e.to_string())?;
 
-            std::fs::create_dir_all(&merges_dir).map_err(|e| e.to_string())?;
-            // Save-then-hash-then-rename: the encoded JPEG bytes ARE this
-            // image's content, so (unlike every other content_hash in this
-            // codebase, hashed from a pre-existing source file) there's no
-            // hash to compute before the encode happens. A nanosecond-
-            // timestamped temp name keeps concurrent merges from colliding
-            // before the final content-hashed rename.
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let tmp_path = merges_dir.join(format!("tmp-{nanos}.jpg"));
-            merged.image.save(&tmp_path).map_err(|e| e.to_string())?;
-            let bytes = std::fs::read(&tmp_path).map_err(|e| e.to_string())?;
+            let reference_path = inputs[merged.reference_idx].path.clone();
+            let (dest_dir, stem) = hdr_merge_output_location(&reference_path);
+            let out_path = export::unique_output_path(&dest_dir, &stem, "jpg");
+            merged.image.save(&out_path).map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(&out_path).map_err(|e| e.to_string())?;
             let content_hash = blake3::hash(&bytes).to_hex().to_string();
-            let out_path = merges_dir.join(format!("{content_hash}.jpg"));
-            std::fs::rename(&tmp_path, &out_path).map_err(|e| e.to_string())?;
 
             let result_metadata = metadata::ImageMetadata {
                 width: Some(merged.image.width()),
@@ -540,9 +556,12 @@ async fn merge_panorama(app: AppHandle, state: State<'_, AppState>, image_ids: V
     }
 
     let catalog = state.catalog.clone();
-    // panoramas_dir holds real, irreplaceable output (same reasoning as
-    // merge_hdr_bracket's own merges_dir) -- fixed app-data location,
-    // unlike thumbnails/previews below.
+    // panoramas_dir holds real, irreplaceable output -- fixed app-data
+    // location, unlike thumbnails/previews below. NOTE: merge_hdr_bracket
+    // no longer uses an equivalent app-data directory (it now writes next
+    // to the bracket's own reference source file instead, per a reported
+    // bug -- see its own doc comment); this one hasn't been asked to
+    // change to match.
     let panoramas_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("panoramas");
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
     let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
@@ -1698,6 +1717,26 @@ mod tests {
 
     fn touch(dir: &std::path::Path, name: &str) {
         std::fs::write(dir.join(name), b"x").unwrap();
+    }
+
+    /// Pins the fix for a real reported bug: HDR merge used to write its
+    /// result into a hidden app-data `merges` directory instead of next to
+    /// the bracket's own source files, which the user never sees browsing
+    /// their own project folder. The output must land in the reference
+    /// frame's own folder, under a readable `{stem}-HDR.jpg` name -- not a
+    /// content hash, and not inside any newly-created subfolder.
+    #[test]
+    fn hdr_merge_output_location_writes_next_to_the_reference_source_with_no_new_folder() {
+        let (dest_dir, stem) = hdr_merge_output_location(std::path::Path::new("/photos/vacation/IMG_1234.CR2"));
+        assert_eq!(dest_dir, PathBuf::from("/photos/vacation"), "must be the source's own folder, not an app-data path");
+        assert_eq!(stem, "IMG_1234-HDR");
+    }
+
+    #[test]
+    fn hdr_merge_output_location_falls_back_gracefully_for_a_bare_filename() {
+        let (dest_dir, stem) = hdr_merge_output_location(std::path::Path::new("IMG_1234.CR2"));
+        assert_eq!(dest_dir, PathBuf::from("."));
+        assert_eq!(stem, "IMG_1234-HDR");
     }
 
     /// The bug this test pins: a plain `starts_with(image_id.to_string())`

@@ -377,19 +377,24 @@ fn remove_matching_files(dir: &std::path::Path, matches: impl Fn(&str) -> bool) 
     }
 }
 
-/// Where an HDR merge result should be written: the reference source
-/// frame's own parent directory, and a `{stem}-HDR` filename stem derived
-/// from that frame's own name (collision-avoidance is `unique_output_path`'s
-/// job, called separately by the caller) -- pulled out of
-/// `merge_hdr_bracket` itself so this filename/location decision is
-/// directly unit-testable without a Tauri `AppHandle`.
-fn hdr_merge_output_location(reference_path: &std::path::Path) -> (PathBuf, String) {
+/// Where a merge result should be written: the reference source frame's own
+/// parent directory, and a `{stem}-{suffix}` filename stem derived from that
+/// frame's own name (collision-avoidance is `unique_output_path`'s job,
+/// called separately by the caller) -- pulled out of `merge_hdr_bracket` and
+/// `merge_panorama` themselves so this filename/location decision is
+/// directly unit-testable without a Tauri `AppHandle`. Shared by both merge
+/// commands: HDR merge's own reference frame is the bracket's chosen
+/// exposure-matched source (`merged.reference_idx`); panorama merge has no
+/// equivalent "best" frame, but `panorama_merge::stitch` still selects a
+/// middle `reference_idx` for its homography chaining, and that's a
+/// perfectly good source image to sit next to.
+fn merge_output_location(reference_path: &std::path::Path, suffix: &str) -> (PathBuf, String) {
     let dest_dir = match reference_path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    let stem = reference_path.file_stem().and_then(|s| s.to_str()).unwrap_or("HDR-Merge");
-    (dest_dir, format!("{stem}-HDR"))
+    let stem = reference_path.file_stem().and_then(|s| s.to_str()).unwrap_or("Merge");
+    (dest_dir, format!("{stem}-{suffix}"))
 }
 
 /// HDR merge (M5, RFC-0003): merges `image_ids` (>= 2, all RAW, in the
@@ -470,7 +475,7 @@ async fn merge_hdr_bracket(
             .map_err(|e| e.to_string())?;
 
             let reference_path = inputs[merged.reference_idx].path.clone();
-            let (dest_dir, stem) = hdr_merge_output_location(&reference_path);
+            let (dest_dir, stem) = merge_output_location(&reference_path, "HDR");
             let out_path = export::unique_output_path(&dest_dir, &stem, "jpg");
             merged.image.save(&out_path).map_err(|e| e.to_string())?;
             let bytes = std::fs::read(&out_path).map_err(|e| e.to_string())?;
@@ -545,10 +550,18 @@ async fn merge_hdr_bracket(
 /// detection/matching/RANSAC across several full-resolution photos is
 /// real CPU work, the same class of cost as HDR merge's own pipeline.
 ///
-/// The result is written to a NEW, content-hashed file under an
-/// app-managed `panoramas` directory (mirroring `merges`/`thumbnails`/
-/// `previews`) and cataloged exactly like a JPEG import: `thumbnail_path`
-/// stays NULL, picked up by the existing background thumbnail pass.
+/// The result is written directly into the SAME folder as the panorama's
+/// own reference source frame (`stitched.reference_idx` -- the middle image
+/// `panorama_merge::stitch` chains its homographies through; there's no
+/// single "best" frame the way HDR merge has one, but it's a perfectly good
+/// source image to sit next to), matching `merge_hdr_bracket`'s own fix for
+/// the same "hidden app-data output the user never sees in Finder/Explorer"
+/// bug (see `merge_output_location`'s doc comment). Filename is that source
+/// frame's own stem plus `-Panorama` (collision-avoided via
+/// `export::unique_output_path`), not a content hash, same reasoning as HDR
+/// merge's own filename. Cataloged exactly like a JPEG import:
+/// `thumbnail_path` stays NULL, picked up by the existing background
+/// thumbnail pass.
 #[tauri::command]
 async fn merge_panorama(app: AppHandle, state: State<'_, AppState>, image_ids: Vec<i64>) -> Result<i64, String> {
     if image_ids.len() < 2 {
@@ -556,13 +569,6 @@ async fn merge_panorama(app: AppHandle, state: State<'_, AppState>, image_ids: V
     }
 
     let catalog = state.catalog.clone();
-    // panoramas_dir holds real, irreplaceable output -- fixed app-data
-    // location, unlike thumbnails/previews below. NOTE: merge_hdr_bracket
-    // no longer uses an equivalent app-data directory (it now writes next
-    // to the bracket's own reference source file instead, per a reported
-    // bug -- see its own doc comment); this one hasn't been asked to
-    // change to match.
-    let panoramas_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("panoramas");
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
     let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
 
@@ -585,20 +591,12 @@ async fn merge_panorama(app: AppHandle, state: State<'_, AppState>, image_ids: V
 
             let stitched = panorama_merge::stitch(&paths).map_err(|e| e.to_string())?;
 
-            std::fs::create_dir_all(&panoramas_dir).map_err(|e| e.to_string())?;
-            // Same save-then-hash-then-rename shape as merge_hdr_bracket:
-            // the encoded JPEG bytes ARE this image's content, so there's
-            // no pre-existing source file to hash before the encode.
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let tmp_path = panoramas_dir.join(format!("tmp-{nanos}.jpg"));
-            stitched.image.save(&tmp_path).map_err(|e| e.to_string())?;
-            let bytes = std::fs::read(&tmp_path).map_err(|e| e.to_string())?;
+            let reference_path = paths[stitched.reference_idx].clone();
+            let (dest_dir, stem) = merge_output_location(&reference_path, "Panorama");
+            let out_path = export::unique_output_path(&dest_dir, &stem, "jpg");
+            stitched.image.save(&out_path).map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(&out_path).map_err(|e| e.to_string())?;
             let content_hash = blake3::hash(&bytes).to_hex().to_string();
-            let out_path = panoramas_dir.join(format!("{content_hash}.jpg"));
-            std::fs::rename(&tmp_path, &out_path).map_err(|e| e.to_string())?;
 
             let result_metadata = metadata::ImageMetadata {
                 width: Some(stitched.image.width()),
@@ -1727,16 +1725,39 @@ mod tests {
     /// content hash, and not inside any newly-created subfolder.
     #[test]
     fn hdr_merge_output_location_writes_next_to_the_reference_source_with_no_new_folder() {
-        let (dest_dir, stem) = hdr_merge_output_location(std::path::Path::new("/photos/vacation/IMG_1234.CR2"));
+        let (dest_dir, stem) = merge_output_location(std::path::Path::new("/photos/vacation/IMG_1234.CR2"), "HDR");
         assert_eq!(dest_dir, PathBuf::from("/photos/vacation"), "must be the source's own folder, not an app-data path");
         assert_eq!(stem, "IMG_1234-HDR");
     }
 
     #[test]
     fn hdr_merge_output_location_falls_back_gracefully_for_a_bare_filename() {
-        let (dest_dir, stem) = hdr_merge_output_location(std::path::Path::new("IMG_1234.CR2"));
+        let (dest_dir, stem) = merge_output_location(std::path::Path::new("IMG_1234.CR2"), "HDR");
         assert_eq!(dest_dir, PathBuf::from("."));
         assert_eq!(stem, "IMG_1234-HDR");
+    }
+
+    /// Same fix, applied to panorama merge: it used to write its stitched
+    /// result into a hidden app-data `panoramas` directory instead of next
+    /// to one of the panorama's own source files. There's no single
+    /// "reference frame" concept for a panorama the way HDR merge has one,
+    /// but `panorama_merge::stitch` picks a middle `reference_idx` for its
+    /// homography chaining, and that source image's own folder is what the
+    /// output must land next to, under a readable `{stem}-Panorama.jpg`
+    /// name -- not a content hash, and not inside any newly-created
+    /// subfolder.
+    #[test]
+    fn panorama_merge_output_location_writes_next_to_the_reference_source_with_no_new_folder() {
+        let (dest_dir, stem) = merge_output_location(std::path::Path::new("/photos/vacation/IMG_5678.jpg"), "Panorama");
+        assert_eq!(dest_dir, PathBuf::from("/photos/vacation"), "must be the source's own folder, not an app-data path");
+        assert_eq!(stem, "IMG_5678-Panorama");
+    }
+
+    #[test]
+    fn panorama_merge_output_location_falls_back_gracefully_for_a_bare_filename() {
+        let (dest_dir, stem) = merge_output_location(std::path::Path::new("IMG_5678.jpg"), "Panorama");
+        assert_eq!(dest_dir, PathBuf::from("."));
+        assert_eq!(stem, "IMG_5678-Panorama");
     }
 
     /// The bug this test pins: a plain `starts_with(image_id.to_string())`

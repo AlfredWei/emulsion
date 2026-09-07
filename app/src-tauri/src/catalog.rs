@@ -602,6 +602,46 @@ impl Catalog {
                 homography_json TEXT NOT NULL,
                 PRIMARY KEY (result_image_id, source_image_id)
             );
+
+            -- Face detection / People view (M5 Slice 6, RFC-0005 §3.4).
+            -- Schema only at this point -- no detection/embedding model has
+            -- been chosen yet (RFC-0005 §5 open questions), so nothing
+            -- populates these tables in production yet. Landing the schema
+            -- ahead of the model choice mirrors how hdr_merge_sources/
+            -- panorama_merge_sources' shape was settled by their RFCs
+            -- independently of the pixel-processing code that fills them.
+            --
+            -- `person_id` starts NULL (detected but not yet clustered) --
+            -- clustering (face_cluster.rs) is what populates it later.
+            -- `embedding` lives on `images`, not `image_versions`: a face's
+            -- identity doesn't change across virtual copies/edits of the
+            -- same source image, matching how content_hash/EXIF already
+            -- live on `images`. Deleting an image cascades to its `faces`
+            -- rows; deleting a `people` row (a future merge/cleanup action)
+            -- clears `faces.person_id` back to NULL rather than deleting
+            -- the underlying detections -- same both-directions shape this
+            -- schema already uses for hdr_merge_sources/panorama_merge_sources.
+            CREATE TABLE IF NOT EXISTS people (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                cover_face_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS faces (
+                id INTEGER PRIMARY KEY,
+                image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+                bbox_x REAL NOT NULL,
+                bbox_y REAL NOT NULL,
+                bbox_w REAL NOT NULL,
+                bbox_h REAL NOT NULL,
+                embedding BLOB NOT NULL,
+                detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_faces_image_id ON faces(image_id);
+            CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces(person_id);
             ",
         )?;
 
@@ -990,6 +1030,11 @@ impl Catalog {
                 "DELETE FROM panorama_merge_sources WHERE result_image_id = ?1 OR source_image_id = ?1",
                 params![image_id],
             )?;
+            // M5 Slice 6 (face detection, RFC-0005 §3.4): one-directional,
+            // same explicit discipline as image_versions/image_keywords/
+            // collection_images above -- a face row always belongs to
+            // exactly one image, never a merge-style result/source pair.
+            tx.execute("DELETE FROM faces WHERE image_id = ?1", params![image_id])?;
             tx.execute("DELETE FROM images WHERE id = ?1", params![image_id])?;
             removed.push(row);
         }
@@ -3282,5 +3327,46 @@ mod tests {
             get_ms < SINGLE_ROW_OP_BUDGET_MS,
             "get_edit_stack() took {get_ms}ms over {N} images, budget is {SINGLE_ROW_OP_BUDGET_MS}ms"
         );
+    }
+
+    // Face detection / People view schema (RFC-0005 §3.4). No accessor
+    // functions exist yet -- these tests exercise the raw schema directly,
+    // same as the ALTER-TABLE migration test above does, since the
+    // detection/embedding pipeline that will actually populate `faces` is
+    // still blocked on RFC-0005 §5's open model/license question.
+    #[test]
+    fn faces_and_people_tables_exist_with_expected_cascade_behavior() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog.add_image("/a.jpg").unwrap();
+        catalog
+            .conn
+            .execute("INSERT INTO people (id, name) VALUES (1, 'Alex')", [])
+            .unwrap();
+        catalog
+            .conn
+            .execute(
+                "INSERT INTO faces (image_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding)
+                 VALUES (?1, 1, 0.1, 0.2, 0.3, 0.4, ?2)",
+                params![image_id, vec![0u8, 1, 2, 3]],
+            )
+            .unwrap();
+
+        // Deleting the person clears the face's person_id but keeps the
+        // detection row -- ON DELETE SET NULL, not a cascade delete.
+        catalog.conn.execute("DELETE FROM people WHERE id = 1", []).unwrap();
+        let person_id: Option<i64> = catalog
+            .conn
+            .query_row("SELECT person_id FROM faces WHERE image_id = ?1", params![image_id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(person_id, None, "removing a person must not delete the underlying face detection");
+
+        // Deleting the image cascades to its faces rows -- same shape as
+        // hdr_merge_sources/panorama_merge_sources' own image-delete cascade.
+        catalog.remove_images(&[image_id]).unwrap();
+        let remaining: i64 = catalog
+            .conn
+            .query_row("SELECT count(*) FROM faces WHERE image_id = ?1", params![image_id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0, "removing an image must drop its face detections");
     }
 }

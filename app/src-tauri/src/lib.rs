@@ -1,6 +1,14 @@
 mod catalog;
 mod develop_engine;
 mod export;
+// M5 Slice 6 (face detection, RFC-0005): the clustering half of the
+// pipeline, hand-rolled and unit-tested against synthetic vectors ahead
+// of the detection/embedding model choice (RFC-0005 §5, still open) that
+// will eventually call it. `#[allow(dead_code)]` here for the same reason
+// `catalog.rs`'s own pre-wired building blocks use it: real, tested API
+// with no production caller yet, not unused code to delete.
+#[allow(dead_code)]
+mod face_cluster;
 mod hdr_merge;
 mod import;
 mod jpeg_decode;

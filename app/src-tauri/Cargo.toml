@@ -35,6 +35,9 @@ lensfun = "0.7.0"
 bytemuck = "1.25"
 printpdf = { version = "0.12.7", default-features = false }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+tract-onnx = "0.23.7"
+sha2 = "0.11.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 
 [features]
 # Embedded WebDriver server for e2e UI testing (app/e2e/) — opt-in only, never
@@ -56,4 +59,5 @@ rsraw = { path = "vendor/rsraw" }
 
 [dev-dependencies]
 little_exif = "0.6.23"
+tokio = { version = "1.53.1", features = ["rt", "macros"] }
 

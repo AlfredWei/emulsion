@@ -111,9 +111,11 @@ Detection+embedding runs as a background job per import batch, same shape as `ge
 
 ## 5. Open questions requiring an explicit user decision before implementation
 
-1. **Exact detection + embedding model files, source, and license** (§3.3) — needs real research and a license-verification pass before any code lands, not assumed from this RFC's model-*family* recommendation alone.
-2. **Real-photo test data for end-to-end clustering verification** (§4) — a privacy/consent question, not just a licensing one; needs the user's explicit choice among the options named above.
-3. **Whether model weights are committed to the repo or fetched-once-and-cached locally** (§3.3) — secondary to #1, decidable once the specific files/licenses are known.
+All three resolved 2026-09-08 — see [`models/FACE_MODELS.md`](../../models/FACE_MODELS.md) for the full research and reasoning behind #1 and #3.
+
+1. **~~Exact detection + embedding model files, source, and license~~ (§3.3)** — RESOLVED: **YuNet** (detection, MIT, `opencv/opencv_zoo`) + **SFace** (embedding, Apache 2.0, same repo). SFace's training data (MS1MV2/MS-Celeb-1M) carries a known consent controversy shared by nearly the entire pre-2020 face-embedding model family, and its Apache-2.0 grant traces to the original author's own contribution rather than an independent third-party statement — both accepted as named, documented tradeoffs rather than silently ignored. InsightFace's `buffalo_l`/`antelopev2` family was ruled out: pretrained weights are "non-commercial research only," incompatible with this repo's own MIT license.
+2. **~~Real-photo test data for end-to-end clustering verification~~ (§4)** — RESOLVED: option (a) — the user's own photos, env-var-gated to a local, never-committed directory (same pattern as `EMULSION_TEST_PANORAMA_DIR`). No committed real-photo fixture for this feature, ever.
+3. **~~Whether model weights are committed to the repo or fetched-once-and-cached locally~~ (§3.3)** — RESOLVED: fetched once on first use into the app's data directory, cached there, **not** committed to the repo. SFace alone is ~37MB (this RFC originally assumed 1-5MB each) — nearly half this repo's current total `.git` size for one binary asset, and there's no Git LFS configured — so the RFC's own "unless license terms specifically prohibit redistribution" default lean toward committing didn't survive contact with the real file size.
 
 ## 6. ADR implications once this ships
 

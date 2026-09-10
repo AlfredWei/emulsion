@@ -136,6 +136,38 @@ pub struct ImageSummary {
     pub contact: Option<String>,
 }
 
+/// One detected face (RFC-0005 §3.4/§3.6), with its person's name already
+/// joined in. `person_id`/`person_name` are both `None` for a detection
+/// that hasn't been clustered/named yet -- the frontend's "Who is this?"
+/// state. Bbox fields are normalized `[0, 1]` fractions of the image, same
+/// convention as the `faces` table itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FaceRow {
+    pub id: i64,
+    pub image_id: i64,
+    pub person_id: Option<i64>,
+    pub person_name: Option<String>,
+    pub bbox_x: f32,
+    pub bbox_y: f32,
+    pub bbox_w: f32,
+    pub bbox_h: f32,
+}
+
+/// One row of the People grid (RFC-0005 §3.6): `name` is `None` until the
+/// user names it (shown as "Person N" in the UI, same as the reviewed
+/// mockup), `cover_face_id` is whichever face seeded this person's
+/// cluster (an FK into `faces`, not resolved to a path here -- the
+/// frontend already has `get_faces_for_image`/thumbnail machinery for
+/// that), `photo_count` counts distinct images, not faces (the same
+/// person appearing twice in one photo still counts once).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersonRow {
+    pub id: i64,
+    pub name: Option<String>,
+    pub cover_face_id: Option<i64>,
+    pub photo_count: i64,
+}
+
 /// What `remove_images` hands back per deleted row, so the command layer
 /// can clean up the app-owned derived files (thumbnail JPEG, content-hash-
 /// keyed Develop preview PNG) after the transaction commits. Never
@@ -637,6 +669,12 @@ impl Catalog {
                 bbox_w REAL NOT NULL,
                 bbox_h REAL NOT NULL,
                 embedding BLOB NOT NULL,
+                -- 0 = a real detection, eligible for clustering (whether
+                -- or not it's been assigned a person_id yet); 1 = the user
+                -- confirmed this crop is not a face -- permanently
+                -- excluded from clustering, but the row is kept, not
+                -- deleted (see this table's own top comment).
+                excluded INTEGER NOT NULL DEFAULT 0,
                 detected_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -732,6 +770,14 @@ impl Catalog {
             "ALTER TABLE images ADD COLUMN contact TEXT",
             "ALTER TABLE image_versions ADD COLUMN caption TEXT",
             "ALTER TABLE images ADD COLUMN import_batch INTEGER",
+            // M5 Slice 6 (face detection wiring): a real gap found while
+            // implementing `reassign_face`'s "not a face" action
+            // (RFC-0005 §3.6) -- `person_id IS NULL` alone can't
+            // distinguish "detected, not yet clustered" (should still be
+            // considered by clustering) from "confirmed not a face"
+            // (must never be, but the detection row is kept rather than
+            // deleted, same as the schema's own comment already promised).
+            "ALTER TABLE faces ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0",
         ] {
             add_column_if_missing(conn, ddl)?;
         }
@@ -957,6 +1003,118 @@ impl Catalog {
         )?;
         let rows = stmt
             .query_map(params![result_image_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect();
+        rows
+    }
+
+    /// Inserts one detected face (RFC-0005 §3.4), `person_id` NULL and
+    /// `excluded` false until clustering or the user's own correction
+    /// says otherwise. `embedding` is stored as raw native-endian `f32`
+    /// bytes via `bytemuck` -- every platform this app targets (x86_64,
+    /// arm64) is little-endian, so this matches the schema's own
+    /// "little-endian" comment without a manual byte-swap.
+    pub fn add_face(&self, image_id: i64, bbox: (f32, f32, f32, f32), embedding: &[f32]) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO faces (image_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![image_id, bbox.0, bbox.1, bbox.2, bbox.3, bytemuck::cast_slice::<f32, u8>(embedding)],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn set_face_person(&self, face_id: i64, person_id: Option<i64>) -> Result<()> {
+        self.conn.execute("UPDATE faces SET person_id = ?1 WHERE id = ?2", params![person_id, face_id])?;
+        Ok(())
+    }
+
+    /// The "not a face" correction (RFC-0005 §3.6): also clears any
+    /// existing `person_id` -- an excluded row must never keep
+    /// contributing to a person's centroid or stay visible as one of
+    /// their photos.
+    pub fn set_face_excluded(&self, face_id: i64, excluded: bool) -> Result<()> {
+        self.conn.execute("UPDATE faces SET excluded = ?1, person_id = NULL WHERE id = ?2", params![excluded as i64, face_id])?;
+        Ok(())
+    }
+
+    /// Every non-excluded face on one image, with its person's name
+    /// (`NULL` if unclustered) already joined in -- what the People
+    /// module's per-photo tagging view (RFC-0005 §3.6) reads directly,
+    /// no separate `list_people` round-trip needed to label each box.
+    pub fn get_faces_for_image(&self, image_id: i64) -> Result<Vec<FaceRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, f.image_id, f.person_id, p.name, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h
+             FROM faces f LEFT JOIN people p ON p.id = f.person_id
+             WHERE f.image_id = ?1 AND f.excluded = 0
+             ORDER BY f.id",
+        )?;
+        let rows = stmt
+            .query_map(params![image_id], |row| {
+                Ok(FaceRow {
+                    id: row.get(0)?,
+                    image_id: row.get(1)?,
+                    person_id: row.get(2)?,
+                    person_name: row.get(3)?,
+                    bbox_x: row.get(4)?,
+                    bbox_y: row.get(5)?,
+                    bbox_w: row.get(6)?,
+                    bbox_h: row.get(7)?,
+                })
+            })?
+            .collect();
+        rows
+    }
+
+    /// Every non-excluded face's id, current `person_id` (`None` if not
+    /// yet clustered), and decoded embedding -- the raw material
+    /// `face_pipeline.rs` needs to rebuild cluster centroids (grouping by
+    /// `person_id`) before feeding new faces through
+    /// `face_cluster::assign_face`, or to recompute clustering from
+    /// scratch for the explicit "Find People" action.
+    pub fn get_clusterable_faces(&self) -> Result<Vec<(i64, Option<i64>, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare("SELECT id, person_id, embedding FROM faces WHERE excluded = 0 ORDER BY id")?;
+        let rows = stmt
+            .query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let person_id: Option<i64> = row.get(1)?;
+                let blob: Vec<u8> = row.get(2)?;
+                Ok((id, person_id, bytemuck::cast_slice::<u8, f32>(&blob).to_vec()))
+            })?
+            .collect();
+        rows
+    }
+
+    /// Creates a new person for a brand-new cluster -- `cover_face_id` is
+    /// the face that seeded it, shown as that person's grid thumbnail
+    /// until the user picks a different one (not yet exposed as its own
+    /// action -- RFC-0005 §3.6 only names basic correction).
+    pub fn create_person(&self, cover_face_id: i64) -> Result<i64> {
+        self.conn.execute("INSERT INTO people (cover_face_id) VALUES (?1)", params![cover_face_id])?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn rename_person(&self, person_id: i64, name: Option<&str>) -> Result<()> {
+        self.conn.execute("UPDATE people SET name = ?1 WHERE id = ?2", params![name, person_id])?;
+        Ok(())
+    }
+
+    /// One row per person with at least one non-excluded face, cover
+    /// crop + name-or-`None` (the frontend shows "Person N" for `None`,
+    /// same as the reviewed mockup) + photo count, most photos first.
+    /// A person that ends up with zero faces (every one of them
+    /// reassigned/excluded away) is a real but expected state -- left in
+    /// the table rather than auto-deleted, since a stray empty person
+    /// with a name the user already typed shouldn't silently vanish; it
+    /// just sorts last and shows a 0 count.
+    pub fn list_people(&self) -> Result<Vec<PersonRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.id, p.name, p.cover_face_id, COUNT(DISTINCT f.image_id)
+             FROM people p LEFT JOIN faces f ON f.person_id = p.id AND f.excluded = 0
+             GROUP BY p.id
+             ORDER BY COUNT(DISTINCT f.image_id) DESC, p.id ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PersonRow { id: row.get(0)?, name: row.get(1)?, cover_face_id: row.get(2)?, photo_count: row.get(3)? })
+            })?
             .collect();
         rows
     }

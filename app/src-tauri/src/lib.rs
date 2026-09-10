@@ -3,21 +3,15 @@ mod develop_engine;
 mod export;
 // M5 Slice 6 (face detection, RFC-0005): the clustering half of the
 // pipeline, hand-rolled and unit-tested against synthetic vectors.
-// `#[allow(dead_code)]` here for the same reason `catalog.rs`'s own
-// pre-wired building blocks use it: real, tested API with no production
-// caller yet (that's the next slice -- import-pipeline/Tauri-command
-// wiring), not unused code to delete.
-#[allow(dead_code)]
 mod face_cluster;
 // Model fetch/cache (YuNet + SFace, models/FACE_MODELS.md) and the
-// detection/embedding pipeline itself. Same not-yet-wired-to-a-command
-// status as face_cluster above -- tract's op coverage against both real
-// model files is verified (see PROGRESS.md), but nothing in the app calls
-// this yet.
-#[allow(dead_code)]
+// detection/embedding pipeline itself.
 mod face_detect;
-#[allow(dead_code)]
 mod face_models;
+// Orchestrates face_detect + face_cluster against the catalog (detect ->
+// embed -> incremental cluster -> persist). Wired to the
+// `detect_faces_for_import_batch`/`recluster_faces` commands below.
+mod face_pipeline;
 mod hdr_merge;
 mod import;
 mod jpeg_decode;
@@ -32,8 +26,8 @@ mod source_decode;
 mod storage;
 
 use catalog::{
-    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, HistoryEntry, ImageKeywordAssignment,
-    ImageSummary, KeywordNode, KeywordRef, PresetEntry, SnapshotEntry,
+    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, FaceRow, HistoryEntry,
+    ImageKeywordAssignment, ImageSummary, KeywordNode, KeywordRef, PersonRow, PresetEntry, SnapshotEntry,
 };
 use export::{ExportOptions, ExportResult};
 use import::{ImportProgress, ImportSummary};
@@ -69,6 +63,13 @@ fn resolve_thumbnail_dir(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Resu
 
 fn resolve_previews_dir(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<PathBuf, String> {
     Ok(resolve_cache_root(app, catalog)?.join("previews"))
+}
+
+/// Where YuNet/SFace are fetched to and cached (models/FACE_MODELS.md's
+/// "fetched once, cached -- not committed" decision), following the same
+/// Settings > Storage override as thumbnails/previews.
+fn resolve_face_models_dir(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<PathBuf, String> {
+    Ok(resolve_cache_root(app, catalog)?.join("face_models"))
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -222,6 +223,129 @@ async fn ensure_thumbnail(app: AppHandle, state: State<'_, AppState>, version_id
     tauri::async_runtime::spawn_blocking(move || import::ensure_thumbnail(&catalog, version_id, &thumbnail_dir))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Face detection + incremental clustering (M5 Slice 6, RFC-0005) for one
+/// import batch -- same batch-scoping rationale as
+/// `backfill_missing_thumbnails`: a pre-existing backlog elsewhere in the
+/// catalog must not make a fresh import's own progress wait on it. Models
+/// are fetched/cached on first use (`face_models::ensure_models`) on the
+/// async executor (it's a network call), then detection/embedding itself
+/// runs on a blocking thread (CPU-heavy, like `import_folder`'s own scan).
+/// Emits `"face-detection-progress"` per image, mirroring
+/// `"thumbnail-progress"`'s shape.
+///
+/// Not yet called by the frontend -- this command exists so the People
+/// view (not yet built) has something real to invoke; triggering it
+/// automatically after every import, vs. leaving it as an explicit
+/// user/frontend-triggered step, is a frontend-slice decision, not this
+/// one's.
+#[tauri::command]
+async fn detect_faces_for_import_batch(app: AppHandle, state: State<'_, AppState>, import_batch: i64) -> Result<(), String> {
+    let catalog = state.catalog.clone();
+    let models_dir = resolve_face_models_dir(&app, &catalog)?;
+    let models = face_models::ensure_models(&models_dir).await.map_err(|e| e.to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let detector = face_detect::FaceDetector::load(&models.yunet).map_err(|e| e.to_string())?;
+        let embedder = face_detect::FaceEmbedder::load(&models.sface).map_err(|e| e.to_string())?;
+
+        let image_ids: Vec<i64> = {
+            let catalog = catalog.lock().map_err(|e| e.to_string())?;
+            catalog
+                .list_images()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|image| image.import_batch == Some(import_batch))
+                .map(|image| image.image_id)
+                .collect()
+        };
+
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        face_pipeline::detect_faces_for_batch(
+            &catalog,
+            &detector,
+            &embedder,
+            &image_ids,
+            face_pipeline::DEFAULT_CLUSTER_THRESHOLD,
+            |current, total| {
+                let _ = app.emit("face-detection-progress", ImportProgress { current, total });
+            },
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The explicit "Find People" action from the reviewed mockup
+/// (`docs/ux/mockups/people-face-tagging-mockup.html`) -- re-clusters
+/// every non-excluded face in the whole catalog from scratch
+/// (`face_pipeline::recluster_all`), reusing each face's own previous
+/// person id where it has one so it doesn't orphan names the user already
+/// typed.
+#[tauri::command]
+async fn recluster_faces(state: State<'_, AppState>) -> Result<(), String> {
+    let catalog = state.catalog.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        face_pipeline::recluster_all(&catalog, face_pipeline::DEFAULT_CLUSTER_THRESHOLD).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// People grid (M5 Slice 6): one row per person, ordered by photo count
+/// (see `Catalog::list_people`) so the grid's busiest/most-established
+/// people lead, matching the mockup's own ordering.
+#[tauri::command]
+fn list_people(state: State<'_, AppState>) -> Result<Vec<PersonRow>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.list_people().map_err(|e| e.to_string())
+}
+
+/// Tag Faces view (M5 Slice 6): every non-excluded detected face on one
+/// photo, with whatever name/person it's currently assigned to (if any).
+#[tauri::command]
+fn get_faces_for_image(state: State<'_, AppState>, image_id: i64) -> Result<Vec<FaceRow>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.get_faces_for_image(image_id).map_err(|e| e.to_string())
+}
+
+/// Backs the mockup's "+ New person "query"" row -- creates a person
+/// using this face as its cover, but does NOT itself assign the face to
+/// it. Callers pair this with `reassign_face` (and usually
+/// `rename_person`) right after, the same way the frontend composes
+/// existing collection/keyword commands rather than this layer offering
+/// one do-everything call.
+#[tauri::command]
+fn create_person(state: State<'_, AppState>, cover_face_id: i64) -> Result<i64, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.create_person(cover_face_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn rename_person(state: State<'_, AppState>, person_id: i64, name: Option<String>) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.rename_person(person_id, name.as_deref()).map_err(|e| e.to_string())
+}
+
+/// Backs both the tag popover's "existing suggestion" pick and the face
+/// menu's "Reassign to…" (mockup) -- `person_id: None` clears the
+/// assignment back to unclustered rather than deleting the face.
+#[tauri::command]
+fn reassign_face(state: State<'_, AppState>, face_id: i64, person_id: Option<i64>) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_face_person(face_id, person_id).map_err(|e| e.to_string())
+}
+
+/// Backs the face menu's "Not a face" action -- kept, not deleted, per
+/// RFC-0005's semantics (the mockup's own panel note explains this to the
+/// user); `set_face_excluded` also clears any `person_id` on the way in.
+#[tauri::command]
+fn set_face_excluded(state: State<'_, AppState>, face_id: i64, excluded: bool) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_face_excluded(face_id, excluded).map_err(|e| e.to_string())
 }
 
 /// Backs the "Import Files…" picker dialog's filter list (M2 Slice 1) --
@@ -1658,6 +1782,14 @@ pub fn run() {
             import_files,
             backfill_missing_thumbnails,
             ensure_thumbnail,
+            detect_faces_for_import_batch,
+            recluster_faces,
+            list_people,
+            get_faces_for_image,
+            create_person,
+            rename_person,
+            reassign_face,
+            set_face_excluded,
             get_supported_extensions,
             list_images,
             set_rating,

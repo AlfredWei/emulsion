@@ -44,6 +44,21 @@ impl Cluster {
         Cluster { centroid: embedding.to_vec(), member_count: 1 }
     }
 
+    /// Rebuilds a cluster's centroid from a person's already-stored member
+    /// embeddings (`Catalog::get_clusterable_faces`, grouped by
+    /// `person_id`) -- the real-world counterpart to `seed`/`absorb`,
+    /// which only ever see one new embedding at a time and have no reason
+    /// to be `pub` themselves. `None` for an empty slice (a person with no
+    /// remaining non-excluded faces has no cluster to rebuild).
+    pub fn from_members(embeddings: &[Vec<f32>]) -> Option<Self> {
+        let (first, rest) = embeddings.split_first()?;
+        let mut cluster = Self::seed(first);
+        for embedding in rest {
+            cluster.absorb(embedding);
+        }
+        Some(cluster)
+    }
+
     /// Streaming mean update: `new_mean = old_mean + (x - old_mean) / (n + 1)`,
     /// applied per dimension. Gives the exact mean of all members assigned
     /// so far without ever storing them.
@@ -221,5 +236,21 @@ mod tests {
         for (got, want) in clusters[0].centroid.iter().zip(expected_mean) {
             assert!((got - want).abs() < 1e-6, "got {got}, want {want}");
         }
+    }
+
+    #[test]
+    fn from_members_matches_the_true_mean() {
+        let members = vec![vec![1.0, 0.0, 0.0], vec![0.9, 0.1, 0.0], vec![0.95, -0.05, 0.05]];
+        let cluster = Cluster::from_members(&members).unwrap();
+        assert_eq!(cluster.member_count, 3);
+        let expected_mean = [(1.0 + 0.9 + 0.95) / 3.0, (0.0 + 0.1 - 0.05) / 3.0, (0.0 + 0.0 + 0.05) / 3.0];
+        for (got, want) in cluster.centroid.iter().zip(expected_mean) {
+            assert!((got - want).abs() < 1e-6, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn from_members_is_none_for_an_empty_slice() {
+        assert!(Cluster::from_members(&[]).is_none());
     }
 }

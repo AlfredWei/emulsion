@@ -40,6 +40,8 @@ Two real options exist in the Rust ecosystem for running a pretrained ONNX face 
 
 **Named, accepted cost of this choice**: `tract`'s op coverage must be verified empirically against whatever specific ONNX model is chosen (§3.3) before committing — not assumed. If a candidate model uses an op `tract` doesn't support, the fallback is either a different model or (only if no viable `tract`-compatible model exists) revisiting this decision, not silently forcing `ort` in through the back door. CPU-only inference is an accepted tradeoff too: face detection/embedding over a photo library is a background/batch job (§3.5), not a `<100ms` interactive path like Develop's GPU shader (ADR-0004) — throughput, not latency, is what matters here, and `tract`'s CPU performance is well-documented as adequate for small (mobile-class) detection/embedding models at that pace.
 
+**Verified 2026-09-09, empirically, against both real chosen model files**: `tract-onnx` 0.23.7 loads both YuNet and SFace with no missing-op errors, and — the stronger check, since a graph can parse while still hitting an unimplemented kernel at execution time — actually *runs* both to completion producing correctly-shaped output tensors (YuNet's 12 outputs at the expected per-stride anchor counts; SFace's 128-dim embedding). Confirmed further downstream, end to end against a real photo (`test_image/Smiling-woman-pink-shirt-portrait.jpg`): a real face detected at score 0.927 with a visually-correct bounding box, a correctly-aligned 112x112 crop, and an embedding that lands `>0.1` cosine-distance closer to a second embedding of the *same* photo than to a different person's photo (`test_image/Red-eye-flash.jpeg`). This closes the last open technical unknown blocking implementation (`app/src-tauri/src/face_detect.rs`).
+
 ### 3.3 Models
 
 Two small, well-known model families fit this use case:
@@ -88,6 +90,8 @@ Unlike detection/embedding (which needs a trained model), clustering over a set 
 - **Threshold is a real, named tuning risk**: too tight over-splits one person into many small clusters (annoying but recoverable — the user can merge them); too loose merges two different people (worse — silently wrong). No amount of design reasoning alone settles the right number; it must be tuned empirically against a real, varied test set (§4) before shipping, and surfaced as a per-catalog adjustable setting if a single fixed default proves not to generalize (an explicit fallback, not assumed necessary from the start).
 
 ### 3.6 Frontend: People view
+
+A static, non-functional mockup of the tagging flow described below — reviewed and approved by the user before implementation started — is at [docs/ux/mockups/people-face-tagging-mockup.html](../ux/mockups/people-face-tagging-mockup.html), same "design reference only, not application code" framing as `docs/ux/mockups/library-develop-mockup.html`.
 
 - New top-level view/module (alongside Library/Develop/Print — `+page.svelte`'s existing `activeModule` switch), showing one grid cell per `people` row (cover face crop + name-or-"Person N" + count), reusing `LibraryGrid.svelte`'s existing virtualization approach rather than a new one.
 - Clicking a person filters the Library grid to every image containing at least one face assigned to them (a new Library filter dimension, alongside the existing rating/flag/color/date/camera/lens filters already in the titlebar).

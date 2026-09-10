@@ -2,13 +2,22 @@ mod catalog;
 mod develop_engine;
 mod export;
 // M5 Slice 6 (face detection, RFC-0005): the clustering half of the
-// pipeline, hand-rolled and unit-tested against synthetic vectors ahead
-// of the detection/embedding model choice (RFC-0005 §5, still open) that
-// will eventually call it. `#[allow(dead_code)]` here for the same reason
-// `catalog.rs`'s own pre-wired building blocks use it: real, tested API
-// with no production caller yet, not unused code to delete.
+// pipeline, hand-rolled and unit-tested against synthetic vectors.
+// `#[allow(dead_code)]` here for the same reason `catalog.rs`'s own
+// pre-wired building blocks use it: real, tested API with no production
+// caller yet (that's the next slice -- import-pipeline/Tauri-command
+// wiring), not unused code to delete.
 #[allow(dead_code)]
 mod face_cluster;
+// Model fetch/cache (YuNet + SFace, models/FACE_MODELS.md) and the
+// detection/embedding pipeline itself. Same not-yet-wired-to-a-command
+// status as face_cluster above -- tract's op coverage against both real
+// model files is verified (see PROGRESS.md), but nothing in the app calls
+// this yet.
+#[allow(dead_code)]
+mod face_detect;
+#[allow(dead_code)]
+mod face_models;
 mod hdr_merge;
 mod import;
 mod jpeg_decode;

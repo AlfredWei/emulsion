@@ -1,0 +1,588 @@
+<title>Emulsion — Face detection &amp; tagging design reference</title>
+
+<style>
+  :root{
+    --bg-canvas:#141210;
+    --bg-app:#1a1815;
+    --bg-panel:#1e1c19;
+    --bg-panel-raised:#28251f;
+    --bg-hover:#332f28;
+    --border-subtle:#37332b;
+    --border-strong:#4a453b;
+    --text-primary:#efeae2;
+    --text-secondary:#a39c8e;
+    --text-tertiary:#6e695e;
+    --accent:#e0932f;
+    --accent-strong:#f0a94a;
+    --accent-soft:#4a371f;
+    --accent-on:#1b1310;
+    --label-red:#e1585b;
+    --label-yellow:#e0c13b;
+    --label-green:#6fcb6b;
+    --label-blue:#5b9ee1;
+    --label-purple:#a87ce0;
+    --shadow-soft:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -8px rgba(0,0,0,.6);
+    --radius-s:3px;
+    --radius-m:5px;
+    --font-ui: -apple-system, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, Menlo, monospace;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:var(--bg-canvas);
+    color:var(--text-primary);
+    font-family:var(--font-ui);
+    font-size:13px;
+    line-height:1.4;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:22px;
+    padding:28px 16px 56px;
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{ transition-duration:0.001ms !important; animation-duration:0.001ms !important; }
+  }
+
+  .meta{
+    width:100%; max-width:1180px;
+    display:flex; align-items:baseline; justify-content:space-between;
+    color:var(--text-tertiary);
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    padding:0 4px;
+  }
+  .meta b{ color:var(--text-secondary); font-weight:600; }
+
+  .window{
+    width:100%; max-width:1180px;
+    background:var(--bg-app);
+    border:1px solid var(--border-subtle);
+    border-radius:10px;
+    box-shadow:var(--shadow-soft);
+    overflow:hidden;
+  }
+  .titlebar{
+    height:42px;
+    display:flex; align-items:center;
+    gap:14px;
+    padding:0 14px;
+    background:var(--bg-app);
+    border-bottom:1px solid var(--border-subtle);
+  }
+  .traffic{ display:flex; gap:7px; }
+  .traffic span{ width:11px; height:11px; border-radius:50%; display:block; }
+  .traffic span:nth-child(1){ background:#e1585b; }
+  .traffic span:nth-child(2){ background:#e0c13b; }
+  .traffic span:nth-child(3){ background:#6fcb6b; }
+  .app-name{ font-weight:600; font-size:12.5px; color:var(--text-secondary); }
+  .app-name em{ font-style:normal; color:var(--text-primary); }
+
+  .module-switch{
+    display:flex; background:var(--bg-panel); border:1px solid var(--border-subtle);
+    border-radius:6px; padding:2px; gap:2px;
+  }
+  .module-switch button{
+    all:unset; cursor:pointer;
+    padding:5px 14px; font-size:11.5px; font-weight:600;
+    border-radius:4px; color:var(--text-secondary);
+    letter-spacing:.02em;
+  }
+  .module-switch button.active{ background:var(--bg-panel-raised); color:var(--text-primary); }
+  .module-switch button.disabled{ opacity:.4; cursor:default; }
+  .titlebar .spacer{ flex:1; }
+
+  .body-grid{ display:grid; grid-template-columns:1fr 240px; height:560px; }
+  .panel{ background:var(--bg-panel); overflow-y:auto; border-left:1px solid var(--border-subtle); padding:14px 12px; }
+  .main{ background:var(--bg-canvas); position:relative; overflow:hidden; display:flex; flex-direction:column; }
+
+  .section-label{
+    font-family:var(--font-mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--text-tertiary); padding:10px 4px 6px; font-weight:600;
+  }
+
+  /* ---- People toolbar (shared shape with Library's own toolbar) ---- */
+  .lib-toolbar{
+    display:flex; align-items:center; gap:10px;
+    padding:9px 14px; border-bottom:1px solid var(--border-subtle);
+    background:var(--bg-app);
+  }
+  .chip{
+    font-size:11px; padding:4px 9px; border-radius:99px; border:1px solid var(--border-strong);
+    color:var(--text-secondary); display:flex; align-items:center; gap:5px; cursor:default;
+  }
+  .chip.on{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent-strong); }
+  .lib-toolbar .spacer{ flex:1; }
+  .find-people-btn{
+    all:unset; cursor:pointer; display:flex; align-items:center; gap:6px;
+    font-size:11.5px; font-weight:700; letter-spacing:.02em;
+    padding:6px 12px; border-radius:6px;
+    background:var(--accent-soft); border:1px solid var(--accent); color:var(--accent-strong);
+  }
+  .find-people-btn:hover{ background:var(--accent); color:var(--accent-on); }
+  .find-people-btn .spin{ display:inline-block; }
+  .find-people-btn.working .spin{ animation:spin 0.9s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  .segmented{ display:flex; background:var(--bg-panel); border:1px solid var(--border-subtle); border-radius:6px; padding:2px; }
+  .segmented button{ all:unset; padding:4px 10px; font-size:10.5px; border-radius:4px; color:var(--text-secondary); cursor:pointer; }
+  .segmented button.on{ background:var(--bg-panel-raised); color:var(--text-primary); }
+
+  /* ---- People grid (cards, not photo cells) ---- */
+  .people-grid-scroll{ flex:1; overflow-y:auto; padding:18px; }
+  .person-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(108px,1fr)); gap:20px 12px; }
+  .person-card{ display:flex; flex-direction:column; align-items:center; gap:8px; cursor:pointer; }
+  .person-avatar{
+    width:86px; height:86px; border-radius:50%; overflow:hidden; position:relative;
+    border:2px solid transparent; box-shadow:0 1px 2px rgba(0,0,0,.5);
+  }
+  .person-card:hover .person-avatar{ border-color:var(--accent); }
+  .person-card.unnamed .person-avatar{ border-style:dashed; border-color:var(--border-strong); }
+  .person-card:hover.unnamed .person-avatar{ border-color:var(--text-secondary); }
+  .person-name{ font-size:12px; font-weight:600; color:var(--text-primary); max-width:100px; text-align:center;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:text; border-radius:var(--radius-s); padding:1px 4px; }
+  .person-name:hover{ background:var(--bg-hover); }
+  .person-name[contenteditable="true"]{ outline:1px solid var(--accent); background:var(--bg-panel-raised); white-space:normal; overflow:visible; }
+  .person-card.unnamed .person-name{ color:var(--text-tertiary); font-weight:500; font-style:italic; }
+  .person-count{ font-family:var(--font-mono); font-size:10px; color:var(--text-tertiary); }
+
+  /* portrait-crop placeholders standing in for real face thumbnails */
+  .face-swatch{ position:absolute; inset:0; }
+  .face-swatch.f1{ background:radial-gradient(circle at 50% 38%, #f0caa0 0%, #d99a70 42%, #7a4a3a 100%); }
+  .face-swatch.f2{ background:radial-gradient(circle at 46% 36%, #e8b98c 0%, #b8794f 45%, #5c3826 100%); }
+  .face-swatch.f3{ background:radial-gradient(circle at 52% 40%, #f2d3ab 0%, #cf9c68 42%, #6b422c 100%); }
+  .face-swatch.f4{ background:radial-gradient(circle at 48% 35%, #d9a878 0%, #a86c46 44%, #4a2f21 100%); }
+  .face-swatch.f5{ background:radial-gradient(circle at 50% 40%, #eec49a 0%, #c28a5c 43%, #5a3826 100%); }
+  .face-swatch.f6{ background:radial-gradient(circle at 44% 38%, #e0b088 0%, #ad6f47 45%, #4f3123 100%); }
+
+  /* ---- Tag Faces canvas ---- */
+  .tagcanvas-wrap{ flex:1; display:flex; align-items:center; justify-content:center; padding:24px; position:relative; }
+  .tagphoto{
+    position:relative; width:100%; max-width:640px; aspect-ratio:3/2; border-radius:2px;
+    overflow:visible;
+    box-shadow:0 20px 50px -14px rgba(0,0,0,.7);
+    background:
+      linear-gradient(180deg, rgba(0,0,0,0) 55%, rgba(0,0,0,.35) 100%),
+      linear-gradient(170deg,#c9b48c 0%,#9c8360 40%,#5c4a34 72%,#221b13 100%);
+  }
+  .tagphoto-inner{ position:absolute; inset:0; border-radius:2px; overflow:hidden; }
+  .face-region{ position:absolute; border-radius:46% 46% 42% 42%; overflow:hidden; filter:blur(0.3px); }
+
+  .face-box{ position:absolute; border:2px solid var(--accent); border-radius:6px; cursor:pointer; z-index:2; }
+  .face-box.untagged{ border-style:dashed; border-color:var(--text-secondary); }
+  .face-box.untagged:hover, .face-box.untagged.open{ border-color:var(--accent-strong); }
+  .face-box.removed{ opacity:0; pointer-events:none; }
+  .face-box .more-btn{
+    all:unset; position:absolute; top:-11px; right:-11px; width:18px; height:18px; border-radius:50%;
+    background:var(--bg-panel-raised); border:1px solid var(--border-strong); color:var(--text-secondary);
+    font-size:11px; display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity .12s;
+    cursor:pointer;
+  }
+  .face-box:hover .more-btn, .face-box.open .more-btn{ opacity:1; }
+  .tag-pill{
+    position:absolute; left:0; top:calc(100% + 6px); white-space:nowrap;
+    background:rgba(20,18,16,.85); color:var(--text-primary); font-size:10.5px; font-weight:600;
+    padding:3px 8px; border-radius:99px; display:flex; align-items:center; gap:5px;
+  }
+  .face-box.untagged .tag-pill{ color:var(--text-secondary); font-weight:500; background:rgba(20,18,16,.65); border:1px dashed var(--border-strong); }
+  .tag-pill .dot{ width:6px; height:6px; border-radius:50%; background:var(--accent-strong); flex:none; }
+  .tag-pill[contenteditable="true"]{ outline:1px solid var(--accent); background:var(--bg-panel-raised); }
+
+  /* ---- tagging popover ---- */
+  .tag-popover{
+    position:absolute; z-index:6; width:208px; background:var(--bg-panel-raised);
+    border:1px solid var(--border-strong); border-radius:var(--radius-m); box-shadow:var(--shadow-soft); padding:8px;
+  }
+  .tag-popover input[type=text]{
+    width:100%; background:var(--bg-panel); border:1px solid var(--border-subtle); border-radius:var(--radius-s);
+    color:var(--text-primary); font-size:12px; padding:6px 8px; margin-bottom:6px; font-family:var(--font-ui);
+  }
+  .tag-popover input[type=text]:focus{ outline:1px solid var(--accent); border-color:var(--accent); }
+  .suggestion{ display:flex; align-items:center; gap:8px; padding:5px 6px; border-radius:var(--radius-s); cursor:pointer; font-size:12px; }
+  .suggestion:hover{ background:var(--bg-hover); }
+  .suggestion .mini-avatar{ width:20px; height:20px; border-radius:50%; flex:none; position:relative; overflow:hidden; }
+  .suggestion .cnt{ margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--text-tertiary); }
+  .new-person{ border-top:1px solid var(--border-subtle); margin-top:4px; padding-top:7px; color:var(--accent-strong); font-weight:700; }
+
+  /* ---- basic-correction menu ---- */
+  .face-menu{
+    position:absolute; z-index:6; background:var(--bg-panel-raised); border:1px solid var(--border-strong);
+    border-radius:var(--radius-m); box-shadow:var(--shadow-soft); padding:4px; width:152px;
+  }
+  .face-menu button{
+    all:unset; display:block; width:100%; padding:6px 8px; font-size:12px; border-radius:var(--radius-s);
+    color:var(--text-secondary); cursor:pointer;
+  }
+  .face-menu button:hover{ background:var(--bg-hover); color:var(--text-primary); }
+  .face-menu button.danger:hover{ color:var(--label-red); }
+
+  /* ---- right panel: faces in this photo ---- */
+  .face-list-item{ display:flex; align-items:center; gap:8px; padding:7px 6px; border-radius:var(--radius-s); }
+  .face-list-item .mini-avatar{ width:32px; height:32px; border-radius:50%; flex:none; position:relative; overflow:hidden; box-shadow:0 0 0 1px var(--border-subtle); }
+  .face-list-item .info{ flex:1; min-width:0; }
+  .face-list-item .info .nm{ font-size:12px; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .face-list-item .info .nm.unnamed{ color:var(--text-tertiary); font-style:italic; }
+  .face-list-item .info .sub{ font-size:10px; color:var(--text-tertiary); }
+  .panel-note{ font-size:10.5px; color:var(--text-tertiary); line-height:1.5; padding:10px 6px 4px; border-top:1px solid var(--border-subtle); margin-top:8px; }
+
+  /* ---- review filmstrip ---- */
+  .filmstrip{
+    display:flex; gap:7px; padding:10px 14px; background:var(--bg-app);
+    border-top:1px solid var(--border-subtle); overflow-x:auto;
+  }
+  .review-cell{
+    width:76px; flex:none; aspect-ratio:3/2; border-radius:var(--radius-s); position:relative;
+    overflow:hidden; border:1px solid transparent; cursor:pointer;
+  }
+  .review-cell.current{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .review-cell .needs-review{
+    position:absolute; top:3px; right:3px; width:14px; height:14px; border-radius:50%;
+    background:var(--accent); color:var(--accent-on); font-size:9px; font-weight:800;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  .footnote{ width:100%; max-width:1180px; color:var(--text-tertiary); font-size:11px; padding:0 4px; line-height:1.6; }
+  .footnote code{ font-family:var(--font-mono); font-size:10.5px; color:var(--text-secondary); }
+</style>
+
+<div class="meta">
+  <span>Design reference · not application code</span>
+  <span><b>Emulsion</b> — People module · face detection &amp; tagging flow (RFC-0005 §3.6)</span>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic"><span></span><span></span><span></span></div>
+    <div class="app-name"><em>Emulsion</em> — Untitled Catalog</div>
+    <div class="module-switch">
+      <button class="disabled" title="See library-develop-mockup.html">Library</button>
+      <button class="disabled" title="See library-develop-mockup.html">Develop</button>
+      <button class="active">People</button>
+    </div>
+    <div class="spacer"></div>
+  </div>
+
+  <div class="lib-toolbar">
+    <span class="chip on">All People <span style="font-family:var(--font-mono);opacity:.7">12</span></span>
+    <span class="chip">Unnamed <span style="font-family:var(--font-mono);opacity:.7">3</span></span>
+    <div class="spacer"></div>
+    <button class="find-people-btn" id="findPeopleBtn"><span class="spin">⟲</span> Find People</button>
+    <div class="segmented" id="peopleView">
+      <button class="on" data-v="grid">Grid</button>
+      <button data-v="tag">Tag Faces</button>
+    </div>
+  </div>
+
+  <!-- ===================== GRID VIEW ===================== -->
+  <div id="view-grid">
+    <div class="people-grid-scroll">
+      <div class="person-grid" id="personGrid"></div>
+    </div>
+  </div>
+
+  <!-- ===================== TAG FACES VIEW ===================== -->
+  <div id="view-tag" style="display:none">
+    <div class="body-grid">
+      <div class="main">
+        <div class="tagcanvas-wrap">
+          <div class="tagphoto">
+            <div class="tagphoto-inner">
+              <div class="face-region" style="left:16%;top:20%;width:17%;height:24%"><div class="face-swatch f1"></div></div>
+              <div class="face-region" style="left:43%;top:14%;width:16%;height:23%"><div class="face-swatch f2"></div></div>
+              <div class="face-region" style="left:68%;top:26%;width:15%;height:21%"><div class="face-swatch f3"></div></div>
+            </div>
+            <div class="face-box" data-face="1" style="left:15%;top:19%;width:19%;height:26%">
+              <button class="more-btn" data-menu="1">⋯</button>
+              <span class="tag-pill" data-pill="1"><span class="dot"></span>Mira Chen</span>
+            </div>
+            <div class="face-box untagged" data-face="2" style="left:42%;top:13%;width:18%;height:25%">
+              <span class="tag-pill" data-pill="2">+ Who is this?</span>
+            </div>
+            <div class="face-box" data-face="3" style="left:67%;top:25%;width:17%;height:23%">
+              <button class="more-btn" data-menu="3">⋯</button>
+              <span class="tag-pill" data-pill="3"><span class="dot" style="background:var(--text-tertiary)"></span>Person 7</span>
+            </div>
+          </div>
+        </div>
+        <div class="filmstrip" id="reviewStrip"></div>
+      </div>
+
+      <div class="panel">
+        <div class="section-label">Faces in this photo</div>
+        <div class="face-list-item" data-list="1">
+          <div class="mini-avatar"><div class="face-swatch f1"></div></div>
+          <div class="info"><div class="nm">Mira Chen</div><div class="sub">Tagged</div></div>
+        </div>
+        <div class="face-list-item" data-list="2">
+          <div class="mini-avatar"><div class="face-swatch f2"></div></div>
+          <div class="info"><div class="nm unnamed">Who is this?</div><div class="sub">Detected, not yet tagged</div></div>
+        </div>
+        <div class="face-list-item" data-list="3">
+          <div class="mini-avatar"><div class="face-swatch f3"></div></div>
+          <div class="info"><div class="nm unnamed">Person 7</div><div class="sub">Auto-clustered, unnamed</div></div>
+        </div>
+        <div class="panel-note">Faces marked "Not a face" are kept (not deleted) but hidden here and excluded from clustering — RFC-0005 §3.4/§3.6.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="footnote">
+  Reference for <code>docs/rfc/RFC-0005-face-detection-people-view.md</code> §3.6. Click the dashed "Who is this?"
+  box to see the tagging popover (search existing people or add a new one); click the "⋯" on a tagged face for
+  basic correction (rename / reassign / not-a-face). Procedural gradients stand in for real face crops. Not the
+  production render pipeline or a real clustering result.
+</p>
+
+<script>
+  // ---- People grid ----
+  const people = [
+    {name:'Mira Chen', count:214, swatch:'f1'},
+    {name:'Diego Álvarez', count:132, swatch:'f2'},
+    {name:'Sana Iqbal', count:98, swatch:'f4'},
+    {name:'Jonas Weber', count:87, swatch:'f5'},
+    {name:'Priya Nair', count:61, swatch:'f6'},
+    {name:'Tomás Reyes', count:44, swatch:'f3'},
+    {name:'Person 7', count:19, swatch:'f3', unnamed:true},
+    {name:'Aiko Tanaka', count:17, swatch:'f1'},
+    {name:'Person 9', count:11, swatch:'f2', unnamed:true},
+    {name:'Lucas Bianchi', count:9, swatch:'f5'},
+    {name:'Person 11', count:6, swatch:'f4', unnamed:true},
+    {name:'Nadia Petrova', count:5, swatch:'f6'},
+  ];
+  const grid = document.getElementById('personGrid');
+  people.forEach(p => {
+    const card = document.createElement('div');
+    card.className = 'person-card' + (p.unnamed ? ' unnamed' : '');
+    card.innerHTML = `
+      <div class="person-avatar"><div class="face-swatch ${p.swatch}"></div></div>
+      <div class="person-name">${p.name}</div>
+      <div class="person-count">${p.count} photo${p.count === 1 ? '' : 's'}</div>
+    `;
+    card.addEventListener('click', () => {
+      document.querySelector('[data-v="tag"]').click();
+    });
+    const nameEl = card.querySelector('.person-name');
+    nameEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (nameEl.isContentEditable) return;
+      nameEl.contentEditable = 'true';
+      nameEl.focus();
+      document.execCommand('selectAll', false, null);
+    });
+    nameEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); nameEl.blur(); }
+    });
+    nameEl.addEventListener('blur', () => {
+      nameEl.contentEditable = 'false';
+      const newName = nameEl.textContent.trim();
+      if (newName) {
+        nameEl.textContent = newName;
+        card.classList.remove('unnamed');
+      } else {
+        nameEl.textContent = p.name;
+      }
+    });
+    grid.appendChild(card);
+  });
+
+  // ---- review filmstrip ----
+  const strip = document.getElementById('reviewStrip');
+  const swatches = ['f1','f2','f3','f4','f5','f6'];
+  for (let i = 0; i < 10; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'review-cell' + (i === 0 ? ' current' : '');
+    cell.innerHTML = `<div class="face-swatch ${swatches[i % swatches.length]}"></div>` +
+      (i < 3 ? '<div class="needs-review">!</div>' : '');
+    strip.appendChild(cell);
+  }
+
+  // ---- Grid / Tag Faces segmented toggle ----
+  document.getElementById('peopleView').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    document.querySelectorAll('#peopleView button').forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+    document.getElementById('view-grid').style.display = btn.dataset.v === 'grid' ? '' : 'none';
+    document.getElementById('view-tag').style.display = btn.dataset.v === 'tag' ? '' : 'none';
+  });
+
+  // ---- Find People (recluster) button, cosmetic only ----
+  document.getElementById('findPeopleBtn').addEventListener('click', function () {
+    if (this.classList.contains('working')) return;
+    this.classList.add('working');
+    const label = this.lastChild;
+    const prev = label.textContent;
+    label.textContent = ' Finding…';
+    setTimeout(() => { this.classList.remove('working'); label.textContent = prev; }, 1400);
+  });
+
+  // ---- Face tagging interaction ----
+  const suggestionPool = [
+    {name: 'Priya Nair', count: 61, swatch: 'f6'},
+    {name: 'Tomás Reyes', count: 44, swatch: 'f3'},
+    {name: 'Aiko Tanaka', count: 17, swatch: 'f1'},
+  ];
+  let openPopover = null;
+  let openMenu = null;
+
+  function closeFloaters() {
+    if (openPopover) { openPopover.remove(); openPopover = null; }
+    if (openMenu) { openMenu.remove(); openMenu = null; }
+    document.querySelectorAll('.face-box.open').forEach(b => b.classList.remove('open'));
+  }
+
+  function tagFace(faceId, name, isNew) {
+    const box = document.querySelector(`.face-box[data-face="${faceId}"]`);
+    const pill = document.querySelector(`.tag-pill[data-pill="${faceId}"]`);
+    const listItem = document.querySelector(`.face-list-item[data-list="${faceId}"]`);
+    box.classList.remove('untagged');
+    pill.innerHTML = `<span class="dot"></span>${name}`;
+    if (listItem) {
+      const nm = listItem.querySelector('.nm');
+      nm.textContent = name;
+      nm.classList.remove('unnamed');
+      listItem.querySelector('.sub').textContent = isNew ? 'New person, tagged just now' : 'Tagged';
+    }
+    if (!box.querySelector('.more-btn')) {
+      const btn = document.createElement('button');
+      btn.className = 'more-btn';
+      btn.dataset.menu = faceId;
+      btn.textContent = '⋯';
+      box.appendChild(btn);
+    }
+  }
+
+  function openTagPopover(box, faceId) {
+    closeFloaters();
+    box.classList.add('open');
+    const pop = document.createElement('div');
+    pop.className = 'tag-popover';
+    pop.style.left = '0';
+    pop.style.top = 'calc(100% + 30px)';
+    pop.innerHTML = `<input type="text" placeholder="Search people or add new…" /><div class="results"></div>`;
+    box.appendChild(pop);
+    openPopover = pop;
+
+    const input = pop.querySelector('input');
+    const results = pop.querySelector('.results');
+
+    function renderResults(query) {
+      const q = query.trim().toLowerCase();
+      const matches = q ? suggestionPool.filter(p => p.name.toLowerCase().includes(q)) : suggestionPool;
+      results.innerHTML = matches.map(p => `
+        <div class="suggestion" data-name="${p.name}">
+          <div class="mini-avatar"><div class="face-swatch ${p.swatch}"></div></div>
+          <span>${p.name}</span>
+          <span class="cnt">${p.count}</span>
+        </div>`).join('') +
+        `<div class="suggestion new-person" data-new="1">+ New person${query.trim() ? ` "${query.trim()}"` : '…'}</div>`;
+    }
+    renderResults('');
+
+    input.focus();
+    input.addEventListener('input', () => renderResults(input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && input.value.trim()) {
+        tagFace(faceId, input.value.trim(), true);
+        closeFloaters();
+      }
+    });
+    // Delegated, not bound per-row -- renderResults() rebuilds .results'
+    // children on every keystroke, so per-row listeners would need
+    // re-attaching each time (same lesson as the .more-btn delegation
+    // fix above).
+    results.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const row = e.target.closest('.suggestion[data-name]');
+      if (row) { tagFace(faceId, row.dataset.name, false); closeFloaters(); return; }
+      if (e.target.closest('[data-new]')) {
+        if (input.value.trim()) { tagFace(faceId, input.value.trim(), true); closeFloaters(); }
+        else input.focus();
+      }
+    });
+    pop.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  function openFaceMenu(btn, faceId) {
+    closeFloaters();
+    const box = btn.closest('.face-box');
+    box.classList.add('open');
+    const menu = document.createElement('div');
+    menu.className = 'face-menu';
+    menu.style.right = '-11px';
+    menu.style.top = '18px';
+    menu.innerHTML = `
+      <button data-act="rename">Rename…</button>
+      <button data-act="reassign">Reassign to…</button>
+      <button data-act="notaface" class="danger">Not a face</button>
+    `;
+    box.appendChild(menu);
+    openMenu = menu;
+
+    menu.querySelector('[data-act="rename"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeFloaters();
+      const pill = document.querySelector(`.tag-pill[data-pill="${faceId}"]`);
+      const dot = pill.querySelector('.dot');
+      pill.contentEditable = 'true';
+      pill.focus();
+      const range = document.createRange();
+      range.selectNodeContents(pill);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      pill.addEventListener('blur', function commit() {
+        pill.contentEditable = 'false';
+        const newName = pill.textContent.trim() || 'Unnamed';
+        pill.innerHTML = '';
+        if (dot) pill.appendChild(dot);
+        pill.append(newName);
+        const listItem = document.querySelector(`.face-list-item[data-list="${faceId}"] .nm`);
+        if (listItem) listItem.textContent = newName;
+        pill.removeEventListener('blur', commit);
+      }, {once:true});
+    });
+    menu.querySelector('[data-act="reassign"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openTagPopover(box, faceId);
+    });
+    menu.querySelector('[data-act="notaface"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      box.classList.add('removed');
+      const listItem = document.querySelector(`.face-list-item[data-list="${faceId}"]`);
+      if (listItem) listItem.style.display = 'none';
+      closeFloaters();
+    });
+    menu.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  // Delegated on the photo container, not bound per-element at page load --
+  // the "more" button on a just-tagged face is created dynamically by
+  // tagFace(), so a one-time querySelectorAll().forEach() would silently
+  // never attach to it.
+  document.querySelector('.tagphoto').addEventListener('click', (e) => {
+    const moreBtn = e.target.closest('.more-btn');
+    if (moreBtn) {
+      e.stopPropagation();
+      openFaceMenu(moreBtn, moreBtn.dataset.menu);
+      return;
+    }
+    const box = e.target.closest('.face-box');
+    if (box) {
+      e.stopPropagation();
+      const faceId = box.dataset.face;
+      if (box.classList.contains('untagged')) {
+        if (openPopover && box.classList.contains('open')) { closeFloaters(); return; }
+        openTagPopover(box, faceId);
+      }
+    }
+  });
+  document.addEventListener('click', closeFloaters);
+</script>

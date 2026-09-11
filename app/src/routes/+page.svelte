@@ -29,6 +29,8 @@
   import LibrarySurveyView from "$lib/components/LibrarySurveyView.svelte";
   import PrintPanel from "$lib/components/PrintPanel.svelte";
   import PrintLayoutView from "$lib/components/PrintLayoutView.svelte";
+  import PeopleGrid from "$lib/components/PeopleGrid.svelte";
+  import PeopleTagView from "$lib/components/PeopleTagView.svelte";
   import { getStoredShortcuts } from "$lib/shortcuts.js";
   import {
     getStoredPanelWidths,
@@ -67,6 +69,7 @@
     listCollectionImageIds,
   } from "$lib/api/catalog.js";
   import {
+    getDevelopPreview,
     getEditStack,
     setEditStack,
     getHistory,
@@ -155,6 +158,16 @@
   import { folderKeyForPath, buildFolderEntries } from "$lib/libraryFolders.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
   import { getPrintReadyImages, exportPrintPdf, PAPER_SIZES } from "$lib/api/print.js";
+  import {
+    detectFacesForImportBatch,
+    reclusterFaces,
+    listPeople,
+    getFacesForImage,
+    createPerson,
+    renamePerson,
+    reassignFace,
+    setFaceExcluded,
+  } from "$lib/api/faces.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -168,7 +181,7 @@
   let selectedId = $state(/** @type {number | null} */ (null));
   let selectedIds = $state(/** @type {Set<number>} */ (new Set()));
   let confirmingRemoval = $state(false);
-  let activeModule = $state("library"); // "library" | "develop"
+  let activeModule = $state("library"); // "library" | "develop" | "print" | "people"
   let libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"));
   let libraryZoomLevel = $state(1);
   let imageViewerRef = $state(/** @type {any} */ (null));
@@ -619,6 +632,127 @@
   // layout preview, so the actual OS print dialog sees the real
   // full-resolution, color-managed payload.
   let printReadyUrls = $state(/** @type {Record<number, string>} */ ({}));
+
+  // People (M5 Slice 6, RFC-0005 §3.6). `peopleView` mirrors the reviewed
+  // mockup's Grid/Tag Faces segmented control; `taggingImage` is whichever
+  // filmstrip photo is currently open in the Tag Faces canvas (null until
+  // one is picked). `personAvatarSourceUrls` caches decoded-preview URLs
+  // by SOURCE PATH (not person id) -- several people can share a cover
+  // photo, and decoding is the expensive part, not the per-person crop
+  // (a pure CSS background-position/size operation, done in PeopleGrid).
+  let people = $state(/** @type {import('$lib/api/faces.js').PersonRow[]} */ ([]));
+  let peopleFilter = $state(/** @type {"all" | "unnamed"} */ ("all"));
+  let peopleView = $state(/** @type {"grid" | "tag"} */ ("grid"));
+  let taggingImage = $state(/** @type {import('$lib/api/catalog.js').ImageSummary | null} */ (null));
+  let taggingFaces = $state(/** @type {import('$lib/api/faces.js').FaceRow[]} */ ([]));
+  let taggingPreviewUrl = $state(/** @type {string | null} */ (null));
+  let taggingLoadToken = 0;
+  let reclusteringFaces = $state(false);
+  let personAvatarSourceUrls = $state(/** @type {Record<string, string | null>} */ ({}));
+
+  let unnamedPeopleCount = $derived(people.filter((p) => !p.name).length);
+  let visiblePeople = $derived(peopleFilter === "unnamed" ? people.filter((p) => !p.name) : people);
+
+  /** Refetches the People grid AND resolves any newly-seen cover photo to
+   * a real decoded-preview URL (source files are often RAW/HEIC -- not
+   * directly renderable by an `<img>`/CSS `background-image`, so this
+   * reuses the same Develop-preview decode Library/Develop already rely
+   * on). Cached by path across calls -- renaming/reassigning people
+   * doesn't change whose photo is whose cover most of the time, so this
+   * only ever decodes a genuinely new cover photo. */
+  async function refreshPeople() {
+    people = await listPeople();
+    const uniquePaths = [...new Set(people.map((p) => p.cover_image_path).filter((p) => p !== null))];
+    const missing = uniquePaths.filter((p) => !(p in personAvatarSourceUrls));
+    if (missing.length === 0) return;
+    const resolved = await Promise.all(
+      missing.map((path) =>
+        getDevelopPreview(/** @type {string} */ (path), null)
+          .then((info) => convertFileSrc(info.path))
+          .catch(() => null),
+      ),
+    );
+    const next = { ...personAvatarSourceUrls };
+    missing.forEach((path, i) => (next[/** @type {string} */ (path)] = resolved[i]));
+    personAvatarSourceUrls = next;
+  }
+
+  /** Loads one filmstrip photo into the Tag Faces canvas -- the real
+   * decoded preview (not the thumbnail: bbox fractions from `faces` are
+   * fractions of the FULL decoded image, and only the undistorted decode
+   * preserves the source's own aspect ratio the way a cropped thumbnail
+   * might not) plus its detected, non-excluded faces. `taggingLoadToken`
+   * guards against an earlier, slower load resolving after a later click
+   * already moved on, same pattern as `previewToken` above. */
+  async function openTagFaces(/** @type {number} */ versionId) {
+    const image = images.find((img) => img.version_id === versionId);
+    if (!image) return;
+    const token = ++taggingLoadToken;
+    taggingImage = image;
+    taggingPreviewUrl = null;
+    taggingFaces = [];
+    try {
+      const [preview, faceRows] = await Promise.all([
+        getDevelopPreview(image.path, image.content_hash ?? null),
+        getFacesForImage(image.image_id),
+      ]);
+      if (token !== taggingLoadToken) return;
+      taggingPreviewUrl = convertFileSrc(preview.path);
+      taggingFaces = faceRows;
+    } catch (/** @type {any} */ e) {
+      if (token === taggingLoadToken) statusMessage = `Could not load faces: ${e}`;
+    }
+  }
+
+  async function handleRenamePerson(/** @type {number} */ personId, /** @type {string | null} */ name) {
+    people = people.map((p) => (p.id === personId ? { ...p, name } : p));
+    taggingFaces = taggingFaces.map((f) => (f.person_id === personId ? { ...f, person_name: name } : f));
+    await renamePerson(personId, name);
+  }
+
+  /** Existing-person pick from the tag popover, or the face menu's
+   * "Reassign to…" -- `personId: null` (from `setFaceExcluded`'s own
+   * caller below) clears the face back to unclustered. */
+  async function handleReassignFace(/** @type {number} */ faceId, /** @type {number | null} */ personId) {
+    const personName = personId === null ? null : (people.find((p) => p.id === personId)?.name ?? null);
+    taggingFaces = taggingFaces.map((f) => (f.id === faceId ? { ...f, person_id: personId, person_name: personName } : f));
+    await reassignFace(faceId, personId);
+    await refreshPeople();
+  }
+
+  /** The tag popover's "+ New person…" row: creates the person, names it,
+   * then assigns this face to it -- three IPC calls composed here rather
+   * than inside a single backend command, matching how the rest of this
+   * app composes existing collection/keyword commands from the frontend. */
+  async function handleCreatePersonAndTagFace(/** @type {number} */ faceId, /** @type {string} */ name) {
+    const personId = await createPerson(faceId);
+    await renamePerson(personId, name);
+    await handleReassignFace(faceId, personId);
+  }
+
+  /** "Not a face" (kept, not deleted, per RFC-0005 -- see PeopleTagView's
+   * own panel note) -- removes it from THIS view's face list immediately,
+   * matching `get_faces_for_image`'s own `excluded = 0` filter. */
+  async function handleSetFaceExcluded(/** @type {number} */ faceId, /** @type {boolean} */ excluded) {
+    if (excluded) taggingFaces = taggingFaces.filter((f) => f.id !== faceId);
+    await setFaceExcluded(faceId, excluded);
+    await refreshPeople();
+  }
+
+  /** "Find People": re-clusters the whole catalog from scratch, then
+   * refreshes both the grid and whichever photo is currently open in Tag
+   * Faces (its faces' person assignments may have just changed). */
+  async function handleReclusterFaces() {
+    if (reclusteringFaces) return;
+    reclusteringFaces = true;
+    try {
+      await reclusterFaces();
+      await refreshPeople();
+      if (taggingImage) await openTagFaces(taggingImage.version_id);
+    } finally {
+      reclusteringFaces = false;
+    }
+  }
 
   /** Same file-picker precedent as `handleChooseCustomProfile` above, kept
    * separate since it targets Print's own (not Soft Proof's) state. */
@@ -1700,6 +1834,17 @@
       importPhase = "thumbnails";
       await backfillMissingThumbnails(summary.import_batch);
       await refresh();
+      // Face detection (M5 Slice 6, RFC-0005): fire-and-forget, same
+      // "doesn't block the visible Library grid" precedent as
+      // import_folder/import_files' own Develop-preview pregeneration
+      // (app/src-tauri/src/lib.rs) -- nothing in Library/Develop depends
+      // on this finishing, and the first run of this per catalog needs a
+      // one-time model download. Silently ignored on failure (e.g. no
+      // network yet); a photo whose detection pass never ran this way has
+      // no other retry path yet (recluster_faces only reclusters ALREADY-
+      // detected faces) -- a known gap, not a silent one, left for a
+      // future slice if it matters in practice.
+      detectFacesForImportBatch(summary.import_batch).catch(() => {});
     } catch (/** @type {any} */ e) {
       statusMessage = `Import failed: ${e}`;
     } finally {
@@ -2620,6 +2765,9 @@
       printItems = currentExportItems;
       printReadyUrls = {};
     }
+    if (target === "people") {
+      refreshPeople();
+    }
     activeModule = target;
   }
 
@@ -3339,6 +3487,9 @@
         disabled={activeModule !== "print" && currentExportItems.length === 0}
       >
         Print
+      </button>
+      <button class:active={activeModule === "people"} onclick={() => switchModule("people")}>
+        People
       </button>
     </div>
     <div class="spacer"></div>
@@ -4083,6 +4234,53 @@
         onExportPdf={handleExportPdf}
       />
     </div>
+  {:else if activeModule === "people"}
+    <div class="people-toolbar">
+      <button
+        class="chip"
+        class:on={peopleFilter === "all"}
+        onclick={() => (peopleFilter = "all")}
+      >
+        All People <span class="chip-count">{people.length}</span>
+      </button>
+      <button
+        class="chip"
+        class:on={peopleFilter === "unnamed"}
+        onclick={() => (peopleFilter = "unnamed")}
+      >
+        Unnamed <span class="chip-count">{unnamedPeopleCount}</span>
+      </button>
+      <div class="spacer"></div>
+      <button
+        class="find-people-btn"
+        class:working={reclusteringFaces}
+        onclick={handleReclusterFaces}
+        disabled={reclusteringFaces}
+      >
+        <span class="spin" aria-hidden="true">⟲</span>
+        {reclusteringFaces ? "Finding…" : "Find People"}
+      </button>
+      <div class="segmented">
+        <button class:on={peopleView === "grid"} onclick={() => (peopleView = "grid")}>Grid</button>
+        <button class:on={peopleView === "tag"} onclick={() => (peopleView = "tag")}>Tag Faces</button>
+      </div>
+    </div>
+    <div class="body people-body">
+      {#if peopleView === "grid"}
+        <PeopleGrid people={visiblePeople} avatarUrls={personAvatarSourceUrls} onRename={handleRenamePerson} />
+      {:else}
+        <PeopleTagView
+          image={taggingImage}
+          previewUrl={taggingPreviewUrl}
+          faces={taggingFaces}
+          people={people}
+          onTagFace={handleReassignFace}
+          onCreateAndTagFace={handleCreatePersonAndTagFace}
+          onRenamePerson={handleRenamePerson}
+          onSetFaceExcluded={handleSetFaceExcluded}
+        />
+      {/if}
+    </div>
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>
   {/if}
@@ -4099,6 +4297,13 @@
       selectedIds={new Set(developVersionId !== null ? [developVersionId] : [])}
       onSelect={openDevelop}
       onOpen={openDevelop}
+    />
+  {:else if activeModule === "people" && peopleView === "tag"}
+    <Filmstrip
+      images={filteredImages}
+      selectedIds={new Set(taggingImage !== null ? [taggingImage.version_id] : [])}
+      onSelect={(versionId) => openTagFaces(versionId)}
+      onOpen={(versionId) => openTagFaces(versionId)}
     />
   {/if}
 </div>
@@ -4146,6 +4351,93 @@
   }
   .spacer {
     flex: 1;
+  }
+  /* People module toolbar (M5 Slice 6) -- same toolbar-row shape as
+     Library's own (LibraryToolbar.svelte), kept inline here since it's
+     small enough not to warrant a separate component. */
+  .people-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-app);
+    flex: none;
+  }
+  .people-toolbar .chip {
+    all: unset;
+    font-size: 11px;
+    padding: 4px 9px;
+    border-radius: 99px;
+    border: 1px solid var(--border-strong);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    box-sizing: border-box;
+  }
+  .people-toolbar .chip.on {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent-strong);
+  }
+  .people-toolbar .chip-count {
+    font-family: var(--font-mono);
+    opacity: 0.7;
+  }
+  .find-people-btn {
+    all: unset;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    color: var(--accent-strong);
+    box-sizing: border-box;
+  }
+  .find-people-btn:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--accent-on);
+  }
+  .find-people-btn:disabled {
+    cursor: default;
+  }
+  .find-people-btn .spin {
+    display: inline-block;
+  }
+  .find-people-btn.working .spin {
+    animation: people-spin 0.9s linear infinite;
+  }
+  @keyframes people-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .segmented {
+    display: flex;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 2px;
+  }
+  .segmented button {
+    all: unset;
+    padding: 4px 10px;
+    font-size: 10.5px;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .segmented button.on {
+    background: var(--bg-panel-raised);
+    color: var(--text-primary);
   }
   /* Toolbar icon buttons: a small pictograph glyph plus a short bold
    * monogram code (OUT/PST/HDR/DEL/EXP/FILE/DIR), both always visible --
@@ -4272,7 +4564,8 @@
   }
   .body,
   .develop-body,
-  .print-body {
+  .print-body,
+  .people-body {
     flex: 1;
     display: flex;
     min-height: 0;

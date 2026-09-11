@@ -156,16 +156,27 @@ pub struct FaceRow {
 /// One row of the People grid (RFC-0005 §3.6): `name` is `None` until the
 /// user names it (shown as "Person N" in the UI, same as the reviewed
 /// mockup), `cover_face_id` is whichever face seeded this person's
-/// cluster (an FK into `faces`, not resolved to a path here -- the
-/// frontend already has `get_faces_for_image`/thumbnail machinery for
-/// that), `photo_count` counts distinct images, not faces (the same
+/// cluster, `photo_count` counts distinct images, not faces (the same
 /// person appearing twice in one photo still counts once).
+///
+/// `cover_image_path`/`cover_bbox_*` resolve the cover face's own photo
+/// and crop in the same query (a `LEFT JOIN` through `faces`/`images`, not
+/// a second round trip) -- there is no other command that maps a bare
+/// `cover_face_id` back to an image path, so the grid's avatar crop would
+/// otherwise be unreachable from the frontend. `None` only if the cover
+/// face (or its image) has since been removed out from under a stale
+/// `cover_face_id` -- the grid falls back to a placeholder avatar then.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PersonRow {
     pub id: i64,
     pub name: Option<String>,
     pub cover_face_id: Option<i64>,
     pub photo_count: i64,
+    pub cover_image_path: Option<String>,
+    pub cover_bbox_x: Option<f32>,
+    pub cover_bbox_y: Option<f32>,
+    pub cover_bbox_w: Option<f32>,
+    pub cover_bbox_h: Option<f32>,
 }
 
 /// What `remove_images` hands back per deleted row, so the command layer
@@ -1106,14 +1117,28 @@ impl Catalog {
     /// just sorts last and shows a 0 count.
     pub fn list_people(&self) -> Result<Vec<PersonRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT p.id, p.name, p.cover_face_id, COUNT(DISTINCT f.image_id)
-             FROM people p LEFT JOIN faces f ON f.person_id = p.id AND f.excluded = 0
+            "SELECT p.id, p.name, p.cover_face_id, COUNT(DISTINCT f.image_id),
+                    ci.path, cf.bbox_x, cf.bbox_y, cf.bbox_w, cf.bbox_h
+             FROM people p
+             LEFT JOIN faces f ON f.person_id = p.id AND f.excluded = 0
+             LEFT JOIN faces cf ON cf.id = p.cover_face_id
+             LEFT JOIN images ci ON ci.id = cf.image_id
              GROUP BY p.id
              ORDER BY COUNT(DISTINCT f.image_id) DESC, p.id ASC",
         )?;
         let rows = stmt
             .query_map([], |row| {
-                Ok(PersonRow { id: row.get(0)?, name: row.get(1)?, cover_face_id: row.get(2)?, photo_count: row.get(3)? })
+                Ok(PersonRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    cover_face_id: row.get(2)?,
+                    photo_count: row.get(3)?,
+                    cover_image_path: row.get(4)?,
+                    cover_bbox_x: row.get(5)?,
+                    cover_bbox_y: row.get(6)?,
+                    cover_bbox_w: row.get(7)?,
+                    cover_bbox_h: row.get(8)?,
+                })
             })?
             .collect();
         rows
@@ -2158,6 +2183,29 @@ mod tests {
             .expect("edit stack read succeeds");
 
         assert_eq!(round_tripped, stack);
+    }
+
+    /// M5 Slice 6 (People view): the grid's avatar crop needs the cover
+    /// face's own photo path + bbox, not just its bare id -- there is no
+    /// other command that resolves `cover_face_id` back to an image, so
+    /// `list_people` must do it itself via the `faces`/`images` join.
+    #[test]
+    fn list_people_resolves_the_cover_faces_photo_and_bbox() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog.add_image("/a.jpg").unwrap();
+        let face_id = catalog.add_face(image_id, (0.1, 0.2, 0.3, 0.4), &[1.0, 0.0]).unwrap();
+        let person_id = catalog.create_person(face_id).unwrap();
+        catalog.set_face_person(face_id, Some(person_id)).unwrap();
+
+        let people = catalog.list_people().unwrap();
+        assert_eq!(people.len(), 1);
+        let person = &people[0];
+        assert_eq!(person.cover_face_id, Some(face_id));
+        assert_eq!(person.cover_image_path.as_deref(), Some("/a.jpg"));
+        assert_eq!(person.cover_bbox_x, Some(0.1));
+        assert_eq!(person.cover_bbox_y, Some(0.2));
+        assert_eq!(person.cover_bbox_w, Some(0.3));
+        assert_eq!(person.cover_bbox_h, Some(0.4));
     }
 
     #[test]

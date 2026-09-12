@@ -53,8 +53,6 @@ pub enum FaceModelError {
     HttpStatus(String, u16),
     #[error("could not write {0}: {1}")]
     Write(PathBuf, std::io::Error),
-    #[error("could not read cached {0}: {1}")]
-    Read(PathBuf, std::io::Error),
     #[error("{0} failed checksum verification after download -- expected sha256:{1}, got sha256:{2}")]
     ChecksumMismatch(String, String, String),
 }
@@ -67,7 +65,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// A file is considered a valid cached copy only if it already exists AND
 /// its checksum matches -- an incomplete/corrupt prior download does not
-/// count as cached and gets re-fetched, not silently used.
+/// count as cached and gets re-fetched, not silently used. Any read
+/// failure (missing, corrupt, unreadable) folds into the same "not
+/// cached" `false`, not a distinct error -- `ensure_one` just re-fetches
+/// either way, so there is no separate "read the cache" failure mode
+/// worth its own `FaceModelError` variant.
 fn is_valid_cache(path: &Path, expected_sha256: &str) -> bool {
     match std::fs::read(path) {
         Ok(bytes) => sha256_hex(&bytes) == expected_sha256,

@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5 Slice 6 — Face detection: People module navigation/import consistency (2026-09-14)
+
+User feedback after the People view UI landed: face detection's UX should be consistent with Library/Develop -- specifically, auto-detect after import should be visible (not silent), and People should let you navigate by folder the same way Library does.
+
+- **New `app/src/lib/components/CatalogRail.svelte`**: the Catalog/Folders/Collections navigation rail, extracted verbatim out of `+page.svelte`'s former Library-only inline markup (including its CSS) so it can be shared. `activeCollectionId`/`activeFolderKey`/`showLastImportOnly` all stay page-level state, genuinely SHARED (not per-module-copied) -- picking a folder in Library and switching to People keeps it selected, and vice versa.
+- **People module now renders the same rail** as Library. Tag Faces' filmstrip already used `filteredImages`, which already reacted to this state -- so picking a folder there immediately scopes which photos are available to tag, no backend change needed. The People grid itself is intentionally left unscoped (documented inline): a person's photos can span multiple folders, and `list_people()` has no per-folder filter to plug in even if the UI offered one.
+- **Face detection after import is now a visible THIRD phase of the same import progress bar** (`"Detecting faces N / M…"`), matching thumbnail backfill's own treatment -- previously a silent fire-and-forget call with no feedback at all. Its own failure (e.g. no network for the one-time model download) is caught separately and appended to the status message rather than failing the whole import, since cataloging + thumbnails already succeeded by that point.
+- **Verified**: `npm run check`: 0 errors/warnings across 369 files. `cargo test --lib`: 337/337 (no Rust changes this pass). Manually exercised against a live `vite dev` server -- rail renders identically in Library and both People sub-views.
+
 ## M5 Slice 6 — Face detection: People view UI, wired to the real backend (2026-09-11)
 
 Built the People module UI matching the reviewed mockup (`docs/ux/mockups/people-face-tagging-mockup.html`), wired to PR #118's real commands — no mock data. This closes out M5 Slice 6's own three-PR arc (schema+clustering → detect+embed pipeline → catalog/command wiring → this).

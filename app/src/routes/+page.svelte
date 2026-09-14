@@ -31,6 +31,7 @@
   import PrintLayoutView from "$lib/components/PrintLayoutView.svelte";
   import PeopleGrid from "$lib/components/PeopleGrid.svelte";
   import PeopleTagView from "$lib/components/PeopleTagView.svelte";
+  import CatalogRail from "$lib/components/CatalogRail.svelte";
   import { getStoredShortcuts } from "$lib/shortcuts.js";
   import {
     getStoredPanelWidths,
@@ -208,9 +209,17 @@
   // "every thumbnail ready" read as the same moment, not "done" followed
   // by an untracked silent wait.
   let thumbnailProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
-  // Which of the two runImport phases the progress bar should currently
-  // describe -- switched to "thumbnails" once cataloging resolves.
-  let importPhase = $state(/** @type {"cataloging" | "thumbnails"} */ ("cataloging"));
+  // Populated from "face-detection-progress" (lib.rs's
+  // detect_faces_for_import_batch) while runImport awaits that call -- the
+  // THIRD phase of the same progress bar, same "stay visible until
+  // genuinely done" treatment thumbnails already got (M5 Slice 6 follow-up
+  // -- this used to be a silent fire-and-forget call with no user-visible
+  // feedback at all).
+  let faceDetectionProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
+  // Which of the three runImport phases the progress bar should currently
+  // describe -- switched to "thumbnails" once cataloging resolves, then
+  // "faces" once thumbnail backfill resolves.
+  let importPhase = $state(/** @type {"cataloging" | "thumbnails" | "faces"} */ ("cataloging"));
   let statusMessage = $state("");
   // M3 Slice 1: general Settings dialog, app-level (not module-scoped, so
   // it's not gated on activeModule like Export/Remove are).
@@ -1812,6 +1821,7 @@
     importing = true;
     importProgress = null;
     thumbnailProgress = null;
+    faceDetectionProgress = null;
     importPhase = "cataloging";
     statusMessage = "";
     try {
@@ -1834,23 +1844,31 @@
       importPhase = "thumbnails";
       await backfillMissingThumbnails(summary.import_batch);
       await refresh();
-      // Face detection (M5 Slice 6, RFC-0005): fire-and-forget, same
-      // "doesn't block the visible Library grid" precedent as
-      // import_folder/import_files' own Develop-preview pregeneration
-      // (app/src-tauri/src/lib.rs) -- nothing in Library/Develop depends
-      // on this finishing, and the first run of this per catalog needs a
-      // one-time model download. Silently ignored on failure (e.g. no
-      // network yet); a photo whose detection pass never ran this way has
-      // no other retry path yet (recluster_faces only reclusters ALREADY-
-      // detected faces) -- a known gap, not a silent one, left for a
-      // future slice if it matters in practice.
-      detectFacesForImportBatch(summary.import_batch).catch(() => {});
+      // Face detection (M5 Slice 6 follow-up): now a THIRD visible phase
+      // of the same progress bar, same "stay up until genuinely done"
+      // treatment as thumbnails -- this used to be a silent fire-and-
+      // forget call with no feedback at all, inconsistent with how
+      // thumbnails (the other post-cataloging background step) already
+      // behave. Its own failure (e.g. no network for the one-time model
+      // download) is caught separately and does NOT fail the whole
+      // import -- cataloging + thumbnails already succeeded, and a photo
+      // whose detection pass fails this way has no other retry path yet
+      // (recluster_faces only reclusters ALREADY-detected faces), a known
+      // gap left for a future slice.
+      importPhase = "faces";
+      try {
+        await detectFacesForImportBatch(summary.import_batch);
+        if (activeModule === "people") await refreshPeople();
+      } catch (/** @type {any} */ e) {
+        statusMessage = `${statusMessage} (face detection failed: ${e})`;
+      }
     } catch (/** @type {any} */ e) {
       statusMessage = `Import failed: ${e}`;
     } finally {
       importing = false;
       importProgress = null;
       thumbnailProgress = null;
+      faceDetectionProgress = null;
     }
   }
 
@@ -3421,6 +3439,22 @@
       // ignore outside Tauri
     }
 
+    // Face-detection progress bar, third phase of the same import bar
+    // (runImport now awaits detectFacesForImportBatch right after
+    // thumbnail backfill resolves, same "stay visible until genuinely
+    // done" treatment as thumbnails got) -- lib.rs's
+    // detect_faces_for_import_batch emits this once per image.
+    let unlistenFaceDetectionProgress = /** @type {(() => void) | undefined} */ (undefined);
+    try {
+      listen("face-detection-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
+        faceDetectionProgress = event.payload;
+      }).then((fn) => {
+        unlistenFaceDetectionProgress = fn;
+      });
+    } catch {
+      // ignore outside Tauri
+    }
+
     return () => {
       unlistenClose?.();
       unlistenDragDrop?.();
@@ -3428,6 +3462,7 @@
       unlistenImportProgress?.();
       unlistenThumbnailProgress?.();
       unlistenHdrMergeProgress?.();
+      unlistenFaceDetectionProgress?.();
       window.removeEventListener("shortcuts-updated", onShortcutsUpdated);
     };
   });
@@ -3694,7 +3729,8 @@
   {/if}
 
   {#if importing}
-    {@const progress = importPhase === "thumbnails" ? thumbnailProgress : importProgress}
+    {@const progress =
+      importPhase === "thumbnails" ? thumbnailProgress : importPhase === "faces" ? faceDetectionProgress : importProgress}
     <div
       class="import-progress"
       role="progressbar"
@@ -3709,6 +3745,8 @@
       <span class="import-progress-label">
         {#if importPhase === "thumbnails"}
           {progress ? `Generating thumbnails ${progress.current} / ${progress.total}…` : "Finishing up…"}
+        {:else if importPhase === "faces"}
+          {progress ? `Detecting faces ${progress.current} / ${progress.total}…` : "Finishing up…"}
         {:else}
           {progress ? `Importing ${progress.current} / ${progress.total}…` : "Importing…"}
         {/if}
@@ -3791,65 +3829,23 @@
         </div>
       {/if}
 
-      <div class="rail">
-        <div class="section-label">Catalog</div>
-        <button
-          type="button"
-          class="tree-item"
-          class:active={activeCollectionId === null && activeFolderKey === null && !showLastImportOnly}
-          onclick={selectAllPhotos}
-        >
-          All Photos
-          <span class="count">{images.length}</span>
-        </button>
-        <button type="button" class="tree-item" class:active={showLastImportOnly} onclick={selectLastImport}>
-          Last Import
-          <span class="count">{lastImportBatchId === null ? 0 : images.filter((img) => img.import_batch === lastImportBatchId).length}</span>
-        </button>
-
-        {#if folderEntries.length > 0}
-          <div class="section-label folders-label">Folders</div>
-          {#each folderEntries as folder (folder.key)}
-            <button
-              type="button"
-              class="tree-item"
-              class:active={activeFolderKey === folder.key}
-              onclick={() => selectFolder(folder.key)}
-              title={folder.key}
-            >
-              <span class="tree-item-name">{folder.key}</span>
-              <span class="count">{folder.count}</span>
-            </button>
-          {/each}
-        {/if}
-
-        <div class="collections-header">
-          <span class="section-label">Collections</span>
-          <span class="collections-actions">
-            <button type="button" class="rail-action" title="New Collection" onclick={() => (creatingCollection = true)}>+</button>
-            <button type="button" class="rail-action" title="New Smart Collection" onclick={() => (creatingSmartCollection = true)}>⚡+</button>
-          </span>
-        </div>
-        {#each collections as collection (collection.id)}
-          <div class="tree-item collection-item" class:active={activeCollectionId === collection.id}>
-            <button type="button" class="tree-item-main" onclick={() => selectCollection(collection.id)}>
-              {#if collection.is_smart}<span class="smart-icon" title="Smart Collection">⚡</span>{/if}
-              <span class="tree-item-name">{collection.name}</span>
-              <span class="count">
-                {collection.is_smart
-                  ? images.filter((img) => matchesRules(img, collection.rules ?? [], keywordIdsByImage)).length
-                  : (collection.count ?? 0)}
-              </span>
-            </button>
-            <button
-              type="button"
-              class="tree-item-delete"
-              aria-label="Delete collection {collection.name}"
-              onclick={(e) => handleDeleteCollection(collection.id, e)}
-            >×</button>
-          </div>
-        {/each}
-      </div>
+      <CatalogRail
+        {images}
+        {activeCollectionId}
+        {activeFolderKey}
+        {showLastImportOnly}
+        {lastImportBatchId}
+        {folderEntries}
+        {collections}
+        {keywordIdsByImage}
+        onSelectAllPhotos={selectAllPhotos}
+        onSelectLastImport={selectLastImport}
+        onSelectFolder={selectFolder}
+        onSelectCollection={selectCollection}
+        onDeleteCollection={handleDeleteCollection}
+        onCreateCollection={() => (creatingCollection = true)}
+        onCreateSmartCollection={() => (creatingSmartCollection = true)}
+      />
 
       {#if images.length === 0}
         <div class="empty">
@@ -4235,6 +4231,13 @@
       />
     </div>
   {:else if activeModule === "people"}
+    <!-- Rail below is the SAME CatalogRail Library uses, sharing
+         activeFolderKey/activeCollectionId with it -- picking a folder
+         here (or in Library beforehand) also scopes Tag Faces' own
+         filmstrip (filteredImages already reacts to that shared state).
+         The People grid itself intentionally stays unscoped: a person's
+         photos can span multiple folders, so "people in this folder"
+         isn't a real filter list_people() supports. -->
     <div class="people-toolbar">
       <button
         class="chip"
@@ -4266,6 +4269,23 @@
       </div>
     </div>
     <div class="body people-body">
+      <CatalogRail
+        {images}
+        {activeCollectionId}
+        {activeFolderKey}
+        {showLastImportOnly}
+        {lastImportBatchId}
+        {folderEntries}
+        {collections}
+        {keywordIdsByImage}
+        onSelectAllPhotos={selectAllPhotos}
+        onSelectLastImport={selectLastImport}
+        onSelectFolder={selectFolder}
+        onSelectCollection={selectCollection}
+        onDeleteCollection={handleDeleteCollection}
+        onCreateCollection={() => (creatingCollection = true)}
+        onCreateSmartCollection={() => (creatingSmartCollection = true)}
+      />
       {#if peopleView === "grid"}
         <PeopleGrid people={visiblePeople} avatarUrls={personAvatarSourceUrls} onRename={handleRenamePerson} />
       {:else}
@@ -4634,128 +4654,6 @@
     font-size: 11px;
     color: var(--text-tertiary);
     font-family: var(--font-mono);
-  }
-  .rail {
-    width: 200px;
-    flex: none;
-    background: var(--bg-panel);
-    border-right: 1px solid var(--border-subtle);
-    padding: 14px 10px;
-    /* M2 Slice 5: the rail was a fixed 2-line static block until now --
-       a variable-length Collections list needs to scroll instead of
-       spilling past the box's bottom edge. */
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-  .section-label {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--text-tertiary);
-    padding: 4px;
-    font-weight: 600;
-  }
-  /* .tree-item is a <button> now (was a plain <div>) so "All Photos" and
-     collections are real click targets -- reset button chrome so it
-     still reads as the same flat row it always has. */
-  .tree-item {
-    all: unset;
-    box-sizing: border-box;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 5px 7px;
-    border-radius: var(--radius-s);
-    color: var(--text-secondary);
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .tree-item.active {
-    background: var(--accent-soft);
-    color: var(--accent-strong);
-  }
-  .tree-item .count {
-    margin-left: auto;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    color: var(--text-tertiary);
-  }
-  .folders-label {
-    margin-top: 10px;
-  }
-  .collections-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding-right: 2px;
-    margin-top: 10px;
-  }
-  .collections-actions {
-    display: flex;
-    gap: 2px;
-  }
-  .rail-action {
-    all: unset;
-    cursor: pointer;
-    padding: 2px 5px;
-    font-size: 11px;
-    border-radius: var(--radius-s);
-    color: var(--text-tertiary);
-  }
-  .rail-action:hover {
-    color: var(--accent-strong);
-    background: var(--accent-soft);
-  }
-  .collection-item {
-    display: flex;
-    align-items: center;
-    border-radius: var(--radius-s);
-  }
-  .collection-item.active {
-    background: var(--accent-soft);
-  }
-  .collection-item .tree-item-main {
-    flex: 1;
-    min-width: 0;
-  }
-  .tree-item-main {
-    all: unset;
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 7px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .collection-item.active .tree-item-main {
-    color: var(--accent-strong);
-  }
-  .tree-item-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .smart-icon {
-    flex: none;
-    font-size: 10px;
-  }
-  .tree-item-delete {
-    all: unset;
-    cursor: pointer;
-    flex: none;
-    padding: 0 7px 0 2px;
-    color: var(--text-tertiary);
-    opacity: 0;
-  }
-  .collection-item:hover .tree-item-delete {
-    opacity: 1;
-  }
-  .tree-item-delete:hover {
-    color: var(--label-red);
   }
   .add-to-collection-select {
     all: unset;

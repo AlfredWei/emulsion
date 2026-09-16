@@ -71,8 +71,22 @@ fn assign_and_persist(
     new_cluster_person_id: impl FnOnce() -> Result<i64, FacePipelineError>,
 ) -> Result<(), FacePipelineError> {
     let cluster_count_before = clusters.len();
-    let index = face_cluster::assign_face(clusters, embedding, threshold)
-        .expect("embedding is never empty -- decoded from a fixed-length model output, not user input");
+    // Crash-safety fix (2026-09-17): this used to `.expect()` on the
+    // assumption that a model-produced embedding is never empty. Whether
+    // or not that assumption is actually true, panicking here is
+    // catastrophic beyond this one face: the caller holds the shared
+    // `AppState.catalog` Mutex guard for this whole batch (see
+    // `detect_faces_for_batch`'s own doc comment), and a panic while a
+    // std Mutex guard is alive poisons it -- every OTHER command in the
+    // app (rating a photo, opening Develop, anything) locks that same
+    // Mutex, so one bad embedding would permanently brick the entire app
+    // until restart, not just fail this one face. Skipping the face
+    // (matching this function's own decode-failure resilience) removes a
+    // known trigger; `detect_faces_for_batch`'s `catch_unwind` below is
+    // the general-purpose backstop for anything else that could still panic.
+    let Ok(index) = face_cluster::assign_face(clusters, embedding, threshold) else {
+        return Ok(());
+    };
     let person_id = if index >= cluster_count_before {
         let id = new_cluster_person_id()?;
         person_ids.push(id);
@@ -84,15 +98,62 @@ fn assign_and_persist(
     Ok(())
 }
 
+/// One image's worth of decode -> detect -> embed -> persist, extracted
+/// so `detect_faces_for_batch` can run it inside `catch_unwind` (see that
+/// function's own crash-safety doc comment). A decode failure is handled
+/// the same as before (silently treated as "no faces found," not an
+/// error) -- only genuine detect/embed/catalog errors surface as `Err`
+/// here, and even those no longer abort the batch, just this one image.
+#[allow(clippy::too_many_arguments)]
+fn detect_one_image(
+    catalog: &Catalog,
+    detector: &FaceDetector,
+    embedder: &FaceEmbedder,
+    clusters: &mut Vec<Cluster>,
+    person_ids: &mut Vec<i64>,
+    image_id: i64,
+    threshold: f32,
+) -> Result<(), FacePipelineError> {
+    let path = catalog.get_image_path(image_id)?;
+    let decoded = path
+        .as_deref()
+        .and_then(|p| source_decode::decode_preview(std::path::Path::new(p)).ok());
+    let Some(image) = decoded.and_then(|d| image::RgbImage::from_raw(d.width, d.height, d.rgb)) else {
+        return Ok(());
+    };
+
+    for face in detector.detect(&image)? {
+        let landmarks_px = face.landmarks.map(|(x, y)| (x * image.width() as f32, y * image.height() as f32));
+        let embedding = embedder.embed(&image, &landmarks_px)?;
+        let face_id = catalog.add_face(image_id, (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h), &embedding)?;
+        assign_and_persist(catalog, clusters, person_ids, face_id, &embedding, threshold, || {
+            catalog.create_person(face_id).map_err(FacePipelineError::from)
+        })?;
+    }
+    Ok(())
+}
+
 /// Runs detection + embedding + incremental clustering for a batch of
-/// newly-imported images (RFC-0005 §3.5's "after a per-import-batch
-/// detection pass finishes" trigger point) -- new faces are compared only
-/// against existing clusters' centroids, not re-clustering the whole
-/// catalog. `on_progress(current, total)` fires once per image, same
-/// shape as every other batch job in this codebase
-/// (`generate_missing_thumbnails_with_progress`, `merge_bracket`). A
-/// source file that fails to decode is skipped, not fatal to the rest of
-/// the batch -- matches import's own resilience to individual bad files.
+/// images -- new faces are compared only against existing clusters'
+/// centroids, not re-clustering the whole catalog. `on_progress(current,
+/// total)` fires once per image, same shape as every other batch job in
+/// this codebase (`generate_missing_thumbnails_with_progress`,
+/// `merge_bracket`). A source file that fails to decode is skipped, not
+/// fatal to the rest of the batch -- matches import's own resilience to
+/// individual bad files. Every image handed to this function, decoded or
+/// not, is marked `faces_scanned` (see that column's own schema comment)
+/// so a repeat call -- another photo click, another "Find People" run --
+/// doesn't redo work already attempted.
+///
+/// `should_stop()` is checked before each image; returning `true` ends the
+/// batch early with everything already scanned kept as-is (an accepted,
+/// deliberate "stop now" semantics, not a rollback -- matches this
+/// function's own per-image resilience elsewhere). The two real callers
+/// use this differently: the tiny per-photo auto-detect call passes a
+/// no-op (`|| false`, single image, nothing worth canceling), while the
+/// folder-scoped "Find People" job wires it to a shared cancel flag
+/// (`lib.rs`'s `detect_faces_for_images` command) so a large folder can be
+/// stopped mid-way.
 pub fn detect_faces_for_batch(
     catalog: &Catalog,
     detector: &FaceDetector,
@@ -100,26 +161,43 @@ pub fn detect_faces_for_batch(
     image_ids: &[i64],
     threshold: f32,
     mut on_progress: impl FnMut(usize, usize),
+    mut should_stop: impl FnMut() -> bool,
 ) -> Result<(), FacePipelineError> {
     let (mut clusters, mut person_ids) = load_existing_clusters(catalog)?;
     let total = image_ids.len();
+    let mut processed = 0;
 
-    for (i, &image_id) in image_ids.iter().enumerate() {
-        on_progress(i, total);
-        let Some(path) = catalog.get_image_path(image_id)? else { continue };
-        let Ok(decoded) = source_decode::decode_preview(std::path::Path::new(&path)) else { continue };
-        let Some(image) = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb) else { continue };
-
-        for face in detector.detect(&image)? {
-            let landmarks_px = face.landmarks.map(|(x, y)| (x * image.width() as f32, y * image.height() as f32));
-            let embedding = embedder.embed(&image, &landmarks_px)?;
-            let face_id = catalog.add_face(image_id, (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h), &embedding)?;
-            assign_and_persist(catalog, &mut clusters, &mut person_ids, face_id, &embedding, threshold, || {
-                catalog.create_person(face_id).map_err(FacePipelineError::from)
-            })?;
+    for &image_id in image_ids {
+        if should_stop() {
+            break;
         }
+        on_progress(processed, total);
+
+        // Crash-safety fix (2026-09-17): this used to run inference/
+        // catalog work directly in the loop, so a `?` from any single
+        // image's `detect`/`embed`/`add_face` call aborted the WHOLE
+        // batch (contradicting this function's own "a source file that
+        // fails to decode is skipped, not fatal" doc comment above, which
+        // only actually covered decode failures) -- and a genuine panic
+        // (e.g. an inference-layer bug on some edge-case input) would
+        // unwind through the caller's held `catalog.lock()` guard and
+        // poison the shared Mutex every other command in the app also
+        // locks, bricking the whole app until restart. `catch_unwind`
+        // makes a single bad image's failure -- error OR panic -- as
+        // inert as an already-handled decode failure: skipped, logged,
+        // `faces_scanned` still set so it isn't retried forever.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            detect_one_image(catalog, detector, embedder, &mut clusters, &mut person_ids, image_id, threshold)
+        }));
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("face detection failed for image {image_id}: {e}"),
+            Err(_) => eprintln!("face detection panicked for image {image_id} -- skipped, not fatal to the rest of the batch"),
+        }
+        catalog.mark_faces_scanned(image_id)?;
+        processed += 1;
     }
-    on_progress(total, total);
+    on_progress(processed, total);
     Ok(())
 }
 
@@ -193,6 +271,70 @@ mod tests {
         assert_eq!(people[0].photo_count, 1);
     }
 
+    // --- Real-model tests for detect_faces_for_batch's own new behavior
+    // (People-tab UX fix, 2026-09-16), gated exactly like face_detect.rs's
+    // own real-model tests -- see that module's test-section header for
+    // how to populate EMULSION_TEST_FACE_MODELS_DIR.
+    fn models_dir() -> Option<std::path::PathBuf> {
+        std::env::var("EMULSION_TEST_FACE_MODELS_DIR").ok().map(std::path::PathBuf::from)
+    }
+
+    #[test]
+    fn detect_faces_for_batch_marks_every_processed_image_as_scanned() {
+        let Some(dir) = models_dir() else {
+            eprintln!("skipping: EMULSION_TEST_FACE_MODELS_DIR not set");
+            return;
+        };
+        let detector = FaceDetector::load(&dir.join("yunet.onnx")).unwrap();
+        let embedder = FaceEmbedder::load(&dir.join("sface.onnx")).unwrap();
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog
+            .add_image_with_edit_stack(
+                "../../test_image/Smiling-woman-pink-shirt-portrait.jpg",
+                "hash-face-pipeline-1",
+                4096,
+                &crate::catalog::EditStack::empty(),
+                &crate::metadata::ImageMetadata::default(),
+            )
+            .unwrap();
+
+        detect_faces_for_batch(&catalog, &detector, &embedder, &[image_id], DEFAULT_CLUSTER_THRESHOLD, |_, _| {}, || false)
+            .unwrap();
+
+        let images = catalog.list_images().unwrap();
+        assert!(images.iter().find(|i| i.image_id == image_id).unwrap().faces_scanned);
+        assert!(!catalog.get_faces_for_image(image_id).unwrap().is_empty(), "expected a real face to be detected");
+    }
+
+    #[test]
+    fn detect_faces_for_batch_stops_immediately_when_should_stop_is_already_true() {
+        let Some(dir) = models_dir() else {
+            eprintln!("skipping: EMULSION_TEST_FACE_MODELS_DIR not set");
+            return;
+        };
+        let detector = FaceDetector::load(&dir.join("yunet.onnx")).unwrap();
+        let embedder = FaceEmbedder::load(&dir.join("sface.onnx")).unwrap();
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog
+            .add_image_with_edit_stack(
+                "../../test_image/Smiling-woman-pink-shirt-portrait.jpg",
+                "hash-face-pipeline-2",
+                4096,
+                &crate::catalog::EditStack::empty(),
+                &crate::metadata::ImageMetadata::default(),
+            )
+            .unwrap();
+
+        detect_faces_for_batch(&catalog, &detector, &embedder, &[image_id], DEFAULT_CLUSTER_THRESHOLD, |_, _| {}, || true)
+            .unwrap();
+
+        let images = catalog.list_images().unwrap();
+        assert!(
+            !images.iter().find(|i| i.image_id == image_id).unwrap().faces_scanned,
+            "a cancel-before-the-first-image run must leave it unscanned, not mark it done"
+        );
+    }
+
     #[test]
     fn recluster_all_still_separates_two_genuinely_different_people() {
         let catalog = Catalog::open_in_memory().unwrap();
@@ -207,5 +349,25 @@ mod tests {
         let person_b = faces_a.iter().find(|f| f.id == face_b).unwrap().person_id;
         assert!(person_a.is_some() && person_b.is_some());
         assert_ne!(person_a, person_b, "orthogonal embeddings must not merge into one person");
+    }
+
+    #[test]
+    fn assign_and_persist_skips_gracefully_instead_of_panicking_on_an_empty_embedding() {
+        // Crash-safety fix (2026-09-17): this used to `.expect()`, which
+        // would poison the shared catalog Mutex for the whole app if it
+        // ever fired for real. Pinned here as a real, if synthetic, test
+        // of the invariant this codebase can no longer assume in code.
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog.add_image("/a.jpg").unwrap();
+        let face_id = catalog.add_face(image_id, (0.0, 0.0, 0.1, 0.1), &[]).unwrap();
+        let mut clusters: Vec<Cluster> = Vec::new();
+        let mut person_ids: Vec<i64> = Vec::new();
+
+        let result = assign_and_persist(&catalog, &mut clusters, &mut person_ids, face_id, &[], 0.1, || {
+            catalog.create_person(face_id).map_err(FacePipelineError::from)
+        });
+
+        assert!(result.is_ok(), "an empty embedding must be skipped, not returned as an error or a panic");
+        assert!(clusters.is_empty(), "no cluster should have been created for the skipped face");
     }
 }

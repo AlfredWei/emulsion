@@ -43,6 +43,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// (a single local catalog file, not per-window/per-command connections).
 struct AppState {
     catalog: Arc<Mutex<Catalog>>,
+    /// Shared cancel flag for the folder-scoped "Find People" job
+    /// (`detect_faces_for_images`/`cancel_face_detection`, People tab UX
+    /// fix). Only one such job is ever expected to run at a time in this
+    /// single-window desktop app -- the same assumption every other
+    /// `Mutex<Catalog>`-serialized long-running command in this file
+    /// already makes -- so one flag, reset at the start of each new job,
+    /// is enough; it isn't per-job-id.
+    face_detection_cancel: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Resolves the directory thumbnails/previews are read from and written
@@ -272,11 +280,75 @@ async fn detect_faces_for_import_batch(app: AppHandle, state: State<'_, AppState
             |current, total| {
                 let _ = app.emit("face-detection-progress", ImportProgress { current, total });
             },
+            || false,
         )
         .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// On-demand detection for an explicit list of already-cataloged images --
+/// the People-tab UX fix (2026-09-16): `detect_faces_for_import_batch`
+/// above only ever ran at import time, so any image cataloged before face
+/// detection existed (this project's own dev catalog included) could never
+/// get scanned, and Tag Faces/"Find People" looked simply broken for them.
+/// Two real callers share this one command and its `"face-detection-scan-
+/// progress"` event -- a distinct name from `detect_faces_for_import_batch`'s
+/// own `"face-detection-progress"` so an on-demand scan can never be
+/// mistaken for import's own third-phase progress bar, but shared between
+/// both callers below since only one of them is ever meaningfully visible
+/// at a time in this single-window app:
+///
+/// - The Tag Faces canvas calls this with a single image id right after
+///   selecting a photo whose `faces_scanned` is still false (RFC-0005's
+///   per-photo tagging view), so opening an unscanned photo now runs
+///   detection automatically instead of just showing "no faces detected".
+/// - The People tab's "Find People" button calls this with every unscanned
+///   image in the selected folder, and can be stopped mid-run via
+///   `cancel_face_detection`.
+///
+/// Not cancelable itself for the single-photo case (nothing to wire a
+/// cancel button to there) -- both share the same `AppState`
+/// `face_detection_cancel` flag regardless, reset to `false` at the start
+/// of every call; harmless for the tiny single-photo case since it
+/// finishes before a user could plausibly reach for a cancel action.
+#[tauri::command]
+async fn detect_faces_for_images(app: AppHandle, state: State<'_, AppState>, image_ids: Vec<i64>) -> Result<(), String> {
+    let catalog = state.catalog.clone();
+    let cancel = state.face_detection_cancel.clone();
+    cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+    let models_dir = resolve_face_models_dir(&app, &catalog)?;
+    let models = face_models::ensure_models(&models_dir).await.map_err(|e| e.to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let detector = face_detect::FaceDetector::load(&models.yunet).map_err(|e| e.to_string())?;
+        let embedder = face_detect::FaceEmbedder::load(&models.sface).map_err(|e| e.to_string())?;
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        face_pipeline::detect_faces_for_batch(
+            &catalog,
+            &detector,
+            &embedder,
+            &image_ids,
+            face_pipeline::DEFAULT_CLUSTER_THRESHOLD,
+            |current, total| {
+                let _ = app.emit("face-detection-scan-progress", ImportProgress { current, total });
+            },
+            move || cancel.load(std::sync::atomic::Ordering::Relaxed),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops the in-flight `detect_faces_for_images` job at the next
+/// per-image checkpoint -- everything already scanned by that point is
+/// kept (see `detect_faces_for_batch`'s own "stop now, not a rollback"
+/// doc comment), not undone.
+#[tauri::command]
+fn cancel_face_detection(state: State<'_, AppState>) {
+    state.face_detection_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The explicit "Find People" action from the reviewed mockup
@@ -1824,7 +1896,10 @@ pub fn run() {
                 import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir);
             });
 
-            app.manage(AppState { catalog });
+            app.manage(AppState {
+                catalog,
+                face_detection_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1835,6 +1910,8 @@ pub fn run() {
             backfill_missing_thumbnails,
             ensure_thumbnail,
             detect_faces_for_import_batch,
+            detect_faces_for_images,
+            cancel_face_detection,
             recluster_faces,
             list_people,
             get_faces_for_image,

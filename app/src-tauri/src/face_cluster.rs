@@ -116,7 +116,17 @@ pub fn assign_face(clusters: &mut Vec<Cluster>, embedding: &[f32], threshold: f3
         .iter()
         .enumerate()
         .map(|(i, c)| (i, cosine_distance(&c.centroid, embedding)))
-        .min_by(|(_, d1), (_, d2)| d1.partial_cmp(d2).expect("cosine_distance never produces NaN"));
+        // `total_cmp`, not `partial_cmp().expect(...)`: this used to assume
+        // `cosine_distance` can never produce NaN and panic if it somehow
+        // did. That assumption is believed true (see this fn's doc comment)
+        // but a panic here would fire while the caller holds the shared
+        // `AppState.catalog` Mutex for the whole batch, poisoning it and
+        // bricking every other command in the app (crash-safety fix,
+        // 2026-09-17, matches `face_pipeline::assign_and_persist`'s same
+        // fix). `total_cmp` totally orders every f32 including NaN, so this
+        // is a total, panic-free ordering with identical behavior for the
+        // finite distances this function actually produces.
+        .min_by(|(_, d1), (_, d2)| d1.total_cmp(d2));
 
     match nearest {
         Some((i, distance)) if distance <= threshold => {

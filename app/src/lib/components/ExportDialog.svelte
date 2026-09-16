@@ -1,6 +1,6 @@
 <script>
   import { open } from "@tauri-apps/plugin-dialog";
-  import { exportImages } from "$lib/api/export.js";
+  import { exportImages, listExportPlugins } from "$lib/api/export.js";
   import { openFolder } from "$lib/api/system.js";
 
   /**
@@ -27,6 +27,21 @@
   let progressCurrent = $state(0);
   let progressTotal = $state(0);
   let progressFileName = $state("");
+  // M5, RFC-0006: the export-plugin hook. "" means "no plugin selected" --
+  // <select> values are always strings, so plugin ids (numbers) are only
+  // parsed back out at the point handleExport builds `options`.
+  let plugins = $state(/** @type {import('$lib/api/export.js').ExportPlugin[]} */ ([]));
+  let pluginId = $state("");
+
+  // Loads once per dialog open, not once per component mount -- `items`
+  // flips from null to non-null every time the dialog is (re)opened, and a
+  // plugin could have been added/edited/deleted in Settings since the last
+  // time this dialog was open.
+  $effect(() => {
+    if (items) {
+      listExportPlugins().then((p) => (plugins = p));
+    }
+  });
 
   async function pickDestination() {
     const dir = await open({ directory: true, multiple: false });
@@ -56,6 +71,7 @@
       destination_dir: destinationDir,
       long_edge: longEdge.trim() ? Number(longEdge) : null,
       quality,
+      plugin_id: pluginId ? Number(pluginId) : null,
     };
     const results = /** @type {import('$lib/api/export.js').ExportResult[]} */ ([]);
     try {
@@ -66,6 +82,10 @@
         results.push(result);
       }
       const failed = results.filter((r) => r.error);
+      // A plugin's own spawn() failure is reported separately from export
+      // failure (RFC-0006 §3.3) -- surfaced here as an appended note, never
+      // in place of the export's own success message.
+      const pluginFailed = results.filter((r) => r.plugin_error);
       if (results.length === 1) {
         // Keep the single-image message shape people already know.
         statusMessage = failed.length > 0
@@ -75,6 +95,9 @@
         statusMessage =
           `Exported ${results.length - failed.length} of ${results.length}` +
           (failed.length > 0 ? ` — first failure: ${failed[0].error}` : "");
+      }
+      if (pluginFailed.length > 0) {
+        statusMessage += ` (plugin failed to run: ${pluginFailed[0].plugin_error})`;
       }
       // Isolated from the export loop's own try/catch above -- a failure
       // opening the destination folder (e.g. a permission error) must
@@ -133,6 +156,18 @@
           disabled={exporting}
         />
       </div>
+
+      {#if plugins.length > 0}
+        <div class="row">
+          <label class="label" for="export-plugin">Run after export</label>
+          <select id="export-plugin" bind:value={pluginId} disabled={exporting}>
+            <option value="">None</option>
+            {#each plugins as plugin (plugin.id)}
+              <option value={String(plugin.id)}>{plugin.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
 
       <label class="checkbox-row">
         <input type="checkbox" bind:checked={revealWhenDone} disabled={exporting} />
@@ -202,12 +237,14 @@
     color: var(--text-secondary);
   }
   input:not([type="checkbox"]),
+  select,
   .folder-btn {
     all: unset;
     box-sizing: border-box;
     width: 100%;
     padding: 6px 8px;
     font-size: 12px;
+    font-family: inherit;
     color: var(--text-primary);
     background: var(--bg-panel-raised);
     border: 1px solid var(--border-subtle);
@@ -218,7 +255,8 @@
     color: var(--text-secondary);
   }
   .folder-btn:disabled,
-  input:disabled {
+  input:disabled,
+  select:disabled {
     opacity: 0.6;
   }
   .status {

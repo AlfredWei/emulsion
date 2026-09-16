@@ -11,9 +11,10 @@
    *   confirmLabel: string,
    *   onConfirm: () => void,
    *   onCancel: () => void,
+   *   variant?: "danger" | "primary",
    * }}
    */
-  let { open, title, message, confirmLabel, onConfirm, onCancel } = $props();
+  let { open, title, message, confirmLabel, onConfirm, onCancel, variant = "danger" } = $props();
 </script>
 
 <svelte:window onkeydown={(e) => open && e.key === "Escape" && onCancel()} />
@@ -25,7 +26,7 @@
       <p class="message">{message}</p>
       <div class="actions">
         <button class="secondary" type="button" onclick={onCancel}>Cancel</button>
-        <button class="danger" type="button" onclick={onConfirm}>{confirmLabel}</button>
+        <button class={variant} type="button" onclick={onConfirm}>{confirmLabel}</button>
       </div>
     </div>
   </div>
@@ -86,5 +87,10 @@
     background: rgba(225, 88, 91, 0.12);
     color: var(--label-red);
     border: 1px solid var(--label-red);
+  }
+  .primary {
+    background: rgba(var(--accent-rgb, 90, 140, 255), 0.14);
+    color: var(--accent-strong);
+    border: 1px solid var(--accent-strong);
   }
 </style>

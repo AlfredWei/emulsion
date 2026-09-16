@@ -28,6 +28,17 @@
    *   onContactChange: (contact: string) => void,
    *   onKeywordAssigned: (name: string, imageCount: number) => void,
    *   onGeoLocationChange?: (lat: number | null, lon: number | null, alt: number | null) => void,
+   *   faces?: import('$lib/api/faces.js').FaceRow[],
+   *   people?: import('$lib/api/faces.js').PersonRow[],
+   *   detectingFaces?: boolean,
+   *   faceDetectionProgress?: { current: number, total: number } | null,
+   *   hoveredFaceId?: number | null,
+   *   onHoverFace?: (faceId: number | null) => void,
+   *   onDetectFaces?: () => void,
+   *   onTagFace?: (faceId: number, personId: number) => void,
+   *   onCreateAndTagFace?: (faceId: number, name: string) => void,
+   *   onRenamePerson?: (personId: number, name: string | null) => void,
+   *   onSetFaceExcluded?: (faceId: number, excluded: boolean) => void,
    * }}
    */
   let {
@@ -42,6 +53,17 @@
     onContactChange,
     onKeywordAssigned,
     onGeoLocationChange,
+    faces = [],
+    people = [],
+    detectingFaces = false,
+    faceDetectionProgress = null,
+    hoveredFaceId = null,
+    onHoverFace,
+    onDetectFaces,
+    onTagFace,
+    onCreateAndTagFace,
+    onRenamePerson,
+    onSetFaceExcluded,
   } = $props();
 
   let filename = $derived(image ? image.path.split(/[/\\]/).pop() || image.path : "—");
@@ -214,7 +236,81 @@
     await removeKeywordFromImage(image.image_id, keywordId);
     imageKeywords = await getImageKeywords(image.image_id);
   }
+
+  // People/Faces (Library-integration redesign, 2026-09-17 -- see RFC-0005
+  // §7): this section replaces the standalone People tab's Tag Faces
+  // canvas side panel (PeopleTagView.svelte, now removed) with the same
+  // tag/rename/reassign/"not a face" interactions, just relocated here so
+  // detected people show up alongside the rest of this photo's metadata.
+  // IPC itself stays in +page.svelte (onTagFace/onCreateAndTagFace/
+  // onRenamePerson/onSetFaceExcluded/onDetectFaces are all callback props)
+  // -- this component only owns the popover/menu's own open/closed UI
+  // state, matching PeopleTagView's original split.
+  let openPopoverFaceId = $state(/** @type {number | null} */ (null));
+  let openMenuFaceId = $state(/** @type {number | null} */ (null));
+  let popoverQuery = $state("");
+  let renamingFaceId = $state(/** @type {number | null} */ (null));
+  let renameValue = $state("");
+
+  let faceSuggestions = $derived.by(() => {
+    const q = popoverQuery.trim().toLowerCase();
+    const named = people.filter((p) => p.name);
+    return q ? named.filter((p) => /** @type {string} */ (p.name).toLowerCase().includes(q)) : named;
+  });
+
+  function closeFaceFloaters() {
+    openPopoverFaceId = null;
+    openMenuFaceId = null;
+    renamingFaceId = null;
+  }
+
+  function toggleFacePopover(/** @type {number} */ faceId) {
+    openMenuFaceId = null;
+    popoverQuery = "";
+    openPopoverFaceId = openPopoverFaceId === faceId ? null : faceId;
+  }
+
+  function toggleFaceMenu(/** @type {number} */ faceId) {
+    openPopoverFaceId = null;
+    openMenuFaceId = openMenuFaceId === faceId ? null : faceId;
+  }
+
+  function pickFaceSuggestion(/** @type {number} */ faceId, /** @type {import('$lib/api/faces.js').PersonRow} */ person) {
+    onTagFace?.(faceId, person.id);
+    closeFaceFloaters();
+  }
+
+  function submitNewFacePerson(/** @type {number} */ faceId) {
+    const name = popoverQuery.trim();
+    if (!name) return;
+    onCreateAndTagFace?.(faceId, name);
+    closeFaceFloaters();
+  }
+
+  function startRenamingFace(/** @type {import('$lib/api/faces.js').FaceRow} */ face) {
+    if (face.person_id === null) return;
+    openMenuFaceId = null;
+    renamingFaceId = face.id;
+    renameValue = face.person_name ?? "";
+  }
+
+  function commitFaceRename(/** @type {import('$lib/api/faces.js').FaceRow} */ face) {
+    if (renamingFaceId !== face.id || face.person_id === null) return;
+    renamingFaceId = null;
+    onRenamePerson?.(face.person_id, renameValue.trim() || null);
+  }
+
+  /** @param {HTMLInputElement} node */
+  function focusAndSelectFace(node) {
+    node.focus();
+    node.select();
+  }
 </script>
+
+<svelte:window
+  onclick={closeFaceFloaters}
+  onkeydown={(e) => (openPopoverFaceId !== null || openMenuFaceId !== null) && e.key === "Escape" && closeFaceFloaters()}
+/>
 
 <div class="panel">
   {#if !image}
@@ -437,6 +533,150 @@
       </div>
     {:else}
       <div class="empty-hint-row">No GPS data</div>
+    {/if}
+
+    <!-- People/Faces (Library-integration redesign -- RFC-0005 §7) -->
+    <div class="section-header-row">
+      <div class="section-label">People</div>
+      {#if selectedCount <= 1}
+        <button
+          class="action-link-btn"
+          type="button"
+          onclick={() => onDetectFaces?.()}
+          disabled={detectingFaces}
+        >
+          {detectingFaces ? "Detecting…" : image.faces_scanned ? "Re-scan" : "😊 Face"}
+        </button>
+      {/if}
+    </div>
+    {#if selectedCount > 1}
+      <div class="empty-hint-row">Select a single photo to see its detected people.</div>
+    {:else if detectingFaces}
+      <div class="face-detect-progress">
+        {#if faceDetectionProgress}
+          <progress value={faceDetectionProgress.current} max={faceDetectionProgress.total}></progress>
+          <span>{faceDetectionProgress.current} / {faceDetectionProgress.total}</span>
+        {:else}
+          <span>Detecting faces…</span>
+        {/if}
+      </div>
+    {:else if faces.length === 0}
+      <div class="empty-hint-row">
+        {image.faces_scanned ? "No faces detected in this photo." : "Not yet scanned — click “Face” above to detect."}
+      </div>
+    {:else}
+      <div class="face-list">
+        {#each faces as face (face.id)}
+          {@const unnamed = face.person_id === null || !face.person_name}
+          <div
+            class="face-list-item"
+            class:hovered={hoveredFaceId === face.id}
+            role="presentation"
+            onmouseenter={() => onHoverFace?.(face.id)}
+            onmouseleave={() => onHoverFace?.(null)}
+          >
+            <span class="mini-avatar" aria-hidden="true"></span>
+            <div class="info">
+              {#if renamingFaceId === face.id}
+                <input
+                  class="face-rename-input"
+                  type="text"
+                  bind:value={renameValue}
+                  use:focusAndSelectFace
+                  onclick={(/** @type {MouseEvent} */ e) => e.stopPropagation()}
+                  onblur={() => commitFaceRename(face)}
+                  onkeydown={(/** @type {KeyboardEvent} */ e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitFaceRename(face);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      renamingFaceId = null;
+                    }
+                  }}
+                />
+              {:else}
+                <button
+                  type="button"
+                  class="nm-btn"
+                  class:unnamed
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    toggleFacePopover(face.id);
+                  }}
+                >
+                  {face.person_id === null ? "Who is this?" : (face.person_name ?? `Person ${face.person_id}`)}
+                </button>
+              {/if}
+              <div class="sub">
+                {face.person_id === null ? "Detected, not yet tagged" : face.person_name ? "Tagged" : "Auto-clustered, unnamed"}
+              </div>
+
+              {#if openPopoverFaceId === face.id}
+                <div class="tag-popover" role="presentation" onclick={(/** @type {MouseEvent} */ e) => e.stopPropagation()}>
+                  <input
+                    type="text"
+                    placeholder="Search people or add new…"
+                    bind:value={popoverQuery}
+                    use:focusAndSelectFace
+                    onkeydown={(/** @type {KeyboardEvent} */ e) => e.key === "Enter" && submitNewFacePerson(face.id)}
+                  />
+                  <div class="results">
+                    {#each faceSuggestions as person (person.id)}
+                      <button type="button" class="suggestion" onclick={() => pickFaceSuggestion(face.id, person)}>
+                        <span class="suggestion-name">{person.name}</span>
+                        <span class="cnt">{person.photo_count}</span>
+                      </button>
+                    {/each}
+                    <button type="button" class="suggestion new-person" onclick={() => submitNewFacePerson(face.id)}>
+                      + New person{popoverQuery.trim() ? ` "${popoverQuery.trim()}"` : "…"}
+                    </button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+            <button
+              type="button"
+              class="face-more-btn"
+              aria-label="Face options"
+              onclick={(e) => {
+                e.stopPropagation();
+                toggleFaceMenu(face.id);
+              }}
+            >⋯</button>
+            {#if openMenuFaceId === face.id}
+              <div class="face-menu" role="presentation" onclick={(/** @type {MouseEvent} */ e) => e.stopPropagation()}>
+                {#if unnamed}
+                  <button
+                    type="button"
+                    onclick={() => {
+                      openMenuFaceId = null;
+                      toggleFacePopover(face.id);
+                    }}
+                  >Tag this face…</button>
+                {:else}
+                  <button type="button" onclick={() => startRenamingFace(face)}>Rename…</button>
+                  <button
+                    type="button"
+                    onclick={() => {
+                      openMenuFaceId = null;
+                      toggleFacePopover(face.id);
+                    }}
+                  >Reassign to…</button>
+                {/if}
+                <button
+                  type="button"
+                  class="danger"
+                  onclick={() => {
+                    closeFaceFloaters();
+                    onSetFaceExcluded?.(face.id, true);
+                  }}
+                >Not a face</button>
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
     {/if}
 
     <!-- Keywords -->
@@ -951,5 +1191,188 @@
   .suggestions button:hover {
     background: var(--accent-soft);
     color: var(--accent-strong);
+  }
+
+  /* People/Faces (Library-integration redesign) */
+  .face-detect-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 2px 4px 6px;
+  }
+  .face-detect-progress progress {
+    flex: 1;
+    height: 5px;
+    accent-color: var(--accent);
+  }
+  .face-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: 4px;
+  }
+  .face-list-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px;
+    border-radius: var(--radius-s);
+  }
+  .face-list-item.hovered {
+    background: var(--accent-soft);
+  }
+  .face-list-item .mini-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--bg-panel-raised);
+    box-shadow: 0 0 0 1px var(--border-subtle);
+  }
+  .face-list-item .info {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+  }
+  .nm-btn {
+    all: unset;
+    display: block;
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    max-width: 100%;
+  }
+  .nm-btn.unnamed {
+    color: var(--accent);
+  }
+  .face-list-item .sub {
+    font-size: 10px;
+    color: var(--text-tertiary);
+  }
+  .face-rename-input {
+    all: unset;
+    display: block;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-panel-raised);
+    outline: 1px solid var(--accent);
+    border-radius: var(--radius-s);
+    padding: 1px 4px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .face-more-btn {
+    all: unset;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .face-more-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .tag-popover {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 2px);
+    z-index: 10;
+    width: 200px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-m);
+    box-shadow: var(--shadow-soft);
+    padding: 8px;
+  }
+  .tag-popover input[type="text"] {
+    width: 100%;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    color: var(--text-primary);
+    font-size: 12px;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    font-family: var(--font-ui);
+    box-sizing: border-box;
+  }
+  .tag-popover input[type="text"]:focus {
+    outline: 1px solid var(--accent);
+    border-color: var(--accent);
+  }
+  .suggestion {
+    all: unset;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px;
+    border-radius: var(--radius-s);
+    cursor: pointer;
+    font-size: 12px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .suggestion:hover {
+    background: var(--bg-hover);
+  }
+  .suggestion-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .suggestion .cnt {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-tertiary);
+  }
+  .new-person {
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 4px;
+    padding-top: 7px;
+    color: var(--accent-strong);
+    font-weight: 700;
+  }
+  .face-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 2px);
+    z-index: 10;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-m);
+    box-shadow: var(--shadow-soft);
+    padding: 4px;
+    width: 152px;
+  }
+  .face-menu button {
+    all: unset;
+    display: block;
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 12px;
+    border-radius: var(--radius-s);
+    color: var(--text-secondary);
+    cursor: pointer;
+    box-sizing: border-box;
+  }
+  .face-menu button:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .face-menu button.danger:hover {
+    color: var(--label-red);
   }
 </style>

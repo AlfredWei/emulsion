@@ -14,8 +14,9 @@
 //! not restricted -- source_decode.rs dispatches RAW or JPEG sources alike
 //! (M2 Slice 1).
 
-use crate::catalog::EditStack;
+use crate::catalog::{EditStack, ExportPlugin};
 use crate::develop_engine::{apply_crop, apply_edit_stack, apply_lens_correction, apply_perspective};
+use crate::export_plugin;
 use crate::source_decode::{self, DecodeError};
 use image::codecs::jpeg::JpegEncoder;
 use image::RgbImage;
@@ -28,6 +29,14 @@ pub struct ExportOptions {
     /// `None` means export at the source's native resolution.
     pub long_edge: Option<u32>,
     pub quality: u8,
+    /// The export-plugin (RFC-0006) to run after each successfully
+    /// exported file, if any -- an id, not the resolved row: this module
+    /// stays catalog-free (see this file's own header comment), so
+    /// `lib.rs`'s `export_images` command resolves this id to a real
+    /// `ExportPlugin` under its existing catalog lock, the same place it
+    /// already resolves each item's edit stack, and hands the resolved
+    /// row to `export_batch` directly instead.
+    pub plugin_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +44,11 @@ pub struct ExportResult {
     pub source_path: String,
     pub output_path: Option<String>,
     pub error: Option<String>,
+    /// Set only when a configured export plugin's own `spawn()` fails
+    /// (bad command, not found, not executable) -- kept separate from
+    /// `error` above so a plugin misconfiguration never makes an
+    /// otherwise-successful export look like a failed one (RFC-0006 §3.3).
+    pub plugin_error: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -143,19 +157,36 @@ pub fn export_one(
 /// Sequential, accepting a `Vec` from the start so batch export is a
 /// frontend-only follow-up (multi-select UI) later, not a backend
 /// rewrite, even though the frontend only ever sends one item this slice.
-pub fn export_batch(items: Vec<(PathBuf, EditStack)>, options: &ExportOptions) -> Vec<ExportResult> {
+///
+/// `plugin`, if set, is invoked once per successfully exported file (not
+/// once per batch) via `export_plugin::invoke` -- fire-and-forget, so a
+/// slow or hanging plugin can't stall or fail the rest of the batch
+/// (RFC-0006 §3.3). A file that failed to export is never handed to the
+/// plugin at all.
+pub fn export_batch(
+    items: Vec<(PathBuf, EditStack)>,
+    options: &ExportOptions,
+    plugin: Option<&ExportPlugin>,
+) -> Vec<ExportResult> {
     items
         .into_iter()
         .map(|(path, stack)| match export_one(&path, &stack, options) {
-            Ok(out_path) => ExportResult {
-                source_path: path.to_string_lossy().to_string(),
-                output_path: Some(out_path.to_string_lossy().to_string()),
-                error: None,
-            },
+            Ok(out_path) => {
+                let plugin_error = plugin
+                    .and_then(|p| export_plugin::invoke(p, &out_path).err())
+                    .map(|e| e.to_string());
+                ExportResult {
+                    source_path: path.to_string_lossy().to_string(),
+                    output_path: Some(out_path.to_string_lossy().to_string()),
+                    error: None,
+                    plugin_error,
+                }
+            }
             Err(e) => ExportResult {
                 source_path: path.to_string_lossy().to_string(),
                 output_path: None,
                 error: Some(e.to_string()),
+                plugin_error: None,
             },
         })
         .collect()
@@ -196,7 +227,7 @@ mod tests {
             return;
         };
         let dest = temp_dir("native-res");
-        let options = ExportOptions { destination_dir: dest.to_string_lossy().to_string(), long_edge: None, quality: 90 };
+        let options = ExportOptions { destination_dir: dest.to_string_lossy().to_string(), long_edge: None, quality: 90, plugin_id: None };
 
         let out_path = export_one(Path::new(&sample_path), &EditStack::empty(), &options)
             .expect("export succeeds for a real RAW file");
@@ -215,7 +246,7 @@ mod tests {
             return;
         };
         let dest = temp_dir("long-edge");
-        let options = ExportOptions { destination_dir: dest.to_string_lossy().to_string(), long_edge: Some(800), quality: 90 };
+        let options = ExportOptions { destination_dir: dest.to_string_lossy().to_string(), long_edge: Some(800), quality: 90, plugin_id: None };
 
         let out_path = export_one(Path::new(&sample_path), &EditStack::empty(), &options)
             .expect("export succeeds for a real RAW file");
@@ -239,6 +270,7 @@ mod tests {
             destination_dir: bad_destination.to_string_lossy().to_string(),
             long_edge: None,
             quality: 90,
+            plugin_id: None,
         };
 
         let result = export_one(Path::new("/nonexistent/not-a-real-raw-file.CR3"), &EditStack::empty(), &options);

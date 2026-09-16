@@ -1,6 +1,7 @@
 mod catalog;
 mod develop_engine;
 mod export;
+mod export_plugin;
 // M5 Slice 6 (face detection, RFC-0005): the clustering half of the
 // pipeline, hand-rolled and unit-tested against synthetic vectors.
 mod face_cluster;
@@ -26,7 +27,7 @@ mod source_decode;
 mod storage;
 
 use catalog::{
-    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, FaceRow, HistoryEntry,
+    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, ExportPlugin, FaceRow, HistoryEntry,
     ImageKeywordAssignment, ImageSummary, KeywordNode, KeywordRef, PersonRow, PresetEntry, SnapshotEntry,
 };
 use export::{ExportOptions, ExportResult};
@@ -1306,6 +1307,43 @@ fn delete_preset(state: State<'_, AppState>, preset_id: i64) -> Result<(), Strin
     catalog.delete_preset(preset_id).map_err(|e| e.to_string())
 }
 
+/// Export plugins (M5, RFC-0006): the v0 extensibility surface's CRUD
+/// commands, same shape as the preset commands just above.
+#[tauri::command]
+fn list_export_plugins(state: State<'_, AppState>) -> Result<Vec<ExportPlugin>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.list_export_plugins().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_export_plugin(
+    state: State<'_, AppState>,
+    name: String,
+    command: String,
+    args_template: Vec<String>,
+) -> Result<ExportPlugin, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.add_export_plugin(&name, &command, &args_template).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_export_plugin(
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+    command: String,
+    args_template: Vec<String>,
+) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.update_export_plugin(id, &name, &command, &args_template).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_export_plugin(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.delete_export_plugin(id).map_err(|e| e.to_string())
+}
+
 /// The on-disk shape of an exported preset file -- deliberately a plain
 /// `{name, schema_version, ops}` struct, not `PresetEntry` (which carries
 /// a catalog `id`/`created_at` that are meaningless once exported to a
@@ -1406,17 +1444,31 @@ async fn export_images(
     let catalog = state.catalog.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let resolved = {
+        let (resolved, plugin) = {
             let catalog = catalog.lock().map_err(|e| e.to_string())?;
-            items
+            let resolved = items
                 .into_iter()
                 .map(|item| {
                     let stack = catalog.get_edit_stack(item.version_id).unwrap_or_else(|_| EditStack::empty());
                     (std::path::PathBuf::from(item.path), stack)
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            // Resolved here, under the same brief lock as the edit stacks
+            // above, rather than inside `export_batch` itself -- keeps
+            // export.rs catalog-free (see that module's own header
+            // comment), matching how every other resolve-then-call-into-a-
+            // pure-module command in this file is already shaped.
+            let plugin = match options.plugin_id {
+                Some(id) => catalog
+                    .list_export_plugins()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|p| p.id == id),
+                None => None,
+            };
+            (resolved, plugin)
         };
-        Ok::<_, String>(export::export_batch(resolved, &options))
+        Ok::<_, String>(export::export_batch(resolved, &options, plugin.as_ref()))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1837,6 +1889,10 @@ pub fn run() {
             create_preset,
             list_presets,
             delete_preset,
+            list_export_plugins,
+            add_export_plugin,
+            update_export_plugin,
+            delete_export_plugin,
             import_preset_file,
             export_preset_file,
             regenerate_thumbnail,

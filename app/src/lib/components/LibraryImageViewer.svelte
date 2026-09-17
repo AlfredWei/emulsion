@@ -304,11 +304,15 @@
         {/if}
         {#if showFaceRects}
           {#each faces as face (face.id)}
+            {@const label = face.person_id === null ? "Who is this?" : (face.person_name ?? `Person ${face.person_id}`)}
             <div
               class="face-rect"
               class:hovered={hoveredFaceId === face.id}
+              class:untagged={face.person_id === null}
               style={`left:${face.bbox_x * 100}%;top:${face.bbox_y * 100}%;width:${face.bbox_w * 100}%;height:${face.bbox_h * 100}%`}
-            ></div>
+            >
+              <span class="face-rect-label">{label}</span>
+            </div>
           {/each}
         {/if}
       </div>
@@ -510,10 +514,35 @@
     pointer-events: none;
     opacity: 0.85;
   }
+  .face-rect.untagged {
+    border-style: dashed;
+    border-color: var(--text-secondary);
+  }
   .face-rect.hovered {
     border-color: var(--accent-strong);
     border-width: 3px;
     opacity: 1;
+  }
+  .face-rect-label {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 4px);
+    white-space: nowrap;
+    background: rgba(20, 18, 16, 0.85);
+    color: var(--text-primary);
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 99px;
+  }
+  .face-rect.untagged .face-rect-label {
+    color: var(--text-secondary);
+    font-weight: 500;
+    background: rgba(20, 18, 16, 0.65);
+    border: 1px dashed var(--border-strong);
+  }
+  .face-rect.hovered .face-rect-label {
+    color: var(--accent-strong);
   }
   .loading-overlay {
     position: absolute;

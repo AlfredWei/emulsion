@@ -35,6 +35,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {string | null} caption
  * @property {string | null} copyright
  * @property {string | null} contact
+ * @property {boolean} faces_scanned
  */
 
 /**

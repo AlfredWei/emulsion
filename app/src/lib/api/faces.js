@@ -40,12 +40,25 @@ export function detectFacesForImportBatch(/** @type {number} */ importBatch) {
   return invoke("detect_faces_for_import_batch", { importBatch });
 }
 
-/** The explicit "Find People" action: re-clusters every non-excluded face
- * in the whole catalog from scratch, reusing each face's existing person
- * id where it has one so it doesn't orphan names already typed.
+/** On-demand detection for an explicit list of already-cataloged images
+ * (People-tab UX fix, 2026-09-16) -- unlike `detectFacesForImportBatch`,
+ * this runs for images that may have been cataloged long before face
+ * detection existed, so it's what backs both a per-photo auto-detect (Tag
+ * Faces, opening a photo whose `faces_scanned` is still false) and the
+ * folder-scoped "Find People" action. Emits `"face-detection-scan-progress"`
+ * `{current, total}` events while it runs -- a distinct event name from
+ * import's own `"face-detection-progress"` so the two progress bars never
+ * cross-talk. Cancelable mid-run via `cancelFaceDetection`.
  * @returns {Promise<void>} */
-export function reclusterFaces() {
-  return invoke("recluster_faces");
+export function detectFacesForImages(/** @type {number[]} */ imageIds) {
+  return invoke("detect_faces_for_images", { imageIds });
+}
+
+/** Stops the in-flight `detectFacesForImages` job at its next per-image
+ * checkpoint -- everything already scanned by that point is kept.
+ * @returns {Promise<void>} */
+export function cancelFaceDetection() {
+  return invoke("cancel_face_detection");
 }
 
 /** @returns {Promise<PersonRow[]>} */

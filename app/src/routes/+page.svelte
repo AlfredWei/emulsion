@@ -29,8 +29,6 @@
   import LibrarySurveyView from "$lib/components/LibrarySurveyView.svelte";
   import PrintPanel from "$lib/components/PrintPanel.svelte";
   import PrintLayoutView from "$lib/components/PrintLayoutView.svelte";
-  import PeopleGrid from "$lib/components/PeopleGrid.svelte";
-  import PeopleTagView from "$lib/components/PeopleTagView.svelte";
   import CatalogRail from "$lib/components/CatalogRail.svelte";
   import { getStoredShortcuts } from "$lib/shortcuts.js";
   import {
@@ -161,7 +159,8 @@
   import { getPrintReadyImages, exportPrintPdf, PAPER_SIZES } from "$lib/api/print.js";
   import {
     detectFacesForImportBatch,
-    reclusterFaces,
+    detectFacesForImages,
+    cancelFaceDetection,
     listPeople,
     getFacesForImage,
     createPerson,
@@ -642,80 +641,49 @@
   // full-resolution, color-managed payload.
   let printReadyUrls = $state(/** @type {Record<number, string>} */ ({}));
 
-  // People (M5 Slice 6, RFC-0005 §3.6). `peopleView` mirrors the reviewed
-  // mockup's Grid/Tag Faces segmented control; `taggingImage` is whichever
-  // filmstrip photo is currently open in the Tag Faces canvas (null until
-  // one is picked). `personAvatarSourceUrls` caches decoded-preview URLs
-  // by SOURCE PATH (not person id) -- several people can share a cover
-  // photo, and decoding is the expensive part, not the per-person crop
-  // (a pure CSS background-position/size operation, done in PeopleGrid).
+  // People/Faces (M5 Slice 6, RFC-0005; folded into Library mode by the
+  // 2026-09-17 redesign -- see RFC-0005 §7). No more standalone People
+  // tab/grid: detected faces for the CURRENTLY SELECTED photo show up in
+  // MetadataPanel's own "People" section, and face rectangles overlay the
+  // Loupe view when `showFaceRects` is on. `people` is still fetched
+  // globally (not scoped to one photo) purely to back the tag popover's
+  // "search existing people" suggestions in MetadataPanel -- no avatar
+  // decoding needed anymore since nothing renders a person cover photo.
   let people = $state(/** @type {import('$lib/api/faces.js').PersonRow[]} */ ([]));
-  let peopleFilter = $state(/** @type {"all" | "unnamed"} */ ("all"));
-  let peopleView = $state(/** @type {"grid" | "tag"} */ ("grid"));
-  let taggingImage = $state(/** @type {import('$lib/api/catalog.js').ImageSummary | null} */ (null));
-  let taggingFaces = $state(/** @type {import('$lib/api/faces.js').FaceRow[]} */ ([]));
-  let taggingPreviewUrl = $state(/** @type {string | null} */ (null));
-  let taggingLoadToken = 0;
-  let reclusteringFaces = $state(false);
-  let personAvatarSourceUrls = $state(/** @type {Record<string, string | null>} */ ({}));
+  let currentImageFaces = $state(/** @type {import('$lib/api/faces.js').FaceRow[]} */ ([]));
+  let showFaceRects = $state(false);
+  let hoveredFaceId = $state(/** @type {number | null} */ (null));
 
-  let unnamedPeopleCount = $derived(people.filter((p) => !p.name).length);
-  let visiblePeople = $derived(peopleFilter === "unnamed" ? people.filter((p) => !p.name) : people);
+  // Shared by all three detection entry points below (MetadataPanel's
+  // per-photo "Face" button, Library's multi-select batch action, and
+  // "Detect Faces in Folder") -- only one `detect_faces_for_images` job is
+  // ever meaningfully in flight at a time in this single-window app (see
+  // lib.rs's `AppState.face_detection_cancel` doc comment), so one shared
+  // in-flight flag is enough; `detectingFaces` also gates the "Face"
+  // button so a per-photo click can't race a folder-wide job sharing the
+  // same backend cancel flag.
+  let detectingFaces = $state(false);
+  let faceScanProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
+  let faceDetectionCancelable = $state(false);
 
-  /** Refetches the People grid AND resolves any newly-seen cover photo to
-   * a real decoded-preview URL (source files are often RAW/HEIC -- not
-   * directly renderable by an `<img>`/CSS `background-image`, so this
-   * reuses the same Develop-preview decode Library/Develop already rely
-   * on). Cached by path across calls -- renaming/reassigning people
-   * doesn't change whose photo is whose cover most of the time, so this
-   * only ever decodes a genuinely new cover photo. */
   async function refreshPeople() {
     people = await listPeople();
-    const uniquePaths = [...new Set(people.map((p) => p.cover_image_path).filter((p) => p !== null))];
-    const missing = uniquePaths.filter((p) => !(p in personAvatarSourceUrls));
-    if (missing.length === 0) return;
-    const resolved = await Promise.all(
-      missing.map((path) =>
-        getDevelopPreview(/** @type {string} */ (path), null)
-          .then((info) => convertFileSrc(info.path))
-          .catch(() => null),
-      ),
-    );
-    const next = { ...personAvatarSourceUrls };
-    missing.forEach((path, i) => (next[/** @type {string} */ (path)] = resolved[i]));
-    personAvatarSourceUrls = next;
   }
 
-  /** Loads one filmstrip photo into the Tag Faces canvas -- the real
-   * decoded preview (not the thumbnail: bbox fractions from `faces` are
-   * fractions of the FULL decoded image, and only the undistorted decode
-   * preserves the source's own aspect ratio the way a cropped thumbnail
-   * might not) plus its detected, non-excluded faces. `taggingLoadToken`
-   * guards against an earlier, slower load resolving after a later click
-   * already moved on, same pattern as `previewToken` above. */
-  async function openTagFaces(/** @type {number} */ versionId) {
-    const image = images.find((img) => img.version_id === versionId);
-    if (!image) return;
-    const token = ++taggingLoadToken;
-    taggingImage = image;
-    taggingPreviewUrl = null;
-    taggingFaces = [];
-    try {
-      const [preview, faceRows] = await Promise.all([
-        getDevelopPreview(image.path, image.content_hash ?? null),
-        getFacesForImage(image.image_id),
-      ]);
-      if (token !== taggingLoadToken) return;
-      taggingPreviewUrl = convertFileSrc(preview.path);
-      taggingFaces = faceRows;
-    } catch (/** @type {any} */ e) {
-      if (token === taggingLoadToken) statusMessage = `Could not load faces: ${e}`;
+  /** Refetches the faces for whichever photo is currently selected --
+   * called on selection change (see the `$effect` below) and after any
+   * tag/rename/reassign/exclude/detect action touches the selected photo. */
+  async function refreshCurrentImageFaces() {
+    if (!selectedImage) {
+      currentImageFaces = [];
+      return;
     }
+    currentImageFaces = await getFacesForImage(selectedImage.image_id);
   }
 
   async function handleRenamePerson(/** @type {number} */ personId, /** @type {string | null} */ name) {
     people = people.map((p) => (p.id === personId ? { ...p, name } : p));
-    taggingFaces = taggingFaces.map((f) => (f.person_id === personId ? { ...f, person_name: name } : f));
+    currentImageFaces = currentImageFaces.map((f) => (f.person_id === personId ? { ...f, person_name: name } : f));
     await renamePerson(personId, name);
   }
 
@@ -724,7 +692,9 @@
    * caller below) clears the face back to unclustered. */
   async function handleReassignFace(/** @type {number} */ faceId, /** @type {number | null} */ personId) {
     const personName = personId === null ? null : (people.find((p) => p.id === personId)?.name ?? null);
-    taggingFaces = taggingFaces.map((f) => (f.id === faceId ? { ...f, person_id: personId, person_name: personName } : f));
+    currentImageFaces = currentImageFaces.map((f) =>
+      f.id === faceId ? { ...f, person_id: personId, person_name: personName } : f,
+    );
     await reassignFace(faceId, personId);
     await refreshPeople();
   }
@@ -739,28 +709,71 @@
     await handleReassignFace(faceId, personId);
   }
 
-  /** "Not a face" (kept, not deleted, per RFC-0005 -- see PeopleTagView's
-   * own panel note) -- removes it from THIS view's face list immediately,
-   * matching `get_faces_for_image`'s own `excluded = 0` filter. */
+  /** "Not a face" (kept, not deleted) -- removes it from the current
+   * photo's face list immediately, matching `get_faces_for_image`'s own
+   * `excluded = 0` filter. */
   async function handleSetFaceExcluded(/** @type {number} */ faceId, /** @type {boolean} */ excluded) {
-    if (excluded) taggingFaces = taggingFaces.filter((f) => f.id !== faceId);
+    if (excluded) currentImageFaces = currentImageFaces.filter((f) => f.id !== faceId);
     await setFaceExcluded(faceId, excluded);
     await refreshPeople();
   }
 
-  /** "Find People": re-clusters the whole catalog from scratch, then
-   * refreshes both the grid and whichever photo is currently open in Tag
-   * Faces (its faces' person assignments may have just changed). */
-  async function handleReclusterFaces() {
-    if (reclusteringFaces) return;
-    reclusteringFaces = true;
+  /** Shared runner behind all three manual detection entry points --
+   * on-demand detection outside the import flow (People-tab UX fix,
+   * 2026-09-16, relocated into Library by the 2026-09-17 redesign).
+   * `cancelable` controls whether a Cancel affordance is shown; the tiny
+   * single-photo case passes `false` (nothing worth canceling). */
+  async function runFaceDetection(/** @type {number[]} */ imageIds, /** @type {boolean} */ cancelable) {
+    if (detectingFaces || imageIds.length === 0) return;
+    detectingFaces = true;
+    faceDetectionCancelable = cancelable;
+    faceScanProgress = { current: 0, total: imageIds.length };
     try {
-      await reclusterFaces();
+      await detectFacesForImages(imageIds);
+      images = images.map((img) => (imageIds.includes(img.image_id) ? { ...img, faces_scanned: true } : img));
+      await refreshCurrentImageFaces();
       await refreshPeople();
-      if (taggingImage) await openTagFaces(taggingImage.version_id);
+    } catch (/** @type {any} */ e) {
+      statusMessage = `Face detection failed: ${e}`;
     } finally {
-      reclusteringFaces = false;
+      detectingFaces = false;
+      faceDetectionCancelable = false;
+      faceScanProgress = null;
     }
+  }
+
+  /** MetadataPanel's per-photo "Face" button. */
+  function handleDetectFacesForSelected() {
+    if (!selectedImage) return;
+    runFaceDetection([selectedImage.image_id], false);
+  }
+
+  /** Library's multi-select batch action -- every selected photo not yet
+   * scanned (already-scanned photos are silently skipped, not re-run). */
+  function handleDetectFacesForSelection() {
+    const targets = selectedImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
+    if (targets.length === 0) {
+      statusMessage = "Every selected photo has already been scanned for faces.";
+      return;
+    }
+    runFaceDetection(targets, true);
+  }
+
+  /** "Detect Faces in Folder" -- every not-yet-scanned photo in the
+   * current CatalogRail scope (a folder, a collection, or "All Photos" --
+   * whatever `filteredImages` already reflects), same scope Library's
+   * other bulk actions use. */
+  function handleDetectFacesForFolder() {
+    const targets = filteredImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
+    if (targets.length === 0) {
+      statusMessage = "Every photo in this view has already been scanned for faces.";
+      return;
+    }
+    runFaceDetection(targets, true);
+  }
+
+  function handleCancelFaceDetection() {
+    cancelFaceDetection().catch(() => {});
   }
 
   /** Same file-picker precedent as `handleChooseCustomProfile` above, kept
@@ -1381,6 +1394,16 @@
   // follow-up M1 Slice 5's export_batch was explicitly built to accept).
   let selectedImage = $derived(images.find((img) => img.version_id === selectedId) ?? null);
   let selectedImages = $derived(images.filter((img) => selectedIds.has(img.version_id)));
+
+  // People/Faces: reload the current photo's detected faces whenever the
+  // single-image selection changes (image_id, not version_id -- faces are
+  // per-image, per RFC-0005 §3.4, so switching between virtual copies of
+  // the same source doesn't need a refetch). Cleared, not stale, when
+  // nothing is selected.
+  $effect(() => {
+    void selectedImage?.image_id;
+    refreshCurrentImageFaces();
+  });
   let currentExportItems = $derived.by(() => {
     if (activeModule === "develop" && developVersionId !== null) {
       return [{ path: developImagePath, version_id: developVersionId }];
@@ -1817,6 +1840,38 @@
   /** @type {string[] | null} */
   let supportedExtensions = $state(null);
 
+  // Import-time face-detection opt-in (Library-integration redesign,
+  // 2026-09-17): detection used to run silently on every import; now the
+  // user is asked first, same promise-bridge pattern BackupPromptDialog
+  // already established for a modal that a plain async function needs to
+  // await mid-flow.
+  let confirmingFaceDetectionOnImport = $state(false);
+  let pendingImportBatchSize = $state(0);
+  /** @type {((run: boolean) => void) | null} */
+  let resolveFaceDetectionPrompt = null;
+
+  function promptFaceDetectionOnImport(/** @type {number} */ count) {
+    pendingImportBatchSize = count;
+    confirmingFaceDetectionOnImport = true;
+    return /** @type {Promise<boolean>} */ (
+      new Promise((resolve) => {
+        resolveFaceDetectionPrompt = resolve;
+      })
+    );
+  }
+
+  function handleFaceDetectionPromptConfirm() {
+    confirmingFaceDetectionOnImport = false;
+    resolveFaceDetectionPrompt?.(true);
+    resolveFaceDetectionPrompt = null;
+  }
+
+  function handleFaceDetectionPromptCancel() {
+    confirmingFaceDetectionOnImport = false;
+    resolveFaceDetectionPrompt?.(false);
+    resolveFaceDetectionPrompt = null;
+  }
+
   async function runImport(/** @type {() => Promise<import('$lib/api/catalog.js').ImportSummary | null>} */ doImport) {
     importing = true;
     importProgress = null;
@@ -1844,23 +1899,24 @@
       importPhase = "thumbnails";
       await backfillMissingThumbnails(summary.import_batch);
       await refresh();
-      // Face detection (M5 Slice 6 follow-up): now a THIRD visible phase
-      // of the same progress bar, same "stay up until genuinely done"
-      // treatment as thumbnails -- this used to be a silent fire-and-
-      // forget call with no feedback at all, inconsistent with how
-      // thumbnails (the other post-cataloging background step) already
-      // behave. Its own failure (e.g. no network for the one-time model
-      // download) is caught separately and does NOT fail the whole
-      // import -- cataloging + thumbnails already succeeded, and a photo
-      // whose detection pass fails this way has no other retry path yet
-      // (recluster_faces only reclusters ALREADY-detected faces), a known
-      // gap left for a future slice.
-      importPhase = "faces";
-      try {
-        await detectFacesForImportBatch(summary.import_batch);
-        if (activeModule === "people") await refreshPeople();
-      } catch (/** @type {any} */ e) {
-        statusMessage = `${statusMessage} (face detection failed: ${e})`;
+      // Face detection (M5 Slice 6 follow-up; opt-in per the 2026-09-17
+      // Library-integration redesign -- see RFC-0005 §7): used to run
+      // silently and unconditionally, which surprised users who didn't
+      // want the one-time model download or the extra wait. Now a THIRD
+      // visible phase of the same progress bar, but only if the user says
+      // yes to `promptFaceDetectionOnImport`. Its own failure (e.g. no
+      // network for the one-time model download) is caught separately and
+      // does NOT fail the whole import -- cataloging + thumbnails already
+      // succeeded, and a photo whose detection pass fails this way can
+      // still be scanned later via the "Face"/"Detect Faces" actions.
+      if (summary.imported > 0 && (await promptFaceDetectionOnImport(summary.imported))) {
+        importPhase = "faces";
+        try {
+          await detectFacesForImportBatch(summary.import_batch);
+          await refreshPeople();
+        } catch (/** @type {any} */ e) {
+          statusMessage = `${statusMessage} (face detection failed: ${e})`;
+        }
       }
     } catch (/** @type {any} */ e) {
       statusMessage = `Import failed: ${e}`;
@@ -3455,6 +3511,22 @@
       // ignore outside Tauri
     }
 
+    // On-demand detection's own progress (MetadataPanel's "Face" button,
+    // Library's multi-select/folder batch actions) -- a distinct event
+    // from import's own "face-detection-progress" above so the two
+    // progress displays can never cross-talk (see runFaceDetection's own
+    // doc comment).
+    let unlistenFaceScanProgress = /** @type {(() => void) | undefined} */ (undefined);
+    try {
+      listen("face-detection-scan-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
+        faceScanProgress = event.payload;
+      }).then((fn) => {
+        unlistenFaceScanProgress = fn;
+      });
+    } catch {
+      // ignore outside Tauri
+    }
+
     return () => {
       unlistenClose?.();
       unlistenDragDrop?.();
@@ -3463,6 +3535,7 @@
       unlistenThumbnailProgress?.();
       unlistenHdrMergeProgress?.();
       unlistenFaceDetectionProgress?.();
+      unlistenFaceScanProgress?.();
       window.removeEventListener("shortcuts-updated", onShortcutsUpdated);
     };
   });
@@ -3522,9 +3595,6 @@
         disabled={activeModule !== "print" && currentExportItems.length === 0}
       >
         Print
-      </button>
-      <button class:active={activeModule === "people"} onclick={() => switchModule("people")}>
-        People
       </button>
     </div>
     <div class="spacer"></div>
@@ -3598,6 +3668,49 @@
       <span class="code" aria-hidden="true">PAN</span>
       <span class="label">{mergingPanorama ? "Stitching…" : `Merge to Panorama…${selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}`}</span>
     </button>
+    {#if detectingFaces}
+      <div class="face-detect-toolbar-progress">
+        <progress value={faceScanProgress?.current ?? 0} max={faceScanProgress?.total ?? 1}></progress>
+        <span class="face-detect-toolbar-label">
+          Detecting faces {faceScanProgress?.current ?? 0} / {faceScanProgress?.total ?? 0}
+        </span>
+        {#if faceDetectionCancelable}
+          <button class="face-detect-toolbar-cancel" type="button" onclick={handleCancelFaceDetection}>Cancel</button>
+        {/if}
+      </div>
+    {:else}
+      <button
+        class="icon-btn detect-faces-btn"
+        onclick={handleDetectFacesForSelection}
+        disabled={activeModule !== "library" || selectedIds.size < 2}
+        title={`Detect Faces — run face detection on the ${selectedIds.size} selected photos not yet scanned`}
+      >
+        <span class="glyph" aria-hidden="true">☺</span>
+        <span class="code" aria-hidden="true">FACE</span>
+        <span class="label">Detect Faces{selectedIds.size >= 2 ? ` (${selectedIds.size})` : ""}</span>
+      </button>
+      <button
+        class="icon-btn detect-faces-folder-btn"
+        onclick={handleDetectFacesForFolder}
+        disabled={activeModule !== "library"}
+        title="Detect Faces in Folder — run face detection on every unscanned photo in the current view"
+      >
+        <span class="glyph" aria-hidden="true">☺</span>
+        <span class="code" aria-hidden="true">ALL</span>
+        <span class="label">Detect Faces in Folder</span>
+      </button>
+    {/if}
+    <button
+      class="icon-btn show-face-rects-btn"
+      class:accent={showFaceRects}
+      onclick={() => (showFaceRects = !showFaceRects)}
+      disabled={activeModule !== "library"}
+      title={showFaceRects ? "Hide face rectangles over the Loupe view" : "Show face rectangles over the Loupe view"}
+    >
+      <span class="glyph" aria-hidden="true">▢</span>
+      <span class="code" aria-hidden="true">RECT</span>
+      <span class="label">{showFaceRects ? "Hide Faces" : "Show Faces"}</span>
+    </button>
     <button
       class="icon-btn danger remove-btn"
       onclick={() => (confirmingRemoval = true)}
@@ -3639,6 +3752,16 @@
     open={copySettingsDialogOpen}
     onConfirm={handleCopySettingsConfirmed}
     onCancel={() => (copySettingsDialogOpen = false)}
+  />
+
+  <ConfirmDialog
+    open={confirmingFaceDetectionOnImport}
+    variant="primary"
+    title="Detect faces?"
+    message={`Run face detection on the ${pendingImportBatchSize} photo${pendingImportBatchSize === 1 ? "" : "s"} you just imported? The first run downloads a small detection model. You can always detect faces later from Library.`}
+    confirmLabel="Detect Faces"
+    onConfirm={handleFaceDetectionPromptConfirm}
+    onCancel={handleFaceDetectionPromptCancel}
   />
 
   <ConfirmDialog
@@ -3900,6 +4023,9 @@
               onOpenDevelop={() => openDevelop(currentImg.version_id)}
               zoomLevel={libraryZoomLevel}
               onZoomChange={(z) => (libraryZoomLevel = z)}
+              faces={currentImg.image_id === selectedImage?.image_id ? currentImageFaces : []}
+              {showFaceRects}
+              {hoveredFaceId}
             />
           {:else if libraryViewMode === "compare" && compareSelectImage && compareCandidateImage}
             <LibraryCompareView
@@ -3968,6 +4094,17 @@
             statusMessage = lat != null ? "Updated GPS coordinates" : "Removed GPS coordinates";
           }
         }}
+        faces={currentImageFaces}
+        {people}
+        {detectingFaces}
+        faceDetectionProgress={faceScanProgress}
+        {hoveredFaceId}
+        onHoverFace={(faceId) => (hoveredFaceId = faceId)}
+        onDetectFaces={handleDetectFacesForSelected}
+        onTagFace={handleReassignFace}
+        onCreateAndTagFace={handleCreatePersonAndTagFace}
+        onRenamePerson={handleRenamePerson}
+        onSetFaceExcluded={handleSetFaceExcluded}
       />
     </div>
   {:else if activeModule === "develop" && developImagePath}
@@ -4230,77 +4367,6 @@
         onExportPdf={handleExportPdf}
       />
     </div>
-  {:else if activeModule === "people"}
-    <!-- Rail below is the SAME CatalogRail Library uses, sharing
-         activeFolderKey/activeCollectionId with it -- picking a folder
-         here (or in Library beforehand) also scopes Tag Faces' own
-         filmstrip (filteredImages already reacts to that shared state).
-         The People grid itself intentionally stays unscoped: a person's
-         photos can span multiple folders, so "people in this folder"
-         isn't a real filter list_people() supports. -->
-    <div class="people-toolbar">
-      <button
-        class="chip"
-        class:on={peopleFilter === "all"}
-        onclick={() => (peopleFilter = "all")}
-      >
-        All People <span class="chip-count">{people.length}</span>
-      </button>
-      <button
-        class="chip"
-        class:on={peopleFilter === "unnamed"}
-        onclick={() => (peopleFilter = "unnamed")}
-      >
-        Unnamed <span class="chip-count">{unnamedPeopleCount}</span>
-      </button>
-      <div class="spacer"></div>
-      <button
-        class="find-people-btn"
-        class:working={reclusteringFaces}
-        onclick={handleReclusterFaces}
-        disabled={reclusteringFaces}
-      >
-        <span class="spin" aria-hidden="true">⟲</span>
-        {reclusteringFaces ? "Finding…" : "Find People"}
-      </button>
-      <div class="segmented">
-        <button class:on={peopleView === "grid"} onclick={() => (peopleView = "grid")}>Grid</button>
-        <button class:on={peopleView === "tag"} onclick={() => (peopleView = "tag")}>Tag Faces</button>
-      </div>
-    </div>
-    <div class="body people-body">
-      <CatalogRail
-        {images}
-        {activeCollectionId}
-        {activeFolderKey}
-        {showLastImportOnly}
-        {lastImportBatchId}
-        {folderEntries}
-        {collections}
-        {keywordIdsByImage}
-        onSelectAllPhotos={selectAllPhotos}
-        onSelectLastImport={selectLastImport}
-        onSelectFolder={selectFolder}
-        onSelectCollection={selectCollection}
-        onDeleteCollection={handleDeleteCollection}
-        onCreateCollection={() => (creatingCollection = true)}
-        onCreateSmartCollection={() => (creatingSmartCollection = true)}
-      />
-      {#if peopleView === "grid"}
-        <PeopleGrid people={visiblePeople} avatarUrls={personAvatarSourceUrls} onRename={handleRenamePerson} />
-      {:else}
-        <PeopleTagView
-          image={taggingImage}
-          previewUrl={taggingPreviewUrl}
-          faces={taggingFaces}
-          people={people}
-          onTagFace={handleReassignFace}
-          onCreateAndTagFace={handleCreatePersonAndTagFace}
-          onRenamePerson={handleRenamePerson}
-          onSetFaceExcluded={handleSetFaceExcluded}
-        />
-      {/if}
-    </div>
   {:else}
     <div class="placeholder">Double-click a photo in Library to open it here.</div>
   {/if}
@@ -4317,13 +4383,6 @@
       selectedIds={new Set(developVersionId !== null ? [developVersionId] : [])}
       onSelect={openDevelop}
       onOpen={openDevelop}
-    />
-  {:else if activeModule === "people" && peopleView === "tag"}
-    <Filmstrip
-      images={filteredImages}
-      selectedIds={new Set(taggingImage !== null ? [taggingImage.version_id] : [])}
-      onSelect={(versionId) => openTagFaces(versionId)}
-      onOpen={(versionId) => openTagFaces(versionId)}
     />
   {/if}
 </div>
@@ -4371,93 +4430,6 @@
   }
   .spacer {
     flex: 1;
-  }
-  /* People module toolbar (M5 Slice 6) -- same toolbar-row shape as
-     Library's own (LibraryToolbar.svelte), kept inline here since it's
-     small enough not to warrant a separate component. */
-  .people-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 9px 14px;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--bg-app);
-    flex: none;
-  }
-  .people-toolbar .chip {
-    all: unset;
-    font-size: 11px;
-    padding: 4px 9px;
-    border-radius: 99px;
-    border: 1px solid var(--border-strong);
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    cursor: pointer;
-    box-sizing: border-box;
-  }
-  .people-toolbar .chip.on {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-    color: var(--accent-strong);
-  }
-  .people-toolbar .chip-count {
-    font-family: var(--font-mono);
-    opacity: 0.7;
-  }
-  .find-people-btn {
-    all: unset;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11.5px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    padding: 6px 12px;
-    border-radius: 6px;
-    background: var(--accent-soft);
-    border: 1px solid var(--accent);
-    color: var(--accent-strong);
-    box-sizing: border-box;
-  }
-  .find-people-btn:hover:not(:disabled) {
-    background: var(--accent);
-    color: var(--accent-on);
-  }
-  .find-people-btn:disabled {
-    cursor: default;
-  }
-  .find-people-btn .spin {
-    display: inline-block;
-  }
-  .find-people-btn.working .spin {
-    animation: people-spin 0.9s linear infinite;
-  }
-  @keyframes people-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  .segmented {
-    display: flex;
-    background: var(--bg-panel);
-    border: 1px solid var(--border-subtle);
-    border-radius: 6px;
-    padding: 2px;
-  }
-  .segmented button {
-    all: unset;
-    padding: 4px 10px;
-    font-size: 10.5px;
-    border-radius: 4px;
-    color: var(--text-secondary);
-    cursor: pointer;
-  }
-  .segmented button.on {
-    background: var(--bg-panel-raised);
-    color: var(--text-primary);
   }
   /* Toolbar icon buttons: a small pictograph glyph plus a short bold
    * monogram code (OUT/PST/HDR/DEL/EXP/FILE/DIR), both always visible --
@@ -4532,6 +4504,36 @@
     color: var(--label-red);
     border-color: var(--label-red);
   }
+  .face-detect-toolbar-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    flex: none;
+  }
+  .face-detect-toolbar-progress progress {
+    width: 110px;
+    height: 5px;
+    accent-color: var(--accent);
+  }
+  .face-detect-toolbar-label {
+    white-space: nowrap;
+  }
+  .face-detect-toolbar-cancel {
+    all: unset;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 3px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+  }
+  .face-detect-toolbar-cancel:hover {
+    color: var(--label-red);
+    border-color: var(--label-red);
+  }
   .settings-btn {
     all: unset;
     cursor: pointer;
@@ -4584,8 +4586,7 @@
   }
   .body,
   .develop-body,
-  .print-body,
-  .people-body {
+  .print-body {
     flex: 1;
     display: flex;
     min-height: 0;

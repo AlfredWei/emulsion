@@ -18,6 +18,9 @@
    *   onOpenDevelop?: () => void,
    *   zoomLevel?: number,
    *   onZoomChange?: (zoom: number) => void,
+   *   faces?: import('$lib/api/faces.js').FaceRow[],
+   *   showFaceRects?: boolean,
+   *   hoveredFaceId?: number | null,
    * }}
    */
   let {
@@ -32,6 +35,9 @@
     onOpenDevelop,
     zoomLevel,
     onZoomChange,
+    faces = [],
+    showFaceRects = false,
+    hoveredFaceId = null,
   } = $props();
 
   let containerEl = $state(/** @type {HTMLDivElement | null} */ (null));
@@ -279,20 +285,37 @@
     class:panning={isDragging}
     style="transform: translate({panX}px, {panY}px) scale({effectiveScale});"
   >
-    {#if previewUrl}
-      <img
-        src={previewUrl}
-        alt={filename}
-        class="main-img"
-        draggable="false"
-      />
-    {:else if thumbPlaceholder}
-      <img
-        src={thumbPlaceholder}
-        alt={filename}
-        class="main-img placeholder"
-        draggable="false"
-      />
+    {#if previewUrl || thumbPlaceholder}
+      <div class="main-img-wrap">
+        {#if previewUrl}
+          <img
+            src={previewUrl}
+            alt={filename}
+            class="main-img"
+            draggable="false"
+          />
+        {:else if thumbPlaceholder}
+          <img
+            src={thumbPlaceholder}
+            alt={filename}
+            class="main-img placeholder"
+            draggable="false"
+          />
+        {/if}
+        {#if showFaceRects}
+          {#each faces as face (face.id)}
+            {@const label = face.person_id === null ? "Who is this?" : (face.person_name ?? `Person ${face.person_id}`)}
+            <div
+              class="face-rect"
+              class:hovered={hoveredFaceId === face.id}
+              class:untagged={face.person_id === null}
+              style={`left:${face.bbox_x * 100}%;top:${face.bbox_y * 100}%;width:${face.bbox_w * 100}%;height:${face.bbox_h * 100}%`}
+            >
+              <span class="face-rect-label">{label}</span>
+            </div>
+          {/each}
+        {/if}
+      </div>
     {/if}
   </div>
 
@@ -459,6 +482,11 @@
   .image-canvas.panning {
     transition: none;
   }
+  .main-img-wrap {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+  }
   .main-img {
     max-width: none;
     max-height: none;
@@ -469,6 +497,52 @@
   .main-img.placeholder {
     filter: blur(4px);
     opacity: 0.8;
+  }
+  /* Face-rectangle overlay (Library-integration redesign, RFC-0005 §7):
+     bbox_x/y/w/h are fractions of the full decode's own width/height, so
+     plain CSS percentages over this wrapper (sized to the <img> itself,
+     inside the same pan/zoom `.image-canvas` transform) stay aligned
+     regardless of zoom/pan or display size -- same technique the removed
+     PeopleTagView.svelte used. Not interactive here (no click-to-tag) --
+     tagging now lives in MetadataPanel's People section; hovering a face
+     row there sets `hoveredFaceId`, highlighted below. */
+  .face-rect {
+    position: absolute;
+    border: 2px solid var(--accent);
+    border-radius: 6px;
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0.85;
+  }
+  .face-rect.untagged {
+    border-style: dashed;
+    border-color: var(--text-secondary);
+  }
+  .face-rect.hovered {
+    border-color: var(--accent-strong);
+    border-width: 3px;
+    opacity: 1;
+  }
+  .face-rect-label {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 4px);
+    white-space: nowrap;
+    background: rgba(20, 18, 16, 0.85);
+    color: var(--text-primary);
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 99px;
+  }
+  .face-rect.untagged .face-rect-label {
+    color: var(--text-secondary);
+    font-weight: 500;
+    background: rgba(20, 18, 16, 0.65);
+    border: 1px dashed var(--border-strong);
+  }
+  .face-rect.hovered .face-rect-label {
+    color: var(--accent-strong);
   }
   .loading-overlay {
     position: absolute;

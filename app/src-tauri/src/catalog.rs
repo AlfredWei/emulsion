@@ -149,6 +149,11 @@ pub struct ImageSummary {
     pub caption: Option<String>,
     pub copyright: Option<String>,
     pub contact: Option<String>,
+    /// Whether face detection has ever been attempted for this image --
+    /// see `faces_scanned`'s own schema comment. Lets the frontend decide
+    /// "does this photo/folder still need on-demand detection" without a
+    /// separate query.
+    pub faces_scanned: bool,
 }
 
 /// One detected face (RFC-0005 §3.4/§3.6), with its person's name already
@@ -470,7 +475,17 @@ impl Catalog {
                 altitude REAL,
                 captured_at TEXT,
                 copyright TEXT,
-                contact TEXT
+                contact TEXT,
+                -- Face detection (M5 Slice 6 follow-up): whether detection
+                -- has EVER been attempted for this image, regardless of
+                -- whether it found any faces -- distinct from zero rows in
+                -- faces, which is ambiguous between never scanned and
+                -- scanned-but-genuinely-no-faces. Without this, selecting
+                -- a photo or running Find People would re-decode and
+                -- re-run the detector on every already-scanned image on
+                -- every call, and a real face-free photo could never be
+                -- told apart from one nobody had gotten to yet.
+                faces_scanned INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_images_content_hash
@@ -820,6 +835,14 @@ impl Catalog {
             // (must never be, but the detection row is kept rather than
             // deleted, same as the schema's own comment already promised).
             "ALTER TABLE faces ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0",
+            // Face detection UX fix (2026-09-16): see this column's own
+            // CREATE TABLE comment above -- existing catalogs (every one
+            // imported before this column existed) need it backfilled to
+            // 0 (SQLite's own NOT NULL DEFAULT already does this for the
+            // ADD COLUMN itself), which correctly reads as "not yet
+            // scanned" and is what makes per-photo/per-folder on-demand
+            // detection below actually run for them.
+            "ALTER TABLE images ADD COLUMN faces_scanned INTEGER NOT NULL DEFAULT 0",
         ] {
             add_column_if_missing(conn, ddl)?;
         }
@@ -1074,6 +1097,17 @@ impl Catalog {
     /// their photos.
     pub fn set_face_excluded(&self, face_id: i64, excluded: bool) -> Result<()> {
         self.conn.execute("UPDATE faces SET excluded = ?1, person_id = NULL WHERE id = ?2", params![excluded as i64, face_id])?;
+        Ok(())
+    }
+
+    /// Marks an image as having had face detection attempted, whether or
+    /// not it found any faces -- see `faces_scanned`'s own schema comment.
+    /// Called once per image at the end of `face_pipeline::detect_faces_for_batch`'s
+    /// per-image loop iteration, including on a decode failure/missing
+    /// file (same "don't retry forever on a permanently bad file" framing
+    /// as import's own skip-not-fatal handling).
+    pub fn mark_faces_scanned(&self, image_id: i64) -> Result<()> {
+        self.conn.execute("UPDATE images SET faces_scanned = 1 WHERE id = ?1", params![image_id])?;
         Ok(())
     }
 
@@ -2183,7 +2217,7 @@ impl Catalog {
                     i.camera_make, i.camera_model, i.lens_model, i.iso, i.aperture, i.shutter_speed, i.focal_length,
                     i.exposure_bias, i.metering_mode, i.flash, i.width, i.height, i.latitude, i.longitude, i.altitude,
                     i.file_size, i.captured_at,
-                    v.caption, i.copyright, i.contact, i.import_batch
+                    v.caption, i.copyright, i.contact, i.import_batch, i.faces_scanned
              FROM images i
              JOIN image_versions v ON v.id = (
                  SELECT id FROM image_versions
@@ -2224,6 +2258,7 @@ impl Catalog {
                 copyright: row.get(27)?,
                 contact: row.get(28)?,
                 import_batch: row.get(29)?,
+                faces_scanned: row.get(30)?,
             })
         })?;
         rows.collect()
@@ -2297,6 +2332,42 @@ mod tests {
         assert_eq!(person.cover_bbox_y, Some(0.2));
         assert_eq!(person.cover_bbox_w, Some(0.3));
         assert_eq!(person.cover_bbox_h, Some(0.4));
+    }
+
+    /// People-tab UX fix (2026-09-16): `faces_scanned` distinguishes
+    /// "detection never attempted" from "attempted, found nothing" --
+    /// without it, on-demand detection (Tag Faces auto-detect, folder-
+    /// scoped "Find People") would either redo work on every call or
+    /// never know an image still needs its first scan.
+    #[test]
+    fn a_freshly_imported_image_defaults_to_faces_not_yet_scanned() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        catalog
+            .add_image_with_edit_stack("/a.CR3", "hash-faces-1", 4096, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+
+        let images = catalog.list_images().unwrap();
+        assert_eq!(images.len(), 1);
+        assert!(!images[0].faces_scanned);
+    }
+
+    #[test]
+    fn mark_faces_scanned_flips_the_flag_for_exactly_that_image() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let scanned_id = catalog
+            .add_image_with_edit_stack("/a.CR3", "hash-faces-2", 4096, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+        catalog
+            .add_image_with_edit_stack("/b.CR3", "hash-faces-3", 4096, &EditStack::empty(), &crate::metadata::ImageMetadata::default())
+            .unwrap();
+
+        catalog.mark_faces_scanned(scanned_id).unwrap();
+
+        let images = catalog.list_images().unwrap();
+        let scanned = images.iter().find(|i| i.image_id == scanned_id).unwrap();
+        let unscanned = images.iter().find(|i| i.image_id != scanned_id).unwrap();
+        assert!(scanned.faces_scanned);
+        assert!(!unscanned.faces_scanned);
     }
 
     #[test]

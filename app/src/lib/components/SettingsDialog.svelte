@@ -3,6 +3,12 @@
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
   import {
+    listExportPlugins,
+    addExportPlugin,
+    updateExportPlugin,
+    deleteExportPlugin,
+  } from "$lib/api/export.js";
+  import {
     getStoredShortcuts,
     saveStoredShortcuts,
     resetStoredShortcuts,
@@ -16,7 +22,7 @@
    */
   let { open: isOpen, onClose } = $props();
 
-  let activeTab = $state(/** @type {"backup" | "shortcuts" | "storage"} */ ("shortcuts"));
+  let activeTab = $state(/** @type {"backup" | "shortcuts" | "storage" | "exportPlugins"} */ ("shortcuts"));
 
   // Backup settings state
   let settings = $state(/** @type {import('$lib/api/backup.js').BackupSettings | null} */ (null));
@@ -33,17 +39,75 @@
   let recordingId = $state(/** @type {string | null} */ (null));
   let shortcutConflictMessage = $state("");
 
+  // Export plugins settings state (M5, RFC-0006). `pluginForm` is null when
+  // the add/edit form is hidden; `pluginForm.id === null` means "adding a
+  // new plugin" rather than editing an existing one. `args` is a single
+  // space-separated string, not the raw `string[]` -- the simplest input
+  // this v0 UI offers, split/joined at the form boundary (see
+  // savePluginForm/openEditPluginForm); an argument containing a literal
+  // space isn't expressible through this field, a known, accepted v0 gap.
+  let plugins = $state(/** @type {import('$lib/api/export.js').ExportPlugin[]} */ ([]));
+  let pluginForm = $state(/** @type {{ id: number | null, name: string, command: string, args: string } | null} */ (null));
+  let pluginError = $state("");
+
   $effect(() => {
     if (isOpen) {
       backupError = "";
       storageError = "";
       shortcutConflictMessage = "";
       recordingId = null;
+      pluginForm = null;
+      pluginError = "";
       shortcuts = getStoredShortcuts();
       getBackupSettings().then((s) => (settings = s));
       getStorageInfo().then((s) => (storageInfo = s));
+      listExportPlugins().then((p) => (plugins = p));
     }
   });
+
+  function openAddPluginForm() {
+    pluginForm = { id: null, name: "", command: "", args: "" };
+    pluginError = "";
+  }
+
+  /** @param {import('$lib/api/export.js').ExportPlugin} plugin */
+  function openEditPluginForm(plugin) {
+    pluginForm = { id: plugin.id, name: plugin.name, command: plugin.command, args: plugin.args_template.join(" ") };
+    pluginError = "";
+  }
+
+  async function savePluginForm() {
+    if (!pluginForm) return;
+    const name = pluginForm.name.trim();
+    const command = pluginForm.command.trim();
+    if (!name || !command) {
+      pluginError = "Name and command are both required.";
+      return;
+    }
+    const argsTemplate = pluginForm.args.split(/\s+/).filter(Boolean);
+    try {
+      if (pluginForm.id === null) {
+        const created = await addExportPlugin(name, command, argsTemplate);
+        plugins = [...plugins, created];
+      } else {
+        await updateExportPlugin(pluginForm.id, name, command, argsTemplate);
+        plugins = plugins.map((p) => (p.id === pluginForm?.id ? { ...p, name, command, args_template: argsTemplate } : p));
+      }
+      pluginForm = null;
+      pluginError = "";
+    } catch (/** @type {any} */ e) {
+      pluginError = `Couldn't save plugin: ${e}`;
+    }
+  }
+
+  async function handleDeletePlugin(/** @type {number} */ id) {
+    try {
+      await deleteExportPlugin(id);
+      plugins = plugins.filter((p) => p.id !== id);
+    } catch (/** @type {any} */ e) {
+      pluginError = `Couldn't delete plugin: ${e}`;
+    }
+  }
 
   /** @param {Partial<import('$lib/api/backup.js').BackupSettings>} patch */
   function saveBackupSettings(patch) {
@@ -210,6 +274,14 @@
           >
             Storage
           </button>
+          <button
+            type="button"
+            class="tab-btn"
+            class:active={activeTab === "exportPlugins"}
+            onclick={() => (activeTab = "exportPlugins")}
+          >
+            Export Plugins
+          </button>
         </div>
       </div>
 
@@ -346,6 +418,61 @@
 
           {#if storageError}
             <div class="status">{storageError}</div>
+          {/if}
+        </section>
+      {:else if activeTab === "exportPlugins"}
+        <section class="backup-section">
+          <p class="storage-note">
+            Run an external command after each exported file (M5 v0 -- see RFC-0006). The command runs with your own
+            account's permissions, exactly as configured below -- there's no sandboxing, so only add commands you
+            trust. <code>{"{path}"}</code>, <code>{"{dir}"}</code>, and <code>{"{filename}"}</code> in the arguments
+            are replaced with the exported file's own path, folder, and filename.
+          </p>
+
+          {#if plugins.length > 0}
+            <div class="plugin-list">
+              {#each plugins as plugin (plugin.id)}
+                <div class="plugin-row">
+                  <div class="plugin-info">
+                    <span class="plugin-name">{plugin.name}</span>
+                    <span class="plugin-command">{plugin.command} {plugin.args_template.join(" ")}</span>
+                  </div>
+                  <div class="plugin-actions">
+                    <button class="link-btn" type="button" onclick={() => openEditPluginForm(plugin)}>Edit</button>
+                    <button class="link-btn danger" type="button" onclick={() => handleDeletePlugin(plugin.id)}>Delete</button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if pluginForm}
+            <div class="plugin-form">
+              <div class="row">
+                <label class="label" for="plugin-name">Name</label>
+                <input id="plugin-name" type="text" bind:value={pluginForm.name} placeholder="e.g. Upload to server" />
+              </div>
+              <div class="row">
+                <label class="label" for="plugin-command">Command</label>
+                <input id="plugin-command" type="text" bind:value={pluginForm.command} placeholder="/path/to/script" />
+              </div>
+              <div class="row">
+                <label class="label" for="plugin-args">Arguments (space-separated)</label>
+                <input id="plugin-args" type="text" bind:value={pluginForm.args} placeholder="--upload {'{path}'}" />
+              </div>
+              <div class="backup-now-row">
+                <button class="primary" type="button" onclick={savePluginForm}>Save</button>
+                <button class="secondary" type="button" onclick={() => (pluginForm = null)}>Cancel</button>
+              </div>
+            </div>
+          {:else}
+            <div class="backup-now-row">
+              <button class="secondary" type="button" onclick={openAddPluginForm}>Add Plugin</button>
+            </div>
+          {/if}
+
+          {#if pluginError}
+            <div class="status">{pluginError}</div>
           {/if}
         </section>
       {/if}
@@ -545,6 +672,7 @@
     color: var(--text-secondary);
   }
   select,
+  input[type="text"],
   .folder-btn {
     all: unset;
     box-sizing: border-box;
@@ -612,6 +740,78 @@
     font-size: 10.5px;
     line-height: 1.5;
     color: var(--text-tertiary);
+  }
+  .storage-note code {
+    font-family: var(--font-mono);
+    background: var(--bg-panel-raised);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .plugin-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+  .plugin-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .plugin-row:last-child {
+    border-bottom: none;
+  }
+  .plugin-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .plugin-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .plugin-command {
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .plugin-actions {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .link-btn {
+    all: unset;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .link-btn:hover {
+    color: var(--text-primary);
+    text-decoration: underline;
+  }
+  .link-btn.danger:hover {
+    color: var(--label-red);
+  }
+  .plugin-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
   }
   .actions {
     display: flex;

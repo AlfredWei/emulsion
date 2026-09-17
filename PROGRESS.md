@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Docs: two overdue ADRs written — RFC-0005 and RFC-0006 each independently recommended "ADR-0007" (2026-09-17)
+
+Both M5 RFCs' own §6/§5 sections had recommended a new ADR once their slice shipped — RFC-0005 (face detection) for the `tract` inference-runtime decision, RFC-0006 (export-plugin hook) for the external-process-invocation decision — and both, written independently of each other, called their proposed ADR "ADR-0007". Neither had actually been written yet (`docs/adr/` still stopped at ADR-0006 despite both features having since shipped). Resolved by numbering sequentially in shipped order, not draft order:
+
+- **[ADR-0007-face-detection-and-recognition.md](docs/adr/ADR-0007-face-detection-and-recognition.md)**: face detection's `tract`/YuNet/SFace decision (RFC-0005 §3.2/§3.3) — shipped first (PR #114-121, merged by 2026-09-15).
+- **[ADR-0008-plugin-extensibility-api-v0.md](docs/adr/ADR-0008-plugin-extensibility-api-v0.md)**: export-plugin hook's fire-and-forget/no-shell/no-sandbox decision (RFC-0006 §3.3) — shipped second (PR #122-123, merged 2026-09-16).
+- **RFC-0006 §5 updated** to point at ADR-0008 instead of the now-collided ADR-0007, with a note explaining the renumbering (RFC-0005 needed no change — it already correctly named ADR-0007).
+
 ## M5 Slice 6 — Face detection: People module navigation/import consistency (2026-09-14)
 
 User feedback after the People view UI landed: face detection's UX should be consistent with Library/Develop -- specifically, auto-detect after import should be visible (not silent), and People should let you navigate by folder the same way Library does.

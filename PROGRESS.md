@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Docs: README brought current + a new user-facing guide (2026-09-18)
+
+User request ("update ReadMe and product manual"). README.md's "Current state" and "Status" sections still said **"M0 complete, M1 in progress"** — badly stale; the project is actually M0–M4.5 done with M5 essentially complete. This had apparently never been updated since M1 despite PROGRESS.md being kept current the whole way, a real gap in this project's own "keep the docs honest" practice.
+
+- **[README.md](README.md)**: status line, "Current state," architecture (added ADR-0007/0008), non-goals, and platform-support sections all rewritten to match reality. Deliberately avoided baking in exact test counts or dates that would just go stale again — points to PROGRESS.md as the authoritative source instead, same discipline the doc already half-followed.
+- **New [docs/USER_GUIDE.md](docs/USER_GUIDE.md)**: this project never had a user-facing "how to use it" doc — M8's own scope line ("Full documentation: user-facing help") had it queued for much later, and nothing existed yet. Written from the actual shipped feature set (Library rail incl. the new People section, all four Library view modes, the full Develop tool list, Print, Export + plugin hook, HDR/panorama merge, Faces & People, Settings, and the real keyboard shortcut table pulled from `shortcuts.js`, not guessed). Explicitly marks Map/geolocation as **not built yet** rather than describing M5.5's eventual goal as if it exists today.
+- **Not done**: `docs/PROJECT_STRUCTURE.md` still says "9-milestone roadmap (M0–M8)" and lists only 6 ADRs — same kind of staleness as README had, left alone since it wasn't part of this request; worth a follow-up pass.
+
 ## Plan change: three new milestones added after M5 — map, effect-quality research, AI-roadmap spike (2026-09-18)
 
 User requested three additions to [PRD/MILESTONES.md](PRD/MILESTONES.md), inserted between M5 and M6 (M5 itself is essentially closed once the video-scope drop above and the still-open face-rect-label PR land):

@@ -1158,6 +1158,20 @@ impl Catalog {
         rows
     }
 
+    /// Every distinct image with at least one non-excluded face assigned
+    /// to this person -- backs the Library rail's "double-click a person
+    /// to filter" action, the same `Vec<image_id>` -> `Set` membership
+    /// shape `manualMembership` already uses for a manual collection
+    /// (frontend caches this per person id rather than re-querying on
+    /// every filter switch).
+    pub fn get_image_ids_for_person(&self, person_id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT image_id FROM faces WHERE person_id = ?1 AND excluded = 0")?;
+        let rows = stmt.query_map(params![person_id], |row| row.get(0))?.collect();
+        rows
+    }
+
     /// Creates a new person for a brand-new cluster -- `cover_face_id` is
     /// the face that seeded it, shown as that person's grid thumbnail
     /// until the user picks a different one (not yet exposed as its own
@@ -2332,6 +2346,39 @@ mod tests {
         assert_eq!(person.cover_bbox_y, Some(0.2));
         assert_eq!(person.cover_bbox_w, Some(0.3));
         assert_eq!(person.cover_bbox_h, Some(0.4));
+    }
+
+    /// Library rail's "double-click a person to filter" action: only
+    /// images with a face actually ASSIGNED to this person should come
+    /// back -- an unclustered or excluded face on some other image must
+    /// never leak in, and a person with two faces on the same image must
+    /// not return that image id twice (the `DISTINCT` earns its keep).
+    #[test]
+    fn get_image_ids_for_person_returns_only_that_persons_assigned_non_excluded_faces() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_a = catalog.add_image("/a.jpg").unwrap();
+        let image_b = catalog.add_image("/b.jpg").unwrap();
+        let image_c = catalog.add_image("/c.jpg").unwrap();
+
+        // Two faces of the same person on image_a -- must not double-count.
+        let face_a1 = catalog.add_face(image_a, (0.0, 0.0, 0.1, 0.1), &[1.0, 0.0]).unwrap();
+        let face_a2 = catalog.add_face(image_a, (0.2, 0.2, 0.1, 0.1), &[1.0, 0.0]).unwrap();
+        let person = catalog.create_person(face_a1).unwrap();
+        catalog.set_face_person(face_a1, Some(person)).unwrap();
+        catalog.set_face_person(face_a2, Some(person)).unwrap();
+
+        // A second person's face on image_b -- must not leak in.
+        let face_b = catalog.add_face(image_b, (0.0, 0.0, 0.1, 0.1), &[0.0, 1.0]).unwrap();
+        let other_person = catalog.create_person(face_b).unwrap();
+        catalog.set_face_person(face_b, Some(other_person)).unwrap();
+
+        // This person's face on image_c, but excluded -- must not count.
+        let face_c = catalog.add_face(image_c, (0.0, 0.0, 0.1, 0.1), &[1.0, 0.0]).unwrap();
+        catalog.set_face_person(face_c, Some(person)).unwrap();
+        catalog.set_face_excluded(face_c, true).unwrap();
+
+        let ids = catalog.get_image_ids_for_person(person).unwrap();
+        assert_eq!(ids, vec![image_a]);
     }
 
     /// People-tab UX fix (2026-09-16): `faces_scanned` distinguishes

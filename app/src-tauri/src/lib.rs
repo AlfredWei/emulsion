@@ -385,6 +385,15 @@ fn get_faces_for_image(state: State<'_, AppState>, image_id: i64) -> Result<Vec<
     catalog.get_faces_for_image(image_id).map_err(|e| e.to_string())
 }
 
+/// Library rail's People section (Face tab): every image id carrying at
+/// least one non-excluded face assigned to this person, for the
+/// double-click-to-filter action -- see `Catalog::get_image_ids_for_person`.
+#[tauri::command]
+fn get_images_for_person(state: State<'_, AppState>, person_id: i64) -> Result<Vec<i64>, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.get_image_ids_for_person(person_id).map_err(|e| e.to_string())
+}
+
 /// Backs the mockup's "+ New person "query"" row -- creates a person
 /// using this face as its cover, but does NOT itself assign the face to
 /// it. Callers pair this with `reassign_face` (and usually
@@ -1915,6 +1924,7 @@ pub fn run() {
             recluster_faces,
             list_people,
             get_faces_for_image,
+            get_images_for_person,
             create_person,
             rename_person,
             reassign_face,

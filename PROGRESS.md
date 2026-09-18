@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Plan change: three new milestones added after M5 — map, effect-quality research, AI-roadmap spike (2026-09-18)
+
+User requested three additions to [PRD/MILESTONES.md](PRD/MILESTONES.md), inserted between M5 and M6 (M5 itself is essentially closed once the video-scope drop above and the still-open face-rect-label PR land):
+
+- **M5.5 — Map & geolocation**: Google Maps address/place-name search to set a photo's (or a batch's) GPS location, plus a world map Library view plotting every geolocated photo, click-to-filter. Closes the "Map/geotagging view" item M4 flagged as optional-pending-demand-signal back on 2026-08-20 rather than committing to it then. Named as an explicit, scoped exception to the PRD's "no cloud" non-goal — only a user-typed search string leaves the device, never catalog/photo data — so it doesn't silently contradict the project's local-first framing.
+- **M5.6 — Develop effects: quality & performance research**: a per-effect research pass against professional-grade references (not a vague "make it better"), producing a written improvement plan per effect with an explicit performance-budget check before any change ships, reusing M5 Slice 2's CPU/GPU parity harness for whatever gets changed.
+- **M5.7 — AI editing roadmap spike (M6 scoping)**: a research-only milestone (mirrors M0's relationship to M1) that resolves M6's own already-named "architecture decision required before scoping in detail" with real on-device-feasibility numbers, and produces per-feature-area recommendations so M6 starts as a build milestone rather than repeating this research. Deliberately scoped NOT to duplicate M6 (AI-assisted selection & enhancement, already in the roadmap) — this is the decision-making step M6's own exit criteria already presuppose, made explicit as its own milestone instead of an implicit prerequisite.
+
+Sizing/placement are this session's judgment calls, not confirmed with the user beyond the three requests themselves — flagged here in case the ordering (map before effects-research before the AI spike) doesn't match actual priority.
+
 ## Plan change: M5's "basic video handling" scope item dropped (2026-09-18)
 
 User call: not their interest, cut it rather than defer it. Was the last remaining unbuilt M5 scope item after face detection and the plugin/export hook shipped — with this dropped, M5's scope is now fully built (GPU rendering, HDR merge, panorama merge, faces, plugin API v0 all done; see each item's own entry above/below).

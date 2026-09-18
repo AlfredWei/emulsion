@@ -190,6 +190,64 @@ Inserted between M4 and M5 (2026-08-30, user request after M4's Print Module shi
 
 ---
 
+## M5.5 — Map & geolocation
+**Rough size:** 1–2 months · **Lightroom analog:** Map module, v4.0, 2012 (closes the "Map/geotagging view" item M4 flagged as optional-pending-demand-signal, its own §"Decide and scope" line, 2026-08-20) — user request (2026-09-18).
+
+### Scope
+- Google Maps integration: forward geocoding (search an address or place name → coordinates) to set or move one photo's or a batch's GPS location; reverse geocoding to label a photo's existing coordinates.
+- Manual pin-drop / drag-to-adjust on the map as an alternative to text search, on top of M4's existing manual coordinate-entry fields.
+- Batch: select multiple photos in Library, assign them all to the same searched/dropped location in one action.
+- World map view: a new Library view mode plotting every geolocated photo in the catalog as pins/clusters; clicking a pin/cluster filters the Library grid to just those photos.
+- Location edits (search-assigned, pin-dropped, or manually typed) all write the same EXIF GPS fields on export — no divergent write path depending on how the coordinates were set.
+- **Explicit, scoped exception to the "no cloud" non-goal** ([PRD §3](PRD.md#3-non-goals-permanent-not-just-later)): a user-initiated address/place-name search calls an external geocoding API — only the searched text leaves the device, never catalog or photo data, and only when the user actually searches. Documented here rather than silently contradicting the PRD's local-first framing.
+
+### Explicitly deferred
+- Any "travel map" storytelling feature (route lines, timeline scrubbing) beyond pin/cluster display.
+- Offline map tiles/geocoding — online access for map tiles and address search is an accepted tradeoff for this one feature, not a precedent for reintroducing cloud dependency elsewhere.
+
+### Exit criteria
+- A user can search an address or place name and apply the resulting coordinates to one photo or a multi-selected batch.
+- The world map view plots every geolocated photo in the catalog, and clicking a pin/cluster filters the Library grid to just those photos.
+- Map-search-assigned and manually-entered GPS coordinates round-trip through export as identical EXIF GPS fields.
+
+---
+
+## M5.6 — Develop effects: quality & performance research
+**Rough size:** 2–4 months · **Lightroom analog:** n/a — an internal quality-bar-raising pass, not a new user-facing module (closest spirit: Lightroom's own process-version revisions, e.g. PV2012, which reworked existing tone/effect algorithms without adding new panels) — user request (2026-09-18).
+
+### Scope
+- A per-effect research pass across every existing Develop op (white balance/auto-tone, tone curve, HSL/color mixer, split toning, dehaze, clarity/texture, sharpening, luminance/color noise reduction, grain, vignette, lens corrections) comparing this project's current algorithm/mapping against published professional-grade references (documented ACR/Lightroom process-version changes, academic image-processing literature, other open-source implementations) to find concrete, specific quality gaps — not a vague "make it better" pass.
+- A written improvement plan per effect: the proposed algorithm/mapping change, its expected quality delta, and an explicit CPU+GPU performance budget check against M5's own ~100ms interactive target before any change ships.
+- Implementation of whichever improvements the plan prioritizes, each shipped as its own slice with a CPU/GPU parity check (reusing M5 Slice 2's `develop-cpu-gpu-parity.e2e.js` harness) so no effect silently diverges between the two engines.
+
+### Explicitly deferred
+- Any AI-model-based effect (denoise, upscale, subject-aware processing) — that's M6; this milestone is scoped to the existing deterministic-algorithm effects only.
+
+### Exit criteria
+- Every existing Develop effect has a documented research finding (either "already good, no change" or a concrete planned change) — no silent gaps.
+- Every shipped improvement stays under the ~100ms interactive budget and passes the CPU/GPU parity harness.
+- At least a sample set of before/after comparisons against a professional reference shows a measurable quality improvement for whichever effects were changed.
+
+---
+
+## M5.7 — AI editing roadmap spike (M6 scoping)
+**Rough size:** 1–2 months, research/decision only · **Lightroom analog:** n/a — a scoping spike, mirroring M0's own relationship to M1: produces the on-device-inference architecture decision M6 already names as a prerequisite ("Architecture decision required before scoping in detail," M6 below) — user request (2026-09-18) to "research the next Lightroom-era milestone (AI-assisted editing, dynamic object selection, masking, etc.)" before M6 build work starts.
+
+### Scope
+- Survey candidate on-device model families for each M6 feature area — subject/sky/landscape-element segmentation masks, AI denoise, AI super-resolution — plus, looking ahead, generative object removal/fill (M7's own open question): model size, license, accuracy, and minimum hardware (GPU/NPU) needed on both macOS and Windows.
+- Resolve M6's own named "architecture decision required before scoping in detail": on-device-only model inference, confirmed feasible (or not) with real numbers on real target hardware, not assumed from a stated preference.
+- A short written recommendation per M6 feature area (which model/approach, why, what M6's real implementation scope should be) — so M6 itself starts as a build milestone, not another research pass, the same division of labor M0 → M1 already established for this project.
+
+### Explicitly deferred
+- Any implementation — this milestone produces decisions and a written plan only, same discipline as M0.
+- A final decision on M7's generative-fill approach — surveyed here for awareness of the landscape, but M7's own exit criteria keep ownership of that specific decision.
+
+### Exit criteria
+- M6's "architecture decision required before scoping in detail" line is resolved and documented (e.g., a new ADR), backed by real feasibility numbers.
+- A written recommendation exists for each M6 feature area, sufficient for M6 to start as a build milestone without re-doing this research.
+
+---
+
 ## M6 — AI-assisted selection & enhancement
 **Rough size:** 4–8 months · **Lightroom analog:** Classic v8–v11, 2018–2022
 

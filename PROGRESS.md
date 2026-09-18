@@ -12,13 +12,23 @@ User requested three additions to [PRD/MILESTONES.md](PRD/MILESTONES.md), insert
 
 Sizing/placement are this session's judgment calls, not confirmed with the user beyond the three requests themselves — flagged here in case the ordering (map before effects-research before the AI spike) doesn't match actual priority.
 
+## Library rail: collapsible sections + a People section closing RFC-0005 §7's browse-by-person gap (2026-09-18)
+
+Two related user requests, landed together since both touch `CatalogRail.svelte`: (1) make the rail's Folders/Collections lists collapsible, (2) add a way to manage face naming and jump to a person's photos in Library — closing the gap the 2026-09-17 People-fold-into-Library redesign explicitly left open ("no replacement for browsing/filtering the whole catalog by named person," RFC-0005 §7).
+
+- **New `app/src/lib/railSections.js`**: persisted collapsed/expanded state for Folders/Collections/People, same localStorage-helper shape as `panelLayout.js` (M4.5's resizable-panel widths) — pure UI chrome, not catalog data.
+- **`CatalogRail.svelte`**: Folders and Collections headers are now toggle buttons with a rotating chevron; each section's list only renders while expanded. New **People section** (collapsible too, hidden entirely when there are no detected people yet): one row per person with a small cropped avatar (same CSS `background-position`/`background-size` trick the pre-fold `PeopleGrid.svelte` used, just at 20px rail-row scale instead of an 86px grid card), name, and photo count. Single-click the name to rename inline (Enter/Escape/blur to commit/cancel, same UX as the old grid); double-click anywhere else on the row to filter Library to that person's photos — guarded so a double-click landing on the name itself doesn't also fire the filter mid-rename.
+- **New backend**: `Catalog::get_image_ids_for_person` (`catalog.rs`) — every distinct non-excluded-face image id for a person — plus the `get_images_for_person` Tauri command. New `get_image_ids_for_person_returns_only_that_persons_assigned_non_excluded_faces` test covers the three real edge cases: two faces of the same person on one image not double-counting, a different person's face not leaking in, and an excluded face not counting.
+- **`+page.svelte`**: `activePersonId` joins `activeCollectionId`/`activeFolderKey`/`showLastImportOnly` as a fourth mutually-exclusive Library source, with the same fetch-once-and-cache membership shape `manualMembership` already uses for a manual collection (`personMembership`, populated via the new command on first select). `refreshPeople()` once again decodes each person's cover photo to a real preview URL for the avatar crop — removed in the 2026-09-17 fold as unneeded, reinstated now that something renders a person's cover photo again.
+- **Verified**: `cargo test --lib`: 352/352 (up from 351). `npm run check`: 0 errors/warnings. Vitest: 100/100 unchanged. Manually checked in a live `vite dev` server: rail renders correctly with no photos loaded (Catalog section only, Collections' chevron collapses/expands on click, no Folders/People sections shown since both are empty). Same limitation as every prior People-view session in this log: full IPC-backed interaction (real people data, real avatar decode, the rename/double-click-filter round-trip) needs the native Tauri window, which isn't drivable through the browser tooling used here — not exercised this session.
+
 ## Plan change: M5's "basic video handling" scope item dropped (2026-09-18)
 
 User call: not their interest, cut it rather than defer it. Was the last remaining unbuilt M5 scope item after face detection and the plugin/export hook shipped — with this dropped, M5's scope is now fully built (GPU rendering, HDR merge, panorama merge, faces, plugin API v0 all done; see each item's own entry above/below).
 
 - **[PRD/MILESTONES.md](PRD/MILESTONES.md)**: removed the "Basic video handling: import/organize/trim" bullet from M5's scope list.
 - **[PRD/PRD.md](PRD/PRD.md)**: permanent non-goals line tightened from "No video editing beyond basic trim/organize" to "No video support at all (import, organize, trim, or editing)" — the carve-out that used to justify M5's video item no longer applies now that nothing's building it.
-- **Not a milestone-close yet**: PR #128 (face-rect label padding) is still open on `main`; once merged, M5 has no open work left and M6 (AI-assisted selection) is next per MILESTONES.md.
+- **Milestone closed**: merged as PR #129; M5 has no open work left once PR #128 (face-rect label padding, already merged) is accounted for, and M6 (AI-assisted selection) is next per MILESTONES.md.
 
 ## Docs: two overdue ADRs written — RFC-0005 and RFC-0006 each independently recommended "ADR-0007" (2026-09-17)
 

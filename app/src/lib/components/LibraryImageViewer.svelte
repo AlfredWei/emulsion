@@ -537,14 +537,15 @@
   .face-rect-label {
     position: absolute;
     left: 0;
-    top: calc(100% + 4px);
+    top: calc(100% + 6px);
     transform-origin: top left;
     white-space: nowrap;
     background: rgba(20, 18, 16, 0.85);
     color: var(--text-primary);
-    font-size: 10.5px;
+    font-size: 13px;
+    line-height: 1.6;
     font-weight: 600;
-    padding: 2px 7px;
+    padding: 4px 12px;
     border-radius: 99px;
   }
   .face-rect.untagged .face-rect-label {

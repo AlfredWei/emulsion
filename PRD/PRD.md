@@ -24,7 +24,7 @@ The catalog and the pixels are always on the user's own disk. There is no server
 - No cloud sync, no hosted catalog, no account system.
 - No mobile companion app.
 - No social/sharing features (no built-in publish-to-web-service).
-- No video editing beyond basic trim/organize (this is a *photo* tool).
+- No video support at all (import, organize, trim, or editing) — this is a *photo* tool.
 - Not attempting pixel-perfect algorithmic parity with any proprietary demosaic/color science implementation — "very good," not "bit-identical to a specific commercial tool."
 
 See [MILESTONES.md](MILESTONES.md) for what's deferred *within* scope vs. excluded permanently.

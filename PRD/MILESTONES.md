@@ -178,7 +178,6 @@ Inserted between M4 and M5 (2026-08-30, user request after M4's Print Module shi
 - HDR merge (multi-exposure → single high-bit-depth composite).
 - Panorama merge (multi-shot → stitched composite), including boundary/edge correction.
 - Face detection/recognition for local face-grouping, surfaced in Library mode rather than a separate "People" view (fully local, no cloud model dependency; see RFC-0005 §7, 2026-09-17 redesign).
-- Basic video handling: import/organize/trim (explicitly not a video editor — see PRD non-goals).
 - Plugin/extensibility API v0 (even a minimal export-plugin hook is useful here and de-risks M8's extensibility work).
 
 ### Explicitly deferred

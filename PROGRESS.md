@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Plan change: M5's "basic video handling" scope item dropped (2026-09-18)
+
+User call: not their interest, cut it rather than defer it. Was the last remaining unbuilt M5 scope item after face detection and the plugin/export hook shipped — with this dropped, M5's scope is now fully built (GPU rendering, HDR merge, panorama merge, faces, plugin API v0 all done; see each item's own entry above/below).
+
+- **[PRD/MILESTONES.md](PRD/MILESTONES.md)**: removed the "Basic video handling: import/organize/trim" bullet from M5's scope list.
+- **[PRD/PRD.md](PRD/PRD.md)**: permanent non-goals line tightened from "No video editing beyond basic trim/organize" to "No video support at all (import, organize, trim, or editing)" — the carve-out that used to justify M5's video item no longer applies now that nothing's building it.
+- **Not a milestone-close yet**: PR #128 (face-rect label padding) is still open on `main`; once merged, M5 has no open work left and M6 (AI-assisted selection) is next per MILESTONES.md.
+
 ## Docs: two overdue ADRs written — RFC-0005 and RFC-0006 each independently recommended "ADR-0007" (2026-09-17)
 
 Both M5 RFCs' own §6/§5 sections had recommended a new ADR once their slice shipped — RFC-0005 (face detection) for the `tract` inference-runtime decision, RFC-0006 (export-plugin hook) for the external-process-invocation decision — and both, written independently of each other, called their proposed ADR "ADR-0007". Neither had actually been written yet (`docs/adr/` still stopped at ADR-0006 despite both features having since shipped). Resolved by numbering sequentially in shipped order, not draft order:

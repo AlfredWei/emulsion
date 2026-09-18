@@ -8,7 +8,7 @@
 
 Emulsion is a desktop app for photographers to import, organize, non-destructively edit, and export their photo libraries — including camera RAW — without a subscription or a cloud account. The catalog and the pixels stay on your own disk; there's no server component anywhere in the design.
 
-**Status: M0 complete, M1 in progress (Slices 1–2 of 5 done).** See [PROGRESS.md](PROGRESS.md) for exactly what's confirmed, what's deferred, and what's next. Not yet a usable app — see [Current state](#current-state-what-youll-actually-see) below before you go looking for features.
+**Status: M0–M4.5 complete, M5 (Performance, GPU, merges, faces) essentially done.** GPU-accelerated Develop rendering with CPU fallback, HDR merge, panorama merge, face detection/grouping, and a plugin/export-hook API v0 have all shipped; M5's "basic video handling" item was dropped from scope (2026-09-18, not a priority for this project). Three follow-on milestones — Map & geolocation, Develop effect quality/performance research, and an AI-editing roadmap spike — were added ahead of M6. See [PRD/MILESTONES.md](PRD/MILESTONES.md) for the full roadmap and [PROGRESS.md](PROGRESS.md) for exactly what's confirmed, what's in flight, and what's next — it's updated continuously, not just at milestone boundaries, so it's the authoritative source if this section ever drifts.
 
 ## Quick start
 
@@ -23,22 +23,24 @@ make dev       # start the app (Tauri window + Vite dev server)
 
 ## Current state: what you'll actually see
 
-Running `make dev` opens the real Library module: import a folder via the native picker, real thumbnails render in a virtualized grid, and you can rate/flag/color-label images — all backed by a real, persistent SQLite catalog. Develop (editing) isn't built yet — that module currently shows a placeholder. See [PROGRESS.md](PROGRESS.md) for the exact scope cut (no folder tree, no metadata panel, no filter/sort yet — those are later slices).
+Running `make dev` opens a real, dogfoodable app, not a scaffold. **Library**: grid/loupe/compare/survey views, flags/ratings/color labels, keywording, manual + smart collections, folder browsing, a multi-dimensional filter bar (rating/flag/label/camera/lens/date/text), and a People section for browsing/renaming detected faces — all backed by a real, persistent SQLite catalog with crash-safe writes and configurable backups. **Develop**: a full non-destructive edit stack (global tone, HSL, split toning, dehaze, tone curve, local adjustment brush/gradients/range masks, lens corrections, presets, soft proofing), GPU-rendered with automatic, tested CPU fallback when WebGPU isn't available. **Export**: JPEG/TIFF with an export-plugin hook for third-party post-processing. **Print**: layout templates + PDF/contact-sheet export. **Merges**: HDR bracket merge and panorama stitching, both hand-rolled (no external CV dependency). **Faces**: local, fully offline face detection/embedding/clustering (no cloud model calls) surfaced directly in Library.
 
-- **The Rust core** (catalog schema, RAW decoding, import) — has real unit tests: `make test`.
-- **The M0 WebGPU validation page** — the proof the rendering architecture works, at `app/src/routes/m0-spike/`. Run `make spike` to load it directly (auto-reverts the config change on exit).
-- See [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for what every file/folder in this repo is for, including the throwaway diagnostic routes (`m0-spike`, `m1-smoke`, `m1-slice2-smoke`) that aren't part of the real app.
+- **The Rust core** (catalog, RAW decode, develop engine, every merge/faces/print pipeline) has a large real unit test suite: `make test`.
+- **E2E tests** drive the actual Tauri window via WebdriverIO (`app/e2e/`) — golden-path, GPU-fallback, CPU/GPU parity, and performance specs among them.
+- See [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for what every file/folder in this repo is for, including the throwaway diagnostic routes (`m0-spike`, `m1-smoke`, `m1-slice2-smoke`) that predate the real app and aren't part of it.
+- Looking for how to actually *use* the app once it's running? See [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## Documentation map
 
 | Doc | What it's for |
 |---|---|
 | [PRD/PRD.md](PRD/PRD.md) | Product requirements: vision, scope, target user, functional/non-functional requirements. Start here for *what* this is. |
-| [PRD/MILESTONES.md](PRD/MILESTONES.md) | The 8-milestone roadmap (M0–M7), each with scope / explicitly-deferred / exit criteria. Start here for *what's next*. |
+| [PRD/MILESTONES.md](PRD/MILESTONES.md) | The full roadmap (M0–M8, plus M4.5 and M5.5–M5.7 inserted as real needs surfaced), each with scope / explicitly-deferred / exit criteria. Start here for *what's next*. |
 | [PRD/lightroom-reference.md](PRD/lightroom-reference.md) | Research on Lightroom's actual v1→now feature timeline, used to sequence the roadmap above. |
-| [docs/rfc/RFC-0001](docs/rfc/RFC-0001-architecture-and-tech-stack.md) | The system architecture, tying together all the ADRs below into one picture. Start here for *how it's built*. |
-| [docs/adr/](docs/adr/) | Individual architecture decisions (app shell, frontend stack, RAW decoding, rendering/color pipeline, catalog storage, edit representation), each with context, decision, consequences, and alternatives considered — several have dated "M0 spike finding" sections where reality corrected the original plan. |
-| [docs/ux/UX-DESIGN.md](docs/ux/UX-DESIGN.md) | Design principles and module layouts for Library/Develop, plus a reviewed static mockup at [docs/ux/mockups/](docs/ux/mockups/). |
+| [docs/rfc/](docs/rfc/) | Pre-implementation design docs for architecture/GPU-significant slices (M5's own practice) — RFC-0001 is the overall system architecture tying together the ADRs below; later RFCs (e.g. face detection, the plugin/export hook) are per-feature. |
+| [docs/adr/](docs/adr/) | Individual architecture decisions (app shell, frontend stack, RAW decoding, rendering/color pipeline, catalog storage, edit representation, face detection's inference runtime, the plugin hook's process-invocation model), each with context, decision, consequences, and alternatives considered — several have dated "spike finding" or "shipped decision" sections where reality corrected or confirmed the original plan. |
+| [docs/ux/UX-DESIGN.md](docs/ux/UX-DESIGN.md) | Design principles and module layouts for Library/Develop, plus reviewed static mockups at [docs/ux/mockups/](docs/ux/mockups/). |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | User-facing guide to the app's actual features — what each module does and how to use it, not how it's built. |
 | [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) | What every file and folder in this repo is for. Start here for *where things live*. |
 | [PROGRESS.md](PROGRESS.md) | Running log of what's actually done vs. in progress vs. blocked — the first thing to read after time away from this project. |
 
@@ -50,14 +52,16 @@ Running `make dev` opens the real Library module: import a folder via the native
 - **Rendering**: "decode once in Rust, edit reactively via in-webview WebGPU" — confirmed working on macOS by an M0 spike, not just assumed ([ADR-0004](docs/adr/ADR-0004-rendering-and-color-management.md)).
 - **Catalog**: embedded SQLite via `rusqlite`, XMP as export-only interchange, never the source of truth ([ADR-0005](docs/adr/ADR-0005-catalog-storage.md)).
 - **Edits**: a versioned, JSON-serializable, fully non-destructive edit stack ([ADR-0006](docs/adr/ADR-0006-edit-representation.md)).
+- **Face detection**: `tract` (pure-Rust ONNX inference) running YuNet (detection) + SFace (embedding), fetched-once-and-cached rather than committed, fully local/offline ([ADR-0007](docs/adr/ADR-0007-face-detection-and-recognition.md)).
+- **Extensibility**: a fire-and-forget, no-shell, no-sandbox export-plugin hook — v0 of the plugin API, intentionally minimal ([ADR-0008](docs/adr/ADR-0008-plugin-extensibility-api-v0.md)).
 
-Permanently out of scope: cloud sync, mobile companion app, video editing beyond basic trim. See [PRD.md §3](PRD/PRD.md#3-non-goals-permanent-not-just-later).
+Permanently out of scope: cloud sync, mobile companion app, any video support at all. See [PRD.md §3](PRD/PRD.md#3-non-goals-permanent-not-just-later) — note M5.5's Map milestone carries one narrow, explicitly-documented exception (a user-initiated address search calls an external geocoding API; catalog/photo data never leaves the device).
 
 ## Platform support
 
-Developed on macOS; Windows is validated via CI on GitHub's own Windows runners (see [.github/workflows/ci.yml](.github/workflows/ci.yml)), not a local machine — this project doesn't have one. **Both platforms are green as of 2026-07-25**: the Rust core builds and its full test suite passes (12/12, including a real RAW decode) on both `macos-latest` and `windows-latest`. RAW decoding (`rsraw`) links a vcpkg-installed prebuilt LibRaw on Windows instead of building from source under MSVC — see [ADR-0003](docs/adr/ADR-0003-raw-decoding.md) for why and [app/src-tauri/vendor/rsraw-sys/PATCH.md](app/src-tauri/vendor/rsraw-sys/PATCH.md) for exactly what was patched.
+Developed on macOS; Windows is validated via CI on GitHub's own Windows runners (see [.github/workflows/ci.yml](.github/workflows/ci.yml)), not a local machine — this project doesn't have one. The Rust core builds and its full test suite passes on both `macos-latest` and `windows-latest`, and CI also runs the real WebdriverIO E2E suite against the built Tauri app on both platforms. RAW decoding (`rsraw`) links a vcpkg-installed prebuilt LibRaw on Windows instead of building from source under MSVC — see [ADR-0003](docs/adr/ADR-0003-raw-decoding.md) for why and [app/src-tauri/vendor/rsraw-sys/PATCH.md](app/src-tauri/vendor/rsraw-sys/PATCH.md) for exactly what was patched.
 
-Still genuinely untested on Windows: the in-webview WebGPU rendering path (ADR-0004) — CI only builds/tests the Rust core, it doesn't launch the full GUI app on any platform yet. See [PROGRESS.md](PROGRESS.md) for current status.
+See [PROGRESS.md](PROGRESS.md) for the current, precise status of any platform-specific gap — this section intentionally doesn't restate exact figures that go stale between edits.
 
 ## Working practices
 

@@ -98,3 +98,11 @@ export function reassignFace(/** @type {number} */ faceId, /** @type {number | n
 export function setFaceExcluded(/** @type {number} */ faceId, /** @type {boolean} */ excluded) {
   return invoke("set_face_excluded", { faceId, excluded });
 }
+
+/** Every image id carrying at least one non-excluded face assigned to
+ * this person -- backs the Library rail's People section
+ * double-click-to-filter action.
+ * @returns {Promise<number[]>} */
+export function getImagesForPerson(/** @type {number} */ personId) {
+  return invoke("get_images_for_person", { personId });
+}

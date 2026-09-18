@@ -167,6 +167,7 @@
     renamePerson,
     reassignFace,
     setFaceExcluded,
+    getImagesForPerson,
   } from "$lib/api/faces.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
@@ -236,13 +237,38 @@
   let activeCollectionId = $state(/** @type {number | null} */ (null));
   let manualMembership = $state(/** @type {Map<number, Set<number>>} */ (new Map()));
 
-  // Folders / Last Import (M4 Library slice). Three library "sources" --
-  // All Photos, Last Import, and a real folder -- are mutually exclusive
-  // with each other and with a Collection, so only one of
-  // `activeCollectionId` / `activeFolderKey` / `showLastImportOnly` is ever
-  // "on" at a time; `baseImages` below checks them in that same order.
+  // Folders / Last Import (M4 Library slice). Four library "sources" --
+  // All Photos, Last Import, a real folder, and a Person -- are mutually
+  // exclusive with each other and with a Collection, so only one of
+  // `activeCollectionId` / `activeFolderKey` / `showLastImportOnly` /
+  // `activePersonId` is ever "on" at a time; `baseImages` below checks
+  // them in that same order.
   let activeFolderKey = $state(/** @type {string | null} */ (null));
   let showLastImportOnly = $state(false);
+
+  // People rail filter (2026-09-18 user request): double-clicking a
+  // person in CatalogRail's People section scopes Library to just their
+  // photos -- the gap RFC-0005 §7 explicitly left open ("no replacement
+  // for browsing/filtering the whole catalog by named person"). Same
+  // fetch-on-demand-and-cache shape as `manualMembership` below for a
+  // manual collection: a person's photo set needs a real query
+  // (`get_images_for_person`, a `faces`/`person_id` join), it isn't
+  // already sitting on `ImageSummary`.
+  let activePersonId = $state(/** @type {number | null} */ (null));
+  let personMembership = $state(/** @type {Map<number, Set<number>>} */ (new Map()));
+
+  async function loadPersonMembership(/** @type {number} */ personId) {
+    const memberIds = await getImagesForPerson(personId);
+    personMembership = new Map(personMembership).set(personId, new Set(memberIds));
+  }
+
+  async function selectPerson(/** @type {number} */ personId) {
+    activeCollectionId = null;
+    activeFolderKey = null;
+    showLastImportOnly = false;
+    activePersonId = personId;
+    if (!personMembership.has(personId)) await loadPersonMembership(personId);
+  }
 
   let folderEntries = $derived(buildFolderEntries(images));
 
@@ -263,18 +289,21 @@
     activeCollectionId = null;
     activeFolderKey = null;
     showLastImportOnly = false;
+    activePersonId = null;
   }
 
   function selectLastImport() {
     activeCollectionId = null;
     activeFolderKey = null;
     showLastImportOnly = true;
+    activePersonId = null;
   }
 
   function selectFolder(/** @type {string} */ key) {
     activeCollectionId = null;
     activeFolderKey = key;
     showLastImportOnly = false;
+    activePersonId = null;
   }
   let allImageKeywords = $state(/** @type {import('$lib/api/catalog.js').ImageKeywordAssignment[]} */ ([]));
   let keywordIdsByImage = $derived(buildKeywordIdsByImage(allImageKeywords));
@@ -328,13 +357,18 @@
     return [img.camera_make, img.camera_model].filter(Boolean).join(" ") || null;
   }
 
-  // Base image set for active folder/collection
+  // Base image set for active folder/collection/person
   let baseImages = $derived.by(() => {
     if (showLastImportOnly) {
       return lastImportBatchId === null ? [] : images.filter((img) => img.import_batch === lastImportBatchId);
     }
     if (activeFolderKey !== null) {
       return images.filter((img) => folderKeyForPath(img.path) === activeFolderKey);
+    }
+    if (activePersonId !== null) {
+      const memberIds = personMembership.get(activePersonId);
+      if (!memberIds) return []; // membership not fetched yet
+      return images.filter((img) => memberIds.has(img.image_id));
     }
     if (activeCollectionId === null) return images;
     const collection = collections.find((c) => c.id === activeCollectionId);
@@ -455,6 +489,7 @@
     activeCollectionId = collectionId;
     activeFolderKey = null;
     showLastImportOnly = false;
+    activePersonId = null;
     if (collectionId !== null && !manualMembership.has(collectionId)) {
       const collection = collections.find((c) => c.id === collectionId);
       if (collection && !collection.is_smart) await loadManualMembership(collectionId);
@@ -642,13 +677,15 @@
   let printReadyUrls = $state(/** @type {Record<number, string>} */ ({}));
 
   // People/Faces (M5 Slice 6, RFC-0005; folded into Library mode by the
-  // 2026-09-17 redesign -- see RFC-0005 §7). No more standalone People
-  // tab/grid: detected faces for the CURRENTLY SELECTED photo show up in
-  // MetadataPanel's own "People" section, and face rectangles overlay the
-  // Loupe view when `showFaceRects` is on. `people` is still fetched
-  // globally (not scoped to one photo) purely to back the tag popover's
-  // "search existing people" suggestions in MetadataPanel -- no avatar
-  // decoding needed anymore since nothing renders a person cover photo.
+  // 2026-09-17 redesign -- see RFC-0005 §7). Detected faces for the
+  // CURRENTLY SELECTED photo show up in MetadataPanel's own "People"
+  // section, and face rectangles overlay the Loupe view when
+  // `showFaceRects` is on. `people` also backs the tag popover's "search
+  // existing people" suggestions in MetadataPanel AND (2026-09-18 user
+  // request) CatalogRail's own collapsible People section, which closes
+  // the "no way to browse by named person" gap RFC-0005 §7 explicitly
+  // left open -- that's what brought avatar decoding back after the
+  // 2026-09-17 fold removed it as unneeded.
   let people = $state(/** @type {import('$lib/api/faces.js').PersonRow[]} */ ([]));
   let currentImageFaces = $state(/** @type {import('$lib/api/faces.js').FaceRow[]} */ ([]));
   let showFaceRects = $state(false);
@@ -666,8 +703,35 @@
   let faceScanProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
   let faceDetectionCancelable = $state(false);
 
+  // CatalogRail's People section avatar crop source, keyed by SOURCE PATH
+  // (not person id -- several people can share a cover photo), same
+  // precedent the pre-2026-09-17 standalone PeopleGrid used: decoding is
+  // the expensive part, the per-person crop itself is a pure CSS
+  // background-position/size trick done in CatalogRail.
+  let personAvatarSourceUrls = $state(/** @type {Record<string, string | null>} */ ({}));
+
+  /** Refetches the People rail AND resolves any newly-seen cover photo to
+   * a real decoded-preview URL (source files are often RAW/HEIC -- not
+   * directly renderable by an `<img>`/CSS `background-image`, so this
+   * reuses the same Develop-preview decode Library/Develop already rely
+   * on). Cached by path across calls -- renaming/reassigning people
+   * doesn't change whose photo is whose cover most of the time, so this
+   * only ever decodes a genuinely new cover photo. */
   async function refreshPeople() {
     people = await listPeople();
+    const uniquePaths = [...new Set(people.map((p) => p.cover_image_path).filter((p) => p !== null))];
+    const missing = uniquePaths.filter((p) => !(p in personAvatarSourceUrls));
+    if (missing.length === 0) return;
+    const resolved = await Promise.all(
+      missing.map((path) =>
+        getDevelopPreview(/** @type {string} */ (path), null)
+          .then((info) => convertFileSrc(info.path))
+          .catch(() => null),
+      ),
+    );
+    const next = { ...personAvatarSourceUrls };
+    missing.forEach((path, i) => (next[/** @type {string} */ (path)] = resolved[i]));
+    personAvatarSourceUrls = next;
   }
 
   /** Refetches the faces for whichever photo is currently selected --
@@ -3957,10 +4021,13 @@
         {activeCollectionId}
         {activeFolderKey}
         {showLastImportOnly}
+        {activePersonId}
         {lastImportBatchId}
         {folderEntries}
         {collections}
         {keywordIdsByImage}
+        {people}
+        avatarUrls={personAvatarSourceUrls}
         onSelectAllPhotos={selectAllPhotos}
         onSelectLastImport={selectLastImport}
         onSelectFolder={selectFolder}
@@ -3968,6 +4035,8 @@
         onDeleteCollection={handleDeleteCollection}
         onCreateCollection={() => (creatingCollection = true)}
         onCreateSmartCollection={() => (creatingSmartCollection = true)}
+        onSelectPerson={selectPerson}
+        onRenamePerson={handleRenamePerson}
       />
 
       {#if images.length === 0}
@@ -3985,6 +4054,8 @@
               No photos in the last import.
             {:else if activeFolderKey !== null}
               No photos in this folder.
+            {:else if activePersonId !== null}
+              No photos of this person.
             {:else}
               No photos in this collection.
             {/if}

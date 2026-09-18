@@ -311,7 +311,10 @@
               class:untagged={face.person_id === null}
               style={`left:${face.bbox_x * 100}%;top:${face.bbox_y * 100}%;width:${face.bbox_w * 100}%;height:${face.bbox_h * 100}%`}
             >
-              <span class="face-rect-label">{label}</span>
+              <span
+                class="face-rect-label"
+                style={`transform: scale(${1 / effectiveScale})`}
+              >{label}</span>
             </div>
           {/each}
         {/if}
@@ -523,10 +526,19 @@
     border-width: 3px;
     opacity: 1;
   }
+  /* Counter-scaled (inline `transform: scale(1/effectiveScale)`) so its
+     on-screen size stays constant as the Loupe view zooms -- without
+     this, the label would grow/shrink right along with the photo since
+     it sits inside `.image-canvas`'s own zoom transform, same as the
+     `.face-rect` box it labels (which SHOULD scale with zoom, since it's
+     tracking the face's actual position). `transform-origin: top left`
+     keeps the counter-scale anchored at the label's own top-left corner
+     (where `left/top` place it) instead of drifting from its center. */
   .face-rect-label {
     position: absolute;
     left: 0;
     top: calc(100% + 4px);
+    transform-origin: top left;
     white-space: nowrap;
     background: rgba(20, 18, 16, 0.85);
     color: var(--text-primary);

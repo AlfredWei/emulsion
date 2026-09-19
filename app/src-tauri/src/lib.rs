@@ -2,6 +2,7 @@ mod catalog;
 mod develop_engine;
 mod export;
 mod export_plugin;
+mod geocode;
 // M5 Slice 6 (face detection, RFC-0005): the clustering half of the
 // pipeline, hand-rolled and unit-tested against synthetic vectors.
 mod face_cluster;
@@ -1503,6 +1504,45 @@ async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, versio
     .map_err(|e| e.to_string())?
 }
 
+/// Forward geocoding (RFC-0007). The API key is read under a brief catalog
+/// lock and the lock released before the network call, so a slow request
+/// never stalls the rest of the app. The frontend only ever learns whether
+/// a key exists (`has_maps_api_key`), never the key itself.
+#[tauri::command]
+async fn geocode_search(state: State<'_, AppState>, query: String) -> Result<Vec<geocode::GeocodeCandidate>, String> {
+    let api_key = {
+        let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+        catalog.get_maps_api_key().map_err(|e| e.to_string())?
+    };
+    geocode::search(&query, api_key.as_deref()).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_geo_location_batch(
+    state: State<'_, AppState>,
+    image_ids: Vec<i64>,
+    latitude: f64,
+    longitude: f64,
+) -> Result<usize, String> {
+    geocode::validate_coordinates(latitude, longitude)?;
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .set_geo_location_batch(&image_ids, latitude, longitude)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn has_maps_api_key(state: State<'_, AppState>) -> Result<bool, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    Ok(catalog.get_maps_api_key().map_err(|e| e.to_string())?.is_some())
+}
+
+#[tauri::command]
+fn set_maps_api_key(state: State<'_, AppState>, key: Option<String>) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_maps_api_key(key.as_deref()).map_err(|e| e.to_string())
+}
+
 #[derive(serde::Deserialize)]
 struct ExportItem {
     path: String,
@@ -1992,6 +2032,10 @@ pub fn run() {
             export_preset_file,
             regenerate_thumbnail,
             export_images,
+            geocode_search,
+            set_geo_location_batch,
+            has_maps_api_key,
+            set_maps_api_key,
             get_backup_settings,
             update_backup_settings,
             get_storage_info,

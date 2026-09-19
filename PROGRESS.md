@@ -2,6 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5.5 Slice 1 — place search & batch location assign (2026-09-19)
+
+First implementation slice of [RFC-0007](docs/rfc/RFC-0007-map-geolocation.md), building on the EXIF/IPTC writer that landed first. The RFC's three open questions were never explicitly answered; this slice went with its recommendations (keep reverse geocoding but as a later, explicit-per-action slice; Google-only). **Say so if any of those should change.**
+
+- **`geocode.rs`**: forward geocoding against Google's Geocoding API via the existing `reqwest` (added its `query` feature). Response parsing is a pure function tested on recorded JSON (OK, ZERO_RESULTS as empty list, REQUEST_DENIED with Google's message, quota statuses, garbage body); results capped at 5; 10s timeout. Transport errors have the URL stripped (`without_url()`) because it contains the API key. No provider trait yet — RFC §3.1/§6 proposed one, but with a single implementation it would be speculative; a second provider would add it.
+- **Key handling**: user-supplied, stored in the catalog `settings` table (`maps_api_key`). The frontend can only learn *whether* a key exists (`has_maps_api_key`) or set/clear it — the key is never sent back, so Settings → Map is a write-only field. (Slice 2's Maps JS view will need the key in the webview; that getter is deferred to then.)
+- **`set_geo_location_batch`**: one transaction, updates lat/lng only (altitude preserved — a searched location has none), skips nonexistent ids, validates ranges (incl. NaN) at the command. Existing single-photo manual entry is unchanged and, as before, doesn't range-check.
+- **UI**: Settings → Map tab (key, plus plain-language privacy/billing note); a place-search box in the metadata panel's Location section, shown only when a key exists, applying the chosen result to the whole current selection ("Apply to N photos"). Library grid state is patched locally so the change shows immediately.
+- **Verified**: `cargo test --lib` 373/373 (+11: 9 geocode incl. no-network guard and coordinate-validation tests, 2 catalog); `npm run check` 0 errors; Settings → Map tab rendered in a live `vite dev`. **Not verified**: any real Google call (no key was used — parse logic is tested only against hand-written bodies modeled on the documented response shape), and the panel's search/apply flow in the real Tauri window.
+- **Docs**: USER_GUIDE's Map section rewritten to "partly built" with setup steps.
+
 ## Export: EXIF/IPTC writer, chosen per export (2026-09-19)
 
 User request: add an EXIF/IPTC writer as a slice *before* any geo implementation, with the user deciding at export time whether to write it. Export previously wrote a bare JPEG (no EXIF at all), which RFC-0007 had already flagged as the hidden cost of M5.5's "round-trips through export" criterion.

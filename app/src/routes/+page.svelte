@@ -4165,6 +4165,11 @@
             statusMessage = lat != null ? "Updated GPS coordinates" : "Removed GPS coordinates";
           }
         }}
+        onGeoLocationApplied={(imageIds, lat, lon) => {
+          const ids = new Set(imageIds);
+          images = images.map((img) => (ids.has(img.image_id) ? { ...img, latitude: lat, longitude: lon } : img));
+          statusMessage = `Set location for ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"}`;
+        }}
         faces={currentImageFaces}
         {people}
         {detectingFaces}

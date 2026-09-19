@@ -13,7 +13,7 @@ Launch the app (`make dev` in development, or the built app once packaged). You'
 - Duplicate files (by content, not just filename) are detected and skipped automatically.
 - A "Detect faces?" prompt appears after import — face detection runs as a visible third phase of the import progress bar if you say yes (see [Faces & People](#faces--people)).
 
-The catalog (a single SQLite file) and your originals stay on your own disk — nothing is uploaded anywhere, ever, except the one narrow exception noted under [Map & geolocation](#map--geolocation-planned).
+The catalog (a single SQLite file) and your originals stay on your own disk — nothing is uploaded anywhere, ever, except the one narrow exception noted under [Map & geolocation](#map--geolocation-partly-built).
 
 ## The Library rail
 
@@ -41,7 +41,7 @@ Four view modes (toolbar or `G`/`E`/`C`/`N`):
 
 **Filtering**: the filter bar combines flag, star rating (`>=` or `=`), color label, file type (RAW/JPEG), camera, lens, date-taken range, and a free-text search (filename, camera, lens) — all combinable at once, scoped to whatever the rail currently has selected.
 
-**Organizing**: hierarchical keywording, manual collections, rule-based Smart Collections, virtual copies and stacking (grouping burst shots or edit variants without duplicating files), and a full EXIF (read-only) + IPTC (editable: caption, copyright, contact) metadata panel. GPS coordinates from EXIF are shown and manually editable — see [Map & geolocation](#map--geolocation-planned) for what's *not* built yet here.
+**Organizing**: hierarchical keywording, manual collections, rule-based Smart Collections, virtual copies and stacking (grouping burst shots or edit variants without duplicating files), and a full EXIF (read-only) + IPTC (editable: caption, copyright, contact) metadata panel. GPS coordinates from EXIF are shown and manually editable — see [Map & geolocation](#map--geolocation-partly-built) for place search and what's not built yet.
 
 **Other actions**: drag-and-drop import, "Reveal in File Manager," non-destructive "Remove from Catalog" (never touches the file on disk), batch export, and one-click batch HDR merge / panorama merge for a multi-selected bracket or shot sequence.
 
@@ -92,9 +92,15 @@ Face detection, embedding, and clustering all run **fully locally** — no cloud
   - **Double-click** anywhere else on their row to filter the Library grid to just their photos.
 - There's currently no way to merge two people who turn out to be the same person, or to browse people across the whole catalog independent of the currently-scoped folder/collection — known gaps, not oversights (see [PROGRESS.md](../PROGRESS.md) and RFC-0005 §7 for the full accounting).
 
-## Map & geolocation (planned)
+## Map & geolocation (partly built)
 
-Not built yet — [M5.5 in the roadmap](../PRD/MILESTONES.md). Once shipped: search an address or place name to set a photo's (or a batch's) GPS location, drop/drag a pin as an alternative to typing, and a world map Library view plotting every geolocated photo, click-to-filter. Today you can only view/edit GPS coordinates that already exist in a photo's EXIF, or type coordinates in manually — no map UI, no address search.
+Part of [M5.5 in the roadmap](../PRD/MILESTONES.md). **Built:** searching for a place or address and applying it as the GPS location of the selected photo(s), in one action for a whole multi-selection. **Not built yet:** dropping/dragging a pin on a map, and the world map Library view.
+
+**Setup (once):** the search uses Google's Geocoding API with *your own* API key — the app doesn't ship one. Create a key in Google Cloud Console, enable the Geocoding API (Google may require a billing account), then paste it in Settings → Map. The key stays in your local catalog and is never shown again in the app.
+
+**Using it:** select one or more photos, and in the metadata panel's Location section type a place name or address and press Search. Pick a result to apply its coordinates to every selected photo (the list says how many). Existing altitude is kept. The location is stored in your catalog and, if you tick EXIF + GPS, written into exported JPEGs. You can still type coordinates by hand, for one photo.
+
+**What leaves your computer:** only the text you type into the search box (plus your key), and only when you press Search. Search results aren't saved; only the location you pick is.
 
 ## Settings
 

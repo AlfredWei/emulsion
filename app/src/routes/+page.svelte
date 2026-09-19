@@ -27,6 +27,9 @@
   import PrintLayoutView from "$lib/components/PrintLayoutView.svelte";
   import CatalogRail from "$lib/components/CatalogRail.svelte";
   import { getStoredShortcuts } from "$lib/shortcuts.js";
+  import { createKeyboardHandlers } from "$lib/keyboard.js";
+  import { createMenuHandler } from "$lib/menuActions.js";
+  import { selectBaseImages, applyLibraryFilters, cameraOptionsFor, lensOptionsFor } from "$lib/libraryFilters.js";
   import {
     getStoredPanelWidths,
     saveStoredPanelWidths,
@@ -99,7 +102,6 @@
     createColorRangeMask,
     createSpotMask,
     createRedEyeMask,
-    OVERLAY_CAPABLE_MASK_OPS,
     getToneCurvePoints,
     upsertToneCurve,
     IDENTITY_TONE_CURVE,
@@ -149,8 +151,8 @@
   } from "$lib/api/develop.js";
   import { queueThumbnailRegeneration, flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
-  import { buildKeywordIdsByImage, matchesRules } from "$lib/collectionRules.js";
-  import { folderKeyForPath, buildFolderEntries } from "$lib/libraryFolders.js";
+  import { buildKeywordIdsByImage } from "$lib/collectionRules.js";
+  import { buildFolderEntries } from "$lib/libraryFolders.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
   import { getPrintReadyImages, exportPrintPdf, PAPER_SIZES } from "$lib/api/print.js";
   import {
@@ -348,131 +350,81 @@
     dateTo = "";
   }
 
-  /** "Make Model" (e.g. "Canon EOS 5D Mark III"), same join convention as MetadataPanel's own camera row. */
-  function cameraLabel(/** @type {{ camera_make?: string|null, camera_model?: string|null }} */ img) {
-    return [img.camera_make, img.camera_model].filter(Boolean).join(" ") || null;
-  }
 
-  // Base image set for active folder/collection/person
-  let baseImages = $derived.by(() => {
-    if (showLastImportOnly) {
-      return lastImportBatchId === null ? [] : images.filter((img) => img.import_batch === lastImportBatchId);
-    }
-    if (activeFolderKey !== null) {
-      return images.filter((img) => folderKeyForPath(img.path) === activeFolderKey);
-    }
-    if (activePersonId !== null) {
-      const memberIds = personMembership.get(activePersonId);
-      if (!memberIds) return []; // membership not fetched yet
-      return images.filter((img) => memberIds.has(img.image_id));
-    }
-    if (activeCollectionId === null) return images;
-    const collection = collections.find((c) => c.id === activeCollectionId);
-    if (!collection) return images;
-    if (collection.is_smart) {
-      const rules = collection.rules ?? [];
-      return images.filter((img) => matchesRules(img, rules, keywordIdsByImage));
-    }
-    const memberIds = manualMembership.get(activeCollectionId);
-    if (!memberIds) return []; // membership not fetched yet
-    return images.filter((img) => memberIds.has(img.image_id));
-  });
+  // Getter objects, not copies: the derived below must track exactly the state the moved code
+  // reads, lazily and in the same order as before (see lib/libraryFilters.js's header).
+  const libraryFilterInputs = {
+    get activeCollectionId() {
+      return activeCollectionId;
+    },
+    get activeFolderKey() {
+      return activeFolderKey;
+    },
+    get activePersonId() {
+      return activePersonId;
+    },
+    get baseImages() {
+      return baseImages;
+    },
+    get cameraFilter() {
+      return cameraFilter;
+    },
+    get collections() {
+      return collections;
+    },
+    get colorLabelFilter() {
+      return colorLabelFilter;
+    },
+    get dateFrom() {
+      return dateFrom;
+    },
+    get dateTo() {
+      return dateTo;
+    },
+    get fileTypeFilter() {
+      return fileTypeFilter;
+    },
+    get flagFilter() {
+      return flagFilter;
+    },
+    get images() {
+      return images;
+    },
+    get keywordIdsByImage() {
+      return keywordIdsByImage;
+    },
+    get lastImportBatchId() {
+      return lastImportBatchId;
+    },
+    get lensFilter() {
+      return lensFilter;
+    },
+    get manualMembership() {
+      return manualMembership;
+    },
+    get minRating() {
+      return minRating;
+    },
+    get personMembership() {
+      return personMembership;
+    },
+    get ratingOp() {
+      return ratingOp;
+    },
+    get searchQuery() {
+      return searchQuery;
+    },
+    get showLastImportOnly() {
+      return showLastImportOnly;
+    },
+  };
 
-  // Distinct camera/lens values within the active folder/collection scope, for the filter dropdowns
-  let cameraOptions = $derived(
-    [...new Set(baseImages.map(cameraLabel).filter((v) => v !== null))].sort(),
-  );
-  let lensOptions = $derived(
-    [...new Set(baseImages.map((img) => img.lens_model || "").filter((v) => v !== ""))].sort(),
-  );
+  let baseImages = $derived.by(() => selectBaseImages(libraryFilterInputs));
 
-  // The image set the Library grid and filmstrip show after applying active filters
-  let filteredImages = $derived.by(() => {
-    let result = baseImages;
+  let cameraOptions = $derived(cameraOptionsFor(baseImages));
+  let lensOptions = $derived(lensOptionsFor(baseImages));
 
-    // Search text query
-    const q = searchQuery.trim().toLowerCase();
-    if (q) {
-      result = result.filter((img) => {
-        const name = (img.path.split(/[/\\]/).pop() || "").toLowerCase();
-        const path = img.path.toLowerCase();
-        const make = (img.camera_make || "").toLowerCase();
-        const model = (img.camera_model || "").toLowerCase();
-        const lens = (img.lens_model || "").toLowerCase();
-        const caption = (img.caption || "").toLowerCase();
-        const copyright = (img.copyright || "").toLowerCase();
-        const contact = (img.contact || "").toLowerCase();
-        return (
-          name.includes(q) ||
-          path.includes(q) ||
-          make.includes(q) ||
-          model.includes(q) ||
-          lens.includes(q) ||
-          caption.includes(q) ||
-          copyright.includes(q) ||
-          contact.includes(q)
-        );
-      });
-    }
-
-    // Flag filter
-    if (flagFilter === "pick") {
-      result = result.filter((img) => img.flag === "pick");
-    } else if (flagFilter === "unflagged") {
-      result = result.filter((img) => img.flag === "none" || !img.flag);
-    } else if (flagFilter === "reject") {
-      result = result.filter((img) => img.flag === "reject");
-    }
-
-    // Star Rating filter
-    if (minRating > 0) {
-      if (ratingOp === ">=") {
-        result = result.filter((img) => img.rating >= minRating);
-      } else {
-        result = result.filter((img) => img.rating === minRating);
-      }
-    }
-
-    // Color label filter
-    if (colorLabelFilter !== "all") {
-      result = result.filter((img) => img.color_label === colorLabelFilter);
-    }
-
-    // File type filter
-    if (fileTypeFilter === "raw") {
-      result = result.filter(
-        (img) =>
-          !img.path.toLowerCase().endsWith(".jpg") && !img.path.toLowerCase().endsWith(".jpeg"),
-      );
-    } else if (fileTypeFilter === "jpeg") {
-      result = result.filter(
-        (img) =>
-          img.path.toLowerCase().endsWith(".jpg") || img.path.toLowerCase().endsWith(".jpeg"),
-      );
-    }
-
-    // Camera filter
-    if (cameraFilter !== "all") {
-      result = result.filter((img) => cameraLabel(img) === cameraFilter);
-    }
-
-    // Lens filter
-    if (lensFilter !== "all") {
-      result = result.filter((img) => img.lens_model === lensFilter);
-    }
-
-    // Date-taken range filter (captured_at is an ISO 8601 string; comparing its
-    // YYYY-MM-DD date portion lexicographically against the <input type="date"> values
-    // avoids parsing either side as a Date/timezone).
-    if (dateFrom) {
-      result = result.filter((img) => img.captured_at && img.captured_at.slice(0, 10) >= dateFrom);
-    }
-    if (dateTo) {
-      result = result.filter((img) => img.captured_at && img.captured_at.slice(0, 10) <= dateTo);
-    }
-
-    return result;
-  });
+  let filteredImages = $derived.by(() => applyLibraryFilters(libraryFilterInputs));
 
   let activeCollection = $derived(collections.find((c) => c.id === activeCollectionId) ?? null);
 
@@ -2472,308 +2424,130 @@
     statusMessage = `Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from collection`;
   }
 
-  // M3 Slice 2: standard Lightroom Classic Library shortcuts -- 0-5 directly
-  // SET star rating (0 clears, not a toggle), P/X toggle Pick/Reject on and
-  // off, U always hard-clears to unflagged (a third, distinct key, not a
-  // toggle of P or X), 6/7/8/9 toggle Red/Yellow/Green/Blue on and off.
-  // Purple has no default key in real Lightroom, so none is bound here
-  // either. Reuses handleRatingChange/handleFlagChange/handleColorLabelChange
-  // with `selectedId` (the anchor) directly -- selectedId is always a
-  // member of selectedIds whenever there's a real multi-selection, so their
-  // existing targetVersionIds() batching applies "for free," no new
-  // target-computation needed.
-  const COLOR_KEYS = { 6: "red", 7: "yellow", 8: "green", 9: "blue" };
+  // Everything the keyboard and menu handlers (lib/keyboard.js, lib/menuActions.js) read or
+  // write. State goes through live getters/setters -- never copied values -- so the handlers
+  // see exactly what the component sees at the moment an event fires; functions are the
+  // component's own (hoisted) handlers. RFC-0009 P2: this object is the seam P4-P7 replace
+  // with store fields.
+  const handlerContext = {
+    get activeModule() {
+      return activeModule;
+    },
+    get backupPromptOpen() {
+      return backupPromptOpen;
+    },
+    get confirmingDeletePresetId() {
+      return confirmingDeletePresetId;
+    },
+    get confirmingRemoval() {
+      return confirmingRemoval;
+    },
+    set confirmingRemoval(value) {
+      confirmingRemoval = value;
+    },
+    get creatingCollection() {
+      return creatingCollection;
+    },
+    get creatingCollectionWithImages() {
+      return creatingCollectionWithImages;
+    },
+    get creatingPreset() {
+      return creatingPreset;
+    },
+    get creatingSmartCollection() {
+      return creatingSmartCollection;
+    },
+    get creatingSnapshot() {
+      return creatingSnapshot;
+    },
+    get exportItems() {
+      return exportItems;
+    },
+    get filteredImages() {
+      return filteredImages;
+    },
+    handleColorLabelChange,
+    handleCompareNextCandidate,
+    handleComparePrevCandidate,
+    handleCopySettingsRequest,
+    handleDeselectAll,
+    handleExportClick,
+    handleExportPdf,
+    handleFlagChange,
+    handleImportFiles,
+    handleImportFolder,
+    handlePasteSettings,
+    handleRatingChange,
+    handleRedo,
+    handleSelectAll,
+    handleToggleClippingOverlay,
+    handleUndo,
+    get libraryViewMode() {
+      return libraryViewMode;
+    },
+    set libraryViewMode(value) {
+      libraryViewMode = value;
+    },
+    get maskOverlaysVisible() {
+      return maskOverlaysVisible;
+    },
+    set maskOverlaysVisible(value) {
+      maskOverlaysVisible = value;
+    },
+    openDevelop,
+    get selectedId() {
+      return selectedId;
+    },
+    set selectedId(value) {
+      selectedId = value;
+    },
+    get selectedIds() {
+      return selectedIds;
+    },
+    set selectedIds(value) {
+      selectedIds = value;
+    },
+    get selectedImage() {
+      return selectedImage;
+    },
+    get selectedMask() {
+      return selectedMask;
+    },
+    selectGridStep,
+    selectNextImage,
+    selectPrevImage,
+    get settingsOpen() {
+      return settingsOpen;
+    },
+    set settingsOpen(value) {
+      settingsOpen = value;
+    },
+    get shortcuts() {
+      return shortcuts;
+    },
+    get showMaskOverlay() {
+      return showMaskOverlay;
+    },
+    set showMaskOverlay(value) {
+      showMaskOverlay = value;
+    },
+    get showOriginal() {
+      return showOriginal;
+    },
+    set showOriginal(value) {
+      showOriginal = value;
+    },
+    get spacePanning() {
+      return spacePanning;
+    },
+    set spacePanning(value) {
+      spacePanning = value;
+    },
+    switchModule,
+  };
+  const { handleGlobalKeydown, handleGlobalKeyup } = createKeyboardHandlers(handlerContext);
+  const handleMenuAction = createMenuHandler(handlerContext);
 
-  // Comprehensive keyboard shortcut handler with custom user bindings
-  function handleGlobalKeydown(/** @type {KeyboardEvent} */ e) {
-    const target = e.target;
-    const isTypingTarget =
-      (target instanceof HTMLInputElement && target.type !== "range") ||
-      target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLSelectElement;
-    if (isTypingTarget) {
-      return;
-    }
-
-    const key = e.key.toLowerCase();
-    const rawKey = e.key;
-
-    if (activeModule === "develop") {
-      if (
-        exportItems !== null ||
-        settingsOpen ||
-        backupPromptOpen ||
-        creatingSnapshot ||
-        creatingPreset ||
-        confirmingDeletePresetId !== null
-      ) {
-        return;
-      }
-      // Undo/Redo (M3)
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && key === "z") {
-        e.preventDefault();
-        if (e.shiftKey) handleRedo();
-        else handleUndo();
-        return;
-      }
-      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && key === "y") {
-        e.preventDefault();
-        handleRedo();
-        return;
-      }
-
-      // Arrow navigation in Develop: navigate to previous / next photo
-      if (!e.metaKey && !e.ctrlKey && !e.altKey) {
-        if (rawKey === shortcuts.nextImage || rawKey === shortcuts.gridDown || rawKey === "ArrowRight") {
-          e.preventDefault();
-          selectNextImage(false);
-          return;
-        }
-        if (rawKey === shortcuts.prevImage || rawKey === shortcuts.gridUp || rawKey === "ArrowLeft") {
-          e.preventDefault();
-          selectPrevImage(false);
-          return;
-        }
-        if (key === shortcuts.viewGrid?.toLowerCase()) {
-          e.preventDefault();
-          switchModule("library");
-          libraryViewMode = "grid";
-          return;
-        }
-        if (key === shortcuts.viewLoupe?.toLowerCase()) {
-          e.preventDefault();
-          switchModule("library");
-          libraryViewMode = "loupe";
-          return;
-        }
-      }
-
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (rawKey === " " || key === shortcuts.toggleView?.toLowerCase()) {
-        e.preventDefault();
-        if (!e.repeat) spacePanning = true;
-        return;
-      }
-      if (
-        key === shortcuts.toggleMaskOverlay?.toLowerCase() &&
-        OVERLAY_CAPABLE_MASK_OPS.includes(selectedMask?.op ?? "")
-      ) {
-        e.preventDefault();
-        showMaskOverlay = !showMaskOverlay;
-        return;
-      }
-      if (key === shortcuts.toggleMaskChrome?.toLowerCase()) {
-        e.preventDefault();
-        maskOverlaysVisible = !maskOverlaysVisible;
-        return;
-      }
-      if (rawKey === shortcuts.toggleOriginal || key === shortcuts.toggleOriginal?.toLowerCase()) {
-        e.preventDefault();
-        showOriginal = !showOriginal;
-        return;
-      }
-      return;
-    }
-
-    if (activeModule !== "library") return;
-    if (
-      confirmingRemoval ||
-      exportItems !== null ||
-      creatingCollection ||
-      creatingSmartCollection ||
-      creatingCollectionWithImages ||
-      settingsOpen ||
-      backupPromptOpen
-    ) {
-      return;
-    }
-
-    // Select All: Cmd+A / Ctrl+A
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && key === "a") {
-      e.preventDefault();
-      handleSelectAll();
-      return;
-    }
-    // Deselect All / Back to Grid: Cmd+D / Ctrl+D / Escape
-    if (((e.metaKey || e.ctrlKey) && !e.altKey && key === "d") || rawKey === "Escape") {
-      e.preventDefault();
-      handleDeselectAll();
-      return;
-    }
-
-    if (rawKey === "Delete" || rawKey === "Backspace") {
-      if (selectedIds.size === 0) return;
-      e.preventDefault();
-      confirmingRemoval = true;
-      return;
-    }
-
-    // Arrow navigation in Library
-    if (rawKey === shortcuts.nextImage || rawKey === "ArrowRight") {
-      e.preventDefault();
-      if (libraryViewMode === "compare") {
-        handleCompareNextCandidate();
-      } else {
-        selectNextImage(e.shiftKey);
-      }
-      return;
-    }
-    if (rawKey === shortcuts.prevImage || rawKey === "ArrowLeft") {
-      e.preventDefault();
-      if (libraryViewMode === "compare") {
-        handleComparePrevCandidate();
-      } else {
-        selectPrevImage(e.shiftKey);
-      }
-      return;
-    }
-    if (rawKey === shortcuts.gridDown || rawKey === "ArrowDown") {
-      e.preventDefault();
-      if (libraryViewMode === "grid") {
-        selectGridStep(4, e.shiftKey);
-      } else {
-        selectNextImage(e.shiftKey);
-      }
-      return;
-    }
-    if (rawKey === shortcuts.gridUp || rawKey === "ArrowUp") {
-      e.preventDefault();
-      if (libraryViewMode === "grid") {
-        selectGridStep(-4, e.shiftKey);
-      } else {
-        selectPrevImage(e.shiftKey);
-      }
-      return;
-    }
-
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-    // Mode hotkeys
-    if (key === shortcuts.viewGrid?.toLowerCase()) {
-      e.preventDefault();
-      libraryViewMode = "grid";
-      return;
-    }
-    if (key === shortcuts.viewLoupe?.toLowerCase() || rawKey === "Enter") {
-      e.preventDefault();
-      if (selectedId !== null) {
-        libraryViewMode = "loupe";
-      } else if (filteredImages.length > 0) {
-        selectedId = filteredImages[0].version_id;
-        selectedIds = new Set([filteredImages[0].version_id]);
-        libraryViewMode = "loupe";
-      }
-      return;
-    }
-    if (key === shortcuts.viewCompare?.toLowerCase()) {
-      e.preventDefault();
-      libraryViewMode = "compare";
-      return;
-    }
-    if (key === shortcuts.viewSurvey?.toLowerCase()) {
-      e.preventDefault();
-      libraryViewMode = "survey";
-      return;
-    }
-    if (key === shortcuts.viewDevelop?.toLowerCase()) {
-      e.preventDefault();
-      if (selectedId !== null) {
-        openDevelop(selectedId);
-      } else if (filteredImages.length > 0) {
-        openDevelop(filteredImages[0].version_id);
-      }
-      return;
-    }
-    if (rawKey === " " || key === shortcuts.toggleView?.toLowerCase()) {
-      e.preventDefault();
-      if (libraryViewMode === "grid") {
-        if (selectedId !== null) libraryViewMode = "loupe";
-      } else if (libraryViewMode === "loupe") {
-        libraryViewMode = "grid";
-      }
-      return;
-    }
-
-    // Rating shortcuts
-    if (rawKey === shortcuts.rate0) {
-      e.preventDefault();
-      handleRatingChange(selectedId, 0);
-      return;
-    }
-    if (rawKey === shortcuts.rate1) {
-      e.preventDefault();
-      handleRatingChange(selectedId, 1);
-      return;
-    }
-    if (rawKey === shortcuts.rate2) {
-      e.preventDefault();
-      handleRatingChange(selectedId, 2);
-      return;
-    }
-    if (rawKey === shortcuts.rate3) {
-      e.preventDefault();
-      handleRatingChange(selectedId, 3);
-      return;
-    }
-    if (rawKey === shortcuts.rate4) {
-      e.preventDefault();
-      handleRatingChange(selectedId, 4);
-      return;
-    }
-    if (rawKey === shortcuts.rate5) {
-      e.preventDefault();
-      handleRatingChange(selectedId, 5);
-      return;
-    }
-
-    // Flag shortcuts
-    if (key === shortcuts.flagPick?.toLowerCase()) {
-      e.preventDefault();
-      handleFlagChange(selectedId, selectedImage?.flag === "pick" ? "none" : "pick");
-      return;
-    }
-    if (key === shortcuts.flagReject?.toLowerCase()) {
-      e.preventDefault();
-      handleFlagChange(selectedId, selectedImage?.flag === "reject" ? "none" : "reject");
-      return;
-    }
-    if (key === shortcuts.flagUnflag?.toLowerCase()) {
-      e.preventDefault();
-      handleFlagChange(selectedId, "none");
-      return;
-    }
-
-    // Color labels
-    if (key === shortcuts.colorRed?.toLowerCase()) {
-      e.preventDefault();
-      handleColorLabelChange(selectedId, selectedImage?.color_label === "red" ? "none" : "red");
-      return;
-    }
-    if (key === shortcuts.colorYellow?.toLowerCase()) {
-      e.preventDefault();
-      handleColorLabelChange(selectedId, selectedImage?.color_label === "yellow" ? "none" : "yellow");
-      return;
-    }
-    if (key === shortcuts.colorGreen?.toLowerCase()) {
-      e.preventDefault();
-      handleColorLabelChange(selectedId, selectedImage?.color_label === "green" ? "none" : "green");
-      return;
-    }
-    if (key === shortcuts.colorBlue?.toLowerCase()) {
-      e.preventDefault();
-      handleColorLabelChange(selectedId, selectedImage?.color_label === "blue" ? "none" : "blue");
-      return;
-    }
-  }
-
-  // M4 Slice 3: releases space-pan (see spacePanning's own doc comment).
-  // No input-focus/dialog guards needed here, unlike handleGlobalKeydown --
-  // clearing this is always safe even if focus moved somewhere else while
-  // the key was held, since spacePanning can only have been set true by
-  // that same keydown handler's own guarded path in the first place.
-  function handleGlobalKeyup(/** @type {KeyboardEvent} */ e) {
-    if (e.key === " ") spacePanning = false;
-  }
 
   // M2 Slice 2: IPTC fields save on blur (MetadataPanel), not debounced --
   // each is a single discrete edit rather than a slider drag, so there's no
@@ -3309,82 +3083,6 @@
     exportItems = currentExportItems.length > 0 ? currentExportItems : null;
   }
 
-  /** Native OS menu bar (M4.5 Slice 4, see build_menu in lib.rs): a menu
-   * click reaches here as a `"menu-action"` event carrying the clicked
-   * item's id, and every case below just calls the exact same handler an
-   * equivalent in-UI button already calls -- no new behavior, only a new
-   * entry point. Module-scoped actions (Select All, the Develop-only
-   * toggles) no-op outside their module rather than acting on
-   * invisible/irrelevant state, matching how the in-UI controls they
-   * mirror are only ever rendered in the first place. */
-  function handleMenuAction(/** @type {string} */ action) {
-    switch (action) {
-      case "import_folder":
-        handleImportFolder();
-        break;
-      case "import_files":
-        handleImportFiles();
-        break;
-      case "export":
-        handleExportClick();
-        break;
-      case "export_pdf":
-        handleExportPdf();
-        break;
-      case "preferences":
-        settingsOpen = true;
-        break;
-      case "undo":
-        if (activeModule === "develop") handleUndo();
-        break;
-      case "redo":
-        if (activeModule === "develop") handleRedo();
-        break;
-      case "copy_settings":
-        handleCopySettingsRequest();
-        break;
-      case "paste_settings":
-        handlePasteSettings();
-        break;
-      case "select_all":
-        if (activeModule === "library") handleSelectAll();
-        break;
-      case "deselect_all":
-        if (activeModule === "library") handleDeselectAll();
-        break;
-      case "view_library":
-        switchModule("library");
-        break;
-      case "view_develop":
-        switchModule("develop");
-        break;
-      case "view_print":
-        switchModule("print");
-        break;
-      case "view_grid":
-        switchModule("library");
-        libraryViewMode = "grid";
-        break;
-      case "view_loupe":
-        switchModule("library");
-        libraryViewMode = "loupe";
-        break;
-      case "view_compare":
-        switchModule("library");
-        libraryViewMode = "compare";
-        break;
-      case "view_survey":
-        switchModule("library");
-        libraryViewMode = "survey";
-        break;
-      case "toggle_clipping":
-        if (activeModule === "develop") handleToggleClippingOverlay();
-        break;
-      case "toggle_before_after":
-        if (activeModule === "develop") showOriginal = !showOriginal;
-        break;
-    }
-  }
 
   onMount(() => {
     // Also covers the startup catch-up pass (preview_cache::pregenerate_missing

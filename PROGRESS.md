@@ -10,6 +10,15 @@ Second step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). `develop_en
 - **Not measured**: per-pixel performance. Functions now call across module boundaries within one crate; with no `#[inline]` and the default release profile (thin-local LTO) this should not matter, but no before/after export timing was taken. The e2e `develop-performance` and CPU/GPU parity specs run in CI on this PR.
 - Next: `DevelopCanvas.svelte` (V1: move the WGSL shader text out first, with an exact-match test).
 
+## Refactor C1: `catalog.rs` split into a `catalog/` module (2026-09-19)
+
+First step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). `catalog.rs` (4,012 lines) is now `catalog/` with 14 files, largest 735 lines: `mod.rs` (Catalog struct, open/harden), `schema.rs` (migrate), and one file per domain — images, merge_sources, culling, geo, faces, keywords, collections, backup, edit_stack, presets, export_plugins — each carrying its own types, methods, and tests; `test_support.rs` holds the two fixtures shared across domains. RFC-0008 planned this as three PRs (C1–C3); it was done in one because it's a scripted, mechanically verified move.
+
+- **Pure move, verified**: the multiset of non-blank source lines before vs after differs only by 4 visibility changes (`migrate` and `DEFAULT_PRESETS` → `pub(super)`, two test helpers → `pub(super)`) plus module/`use`/`impl` boilerplate. `cargo test --lib` still 380 passed / 2 ignored; build warning-free. No caller changed — `crate::catalog::{Catalog, EditStack, ExportPlugin, ...}` paths still resolve via re-exports in `mod.rs`.
+- **Dropped re-exports**: `RemovedImage`, `ImageExposureInfo`, `VersionSource`, and `BackupError` are no longer re-exported (no code outside `catalog` names them); still `pub` in their modules.
+- **Docs**: PROJECT_STRUCTURE.md updated. Older RFC/PROGRESS entries that cite `catalog.rs:NNN` line numbers now point at a file that no longer exists and were left as historical text.
+- Next: D1–D4, splitting `develop_engine.rs`.
+
 ## M5.5 Slice 1 — place search & batch location assign, OpenStreetMap default + optional Google (2026-09-19)
 
 First implementation slice of [RFC-0007](docs/rfc/RFC-0007-map-geolocation.md), building on the EXIF/IPTC writer that landed first. **Revised after review**: the first cut was Google-only; learning that Google needs a billing account (card) even inside its free tier, the decisions were (1) both providers with OpenStreetMap the no-setup default, (2) keep reverse geocoding but explicit-per-photo in a later slice, (3) map view is worthwhile but a later slice. Recorded as [RFC-0007 §7](docs/rfc/RFC-0007-map-geolocation.md#7-update-2026-09-19-review-decisions-and-what-they-change), which also records the accepted decision that the later map-view slice uses Leaflet + OSM tiles regardless of geocoding provider (Google stays optional for search only).

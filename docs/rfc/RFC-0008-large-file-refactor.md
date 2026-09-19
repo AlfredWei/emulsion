@@ -1,6 +1,6 @@
 # RFC-0008: Splitting the four oversized source files
 
-- Status: Draft — plan for review; no code changes in this PR
+- Status: Accepted 2026-09-19 (decisions in §9); no code changes in this PR
 - Date: 2026-09-19
 - Companion documents: [PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md), [RFC-0002](RFC-0002-develop-gpu-cpu-fallback.md) (CPU/GPU parity), [PROGRESS.md](../../PROGRESS.md)
 
@@ -80,11 +80,11 @@ Recommended: **catalog → develop_engine → DevelopCanvas (V1–V4) → `+page
 
 Interaction with feature work: M5.5's next slices (map view, pin-drop, reverse geocode) will touch `+page.svelte`, `MetadataPanel`, and `catalog.rs`. Suggested: land PR #135, do the two Rust splits (C1–C3, D1–D4) — quick and low-risk — before the map view slice, and then interleave the Svelte splits, freezing feature edits to a file only while its own steps are in flight.
 
-## 9. Decisions for review
+## 9. Decisions (2026-09-19, from review)
 
-1. **Size thresholds** (~1,000 Rust / ~800 Svelte): acceptable?
-2. **Order and interleaving** with the map-view work as in §8, or pause features until the refactor is done?
-3. **Second tier**: `lib.rs` (2,203), `lib/api/develop.js` (1,726), `DevelopPanel.svelte` (1,607), `MetadataPanel.svelte` (1,544) are also large but under 4k. Out of scope here; want a follow-up plan after the four, or leave them?
+1. **Size thresholds:** ~1,000 lines per file accepted (Rust ~1,000; Svelte kept at the tighter ~800 target where the markup/style split allows, but 1,000 is the hard ceiling).
+2. **Order and interleaving:** accepted as in §8 — land the M5.5 place-search PR first, do the Rust splits (C1–C3, D1–D4) before the map-view slice, then interleave the Svelte splits with feature work, freezing feature edits to a file only while its own steps are in flight.
+3. **Second tier** (`lib.rs`, `lib/api/develop.js`, `DevelopPanel.svelte`, `MetadataPanel.svelte`): the four oversized files come first; the second tier gets its own plan afterwards, not in this RFC.
 
 ## 10. Non-goals and risks
 

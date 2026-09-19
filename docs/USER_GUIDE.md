@@ -96,11 +96,11 @@ Face detection, embedding, and clustering all run **fully locally** — no cloud
 
 Part of [M5.5 in the roadmap](../PRD/MILESTONES.md). **Built:** searching for a place or address and applying it as the GPS location of the selected photo(s), in one action for a whole multi-selection. **Not built yet:** dropping/dragging a pin on a map, and the world map Library view.
 
-**Setup (once):** the search uses Google's Geocoding API with *your own* API key — the app doesn't ship one. Create a key in Google Cloud Console, enable the Geocoding API (Google may require a billing account), then paste it in Settings → Map. The key stays in your local catalog and is never shown again in the app.
+**Choosing a search service (Settings → Map):** *OpenStreetMap* is the default and needs no setup or account; it's good with addresses and limited to about one search per second. *Google* is better at landmark and business names but needs your own API key — create one in Google Cloud Console and enable the Geocoding API (Google requires a billing account, though light personal use is within its free monthly allowance). The key stays in your local catalog and is never shown again in the app.
 
 **Using it:** select one or more photos, and in the metadata panel's Location section type a place name or address and press Search. Pick a result to apply its coordinates to every selected photo (the list says how many). Existing altitude is kept. The location is stored in your catalog and, if you tick EXIF + GPS, written into exported JPEGs. You can still type coordinates by hand, for one photo.
 
-**What leaves your computer:** only the text you type into the search box (plus your key), and only when you press Search. Search results aren't saved; only the location you pick is.
+**What leaves your computer:** only the text you type into the search box (plus your key, if you chose Google), and only when you press Search. Search results aren't saved; only the location you pick is.
 
 ## Settings
 

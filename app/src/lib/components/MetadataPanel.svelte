@@ -7,7 +7,7 @@
     listKeywords,
     setGeoLocation,
   } from "$lib/api/catalog.js";
-  import { geocodeSearch, setGeoLocationBatch, hasMapsApiKey } from "$lib/api/map.js";
+  import { geocodeSearch, setGeoLocationBatch, getMapSettings } from "$lib/api/map.js";
   import { revealInFileManager } from "$lib/api/system.js";
   import LibraryHistogram from "$lib/components/LibraryHistogram.svelte";
 
@@ -175,20 +175,25 @@
   let placeResults = $state(/** @type {import('$lib/api/map.js').GeocodeCandidate[] | null} */ (null));
   let placeError = $state("");
   let placeSearching = $state(false);
-  let mapsKeyPresent = $state(false);
+  let mapProvider = $state(/** @type {import('$lib/api/map.js').GeocodeProvider} */ ("osm"));
+  let googleKeyPresent = $state(false);
+  // OpenStreetMap needs no setup; Google only works once a key is saved.
+  let searchAvailable = $derived(mapProvider === "osm" || googleKeyPresent);
 
-  async function refreshMapsKey() {
+  async function refreshMapSettings() {
     try {
-      mapsKeyPresent = await hasMapsApiKey();
+      const m = await getMapSettings();
+      mapProvider = m.provider;
+      googleKeyPresent = m.has_google_key;
     } catch {
-      mapsKeyPresent = false;
+      // Not running under Tauri (e.g. plain vite dev): leave defaults.
     }
   }
-  // Re-checked per selected image so a key saved in Settings shows up
-  // without reloading the app.
+  // Re-checked per selected image so a provider/key change in Settings
+  // shows up without reloading the app.
   $effect(() => {
     void image;
-    refreshMapsKey();
+    refreshMapSettings();
   });
 
   async function handlePlaceSearch() {
@@ -562,7 +567,7 @@
       </button>
     </div>
 
-    {#if mapsKeyPresent}
+    {#if searchAvailable}
       <form class="place-search" onsubmit={(e) => { e.preventDefault(); handlePlaceSearch(); }}>
         <input
           type="text"
@@ -594,8 +599,11 @@
           </ul>
         {/if}
       {/if}
+      {#if mapProvider === "osm"}
+        <div class="place-msg">Search data © OpenStreetMap contributors</div>
+      {/if}
     {:else}
-      <div class="place-msg">Add a Google Maps API key in Settings → Map to search places.</div>
+      <div class="place-msg">Google search needs an API key — add one in Settings → Map, or switch to OpenStreetMap.</div>
     {/if}
 
     {#if editingGps}

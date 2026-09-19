@@ -2233,6 +2233,23 @@ impl Catalog {
             .optional()
     }
 
+    /// Raw provider name (`"osm"`/`"google"`), interpreted by
+    /// `geocode::Provider::from_setting`; `None` means never chosen.
+    pub fn get_geocode_provider(&self) -> Result<Option<String>> {
+        self.conn
+            .query_row("SELECT value FROM settings WHERE key = 'geocode_provider'", [], |row| row.get(0))
+            .optional()
+    }
+
+    pub fn set_geocode_provider(&self, provider: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('geocode_provider', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![provider],
+        )?;
+        Ok(())
+    }
+
     /// `None` (or a blank string) removes the key.
     pub fn set_maps_api_key(&self, key: Option<&str>) -> Result<()> {
         match key.map(str::trim).filter(|k| !k.is_empty()) {
@@ -3981,5 +3998,15 @@ mod tests {
         assert_eq!(catalog.get_maps_api_key().unwrap().as_deref(), Some("def"));
         catalog.set_maps_api_key(Some("   ")).unwrap();
         assert_eq!(catalog.get_maps_api_key().unwrap(), None);
+    }
+
+    #[test]
+    fn geocode_provider_setting_round_trips() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        assert_eq!(catalog.get_geocode_provider().unwrap(), None);
+        catalog.set_geocode_provider("google").unwrap();
+        assert_eq!(catalog.get_geocode_provider().unwrap().as_deref(), Some("google"));
+        catalog.set_geocode_provider("osm").unwrap();
+        assert_eq!(catalog.get_geocode_provider().unwrap().as_deref(), Some("osm"));
     }
 }

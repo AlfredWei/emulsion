@@ -1,6 +1,6 @@
 # RFC-0007: Map & geolocation (M5.5)
 
-- Status: Draft — for review in PR (flips to Accepted once merged)
+- Status: Accepted (PR #133), revised 2026-09-19 — see §7
 - Date: 2026-09-19
 - Companion documents: [MILESTONES §M5.5](../../PRD/MILESTONES.md#m55--map--geolocation), [PRD §3](../../PRD/PRD.md#3-non-goals-permanent-not-just-later), [PROGRESS.md](../../PROGRESS.md), [ADR-0005](../adr/ADR-0005-catalog-storage.md), [ADR-0008](../adr/ADR-0008-plugin-extensibility-api-v0.md)
 
@@ -85,3 +85,15 @@ Slice 1 is independently shippable and doesn't need the map at all; slice 2 carr
 - Export gains EXIF/IPTC writing infrastructure (via the prerequisite slice) that later metadata work can extend.
 - A `Geocoder` trait boundary keeps a provider swap (or offline geocoder, if ever un-deferred) local to one module.
 - No ADR yet; if slice 3's WebView spike or the provider decision produces a lasting architectural choice, it gets an ADR after shipping, per this project's RFC-then-ADR practice.
+
+## 7. Update (2026-09-19): review decisions, and what they change
+
+Google's Geocoding/Maps APIs turned out to require a billing account with a card even inside their free monthly caps (10,000 geocodes / 10,000 map loads at the time of writing; verify against Google's current pricing page). For an app whose premise is "no account, no cloud," that is a real setup hurdle for every future user. Review answered §5 as follows:
+
+1. **Provider — both, OpenStreetMap by default.** Nominatim (no key, no account) is the default search provider; Google is an optional upgrade the user selects in Settings → Map and supplies their own key for (better at landmark/business names). This supersedes §3.1's "Google-only": the key is now needed *only* when Google is selected. Nominatim's policy is honored in code: an identifying User-Agent and at most one request per second (a process-wide throttle). Results carry the "© OpenStreetMap contributors" attribution in the UI. The provider is a setting and a two-arm `match` in `geocode.rs`; an interface/trait is still not warranted at two providers.
+2. **Reverse geocoding — keep, explicit per action, in a later slice.** Amends M5.5's privacy wording (done in MILESTONES): forward search sends the typed text; reverse geocoding sends the photo's coordinates *only when the user asks for it on that photo*, never automatically. It goes to whichever provider is selected, so its exposure is that provider's.
+3. **Map view — worth doing, but a later slice.** Search & assign ships first (this slice), then the map view, then pin-drop/reverse geocode — the plan in §4 stands with the map view explicitly not next.
+
+**Proposed for the map-view slice (to confirm then, not decided here):** because the default provider is OpenStreetMap, render the map with Leaflet + OSM tiles for *both* geocoding providers. Google's map tiles cannot be used inside Leaflet under Google's terms, and supporting two renderers would double the riskiest slice; Google's role stays geocoding quality. This retires §3.3's Maps-JS-in-WebView spike as a prerequisite (Leaflet in a webview is well-trodden) and drops the "Maps JS needs the key in the webview" concern — but it does mean the world-map view is not Google Maps, a departure from M5.5's original "Google Maps integration" phrasing. OSM's tile policy restricts heavy use; fine for a personal-scale viewer, worth revisiting if usage grows.
+
+**Slice 1 as built** follows this update: `geocode.rs` supports both providers; Settings → Map has the provider choice and the Google key field (shown only when Google is selected); the panel's search works out of the box on OSM.

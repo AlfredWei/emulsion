@@ -1,6 +1,6 @@
-// Map & geolocation Tauri commands (M5.5, RFC-0007). The API key itself
-// never reaches the frontend: the backend reads it and makes the Google
-// call; the UI only ever learns whether a key exists.
+// Map & geolocation Tauri commands (M5.5, RFC-0007). The backend makes the
+// search request; a Google API key never reaches the frontend -- the UI only
+// ever learns whether one is saved.
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -29,12 +29,26 @@ export function setGeoLocationBatch(
   return invoke("set_geo_location_batch", { imageIds, latitude, longitude });
 }
 
-/** @returns {Promise<boolean>} */
-export function hasMapsApiKey() {
-  return invoke("has_maps_api_key");
+/**
+ * @typedef {"osm" | "google"} GeocodeProvider
+ */
+
+/**
+ * @typedef {Object} MapSettings
+ * @property {GeocodeProvider} provider
+ * @property {boolean} has_google_key
+ */
+
+/** @returns {Promise<MapSettings>} */
+export function getMapSettings() {
+  return invoke("get_map_settings");
 }
 
-/** A blank or null key removes the stored one. */
+export function setGeocodeProvider(/** @type {GeocodeProvider} */ provider) {
+  return invoke("set_geocode_provider", { provider });
+}
+
+/** Google key only. A blank or null key removes the stored one. */
 export function setMapsApiKey(/** @type {string | null} */ key) {
   return invoke("set_maps_api_key", { key });
 }

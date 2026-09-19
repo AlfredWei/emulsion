@@ -66,7 +66,9 @@ Layout templates, page setup, and printer color management, plus a direct "Expor
 
 ## Export
 
-JPEG/TIFF export with resize, output sharpening, color space, quality, and a filename template; batch export runs in the background with per-file/overall progress and a "reveal in file manager" action when it finishes.
+JPEG export with an optional long-edge resize and a quality setting; batch export shows per-file progress and can reveal the destination folder in your file manager when it finishes.
+
+**Metadata**: the Export dialog lets you choose what gets embedded in each exported JPEG. *Write EXIF* embeds camera/lens, exposure settings, and capture time; *Include GPS location* (a sub-option of EXIF) adds the photo's coordinates — untick it to strip location before sharing. *Write IPTC* embeds caption, copyright, contact, and keywords (UTF-8; fields longer than IPTC's limits are trimmed). Both EXIF and IPTC are on by default; unticking both gives a bare JPEG. If embedding fails for a file, the export still succeeds and the dialog notes that metadata wasn't written. XMP is not written.
 
 **Export plugins**: configure external tools (Settings → Export Plugins) to run automatically after a successful export — useful for handing a finished file to another program. This is v0 of the plugin API: fire-and-forget, no shell, no sandboxing — see [ADR-0008](adr/ADR-0008-plugin-extensibility-api-v0.md) for exactly what that means and why.
 

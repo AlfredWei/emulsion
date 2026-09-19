@@ -87,6 +87,11 @@ src/
 │   │   ├── LibraryGrid.svelte   Hand-rolled virtualized grid (no library — see
 │   │   │                         UX-DESIGN.md §5 and the component's own comment)
 │   │   └── GridCell.svelte       One thumbnail: image + hover rating/flag/color controls
+│   │   ├── AppTitlebar.svelte    App shell top bar: module switch + batch/import/export
+│   │   │                          buttons (stateless; RFC-0009 P1)
+│   │   ├── AppDialogs.svelte     Every app-level modal in one place (stateless; RFC-0009 P1)
+│   │   └── StatusStrip.svelte    Import/merge progress or the latest status message
+│   │                              (this list is not exhaustive -- see `ls`)
 │   └── styles/tokens.css     Dark-theme design tokens, ported from the reviewed mockup
 ├── app.html                 SvelteKit's HTML shell
 └── static/                  Static assets (icons, etc.)

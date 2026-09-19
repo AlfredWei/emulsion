@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor D1–D4: `develop_engine.rs` split into a `develop_engine/` module (2026-09-19)
+
+Second step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). `develop_engine.rs` (5,346 lines) is now `develop_engine/`: `color.rs` (shared math: luma, smoothstep, lerp, HSL conversion, `op_value`), `tone.rs`, `hsl_split.rs`, `effects.rs` (vignette, grain), `detail.rs` (sharpen, noise reduction, local contrast, dehaze filters), `masks.rs` (all mask kinds), `pipeline.rs` (`apply_edit_stack`, kept whole so the eight-pass order is unchanged), `crop.rs`, `lens.rs`, `perspective.rs`, and `tests/` (six files by topic plus `support.rs` for shared fixtures). Largest file: 739 lines. RFC-0008 planned four PRs (D1–D4); done as one because it's a scripted, mechanically verified move.
+
+- **Pure move, verified**: the multiset of non-blank source lines before vs after differs only by the `mod`/`use` boilerplate and `pub(super)` visibility on items that now cross files. `cargo test --lib` 380 passed / 2 ignored; build warning-free in both test and non-test builds. Callers (`export.rs`, `import.rs`, `preview_cache.rs`) unchanged: `apply_edit_stack`, `apply_crop`, `apply_lens_correction`, `apply_perspective` are still re-exported at `crate::develop_engine`. `crop_op`, `Crop`, `LensCorrection`, `Perspective` are no longer re-exported (no outside user).
+- **Not measured**: per-pixel performance. Functions now call across module boundaries within one crate; with no `#[inline]` and the default release profile (thin-local LTO) this should not matter, but no before/after export timing was taken. The e2e `develop-performance` and CPU/GPU parity specs run in CI on this PR.
+- Next: `DevelopCanvas.svelte` (V1: move the WGSL shader text out first, with an exact-match test).
+
 ## M5.5 Slice 1 — place search & batch location assign, OpenStreetMap default + optional Google (2026-09-19)
 
 First implementation slice of [RFC-0007](docs/rfc/RFC-0007-map-geolocation.md), building on the EXIF/IPTC writer that landed first. **Revised after review**: the first cut was Google-only; learning that Google needs a billing account (card) even inside its free tier, the decisions were (1) both providers with OpenStreetMap the no-setup default, (2) keep reverse geocoding but explicit-per-photo in a later slice, (3) map view is worthwhile but a later slice. Recorded as [RFC-0007 §7](docs/rfc/RFC-0007-map-geolocation.md#7-update-2026-09-19-review-decisions-and-what-they-change), which also records the accepted decision that the later map-view slice uses Leaflet + OSM tiles regardless of geocoding provider (Google stays optional for search only).

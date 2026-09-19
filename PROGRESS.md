@@ -2,6 +2,13 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor V2: pure helpers moved out of `DevelopCanvas.svelte` (2026-09-19)
+
+Fourth step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). Seven functions that read no component state moved verbatim into modules: `lib/maskGeometry.js` (`clipLineToUnitBox`, `linearFeatherLines`, `radialFeatherRadii`, `spotCentroidAndRadius`), `lib/gpu/atmChain.js` (`buildAtmLightChainSizes`), and `lib/gpu/brushRaster.js` (`rasterizeDab`, `rasterizeSpotDab`, which draw onto a context they are handed). `DevelopCanvas.svelte`: 4,014 → 3,805 lines.
+
+- **Pure move, verified**: comparing every non-blank source line before vs after shows no difference except the three `import` lines and module header comments. `npm run check` 0 errors; vitest 114 passed (was 102): +12 tests for the geometry and pass-size helpers (the brush rasterizers need a Canvas2D context and are not unit-tested; CPU/GPU parity e2e in CI covers their output).
+- **Honest scope note**: this step is small (~210 lines) because most of the component is not pure — the remaining bulk is GPU setup/render code that assigns ~88 plain module-level handles (`device`, pipelines, textures, buffers, bind groups), pointer handlers (~430 lines), overlay markup (~385) and styles (~445). Getting under 1,000 lines needs those extracted too, and moving the GPU code out means turning the ~88 loose variables into fields of one object and renaming every use — risky to do with text substitution, so the next step (V3) should do that rename with a real JS parser (scope-aware), not regexes. The handles are confirmed plain `let`s, not `$state`, so reactivity is not involved.
+
 ## Refactor V1: WGSL shader source moved out of `DevelopCanvas.svelte` (2026-09-19)
 
 Third step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). The ~1,620-line inline `WGSL` template string is now ten section modules under `app/src/lib/gpu/shaders/` (`common`, `gradeUniforms`, `detailFilters`, `gradeMath`, `lens`, `perspective`, `grade`, `dehazeLocalContrast`, `premask`, `mask`; largest 302 lines) assembled in the original order by `index.js`. `DevelopCanvas.svelte` drops from 5,634 to 4,014 lines and just imports `WGSL`.

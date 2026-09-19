@@ -1,6 +1,6 @@
 # RFC-0009: `+page.svelte` state design (RFC-0008 §6, steps P3 onward)
 
-- Status: Proposed
+- Status: Proposed (review round 1 in progress; decisions in §8.2)
 - Date: 2026-09-19
 - Companion documents: [RFC-0008](RFC-0008-large-file-refactor.md) (the plan this unblocks), [PROGRESS.md](../../PROGRESS.md), [PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md)
 
@@ -181,12 +181,35 @@ After P7 the script is glue (~150 lines). Markup (~820) plus styles (~320) is ~1
 | P5 blast radius (edit stack is read by ~30 functions) | P5 done alone, preceded by the rewrite tooling proving zero unresolved references; merged only after the smoke list |
 | Hidden dependence on load-time evaluation order of module singletons | Stores have no side effects at import; `install…()` is explicit |
 
-## 8. Open questions for review
+## 8. Layout analysis and decisions
 
-1. **Location and naming:** `app/src/lib/state/*.svelte.js` and `app/src/lib/actions/*.js`, or a different layout?
-2. **Singleton + factory** (§3.1) as the store shape, or pure factories injected from the page?
-3. **Amended order** (§6, `develop` before `masks`/`presets`/`softProof`): accepted?
-4. **Should `collectionsUI` fold into `library`?** It is ~10 fields; splitting is cleaner, folding is fewer files.
+### 8.1 Layout analysis (added after review round 1)
+
+Question raised in review: is `lib/state/` + `lib/actions/` (layered by kind) the right pattern, or feature folders (`lib/develop/{store,actions}`)? The measurement, assigning each of the 137 functions a home domain by which state it touches most:
+
+| Home domain | Functions | Also touch other domains' state |
+|---|---|---|
+| develop | 48 | masks 7, presets 5, shell 5, selection 2, library 2 |
+| library | 20 | selection 3, develop 3, others 1 each |
+| selection | 13 | **library 11**, shell 5, import 2 |
+| presets 9 · import 7 · shell 7 · masks 6 · faces 6 · print 5 · collectionsUI 4 · softProof 1 | | mostly ≤ 3 cross-domain touches each |
+| touches no store state | 11 | — |
+
+17 functions touch three or more domains. Findings:
+
+1. **Coupling is hub-and-spoke around `develop` and `library`+`selection`.** Feature folders would still have to import each other's internals for these workflows, so the folder boundary would not bound anything. Layering by *kind* (state vs. workflow) matches where the coupling actually is: workflows are the glue, and they belong together. It also matches the repo's existing convention (`lib/api/`, `lib/components/`, `lib/gpu/` are all by kind).
+2. **Refinement to §3.3: the seven "develop + masks" functions are mask *workflows*.** `handleMaskCreated`, `handleMaskDeleted`, `handleCreateLuminanceRangeMask`, `handleColorRangeResampled`, `handleEyedropperSampled` write both `editStack` and mask selection; `restoreTo`, `handleRestoreSnapshot`, `handleResetEditStack`, `openDevelop`, `switchModule` write `editStack` and clear the tool/mask selection. Under the §3.2 rule they are actions, not methods on `develop` or `masks`; the `masks → develop` store edge stays valid because the *stores* never call each other's mutators, only actions do. So `develop.svelte.js` holds state, derived fields and persistence only; history/restore/reset go to `actions/historyActions.js`, mask workflows to `actions/maskActions.js`.
+3. **`develop` has 48 home functions, too many for one file.** The adjustment-change handlers (`handleAdjustmentChange` and its siblings) are near-pure edit-stack transforms and become `developAdjustments.js`, alongside `stepMath.js`-style helpers, with actions calling them.
+4. **`library`/`selection` are bidirectionally used by functions but not by stores**: 11 selection-home functions touch library, 3 library-home functions touch selection. The store DAG (`selection → library`) holds; the crossing functions are `libraryActions.js`.
+
+Result: the layered layout stands, with `actions/` split by workflow (`navigation`, `historyActions`, `maskActions`, `presetActions`, `libraryActions`, `collectionsActions`, `printActions`) rather than one file per store.
+
+### 8.2 Decisions
+
+1. **Layout:** `lib/state/*.svelte.js` + `lib/actions/*.js`, with the refinement above. Accepted in principle; the analysis above is the confirmation requested.
+2. **Store shape:** singleton with a factory alongside (as §3.1). Preferred in review.
+3. **Amended step order (§6):** accepted.
+4. **`collectionsUI`:** under discussion — recommendation is to fold its four dialog flags into `library` (see PR thread).
 
 ## 9. Consequences
 

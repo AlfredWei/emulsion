@@ -83,8 +83,7 @@ pub fn apply(
         return Err(MetadataWriteError::NotJpeg);
     }
     if options.exif {
-        let (exif, has_tags) = build_exif(meta, options.gps);
-        if has_tags {
+        if let Some(exif) = build_exif(meta, options.gps) {
             exif.write_to_vec(&mut jpeg, FileExtension::JPEG)
                 .map_err(|e| MetadataWriteError::Exif(e.to_string()))?;
         }
@@ -128,29 +127,23 @@ fn exif_datetime(captured_at: &str) -> Option<String> {
     Some(format!("{} {}", date.replace('-', ":"), &time[..8]))
 }
 
-fn build_exif(meta: &ExportMetadata, include_gps: bool) -> (Metadata, bool) {
-    let mut exif = Metadata::new();
-    let mut has_tags = false;
-    macro_rules! tag {
-        ($t:expr) => {{
-            has_tags = true;
-            exif.set_tag($t);
-        }};
-    }
+/// `None` when there is nothing to write.
+fn build_exif(meta: &ExportMetadata, include_gps: bool) -> Option<Metadata> {
+    let mut tags: Vec<ExifTag> = Vec::new();
     if let Some(v) = &meta.camera_make {
-        tag!(ExifTag::Make(v.clone()));
+        tags.push(ExifTag::Make(v.clone()));
     }
     if let Some(v) = &meta.camera_model {
-        tag!(ExifTag::Model(v.clone()));
+        tags.push(ExifTag::Model(v.clone()));
     }
     if let Some(v) = &meta.lens_model {
-        tag!(ExifTag::LensModel(v.clone()));
+        tags.push(ExifTag::LensModel(v.clone()));
     }
     if let Some(v) = meta.iso {
-        tag!(ExifTag::ISO(vec![u16::try_from(v).unwrap_or(u16::MAX)]));
+        tags.push(ExifTag::ISO(vec![u16::try_from(v).unwrap_or(u16::MAX)]));
     }
     if let Some(v) = meta.aperture {
-        tag!(ExifTag::FNumber(vec![rational(v as f64, 100)]));
+        tags.push(ExifTag::FNumber(vec![rational(v as f64, 100)]));
     }
     if let Some(v) = meta.shutter_speed.filter(|s| *s > 0.0) {
         let time = if v < 1.0 {
@@ -158,33 +151,40 @@ fn build_exif(meta: &ExportMetadata, include_gps: bool) -> (Metadata, bool) {
         } else {
             rational(v as f64, 10)
         };
-        tag!(ExifTag::ExposureTime(vec![time]));
+        tags.push(ExifTag::ExposureTime(vec![time]));
     }
     if let Some(v) = meta.focal_length {
-        tag!(ExifTag::FocalLength(vec![rational(v as f64, 10)]));
+        tags.push(ExifTag::FocalLength(vec![rational(v as f64, 10)]));
     }
     if let Some(v) = meta.exposure_bias {
-        tag!(ExifTag::ExposureCompensation(vec![iR64 {
+        tags.push(ExifTag::ExposureCompensation(vec![iR64 {
             nominator: (v as f64 * 100.0).round() as i32,
             denominator: 100,
         }]));
     }
     if let Some(v) = meta.captured_at.as_deref().and_then(exif_datetime) {
-        tag!(ExifTag::DateTimeOriginal(v));
+        tags.push(ExifTag::DateTimeOriginal(v));
     }
     if include_gps {
         if let (Some(lat), Some(lng)) = (meta.latitude, meta.longitude) {
-            tag!(ExifTag::GPSLatitudeRef(if lat < 0.0 { "S" } else { "N" }.to_string()));
-            tag!(ExifTag::GPSLatitude(dms(lat)));
-            tag!(ExifTag::GPSLongitudeRef(if lng < 0.0 { "W" } else { "E" }.to_string()));
-            tag!(ExifTag::GPSLongitude(dms(lng)));
+            tags.push(ExifTag::GPSLatitudeRef(if lat < 0.0 { "S" } else { "N" }.to_string()));
+            tags.push(ExifTag::GPSLatitude(dms(lat)));
+            tags.push(ExifTag::GPSLongitudeRef(if lng < 0.0 { "W" } else { "E" }.to_string()));
+            tags.push(ExifTag::GPSLongitude(dms(lng)));
             if let Some(alt) = meta.altitude {
-                tag!(ExifTag::GPSAltitudeRef(vec![u8::from(alt < 0.0)]));
-                tag!(ExifTag::GPSAltitude(vec![rational(alt.abs() as f64, 100)]));
+                tags.push(ExifTag::GPSAltitudeRef(vec![u8::from(alt < 0.0)]));
+                tags.push(ExifTag::GPSAltitude(vec![rational(alt.abs() as f64, 100)]));
             }
         }
     }
-    (exif, has_tags)
+    if tags.is_empty() {
+        return None;
+    }
+    let mut exif = Metadata::new();
+    for tag in tags {
+        exif.set_tag(tag);
+    }
+    Some(exif)
 }
 
 // IPTC-IIM field size limits (IPTC-NAA Information Interchange Model v4).

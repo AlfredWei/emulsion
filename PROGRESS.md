@@ -11,7 +11,7 @@ First implementation slice of [RFC-0007](docs/rfc/RFC-0007-map-geolocation.md), 
 - **`set_geo_location_batch`**: one transaction, lat/lng only (altitude preserved), skips nonexistent ids, range/NaN-validated at the command. Manual single-photo entry is unchanged and still doesn't range-check.
 - **UI**: metadata panel Location section has a place search (works out of the box on OSM; shows an OSM attribution line; on Google without a key it points to Settings), applying the chosen result to the whole selection ("Apply to N photos") with the grid patched locally.
 - **Verified**: `cargo test --lib` 380/380 (was 362 before this slice); `npm run check` 0 errors; Settings → Map tab renders with OSM as default in a live `vite dev`. **Not verified**: any real Nominatim or Google request (parsers only tested on hand-written bodies modeled on documented responses), provider switching and the panel search/apply flow (need the real Tauri window's IPC), and the Nominatim throttle under real timing.
-- **Known noise**: 4 `has_tags is never read` compiler warnings from the EXIF writer's tag macro (merged in the previous slice; harmless, not addressed here).
+- **Cleanup**: fixed the 4 `has_tags is never read` compiler warnings in `metadata_writer.rs` (from the previous slice) by collecting EXIF tags in a `Vec` and returning `None` when empty, instead of a flag set by a macro. Build is now warning-free; behavior unchanged (all writer tests still pass).
 - **Docs**: USER_GUIDE Map section, MILESTONES M5.5 scope/privacy wording, and RFC-0007 §7 updated.
 
 ## Export: EXIF/IPTC writer, chosen per export (2026-09-19)

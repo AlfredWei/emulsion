@@ -25,6 +25,14 @@ User request: add an EXIF/IPTC writer as a slice *before* any geo implementation
 
 Awaiting review; three open questions listed in RFC §5.
 
+## Plan: splitting the four 4k+-line files (2026-09-19)
+
+User request: four files exceed 4,000 lines (`DevelopCanvas.svelte` 5,634, `develop_engine.rs` 5,346, `+page.svelte` 4,788, `catalog.rs` 4,012), hurting readability. [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md) is the plan — **no code changed yet**, awaiting review. Structure was surveyed per file by read-only subagents (grep-based; line numbers approximate, re-derived per step).
+
+- Behavior-preserving pure moves, ~15 small PRs, each green on its own; targets ~1,000 lines (Rust) / ~800 (Svelte) per file.
+- Order: `catalog` → `develop_engine` → `DevelopCanvas` (WGSL string out first, verified byte-identical) → `+page.svelte` last (shared-state store needs a short design first; riskiest).
+- Open decisions: size thresholds, interleaving with the M5.5 map-view work (suggested: do the Rust splits before it), and whether to plan the 1.5k–2.2k-line second tier (`lib.rs`, `lib/api/develop.js`, `DevelopPanel`, `MetadataPanel`).
+
 ## Docs: README brought current + a new user-facing guide (2026-09-18)
 
 User request ("update ReadMe and product manual"). README.md's "Current state" and "Status" sections still said **"M0 complete, M1 in progress"** — badly stale; the project is actually M0–M4.5 done with M5 essentially complete. This had apparently never been updated since M1 despite PROGRESS.md being kept current the whole way, a real gap in this project's own "keep the docs honest" practice.

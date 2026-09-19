@@ -199,6 +199,7 @@ Inserted between M4 and M5 (2026-08-30, user request after M4's Print Module shi
 - Batch: select multiple photos in Library, assign them all to the same searched/dropped location in one action.
 - World map view: a new Library view mode plotting every geolocated photo in the catalog as pins/clusters; clicking a pin/cluster filters the Library grid to just those photos.
 - Location edits (search-assigned, pin-dropped, or manually typed) all write the same EXIF GPS fields on export — no divergent write path depending on how the coordinates were set.
+- **Prerequisite slice — EXIF/IPTC export writer** (2026-09-19, user request; built before any geo work): export can embed EXIF (camera/exposure/capture time, GPS) and IPTC (caption/copyright/contact/keywords), each chosen per export in the Export dialog. Geo features then only have to populate the catalog's GPS columns; the writer already carries them to the file.
 - **Explicit, scoped exception to the "no cloud" non-goal** ([PRD §3](PRD.md#3-non-goals-permanent-not-just-later)): a user-initiated address/place-name search calls an external geocoding API — only the searched text leaves the device, never catalog or photo data, and only when the user actually searches. Documented here rather than silently contradicting the PRD's local-first framing.
 
 ### Explicitly deferred

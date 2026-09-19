@@ -18,6 +18,7 @@ mod import;
 mod jpeg_decode;
 mod lens_profile;
 mod metadata;
+mod metadata_writer;
 mod panorama_merge;
 mod preview_cache;
 mod print;
@@ -1531,7 +1532,14 @@ async fn export_images(
                 .into_iter()
                 .map(|item| {
                     let stack = catalog.get_edit_stack(item.version_id).unwrap_or_else(|_| EditStack::empty());
-                    (std::path::PathBuf::from(item.path), stack)
+                    // Only resolved when the user asked for metadata: skips
+                    // the extra queries on the bare-JPEG path.
+                    let metadata = if options.metadata.any() {
+                        catalog.get_export_metadata(item.version_id).ok().flatten()
+                    } else {
+                        None
+                    };
+                    (std::path::PathBuf::from(item.path), stack, metadata)
                 })
                 .collect::<Vec<_>>();
             // Resolved here, under the same brief lock as the edit stacks

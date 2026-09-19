@@ -32,6 +32,13 @@
   // parsed back out at the point handleExport builds `options`.
   let plugins = $state(/** @type {import('$lib/api/export.js').ExportPlugin[]} */ ([]));
   let pluginId = $state("");
+  // Metadata embedding is the user's call per export. EXIF (camera settings,
+  // capture time, GPS) and IPTC (caption, copyright, contact, keywords) are
+  // independent; GPS is a sub-choice of EXIF since location is the field
+  // people most often want to strip before sharing.
+  let writeExif = $state(true);
+  let writeIptc = $state(true);
+  let writeGps = $state(true);
 
   // Loads once per dialog open, not once per component mount -- `items`
   // flips from null to non-null every time the dialog is (re)opened, and a
@@ -72,6 +79,7 @@
       long_edge: longEdge.trim() ? Number(longEdge) : null,
       quality,
       plugin_id: pluginId ? Number(pluginId) : null,
+      metadata: { exif: writeExif, iptc: writeIptc, gps: writeExif && writeGps },
     };
     const results = /** @type {import('$lib/api/export.js').ExportResult[]} */ ([]);
     try {
@@ -95,6 +103,10 @@
         statusMessage =
           `Exported ${results.length - failed.length} of ${results.length}` +
           (failed.length > 0 ? ` — first failure: ${failed[0].error}` : "");
+      }
+      const metadataFailed = results.filter((r) => r.metadata_warning);
+      if (metadataFailed.length > 0) {
+        statusMessage += ` (metadata not written for ${metadataFailed.length}: ${metadataFailed[0].metadata_warning})`;
       }
       if (pluginFailed.length > 0) {
         statusMessage += ` (plugin failed to run: ${pluginFailed[0].plugin_error})`;
@@ -168,6 +180,22 @@
           </select>
         </div>
       {/if}
+
+      <fieldset class="metadata" disabled={exporting}>
+        <legend class="label">Metadata</legend>
+        <label class="checkbox-row">
+          <input type="checkbox" bind:checked={writeExif} />
+          Write EXIF (camera, exposure, capture time)
+        </label>
+        <label class="checkbox-row sub">
+          <input type="checkbox" bind:checked={writeGps} disabled={!writeExif} />
+          Include GPS location
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" bind:checked={writeIptc} />
+          Write IPTC (caption, copyright, contact, keywords)
+        </label>
+      </fieldset>
 
       <label class="checkbox-row">
         <input type="checkbox" bind:checked={revealWhenDone} disabled={exporting} />
@@ -264,6 +292,18 @@
     font-family: var(--font-mono);
     color: var(--text-secondary);
     word-break: break-all;
+  }
+  .metadata {
+    all: unset;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .metadata:disabled {
+    opacity: 0.6;
+  }
+  .checkbox-row.sub {
+    margin-left: 18px;
   }
   .checkbox-row {
     display: flex;

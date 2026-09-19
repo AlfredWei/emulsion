@@ -2,6 +2,18 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Export: EXIF/IPTC writer, chosen per export (2026-09-19)
+
+User request: add an EXIF/IPTC writer as a slice *before* any geo implementation, with the user deciding at export time whether to write it. Export previously wrote a bare JPEG (no EXIF at all), which RFC-0007 had already flagged as the hidden cost of M5.5's "round-trips through export" criterion.
+
+- **New `metadata_writer.rs`** (catalog-free, like `export.rs`): EXIF via `little_exif` (promoted from dev-dependency) — make/model/lens, ISO, aperture, shutter, focal length, exposure bias, capture time, GPS lat/lng/altitude. IPTC-IIM hand-written into an APP13/Photoshop 3.0 block (no IPTC crate handles JPEG writing here): caption 2:120, copyright 2:116, contact 2:118, keywords 2:25, UTF-8 charset declared, fields truncated on char boundaries at IIM limits.
+- **Choice model**: `ExportOptions.metadata { exif, iptc, gps }` (defaults all-false for API callers; the dialog defaults all on). GPS is a sub-toggle of EXIF because location is what people most want to strip when sharing. Judgment call: defaulting GPS *on* matches Lightroom and the point of geotagging, but is the privacy-riskier default — easy to flip.
+- **Failure policy**: if embedding fails, the JPEG is still exported without metadata and `ExportResult.metadata_warning` is shown in the dialog (same pattern as `plugin_error`) rather than failing the export.
+- **`Catalog::get_export_metadata(version_id)`** joins EXIF columns, per-version caption, copyright/contact, and leaf keyword names; only queried when metadata writing was requested.
+- **Not written**: XMP, pixel dimensions/orientation, metering/flash (stored as display strings). Keywords are leaf names, not hierarchy paths.
+- **Verified**: `cargo test --lib` 362/362 (was 352; +8 writer tests incl. EXIF round-trip through the import-side parser with GPS, IPTC parse-back, GPS-off, truncation, non-JPEG rejection; +1 export-level test covering bare/EXIF-no-GPS/all-on; +1 catalog test). `npm run check`: 0 errors. **Not verified**: the dialog in the real Tauri window (IPC-backed, same limitation as prior UI entries), and no third-party reader (Lightroom/exiftool/Preview) has opened an output file — round-trips use this project's own parsers.
+- **Docs**: USER_GUIDE Export section now describes the metadata options — and was corrected: it previously claimed TIFF export, color space, sharpening and filename templates, none of which exist in `export.rs`/the dialog. README's "JPEG/TIFF" wording has the same overstatement and was left alone (not part of this request).
+
 ## M5.5 Slice 0 — RFC-0007 (Map & geolocation) drafted for review (2026-09-19)
 
 "Next slice" after M5 closed is M5.5. Per this project's RFC-first practice for architecture-significant work, [RFC-0007](docs/rfc/RFC-0007-map-geolocation.md) comes first; no implementation yet. Findings that shaped it:

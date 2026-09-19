@@ -1,6 +1,9 @@
 <script>
-  import { WGSL } from "$lib/gpu/shaders/index.js";
   import { linearFeatherLines, radialFeatherRadii, spotCentroidAndRadius } from "$lib/maskGeometry.js";
+  import { createGpuHandles, HISTOGRAM_SIZE } from "$lib/gpu/gpuHandles.js";
+  import { initGpu as initGpuImpl } from "$lib/gpu/pipelines.js";
+  import { readHistogramIfIdle as readHistogramIfIdleImpl, writeAdjustmentsAndRender as writeAdjustmentsAndRenderImpl } from "$lib/gpu/renderFrame.js";
+  import { applyBitmapToGpu as applyBitmapToGpuImpl } from "$lib/gpu/sourceTexture.js";
   import { buildAtmLightChainSizes } from "$lib/gpu/atmChain.js";
   import { rasterizeDab, rasterizeSpotDab } from "$lib/gpu/brushRaster.js";
   import { tick } from "svelte";
@@ -10,7 +13,6 @@
   import { binHistogramPixels } from "$lib/histogramMath.js";
   import { classifyGpuFailure } from "$lib/gpuFallback.js";
 
-  const MAX_MASKS = 8;
 
   /**
    * @type {{
@@ -501,7 +503,7 @@
    * than exact per-pixel data. */
   function reportHoverPixel(/** @type {number} */ clientX, /** @type {number} */ clientY) {
     if (!onHoverPixel) return;
-    if (!lastHistogramPixels) {
+    if (!gpu.lastHistogramPixels) {
       onHoverPixel(null);
       return;
     }
@@ -513,10 +515,10 @@
     const col = Math.min(HISTOGRAM_SIZE - 1, Math.max(0, Math.floor(x * HISTOGRAM_SIZE)));
     const row = Math.min(HISTOGRAM_SIZE - 1, Math.max(0, Math.floor(y * HISTOGRAM_SIZE)));
     const i = (row * HISTOGRAM_SIZE + col) * 4;
-    const bgra = presentationFormat.startsWith("bgra");
-    const r = lastHistogramPixels[bgra ? i + 2 : i];
-    const g = lastHistogramPixels[i + 1];
-    const b = lastHistogramPixels[bgra ? i : i + 2];
+    const bgra = gpu.presentationFormat.startsWith("bgra");
+    const r = gpu.lastHistogramPixels[bgra ? i + 2 : i];
+    const g = gpu.lastHistogramPixels[i + 1];
+    const b = gpu.lastHistogramPixels[bgra ? i : i + 2];
     onHoverPixel({ r, g, b });
   }
 
@@ -548,19 +550,6 @@
     wrapEl.scrollTop = scrollTop;
   }
 
-  // M3 Slice 8: retained sampleable pixel data, drawn once per image load
-  // (see loadImage) into a persistent 2D OffscreenCanvas -- the decoded
-  // ImageBitmap itself is discarded right after its one-time
-  // copyExternalImageToTexture GPU upload (see loadImage), so nothing
-  // else in this component keeps pixel data around for a CPU-side read
-  // like an eyedropper needs. Same "own persistent per-image resource,
-  // reset in loadImage" pattern brushTextureArray/brushRasterState
-  // already use.
-  /** @type {OffscreenCanvas | null} */
-  let sourceSampleCanvas = null;
-  /** @type {OffscreenCanvasRenderingContext2D | null} */
-  let sourceSampleCtx = null;
-
   /** Samples the ORIGINAL DECODED SOURCE pixel at a normalized (0..1)
    * coordinate -- deliberately not the currently-graded preview the user
    * sees on screen. A true WYSIWYG eyedropper matching exactly what's
@@ -572,10 +561,10 @@
    * for a heavily-graded image. Returns `{r,g,b}` as 0-1 floats, matching
    * WGSL's own texture-sample convention. */
   function sampleSourcePixel(/** @type {number} */ normX, /** @type {number} */ normY) {
-    if (!sourceSampleCtx || !sourceSampleCanvas) return null;
-    const px = Math.min(Math.max(Math.round(normX * sourceSampleCanvas.width), 0), sourceSampleCanvas.width - 1);
-    const py = Math.min(Math.max(Math.round(normY * sourceSampleCanvas.height), 0), sourceSampleCanvas.height - 1);
-    const d = sourceSampleCtx.getImageData(px, py, 1, 1).data;
+    if (!gpu.sourceSampleCtx || !gpu.sourceSampleCanvas) return null;
+    const px = Math.min(Math.max(Math.round(normX * gpu.sourceSampleCanvas.width), 0), gpu.sourceSampleCanvas.width - 1);
+    const py = Math.min(Math.max(Math.round(normY * gpu.sourceSampleCanvas.height), 0), gpu.sourceSampleCanvas.height - 1);
+    const d = gpu.sourceSampleCtx.getImageData(px, py, 1, 1).data;
     return { r: d[0] / 255, g: d[1] / 255, b: d[2] / 255 };
   }
 
@@ -1132,1136 +1121,130 @@
     handleDragState = null;
   }
 
-  // WebGPU handles -- plain vars, not $state: these drive imperative canvas
-  // rendering, not Svelte's own reactivity (RFC-0001 §4 "decode once, edit
-  // reactively": the texture is uploaded once per image, every subsequent
-  // adjustment just rewrites a uniform buffer and re-runs the shader, no
-  // re-fetch and no Svelte re-render of the DOM).
-  /** @type {GPUDevice | null} */
-  let device = null;
-  /** @type {GPUCanvasContext | null} */
-  let context = null;
-  /** @type {GPURenderPipeline | null} */
-  let pipeline = null;
-  /** M4 Slice 2: before/after preview's own dedicated pass (fs_original) --
-   * see that WGSL function's own doc comment for why this is a separate
-   * pipeline rather than a branch inside `pipeline` (fs_mask). */
-  /** @type {GPURenderPipeline | null} */
-  let originalPipeline = null;
-  /** @type {GPUBindGroup | null} */
-  let originalBindGroup = null;
-  /** @type {GPUTexture | null} */
-  let sourceTexture = null;
-  /** @type {GPUBuffer | null} */
-  let uniformBuffer = null;
-  /** @type {GPUBuffer | null} */
-  let masksBuffer = null;
-  // Tone Curve (M3): device-scoped like uniformBuffer/masksBuffer above
-  // (created once in initGpu, rewritten via writeBuffer whenever the curve
-  // changes) -- NOT recreated per image/tier-swap the way sourceTexture/
-  // brushTextureArray are, since a curve's shape has nothing to do with
-  // which image is loaded.
-  /** @type {GPUBuffer | null} */
-  let curveLutBuffer = null;
-  // HSL / Color Mixer (M3): same device-scoped treatment as curveLutBuffer
-  // above -- created once, rewritten via writeBuffer on every render, not
-  // tied to which image is loaded.
-  /** @type {GPUBuffer | null} */
-  let hslBandsBuffer = null;
-  // Split Toning (M3): same device-scoped treatment as curveLutBuffer/
-  // hslBandsBuffer above.
-  /** @type {GPUBuffer | null} */
-  let splitToningBuffer = null;
-  // Vignette (M3): same device-scoped treatment -- 3 fields don't fit in
-  // Adjustments' own spare padding (already claimed by Dehaze/Texture/
-  // Clarity), so it gets its own small dedicated buffer, same as Split
-  // Toning did for the same reason.
-  /** @type {GPUBuffer | null} */
-  let vignetteBuffer = null;
-  // Lens Corrections (M3): a larger flat struct (24 f32s, see the WGSL
-  // `LensCorrectionParams` doc comment) than Vignette/Grain's own -- still
-  // device-scoped and rewritten every render, same as those.
-  /** @type {GPUBuffer | null} */
-  let lensCorrectionBuffer = null;
-  // Perspective Correction (M4): same device-scoped, own-small-buffer
-  // treatment as Vignette/Grain above.
-  /** @type {GPUBuffer | null} */
-  let perspectiveBuffer = null;
-  // Grain (M3): same device-scoped, own-small-buffer treatment as
-  // Vignette above, for the same reason (3 fields, no spare Adjustments
-  // padding left).
-  /** @type {GPUBuffer | null} */
-  let grainBuffer = null;
-  // Sharpening / Noise Reduction (M3): same device-scoped, own-small-
-  // buffer treatment as Vignette/Grain above, one buffer per structured
-  // op.
-  /** @type {GPUBuffer | null} */
-  let sharpenBuffer = null;
-  /** @type {GPUBuffer | null} */
-  let lumaNRBuffer = null;
-  /** @type {GPUBuffer | null} */
-  let colorNRBuffer = null;
-  /** @type {GPUBindGroup | null} */
-  let bindGroup = null;
-  // M4 Slice 1 (Healing/Clone brush): the fs_premask pass's own
-  // pipeline/bind group, plus preMaskTex itself -- see preMaskTex's WGSL-
-  // side doc comment for the full split reasoning. preMaskTex is
-  // per-image (recreated alongside gradedTex, same size), the pipeline/
-  // bind-group-SHAPE is device-scoped (created once in initGpu, like
-  // `pipeline` itself), but preMaskBindGroup still needs recreating per
-  // image since it references preMaskTex's own view target indirectly
-  // via the textures it reads (gradedTex etc, same lifecycle as
-  // `bindGroup` above).
-  /** @type {GPURenderPipeline | null} */
-  let preMaskPipeline = null;
-  /** @type {GPUBindGroup | null} */
-  let preMaskBindGroup = null;
-  /** @type {GPUTexture | null} */
-  let preMaskTex = null;
-  /** @type {GPUTextureFormat} */
-  let presentationFormat = "bgra8unorm";
-
-  // Histogram: a fixed 256x256 target, device-scoped (created once in
-  // initGpu, unlike every per-image texture above) since a histogram is a
-  // statistical sample of the graded output, not something that needs
-  // full source resolution -- see readHistogramIfIdle's own doc comment
-  // for the full reasoning on why 256x256 specifically. Rendered into
-  // using fs_final's OWN existing `pipeline`/`bindGroup` a second time
-  // (see writeAdjustmentsAndRender), so no new WGSL entry point, pipeline,
-  // or bind group is needed at all -- fs_mask's own `in.uv`-based coord
-  // (see that pass's doc comment) proportionally maps this small target
-  // across the full preMaskTex, giving a nearest-neighbor 256x256 grid
-  // sample of the same graded pixels the main canvas shows, just at a
-  // smaller output resolution.
-  const HISTOGRAM_SIZE = 256;
-  /** @type {GPUTexture | null} */
-  let histogramTex = null;
-  /** @type {GPUBuffer | null} */
-  let histogramReadbackBuffer = null;
-  let histogramReadInFlight = false;
-  // The most recent histogramTex readback's raw bytes -- kept around
-  // (not just its binned form) so hover-RGB lookups (see
-  // reportHoverPixel) can index directly into it without a second GPU
-  // round-trip. An approximate (256x256, not full-resolution) but
-  // genuinely GRADED sample -- unlike sampleSourcePixel's own SOURCE-only
-  // sampling, see that function's doc comment for why a true graded
-  // readback was previously deferred; this reuses the exact same texture
-  // the histogram itself already reads back every render, so no
-  // additional GPU work is needed for this feature at all.
-  /** @type {Uint8Array | null} */
-  let lastHistogramPixels = null;
-
-  // Clipping-overlay toggle: device-scoped, same tiny-padded-uniform
-  // treatment as Vignette/Grain/etc.'s own small buffers.
-  /** @type {GPUBuffer | null} */
-  let clippingBuffer = null;
-
-  // Dehaze (M3): the first op in this pipeline needing a real multi-pass
-  // render graph (dark-channel-prior haze removal genuinely needs
-  // neighboring-pixel/whole-image data, unlike every earlier op's single
-  // straight-through fs_main) -- see the WGSL source's own doc comments on
-  // fs_grade/fs_atm_reduce/fs_min_channel/fs_min_h/fs_min_v/fs_mean_h/
-  // fs_mean_v/fs_final for the algorithm. `pipeline`/`bindGroup` above
-  // are REPURPOSED as the final pass's own pipeline/bind group (entryPoint
-  // "fs_final" now, not "fs_main") -- their bind group layout is
-  // genuinely DIFFERENT from before, not a superset: fs_final no longer
-  // references srcTexture(1)/curveLut(5)/hslBands(6)/splitToning(7) (those
-  // moved into fs_grade below), but DOES still need srcSampler(0) -- the
-  // mask loop's own pre-existing brushMasks sample uses it, unrelated to
-  // Dehaze. layout:"auto" infers {0,2,3,4,8,10,12} for it -- see
-  // applyBitmapToGpu's rebuilt bindGroup entries.
-  // Lens Corrections (M3): a NEW pass that runs BEFORE fs_grade, writing
-  // into lensCorrectedTex -- gradeBindGroup's own binding 1 is rebound to
-  // read lensCorrectedTex instead of sourceTexture (see applyBitmapToGpu),
-  // the same "same slot number, different physical texture per bind
-  // group" technique already established for lcRgbInput/lcBlurInput, so
-  // fs_grade's own WGSL body and inferred layout need no change at all.
-  /** @type {GPURenderPipeline | null} */
-  let lensCorrectPipeline = null;
-  // Perspective Correction (M4): another new pass, chained right after
-  // lens correction and before fs_grade -- reads lensCorrectedTex (same
-  // "same slot, different physical texture" technique lens correction's
-  // own doc comment above describes) and writes perspectiveCorrectedTex,
-  // which gradeBindGroup's binding 1 is then rebound to instead.
-  /** @type {GPURenderPipeline | null} */
-  let perspectivePipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let gradePipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let atmReducePipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let minChannelPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let minHPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let minVPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let meanHPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let meanVPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let textureHPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let textureVPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let clarityHPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let clarityVPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let sharpenHPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let sharpenVPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let lumaNRHPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let lumaNRVPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let colorNRHPipeline = null;
-  /** @type {GPURenderPipeline | null} */
-  let colorNRVPipeline = null;
-
-  // Intermediate textures -- all sized to match the CURRENT source
-  // texture's own resolution (recreated in applyBitmapToGpu whenever that
-  // changes, same lifecycle as sourceTexture/brushTextureArray), except
-  // the atmospheric-light reduction chain, which is a SEQUENCE of
-  // successively-smaller textures (8x8 block reduction per pass) computed
-  // from the source resolution -- see buildAtmLightChainSizes.
-  // Lens Corrections (M3): fs_lens_correct's own output -- fs_grade reads
-  // this instead of sourceTexture directly (see lensCorrectPipeline's own
-  // doc comment above). rgba16float for the same reason gradedTex is: no
-  // new 8-bit quantization step before grading.
-  /** @type {GPUTexture | null} */
-  let lensCorrectedTex = null;
-  // Perspective Correction (M4): fs_perspective's own output -- fs_grade
-  // reads this instead of lensCorrectedTex directly (see
-  // perspectivePipeline's own doc comment above).
-  /** @type {GPUTexture | null} */
-  let perspectiveCorrectedTex = null;
-  /** @type {GPUTexture | null} */
-  let gradedTex = null;
-  /** @type {GPUTexture | null} */
-  let minChannelTex = null;
-  /** @type {GPUTexture | null} */
-  let darkChannelHTex = null;
-  /** @type {GPUTexture | null} */
-  let tRawTex = null;
-  /** @type {GPUTexture | null} */
-  let transmissionHTex = null;
-  /** @type {GPUTexture | null} */
-  let transmissionTex = null;
-  /** @type {GPUTexture[]} */
-  let atmLightChain = [];
-  // Texture & Clarity (M3): local-contrast passes that run BEFORE Dehaze's
-  // own maps, writing their final result back into gradedTex itself (see
-  // fs_clarity_v's own doc comment) -- these three are the only NEW
-  // textures needed. textureBlurScratchTex/clarityBlurScratchTex are each
-  // dedicated to one op (not shared) even though nothing stops them from
-  // being reused sequentially -- matches every other Dehaze filter stage's
-  // own one-texture-per-stage convention, so a future pass reordering
-  // can't silently corrupt output with no validation error to catch it.
-  /** @type {GPUTexture | null} */
-  let textureBlurScratchTex = null;
-  /** @type {GPUTexture | null} */
-  let textureAdjustedTex = null;
-  /** @type {GPUTexture | null} */
-  let clarityBlurScratchTex = null;
-  // Sharpening / Noise Reduction (M3): same one-texture-per-stage
-  // convention as Texture/Clarity above -- an H-output scratch texture
-  // and a final (post-V-pass) result texture per op, all read directly
-  // by fs_final (none of these overwrite gradedTex the way Clarity's own
-  // V-pass does -- see fs_final's own doc comment for why these stay as
-  // separate delta-source textures instead).
-  /** @type {GPUTexture | null} */
-  let sharpenBlurHTex = null;
-  /** @type {GPUTexture | null} */
-  let sharpenBlurTex = null;
-  /** @type {GPUTexture | null} */
-  let lumaNRBlurHTex = null;
-  /** @type {GPUTexture | null} */
-  let lumaNRBlurTex = null;
-  /** @type {GPUTexture | null} */
-  let colorNRBlurHTex = null;
-  /** @type {GPUTexture | null} */
-  let colorNRBlurTex = null;
-
-  /** @type {GPUBindGroup | null} */
-  let lensCorrectBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let perspectiveBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let gradeBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let minChannelBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let minHBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let minVBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let meanHBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let meanVBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let textureHBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let textureVBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let clarityHBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let clarityVBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let sharpenHBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let sharpenVBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let lumaNRHBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let lumaNRVBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let colorNRHBindGroup = null;
-  /** @type {GPUBindGroup | null} */
-  let colorNRVBindGroup = null;
-  /** @type {GPUBindGroup[]} */
-  let atmReduceBindGroups = [];
-
-  // Dirty-key caching: the dark-channel/atmospheric-light/transmission
-  // passes above, PLUS Texture/Clarity's own local-contrast passes (which
-  // write their result INTO gradedTex, unlike dehaze_amount -- see
-  // writeAdjustmentsAndRender's own comment on why texture/clarity amounts
-  // belong in this key but dehaze_amount doesn't), depend on {exposure,
-  // contrast, saturation, toneCurvePoints, hslBands, splitToning, texture,
-  // clarity} -- NOT on masks/selectedMaskId/showMaskOverlay, which only
-  // affect the cheap final pass. A VALUE-based key (not reference
-  // equality) is required: masks/toneCurvePoints/hslBands/splitToning are
-  // all rebuilt via $derived from editStack in +page.svelte on EVERY
-  // edit-stack change regardless of which op changed, so a reference check
-  // would always report "changed" and silently defeat this cache. `null`
-  // (not computed yet) is always treated as dirty, which is what makes the
-  // very first render safe -- gradedTex/darkChannelHTex/etc are guaranteed
-  // to hold real values (not uninitialized garbage) before fs_final ever
-  // reads them. Named for the whole shared block it gates, not just
-  // Dehaze -- the block grew two more ops without this rename, `dehaze` in
-  // the name would have been a trap for the next person wiring one in.
-  /** @type {string | null} */
-  let spatialOpsInputsKey = null;
-
-  // M3 Slice 7: brush masks rasterize into a shared texture ARRAY (one
-  // layer per active brush mask, sized to the same combined MAX_MASKS
-  // budget every mask kind shares) rather than a single texture -- a
-  // single shared texture would silently break true op-order interleaving
-  // and independent per-mask adjustments the moment there's more than one
-  // brush mask, or a brush mask sits between two gradients in the stack.
-  // Recreated per-image (see loadImage) since it must be sized to that
-  // image's native resolution.
-  /** @type {GPUTexture | null} */
-  let brushTextureArray = null;
-  /** Per-mask persistent rasterization state, keyed by mask id. Each
-   * OffscreenCanvas is NEVER cleared once created -- only newly-added dabs
-   * are drawn onto it (see syncMaskRasterization) -- so a long stroke's
-   * per-move cost stays bound by texture resolution/upload cost, not by
-   * re-rendering the whole dab list from scratch every time. Reset
-   * entirely on every image change (loadImage), since a canvas sized for
-   * one image's resolution is meaningless for another.
-   * @type {Map<string, { canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D, layer: number, dabsDrawn: number, featherDrawn: number, firstDabX: number, firstDabY: number }>} */
-  let brushRasterState = new Map();
-  /** @type {number[]} */
-  let freeBrushLayers = [];
-
-  // Same three global adjustments as ADR-0004/RFC-0001's Slice 3 scope,
-  // plus (M3 Slice 5) a bounded array of linear-gradient local-adjustment
-  // masks, applied in WGSL entirely inside the webview process -- no IPC
-  // round trip per edit. This formula must be kept in hand-sync with
-  // `develop_engine.rs`'s `apply_edit_stack` (app/src-tauri/src/
-  // develop_engine.rs) -- the CPU-side implementation used for
-  // full-resolution export and thumbnail regeneration. They can't be
-  // unified into one executable implementation without native wgpu
-  // (deliberately deferred to M5, see ADR-0004's dated update); until
-  // then, `develop_engine.rs`'s own test table is the parity reference to
-  // check this shader's math against whenever either side changes.
-
-  async function initGpu(/** @type {HTMLCanvasElement} */ canvas) {
-    if (!("gpu" in navigator)) {
-      throw new Error("navigator.gpu is undefined in this webview");
-    }
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) throw new Error("requestAdapter() returned null");
-    device = await adapter.requestDevice();
-    presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-
-    // A real, pre-existing gap this component never had a way to surface:
-    // most WebGPU errors (shader compile failures, bind-group-layout
-    // mismatches, invalid texture usage, etc.) are reported ASYNCHRONOUSLY
-    // via this event, not as a catchable JS exception at the call site --
-    // createShaderModule/createRenderPipeline/beginRenderPass etc. don't
-    // throw on an invalid WGSL module or a malformed pipeline; they just
-    // silently produce an invalid resource, and any draw using it
-    // no-ops. Without this listener, such an error would only ever be
-    // visible in the webview's own devtools console, which isn't
-    // reachable from outside the app -- worth catching for real now that
-    // Dehaze made this shader's own pipeline count/complexity jump
-    // significantly (1 pipeline -> 8).
-    device.addEventListener("uncapturederror", (/** @type {any} */ event) => {
+  // GPU handles live on one plain (non-reactive) object; see lib/gpu/gpuHandles.js.
+  const gpu = createGpuHandles();
+  // Getters, not copies: the renderer reads props through these at the same points it used to read
+  // them directly, so what the render effect tracks is unchanged.
+  const renderInputs = {
+    get onHistogramUpdate() {
+      return onHistogramUpdate;
+    },
+    get masks() {
+      return masks;
+    },
+    get showOriginal() {
+      return showOriginal;
+    },
+    get toneCurvePoints() {
+      return toneCurvePoints;
+    },
+    get hslBands() {
+      return hslBands;
+    },
+    get splitToning() {
+      return splitToning;
+    },
+    get lensCorrection() {
+      return lensCorrection;
+    },
+    get perspective() {
+      return perspective;
+    },
+    get vignette() {
+      return vignette;
+    },
+    get grain() {
+      return grain;
+    },
+    get sharpen() {
+      return sharpen;
+    },
+    get lumaNR() {
+      return lumaNR;
+    },
+    get colorNR() {
+      return colorNR;
+    },
+    get showClippingOverlay() {
+      return showClippingOverlay;
+    },
+    get showMaskOverlay() {
+      return showMaskOverlay;
+    },
+    get selectedMaskId() {
+      return selectedMaskId;
+    },
+    get exposure() {
+      return exposure;
+    },
+    get contrast() {
+      return contrast;
+    },
+    get saturation() {
+      return saturation;
+    },
+    get dehaze() {
+      return dehaze;
+    },
+    get texture() {
+      return texture;
+    },
+    get clarity() {
+      return clarity;
+    },
+    get temperature() {
+      return temperature;
+    },
+    get tint() {
+      return tint;
+    },
+    get highlights() {
+      return highlights;
+    },
+    get shadows() {
+      return shadows;
+    },
+    get whites() {
+      return whites;
+    },
+    get blacks() {
+      return blacks;
+    },
+  };
+  const gpuHooks = {
+    /** @param {string} message */
+    onError(message) {
       status = "error";
-      errorMessage = `WebGPU: ${event.error.message}`;
-    });
+      errorMessage = message;
+    },
+    /** @param {number} w @param {number} h */
+    onSourceDimensions(w, h) {
+      sourceWidth = w;
+      sourceHeight = h;
+      onSourceDimensions?.(w, h);
+    },
+  };
 
-    context = canvas.getContext("webgpu");
-    if (!context) throw new Error("canvas.getContext('webgpu') returned null");
-    context.configure({ device, format: presentationFormat, alphaMode: "opaque" });
-
-    // One compiled module, many entry points -- each createRenderPipeline
-    // call below just picks a different entryPoint out of the SAME
-    // compiled WGSL, no separate compilation per pass. Each pipeline gets
-    // its OWN layout:"auto"-inferred bind group layout, scoped to only the
-    // bindings that specific entry point's own code actually references
-    // (NOT the whole module's declarations) -- see the WGSL source's own
-    // comment on gradePipeline/pipeline(final)'s deliberately DIFFERENT
-    // inferred layouts for why a bind group built for one pipeline can't
-    // be reused for another, even where their WGSL code looks similar.
-    const module = device.createShaderModule({ code: WGSL });
-    // Kept permanently (not a debugging leftover) -- shader COMPILATION
-    // errors are a separate WebGPU error category from the validation
-    // errors device.onuncapturederror catches above; they surface ONLY via
-    // this async call, never as a device error. Without it, a future WGSL
-    // typo could compile to a silently-invalid module with zero visible
-    // signal beyond "the canvas is blank" -- exactly the class of bug that
-    // made Dehaze's own real bind-group bug (a missing srcSampler entry,
-    // unrelated to this specific check but discovered while debugging the
-    // same "no error surfaces anywhere" symptom) so slow to localize.
-    module.getCompilationInfo().then((info) => {
-      const problems = info.messages.filter((m) => m.type !== "info");
-      if (problems.length > 0) {
-        status = "error";
-        errorMessage = `WGSL compile: ${problems.map((m) => `line ${m.lineNum}: ${m.message}`).join(" | ")}`;
-      }
-    });
-    pipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_mask", targets: [{ format: presentationFormat }] },
-      primitive: { topology: "triangle-list" },
-    });
-    // M4 Slice 2: before/after preview (see fs_original's own doc comment).
-    originalPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_original", targets: [{ format: presentationFormat }] },
-      primitive: { topology: "triangle-list" },
-    });
-    // M4 Slice 1 (Healing/Clone brush): writes preMaskTex, fs_mask's own
-    // input -- see preMaskTex's WGSL-side doc comment for why this had to
-    // become its own pass rather than staying fused into fs_final.
-    preMaskPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_premask", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    lensCorrectPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_lens_correct", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    perspectivePipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_perspective", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    gradePipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_grade", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    atmReducePipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_atm_reduce", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    minChannelPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_min_channel", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    minHPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_min_h", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    minVPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_min_v", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    meanHPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_mean_h", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    meanVPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_mean_v", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    textureHPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_texture_h", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    textureVPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_texture_v", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    clarityHPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_clarity_h", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    clarityVPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_clarity_v", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    sharpenHPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_sharpen_h", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    sharpenVPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_sharpen_v", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    lumaNRHPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_lumaNR_h", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    lumaNRVPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_lumaNR_v", targets: [{ format: "r32float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    colorNRHPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_colorNR_h", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-    colorNRVPipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs_main" },
-      fragment: { module, entryPoint: "fs_colorNR_v", targets: [{ format: "rgba16float" }] },
-      primitive: { topology: "triangle-list" },
-    });
-
-    uniformBuffer = device.createBuffer({
-      size: 64, // 16 x f32 (exposure, contrast, saturation, mask_count, selected_mask_index, dehaze, texture, clarity, temp, tint, highlights, shadows, whites, blacks, pad0, pad1)
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    masksBuffer = device.createBuffer({
-      size: MAX_MASKS * 12 * 4, // 12 f32s (3x vec4) per mask
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    curveLutBuffer = device.createBuffer({
-      size: 64 * 16, // 64 vec4<f32> (256 f32 samples), packed to avoid WGSL's 16-byte uniform-array-stride requirement -- see the Mask struct's own comment on this exact footgun
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    hslBandsBuffer = device.createBuffer({
-      size: 8 * 16, // 8 bands x vec4<f32> (hue, saturation, luminance, unused padding)
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    splitToningBuffer = device.createBuffer({
-      size: 8 * 4, // 8 f32 (5 real fields + 3 padding), matches the WGSL SplitToning struct
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    vignetteBuffer = device.createBuffer({
-      size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL Vignette struct
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    lensCorrectionBuffer = device.createBuffer({
-      size: 24 * 4, // 24 f32, matches the WGSL LensCorrectionParams struct exactly (no padding needed -- already a multiple of 16 bytes)
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    perspectiveBuffer = device.createBuffer({
-      size: 8 * 4, // 8 f32 (5 real fields + 3 padding), matches the WGSL PerspectiveParams struct
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    grainBuffer = device.createBuffer({
-      size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL Grain struct
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    sharpenBuffer = device.createBuffer({
-      size: 4 * 4, // 4 f32 (amount, radius, detail, masking), matches the WGSL SharpenParams struct
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    lumaNRBuffer = device.createBuffer({
-      size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL LumaNrParams struct
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    colorNRBuffer = device.createBuffer({
-      size: 4 * 4, // 4 f32 (2 real fields + 2 padding), matches the WGSL ColorNrParams struct
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    // Histogram: RENDER_ATTACHMENT so fs_final can draw into it (see
-    // writeAdjustmentsAndRender), COPY_SRC so its contents can be copied
-    // out to histogramReadbackBuffer below. Same presentationFormat as the
-    // canvas itself -- a render pass's color attachment format must
-    // exactly match the pipeline it's used with, and `pipeline` (fs_final)
-    // was already created with that target format.
-    histogramTex = device.createTexture({
-      size: [HISTOGRAM_SIZE, HISTOGRAM_SIZE],
-      format: presentationFormat,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-    });
-    // bytesPerRow (256 texels x 4 bytes/texel = 1024) is already a
-    // multiple of 256 -- WebGPU's own copyTextureToBuffer alignment
-    // requirement -- so no row padding is needed here, unlike a
-    // less-conveniently-sized readback would require.
-    histogramReadbackBuffer = device.createBuffer({
-      size: HISTOGRAM_SIZE * 4 * HISTOGRAM_SIZE,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
-    clippingBuffer = device.createBuffer({
-      size: 4 * 4, // 4 f32 (1 real field + 3 padding), matches the WGSL Clipping struct
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
+  /** @param {HTMLCanvasElement} canvas */
+  async function initGpu(canvas) {
+    return initGpuImpl(gpu, canvas, gpuHooks);
   }
 
-  /** One fullscreen-triangle draw into `outputView` -- the shared shape
-   * every dehaze pass and the existing final pass use, factored out to
-   * avoid repeating the same beginRenderPass/setPipeline/setBindGroup/
-   * draw/end boilerplate for what's now up to ~9 passes per render. */
-  function runFullscreenPass(
-    /** @type {GPUCommandEncoder} */ enc,
-    /** @type {GPURenderPipeline} */ pl,
-    /** @type {GPUBindGroup} */ bg,
-    /** @type {GPUTextureView} */ outputView,
-  ) {
-    const p = enc.beginRenderPass({
-      colorAttachments: [{ view: outputView, loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
-    });
-    p.setPipeline(pl);
-    p.setBindGroup(0, bg);
-    p.draw(3);
-    p.end();
+  function readHistogramIfIdle() {
+    return readHistogramIfIdleImpl(gpu, renderInputs);
   }
 
-  /** Reads back `histogramTex` (rendered as part of writeAdjustmentsAndRender,
-   * see that function's own doc comment) and reports 256-bin R/G/B counts
-   * via `onHistogramUpdate`. `GPUBuffer.mapAsync` can't be awaited inline
-   * inside the render loop without stalling it, so this runs detached,
-   * guarded by `histogramReadInFlight` -- both because a buffer that's
-   * currently mapped can't be written to again (the render function skips
-   * re-copying into it while a read is in flight, see there) and because
-   * overlapping reads should simply be DROPPED, not queued: a live
-   * histogram only needs to reflect a RECENT frame, not every single one,
-   * and queuing would only fall further behind under sustained rapid
-   * input (e.g. dragging a slider faster than one readback completes). */
-  async function readHistogramIfIdle() {
-    if (histogramReadInFlight || !histogramReadbackBuffer) return;
-    histogramReadInFlight = true;
-    try {
-      await histogramReadbackBuffer.mapAsync(GPUMapMode.READ);
-      // Copied out via slice(0) BEFORE unmap() -- the ArrayBuffer
-      // getMappedRange() returns is detached (zero-length) the instant
-      // unmap() runs, so onHistogramUpdate's caller can't be handed a
-      // view over it directly.
-      const data = new Uint8Array(histogramReadbackBuffer.getMappedRange().slice(0));
-      histogramReadbackBuffer.unmap();
-      // Kept around (not just passed to onHistogramUpdate) so the pointer
-      // hover-readout below can map a screen position to the SAME 256x256
-      // downsampled sample the histogram itself is drawn from, without a
-      // second GPU round-trip -- see reportHoverPixel.
-      lastHistogramPixels = data;
-      if (onHistogramUpdate) onHistogramUpdate(binHistogramPixels(data, presentationFormat.startsWith("bgra") ? "bgra" : "rgba"));
-    } catch {
-      // A stale/aborted map (e.g. the device was torn down mid-await, on
-      // unmount) isn't user-visible -- the next render's own call simply
-      // tries again.
-    } finally {
-      histogramReadInFlight = false;
-    }
+  /** @param {ImageBitmap} bitmap */
+  async function applyBitmapToGpu(bitmap) {
+    return applyBitmapToGpuImpl(gpu, bitmap, gpuHooks);
   }
 
-  async function applyBitmapToGpu(/** @type {ImageBitmap} */ bitmap) {
-    // Both callers (loadImage, upgradeToFullTier) already only reach here
-    // once initGpu has run, but re-asserted here too -- both for a real
-    // defensive guard against an unexpected call order, and because
-    // TypeScript's null-narrowing from a caller's own guard doesn't carry
-    // across a function boundary.
-    if (!device || !context || !pipeline || !preMaskPipeline || !lensCorrectPipeline || !perspectivePipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !perspectiveBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
-
-    // GPU texture-dimension safety: a genuinely native-resolution decode
-    // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
-    // device's actual texture-size limit on a very-high-megapixel body --
-    // the draft tier is already capped to DEVELOP_PREVIEW_MAX_DIMENSION so
-    // this is normally a no-op there. Downscaling defensively here (one
-    // code path, both tiers) is an honest, accepted degradation on
-    // whatever hardware this ends up mattering for, not a crash from an
-    // opaque WebGPU validation error.
-    const maxDim = device.limits.maxTextureDimension2D;
-    if (bitmap.width > maxDim || bitmap.height > maxDim) {
-      const scale = maxDim / Math.max(bitmap.width, bitmap.height);
-      bitmap = await createImageBitmap(bitmap, {
-        resizeWidth: Math.max(1, Math.round(bitmap.width * scale)),
-        resizeHeight: Math.max(1, Math.round(bitmap.height * scale)),
-        resizeQuality: "high",
-      });
-    }
-
-    sourceTexture?.destroy();
-    sourceTexture = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "rgba8unorm",
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    device.queue.copyExternalImageToTexture(
-      { source: bitmap },
-      { texture: sourceTexture },
-      [bitmap.width, bitmap.height],
-    );
-
-    // M3 Slice 8: retain sampleable pixel data for the color-range
-    // eyedropper -- draw the SAME bitmap once into a persistent 2D
-    // OffscreenCanvas before it's discarded. Neither this draw nor the GPU
-    // upload above closes/consumes the bitmap, so order between them
-    // doesn't matter -- bitmap.close() happens later in this function
-    // (NOT here), once every remaining `bitmap.width`/`.height` read below
-    // is done: per spec, close() zeroes a bitmap's width/height, so
-    // closing it before those later reads would corrupt the brush texture
-    // array's size and the canvas's own dimensions. Re-drawn on every call
-    // (including a tier upgrade), not just the first -- leaving this stale
-    // at draft resolution while the GPU texture is full-res would silently
-    // make the eyedropper keep sampling coarser data at exactly the moment
-    // the user zoomed in to inspect detail more closely.
-    sourceSampleCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    sourceSampleCtx = /** @type {OffscreenCanvasRenderingContext2D} */ (sourceSampleCanvas.getContext("2d"));
-    sourceSampleCtx.drawImage(bitmap, 0, 0);
-
-    // M3 Slice 7: recreated whenever the active bitmap's resolution
-    // changes (new image, OR a tier upgrade) -- must be sized to match, an
-    // OffscreenCanvas at the wrong resolution would rasterize dabs at the
-    // wrong scale. Existing brush masks' dab lists are stored normalized
-    // (0-1), so re-rasterizing from scratch into freshly-sized canvases
-    // (via syncBrushRasterization, called below through this function's
-    // caller's own writeAdjustmentsAndRender()) is correct with no
-    // special-casing regardless of why the resolution changed.
-    brushTextureArray?.destroy();
-    brushTextureArray = device.createTexture({
-      size: [bitmap.width, bitmap.height, MAX_MASKS],
-      format: "rgba8unorm",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
-    brushRasterState = new Map();
-    freeBrushLayers = Array.from({ length: MAX_MASKS }, (_, i) => i);
-
-    // Lens Corrections (M3): same "recreate whenever the source resolution
-    // changes" lifecycle as sourceTexture/brushTextureArray above --
-    // fs_lens_correct's own output, read by fs_perspective in place of
-    // sourceTexture (see perspectiveBindGroup's own doc comment below).
-    lensCorrectedTex?.destroy();
-    lensCorrectedTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "rgba16float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-
-    // Perspective Correction (M4): same lifecycle as lensCorrectedTex
-    // above -- fs_perspective's own output, read by fs_grade in place of
-    // lensCorrectedTex (see gradeBindGroup's own doc comment below).
-    perspectiveCorrectedTex?.destroy();
-    perspectiveCorrectedTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "rgba16float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-
-    // Dehaze (M3): intermediates sized to match this bitmap's own
-    // resolution -- same "recreate whenever the source resolution changes"
-    // lifecycle as sourceTexture/brushTextureArray above.
-    gradedTex?.destroy();
-    gradedTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      // rgba16float, not rgba8unorm -- filterable+renderable by default
-      // (no feature request needed) and avoids a NEW 8-bit quantization
-      // step between Split Toning and Dehaze/masks that didn't exist in
-      // the old single-pass fs_main.
-      format: "rgba16float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-
-    // M4 Slice 1 (Healing/Clone brush): same lifecycle/format/size as
-    // gradedTex above -- see preMaskTex's own WGSL-side doc comment for
-    // why this exists as a real texture rather than staying fused into
-    // fs_final's own single pass.
-    preMaskTex?.destroy();
-    preMaskTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "rgba16float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-
-    minChannelTex?.destroy();
-    minChannelTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    darkChannelHTex?.destroy();
-    darkChannelHTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    tRawTex?.destroy();
-    tRawTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    transmissionHTex?.destroy();
-    transmissionHTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    transmissionTex?.destroy();
-    transmissionTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-
-    // Texture & Clarity (M3): same "recreate whenever source resolution
-    // changes" lifecycle as every intermediate above. textureAdjustedTex
-    // is Texture's final (post-apply) output and Clarity's own input --
-    // Clarity's own final output overwrites gradedTex in place (see
-    // fs_clarity_v's doc comment), so it needs no texture of its own here.
-    textureBlurScratchTex?.destroy();
-    textureBlurScratchTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    textureAdjustedTex?.destroy();
-    textureAdjustedTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "rgba16float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    clarityBlurScratchTex?.destroy();
-    clarityBlurScratchTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-
-    // Sharpening / Noise Reduction (M3): same "recreate whenever source
-    // resolution changes" lifecycle as every intermediate above.
-    sharpenBlurHTex?.destroy();
-    sharpenBlurHTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    sharpenBlurTex?.destroy();
-    sharpenBlurTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    lumaNRBlurHTex?.destroy();
-    lumaNRBlurHTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    lumaNRBlurTex?.destroy();
-    lumaNRBlurTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "r32float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    colorNRBlurHTex?.destroy();
-    colorNRBlurHTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "rgba16float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    colorNRBlurTex?.destroy();
-    colorNRBlurTex = device.createTexture({
-      size: [bitmap.width, bitmap.height],
-      format: "rgba16float",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-
-    // Atmospheric-light reduction chain: an ARRAY of successively-smaller
-    // textures (see buildAtmLightChainSizes/fs_atm_reduce's own doc
-    // comment), not one texture's mip chain -- simpler to create and bind
-    // correctly by hand than juggling createView({baseMipLevel}) at every
-    // step, and these are all tiny (the largest is ~1/64th of the source
-    // resolution).
-    atmLightChain.forEach((tex) => tex.destroy());
-    const chainSizes = buildAtmLightChainSizes(bitmap.width, bitmap.height);
-    // Captured as a local `const` -- TS can't narrow the outer `device`/
-    // `atmReducePipeline` `let`s (reassignable elsewhere in this module)
-    // across a closure boundary, even though the top-of-function guard
-    // above already ensures both are non-null for this entire call.
-    const gpuDevice = device;
-    const reducePipeline = atmReducePipeline;
-    atmLightChain = chainSizes.map(([w, h]) =>
-      gpuDevice.createTexture({
-        size: [w, h],
-        format: "rgba16float",
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-      }),
-    );
-    const atmLightFinalTex = atmLightChain[atmLightChain.length - 1];
-
-    const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
-
-    // Lens Corrections (M3): fs_lens_correct's own bind group reads the
-    // TRUE original sourceTexture at binding 1. perspectiveBindGroup below
-    // binds a DIFFERENT physical texture (lensCorrectedTex) to that SAME
-    // slot number for fs_perspective's own separately-inferred layout --
-    // the same "same binding index, different texture per bind group"
-    // technique already established for lcRgbInput/lcBlurInput (see that
-    // binding's own doc comment), so fs_perspective's WGSL body needs no
-    // change at all. gradeBindGroup, in turn, does the same trick again
-    // one stage later, binding perspectiveCorrectedTex to binding 1 for
-    // fs_grade's own separately-inferred layout.
-    lensCorrectBindGroup = gpuDevice.createBindGroup({
-      layout: lensCorrectPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: sampler },
-        { binding: 1, resource: sourceTexture.createView() },
-        { binding: 25, resource: { buffer: lensCorrectionBuffer } },
-      ],
-    });
-    // Perspective Correction (M4): same "same slot, different texture"
-    // technique -- reads lensCorrectedTex (lens correction's own output)
-    // at binding 1, not the true original sourceTexture.
-    perspectiveBindGroup = gpuDevice.createBindGroup({
-      layout: /** @type {GPURenderPipeline} */ (perspectivePipeline).getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: sampler },
-        { binding: 1, resource: lensCorrectedTex.createView() },
-        { binding: 28, resource: { buffer: perspectiveBuffer } },
-      ],
-    });
-    // M4 Slice 2: before/after preview (see fs_original's own doc comment).
-    originalBindGroup = gpuDevice.createBindGroup({
-      layout: /** @type {GPURenderPipeline} */ (originalPipeline).getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: sampler },
-        { binding: 1, resource: sourceTexture.createView() },
-      ],
-    });
-    gradeBindGroup = gpuDevice.createBindGroup({
-      layout: gradePipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: sampler },
-        { binding: 1, resource: /** @type {GPUTexture} */ (perspectiveCorrectedTex).createView() },
-        { binding: 2, resource: { buffer: uniformBuffer } },
-        { binding: 5, resource: { buffer: curveLutBuffer } },
-        { binding: 6, resource: { buffer: hslBandsBuffer } },
-        { binding: 7, resource: { buffer: splitToningBuffer } },
-      ],
-    });
-
-    // One bind group per reduction pass -- `reduceInput` (binding 9) is
-    // rebound to a DIFFERENT actual texture each step (gradedTex for the
-    // first pass, then each successively-smaller chain texture in turn),
-    // the SAME atmReducePipeline object reused for every draw call.
-    atmReduceBindGroups = chainSizes.map((_, i) => {
-      const input = /** @type {GPUTexture} */ (i === 0 ? gradedTex : atmLightChain[i - 1]);
-      return gpuDevice.createBindGroup({
-        layout: reducePipeline.getBindGroupLayout(0),
-        entries: [{ binding: 9, resource: input.createView() }],
-      });
-    });
-
-    minChannelBindGroup = gpuDevice.createBindGroup({
-      layout: minChannelPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 8, resource: gradedTex.createView() },
-        { binding: 10, resource: atmLightFinalTex.createView() },
-      ],
-    });
-    minHBindGroup = gpuDevice.createBindGroup({
-      layout: minHPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 11, resource: minChannelTex.createView() }],
-    });
-    minVBindGroup = gpuDevice.createBindGroup({
-      layout: minVPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 11, resource: darkChannelHTex.createView() }],
-    });
-    meanHBindGroup = gpuDevice.createBindGroup({
-      layout: meanHPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 11, resource: tRawTex.createView() }],
-    });
-    meanVBindGroup = gpuDevice.createBindGroup({
-      layout: meanVPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 11, resource: transmissionHTex.createView() }],
-    });
-
-    // Texture & Clarity (M3): textureHPipeline/textureVPipeline read
-    // gradedTex (binding 13, rebound per-op unlike Dehaze's filterInput
-    // rebinding pattern -- here each op gets its own bind group instead,
-    // since layout:"auto" infers a separate layout per entry point
-    // regardless); clarityHPipeline/clarityVPipeline read
-    // textureAdjustedTex instead, chaining onto Texture's own output. The
-    // V passes also need binding 2 (the Adjustments uniform, for
-    // texture_amount/clarity_amount) -- easy to miss since none of
-    // Dehaze's own H/V bind groups need it (see the design review that
-    // caught this as a real omission before it was ever written).
-    textureHBindGroup = gpuDevice.createBindGroup({
-      layout: textureHPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 13, resource: gradedTex.createView() }],
-    });
-    textureVBindGroup = gpuDevice.createBindGroup({
-      layout: textureVPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 13, resource: gradedTex.createView() },
-        { binding: 14, resource: textureBlurScratchTex.createView() },
-        { binding: 2, resource: { buffer: uniformBuffer } },
-      ],
-    });
-    clarityHBindGroup = gpuDevice.createBindGroup({
-      layout: clarityHPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 13, resource: textureAdjustedTex.createView() }],
-    });
-    clarityVBindGroup = gpuDevice.createBindGroup({
-      layout: clarityVPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 13, resource: textureAdjustedTex.createView() },
-        { binding: 14, resource: clarityBlurScratchTex.createView() },
-        { binding: 2, resource: { buffer: uniformBuffer } },
-      ],
-    });
-
-    // Sharpening / Noise Reduction (M3): all three H-passes read
-    // gradedTex(8) DIRECTLY (never rebound the way Texture/Clarity's own
-    // lcRgbInput is) -- they always read the SAME pre-Dehaze-recovery
-    // snapshot, so no per-pass rebinding is needed. Sharpen's own H/V
-    // passes additionally need binding 19 (sharpenParams) for its
-    // uniform-driven radius; Luma/Color NR's radii are fixed WGSL consts,
-    // so their own H/V bind groups need no uniform at all.
-    sharpenHBindGroup = gpuDevice.createBindGroup({
-      layout: sharpenHPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 8, resource: gradedTex.createView() },
-        { binding: 19, resource: { buffer: sharpenBuffer } },
-      ],
-    });
-    sharpenVBindGroup = gpuDevice.createBindGroup({
-      layout: sharpenVPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 17, resource: sharpenBlurHTex.createView() },
-        { binding: 19, resource: { buffer: sharpenBuffer } },
-      ],
-    });
-    lumaNRHBindGroup = gpuDevice.createBindGroup({
-      layout: lumaNRHPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 8, resource: gradedTex.createView() }],
-    });
-    lumaNRVBindGroup = gpuDevice.createBindGroup({
-      layout: lumaNRVPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 17, resource: lumaNRBlurHTex.createView() }],
-    });
-    colorNRHBindGroup = gpuDevice.createBindGroup({
-      layout: colorNRHPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 8, resource: gradedTex.createView() }],
-    });
-    colorNRVBindGroup = gpuDevice.createBindGroup({
-      layout: colorNRVPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 18, resource: colorNRBlurHTex.createView() }],
-    });
-
-    // Pre-mask pass's own bind group (M4 Slice 1): exactly the entry set
-    // the OLD single-pass fs_final's own bind group used to carry for its
-    // Dehaze/NR/Sharpen/Vignette/Grain half (0,2,3,4,26 removed -- those
-    // are mask-loop/clipping-only, now fs_mask's job below).
-    preMaskBindGroup = gpuDevice.createBindGroup({
-      layout: preMaskPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 2, resource: { buffer: uniformBuffer } },
-        { binding: 8, resource: gradedTex.createView() },
-        { binding: 10, resource: atmLightFinalTex.createView() },
-        { binding: 12, resource: transmissionTex.createView() },
-        { binding: 15, resource: { buffer: vignetteBuffer } },
-        { binding: 16, resource: { buffer: grainBuffer } },
-        { binding: 19, resource: { buffer: sharpenBuffer } },
-        { binding: 20, resource: { buffer: lumaNRBuffer } },
-        { binding: 21, resource: { buffer: colorNRBuffer } },
-        { binding: 22, resource: sharpenBlurTex.createView() },
-        { binding: 23, resource: lumaNRBlurTex.createView() },
-        { binding: 24, resource: colorNRBlurTex.createView() },
-      ],
-    });
-
-    // Final pass's own bind group -- pruned down (M4 Slice 1) to just
-    // what fs_mask itself references now that Dehaze/NR/Sharpen/Vignette/
-    // Grain moved into fs_premask above: srcSampler(0, still needed --
-    // the mask loop's own brushMasks sample uses it, unrelated to
-    // Dehaze), the Adjustments uniform(2, for mask_count/
-    // selected_mask_index), masks(3), brushMasks(4), clipping(26), and
-    // the NEW preMaskTex(27) -- fs_mask's own input, replacing the direct
-    // gradedTex/atmLightFinal/etc. reads this bind group used to carry.
-    bindGroup = gpuDevice.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: sampler },
-        { binding: 2, resource: { buffer: uniformBuffer } },
-        { binding: 3, resource: { buffer: masksBuffer } },
-        { binding: 4, resource: brushTextureArray.createView({ dimension: "2d-array" }) },
-        { binding: 26, resource: { buffer: clippingBuffer } },
-        { binding: 27, resource: preMaskTex.createView() },
-      ],
-    });
-    // Every intermediate above is freshly (re)created for this bitmap --
-    // any previously-cached dirty key belonged to a DIFFERENT image/tier's
-    // now-destroyed textures, so it must not be trusted to skip
-    // recomputing the expensive passes on the next render.
-    spatialOpsInputsKey = null;
-
-    if (context.canvas instanceof HTMLCanvasElement) {
-      context.canvas.width = bitmap.width;
-      context.canvas.height = bitmap.height;
-    }
-    sourceWidth = bitmap.width;
-    sourceHeight = bitmap.height;
-    onSourceDimensions?.(sourceWidth, sourceHeight);
-    context.configure({ device, format: presentationFormat, alphaMode: "opaque" });
-    // Every remaining bitmap.width/.height read is done -- free it now
-    // that both its consumers (the GPU upload and the sample-canvas draw
-    // above) are finished with it.
-    bitmap.close();
+  function writeAdjustmentsAndRender() {
+    return writeAdjustmentsAndRenderImpl(gpu, renderInputs);
   }
 
   async function loadImage(/** @type {string} */ path) {
-    if (!device || !context || !pipeline || !preMaskPipeline || !lensCorrectPipeline || !perspectivePipeline || !gradePipeline || !atmReducePipeline || !minChannelPipeline || !minHPipeline || !minVPipeline || !meanHPipeline || !meanVPipeline || !textureHPipeline || !textureVPipeline || !clarityHPipeline || !clarityVPipeline || !sharpenHPipeline || !sharpenVPipeline || !lumaNRHPipeline || !lumaNRVPipeline || !colorNRHPipeline || !colorNRVPipeline || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !perspectiveBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
+    if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.meanHPipeline || !gpu.meanVPipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityHPipeline || !gpu.clarityVPipeline || !gpu.sharpenHPipeline || !gpu.sharpenVPipeline || !gpu.lumaNRHPipeline || !gpu.lumaNRVPipeline || !gpu.colorNRHPipeline || !gpu.colorNRVPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
     status = "loading";
     errorMessage = "";
     // A genuinely new image -- any 1:1 tier state belonged to whatever was
@@ -2331,7 +1314,7 @@
       // was in flight -- only apply if still relevant, otherwise this
       // would silently stomp whatever loadImage/a later upgrade already
       // put in place.
-      if (imagePath !== path || zoomMode !== "100" || !device) return;
+      if (imagePath !== path || zoomMode !== "100" || !gpu.device) return;
       const response = await fetch(convertFileSrc(preview.path));
       const bitmap = await createImageBitmap(await response.blob());
       if (imagePath !== path || zoomMode !== "100") return; // re-check post-decode too
@@ -2369,416 +1352,6 @@
     }
   }
 
-  /** Ensures every brush/spot mask in `masks` has a rasterized texture-
-   * array layer, drawing only newly-added dabs onto each mask's own
-   * persistent OffscreenCanvas -- never re-rasterizing dabs already drawn,
-   * which is what keeps a long stroke's per-move cost O(1) (bound by
-   * texture resolution/upload cost, not stroke length). Shared between the
-   * two mask kinds (M4 Slice 2 generalized this from brush-only) since
-   * both are dab-stroke masks that need the exact same texture-array
-   * plumbing, drawing into the SAME shared texture array/layer pool -- the
-   * combined MAX_MASKS budget already caps total masks at 8 regardless of
-   * kind, so there's always enough room for every dab-stroke mask
-   * (brush or spot) to get its own layer.
-   *
-   * Spot masks have one wrinkle brush masks don't: a spot mask's edge
-   * softness is a single mask-level `feather` (not baked per-dab at paint
-   * time the way brush's hardness/flow are), so changing it on an
-   * EXISTING mask (via MaskEditorPanel's Feather slider) must
-   * re-rasterize every already-drawn dab, not just newly-appended ones --
-   * `featherDrawn` tracks the feather value last baked into each spot
-   * entry's canvas, reusing the same "dabs shrank -> full clear and
-   * redraw" path a genuine dab-list shrink (not expected, but handled
-   * defensively) already needed.
-   *
-   * Releases layers for masks no longer present (deleted). Called at the
-   * top of writeAdjustmentsAndRender, so it runs both on every mask-list
-   * change and once per freshly loaded image (loadImage's initial call
-   * re-rasterizes any brush/spot masks already in that image's saved edit
-   * stack, since a canvas sized for a DIFFERENT image's resolution is
-   * meaningless here -- loadImage resets brushRasterState/freeBrushLayers
-   * before this runs). */
-  function syncMaskRasterization() {
-    if (!device || !brushTextureArray) return;
-    const presentIds = new Set();
-    for (const mask of masks) {
-      const isSpot = mask.op === "spot_mask";
-      if (mask.op !== "brush_mask" && !isSpot) continue;
-      presentIds.add(mask.id);
-      let entry = brushRasterState.get(mask.id);
-      if (!entry) {
-        const layer = freeBrushLayers.shift();
-        // Combined MAX_MASKS budget exhausted -- MaskToolStrip's atCap
-        // check already prevents creating a mask that would hit this, so
-        // this is a defensive no-op, not an expected path.
-        if (layer === undefined) continue;
-        const canvas = new OffscreenCanvas(brushTextureArray.width, brushTextureArray.height);
-        const ctx = /** @type {OffscreenCanvasRenderingContext2D} */ (canvas.getContext("2d"));
-        // Opaque black init (NOT the canvas's default transparent) --
-        // required for brush's "multiply" erase compositing to correctly
-        // no-op over never-painted areas (spot never uses "multiply", but
-        // shares this same init for one consistent starting state).
-        // Against a transparent destination, Porter-Duff "multiply" lets
-        // the erase gradient's own color show through directly (since
-        // there's no destination alpha to constrain it), which would
-        // incorrectly paint weight into untouched regions. Against opaque
-        // black (alpha=1, color=0), multiply always yields black
-        // regardless of the erase color, so erasing over nothing stays
-        // nothing.
-        ctx.fillStyle = "black";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        entry = { canvas, ctx, layer, dabsDrawn: 0, featherDrawn: 0, firstDabX: 0, firstDabY: 0 };
-        brushRasterState.set(mask.id, entry);
-      }
-      const dabs = /** @type {any} */ (mask).dabs;
-      const featherChanged = isSpot && /** @type {any} */ (mask).feather !== entry.featherDrawn;
-      // Dragging a spot mask's "move" handle translates every dab in place
-      // (see handleMaskHandlePointerMove's own spot_move case) -- the dab
-      // COUNT never changes, so the append-only dirty check below (which
-      // this whole function otherwise relies on to keep a long stroke's
-      // per-move cost O(1)) is blind to it. Comparing dabs[0]'s own
-      // position against what was last baked into the texture is a cheap,
-      // sufficient proxy: a move translates the WHOLE stroke by one
-      // uniform delta, so if the first dab moved, they all did.
-      const posChanged = isSpot && dabs.length > 0 && (dabs[0].x !== entry.firstDabX || dabs[0].y !== entry.firstDabY);
-      if (dabs.length < entry.dabsDrawn || featherChanged || posChanged) {
-        // Dab list shrank (not expected in this design, dabs only ever get
-        // appended, but handled defensively rather than leaving stale
-        // strokes visible) OR a spot mask's shared feather changed (every
-        // dab needs the new softness baked in, not just new ones) OR the
-        // whole stroke was dragged to a new position (every dab needs
-        // re-rasterizing at its new coordinates, not just newly-painted
-        // ones).
-        entry.ctx.fillStyle = "black";
-        entry.ctx.fillRect(0, 0, entry.canvas.width, entry.canvas.height);
-        entry.dabsDrawn = 0;
-      }
-      for (let i = entry.dabsDrawn; i < dabs.length; i++) {
-        if (isSpot) {
-          rasterizeSpotDab(entry.ctx, entry.canvas.width, entry.canvas.height, dabs[i], /** @type {any} */ (mask).feather);
-        } else {
-          rasterizeDab(entry.ctx, entry.canvas.width, entry.canvas.height, dabs[i]);
-        }
-      }
-      if (isSpot) {
-        entry.featherDrawn = /** @type {any} */ (mask).feather;
-        entry.firstDabX = dabs.length > 0 ? dabs[0].x : 0;
-        entry.firstDabY = dabs.length > 0 ? dabs[0].y : 0;
-      }
-      if (dabs.length !== entry.dabsDrawn) {
-        entry.dabsDrawn = dabs.length;
-        const imageData = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height);
-        device.queue.writeTexture(
-          { texture: brushTextureArray, origin: { x: 0, y: 0, z: entry.layer } },
-          imageData.data,
-          { bytesPerRow: entry.canvas.width * 4, rowsPerImage: entry.canvas.height },
-          { width: entry.canvas.width, height: entry.canvas.height },
-        );
-      }
-    }
-    for (const [id, entry] of brushRasterState) {
-      if (!presentIds.has(id)) {
-        freeBrushLayers.push(entry.layer);
-        brushRasterState.delete(id);
-      }
-    }
-  }
-
-  function writeAdjustmentsAndRender() {
-    if (!device || !context || !pipeline || !bindGroup || !preMaskPipeline || !preMaskBindGroup || !preMaskTex || !lensCorrectPipeline || !lensCorrectBindGroup || !lensCorrectedTex || !perspectivePipeline || !perspectiveBindGroup || !perspectiveCorrectedTex || !gradePipeline || !gradeBindGroup || !atmReducePipeline || atmReduceBindGroups.length === 0 || !minChannelPipeline || !minChannelBindGroup || !minHPipeline || !minHBindGroup || !minVPipeline || !minVBindGroup || !meanHPipeline || !meanHBindGroup || !meanVPipeline || !meanVBindGroup || !textureHPipeline || !textureHBindGroup || !textureVPipeline || !textureVBindGroup || !clarityHPipeline || !clarityHBindGroup || !clarityVPipeline || !clarityVBindGroup || !sharpenHPipeline || !sharpenHBindGroup || !sharpenVPipeline || !sharpenVBindGroup || !lumaNRHPipeline || !lumaNRHBindGroup || !lumaNRVPipeline || !lumaNRVBindGroup || !colorNRHPipeline || !colorNRHBindGroup || !colorNRVPipeline || !colorNRVBindGroup || !gradedTex || !minChannelTex || !darkChannelHTex || !tRawTex || !transmissionHTex || !transmissionTex || !textureBlurScratchTex || !textureAdjustedTex || !clarityBlurScratchTex || !sharpenBlurHTex || !sharpenBlurTex || !lumaNRBlurHTex || !lumaNRBlurTex || !colorNRBlurHTex || !colorNRBlurTex || atmLightChain.length === 0 || !uniformBuffer || !masksBuffer || !curveLutBuffer || !hslBandsBuffer || !splitToningBuffer || !vignetteBuffer || !lensCorrectionBuffer || !perspectiveBuffer || !grainBuffer || !sharpenBuffer || !lumaNRBuffer || !colorNRBuffer || !clippingBuffer) return;
-
-    // M4 Slice 2: before/after preview -- skips the ENTIRE global-grade +
-    // local-mask pipeline below (not just the mask loop) and draws the raw
-    // decoded source straight to the swapchain via fs_original, matching
-    // real Lightroom's own \ behavior (show the photo exactly as it was
-    // before any edits, not just "with local adjustments hidden"). Returns
-    // before touching histogram/mask-rasterization state so toggling back
-    // off simply re-renders the live graded result on the very next call,
-    // no state to reconcile.
-    if (showOriginal) {
-      if (!originalPipeline || !originalBindGroup) return;
-      const encoder = device.createCommandEncoder();
-      runFullscreenPass(encoder, originalPipeline, originalBindGroup, context.getCurrentTexture().createView());
-      device.queue.submit([encoder.finish()]);
-      return;
-    }
-
-    syncMaskRasterization();
-
-    // Tone curve: rebuilt from the current control points and rewritten
-    // every render, same "cheap enough to just always redo" treatment as
-    // the uniform/mask buffers below -- no dirty-tracking needed given
-    // buildToneCurveLut's own cost (a handful of points, 256 samples).
-    device.queue.writeBuffer(curveLutBuffer, 0, buildToneCurveLut(toneCurvePoints));
-    device.queue.writeBuffer(hslBandsBuffer, 0, buildHslUniformData(hslBands));
-    device.queue.writeBuffer(splitToningBuffer, 0, buildSplitToningUniformData(splitToning));
-    device.queue.writeBuffer(lensCorrectionBuffer, 0, buildLensCorrectionUniformData(lensCorrection));
-    device.queue.writeBuffer(perspectiveBuffer, 0, buildPerspectiveUniformData(perspective));
-    device.queue.writeBuffer(vignetteBuffer, 0, buildVignetteUniformData(vignette));
-    device.queue.writeBuffer(grainBuffer, 0, buildGrainUniformData(grain));
-    device.queue.writeBuffer(sharpenBuffer, 0, buildSharpenUniformData(sharpen));
-    device.queue.writeBuffer(lumaNRBuffer, 0, buildLumaNrUniformData(lumaNR));
-    device.queue.writeBuffer(colorNRBuffer, 0, buildColorNrUniformData(colorNR));
-    device.queue.writeBuffer(clippingBuffer, 0, new Float32Array([showClippingOverlay ? 1 : 0, 0, 0, 0]));
-
-    // Mask overlay: -1 (disabled) unless the toggle is on AND the current
-    // selection exists in `masks` -- `findIndex`'s own -1 miss-sentinel
-    // *is* the disabled state, so no separate per-kind lookup is needed
-    // here at all (the shader itself gates which kinds actually show the
-    // overlay; see the kind > 1.5 check in the mask loop below).
-    const selectedMaskIndex = showMaskOverlay ? masks.findIndex((m) => m.id === selectedMaskId) : -1;
-
-    device.queue.writeBuffer(
-      uniformBuffer,
-      0,
-      new Float32Array([
-        exposure,
-        contrast,
-        saturation,
-        masks.length,
-        selectedMaskIndex,
-        dehaze,
-        texture,
-        clarity,
-        temperature,
-        tint,
-        highlights,
-        shadows,
-        whites,
-        blacks,
-        0,
-        0,
-      ]),
-    );
-
-    const maskData = new Float32Array(MAX_MASKS * 12);
-    masks.slice(0, MAX_MASKS).forEach((/** @type {any} */ m, /** @type {number} */ i) => {
-      const o = i * 12;
-      if (m.op === "radial_gradient_mask") {
-        maskData[o + 0] = m.center.x;
-        maskData[o + 1] = m.center.y;
-        maskData[o + 2] = m.radiusX;
-        maskData[o + 3] = m.radiusY;
-        maskData[o + 4] = m.feather;
-        maskData[o + 6] = 1; // kind = radial
-      } else if (m.op === "brush_mask") {
-        maskData[o + 6] = 2; // kind = brush
-        maskData[o + 7] = brushRasterState.get(m.id)?.layer ?? 0;
-      } else if (m.op === "luminance_range_mask") {
-        maskData[o + 0] = m.rangeMin;
-        maskData[o + 1] = m.rangeMax;
-        maskData[o + 4] = m.feather;
-        maskData[o + 6] = 3; // kind = luminance range
-      } else if (m.op === "color_range_mask") {
-        maskData[o + 0] = m.refColor.r;
-        maskData[o + 1] = m.refColor.g;
-        maskData[o + 2] = m.refColor.b;
-        maskData[o + 3] = m.range;
-        maskData[o + 4] = m.feather;
-        maskData[o + 6] = 4; // kind = color range
-      } else if (m.op === "spot_mask") {
-        // M4 Slice 1/2 (Healing/Clone brush): structurally unlike every
-        // kind above -- no exposure/contrast/saturation (see SpotMask's
-        // own doc comment in develop.js), so this branch is the ONLY one
-        // that must ALSO set offset 8 (adjustments.x, repurposed as
-        // mode) itself, and skip the trailing common exposure/contrast/
-        // saturation writes below (guarded by the `m.op !== "spot_mask"`
-        // check right after this if/else chain) -- those would otherwise
-        // read `m.exposure` etc as `undefined`, which Float32Array
-        // silently coerces to NaN, corrupting the mode field they'd
-        // overwrite. M4 Slice 2: same texture-array-layer packing as
-        // brush_mask above (o+7), plus the dabs' own centroid/average
-        // radius (o+2/o+3, o+5) for heal-ring sampling -- see the WGSL
-        // Mask struct's own doc comment for the full field-repurposing map.
-        const c = spotCentroidAndRadius(m.dabs);
-        maskData[o + 0] = m.sourceOffset.dx;
-        maskData[o + 1] = m.sourceOffset.dy;
-        maskData[o + 2] = c.x;
-        maskData[o + 3] = c.y;
-        maskData[o + 4] = m.feather;
-        maskData[o + 5] = c.avgRadius;
-        maskData[o + 6] = 5; // kind = spot
-        maskData[o + 7] = brushRasterState.get(m.id)?.layer ?? 0;
-        maskData[o + 8] = m.mode === "heal" ? 1 : 0;
-      } else if (m.op === "red_eye_mask") {
-        // M4: same center/radiusX/radiusY/feather geometry as radial above,
-        // but o+5 (params.y, radial's own invert slot) is repurposed as
-        // pupilSize and o+11 (adjustments.w, unused padding on every other
-        // kind) as darken -- see the WGSL Mask struct's own doc comment.
-        // Like spot, must set its own o+5/o+8-10 here and be excluded from
-        // the common invert/exposure/contrast/saturation write below,
-        // since `m.invert`/`m.exposure`/etc are all undefined on this
-        // mask kind (see RedEyeMask's own JSDoc typedef in develop.js).
-        maskData[o + 0] = m.center.x;
-        maskData[o + 1] = m.center.y;
-        maskData[o + 2] = m.radiusX;
-        maskData[o + 3] = m.radiusY;
-        maskData[o + 4] = m.feather;
-        maskData[o + 5] = m.pupilSize;
-        maskData[o + 6] = 6; // kind = red eye
-        maskData[o + 11] = m.darken;
-      } else {
-        // linear_gradient_mask -- the only kind left once the four
-        // explicit branches above are exhausted, given MASK_OP_NAMES
-        // already gates what can appear in `masks` at all (develop.js).
-        // A real bug once lived here (before luminance range existed):
-        // an unconditional catch-all `else` assumed "anything that isn't
-        // radial or brush is linear" -- a mask object of a kind with no
-        // .start/.end would have thrown on m.start.x, aborting the render
-        // for every mask in the stack the instant one existed anywhere.
-        // Every new kind since (luminance range, color range) has gotten
-        // its own explicit branch above this fallback for exactly that
-        // reason.
-        maskData[o + 0] = m.start.x;
-        maskData[o + 1] = m.start.y;
-        maskData[o + 2] = m.end.x;
-        maskData[o + 3] = m.end.y;
-        maskData[o + 4] = m.feather;
-        maskData[o + 6] = 0; // kind = linear
-      }
-      if (m.op !== "spot_mask" && m.op !== "red_eye_mask") {
-        maskData[o + 5] = m.invert ? 1 : 0;
-        maskData[o + 8] = m.exposure;
-        maskData[o + 9] = m.contrast;
-        maskData[o + 10] = m.saturation;
-      }
-    });
-    device.queue.writeBuffer(masksBuffer, 0, maskData);
-
-    const encoder = device.createCommandEncoder();
-
-    // Texture/Clarity/Dehaze/Sharpen/NR: the local-contrast, dark-channel/
-    // atmospheric-light/transmission, and sharpen/NR blur passes depend on
-    // {exposure, contrast, saturation, temperature, tint, highlights,
-    // shadows, whites, blacks, toneCurvePoints, hslBands, splitToning,
-    // texture, clarity, sharpenRadius} -- NOT masks/
-    // selectedMaskId/showMaskOverlay, which only ever affect the cheap
-    // final pass below, and NOT dehaze/sharpen's-own-amount/lumaNR/colorNR
-    // (only fs_final's own cheap blend reads those; none of the BLUR
-    // CONTENT computed in this block depends on them). texture/clarity DO
-    // belong in this key, unlike dehaze -- fs_texture_v/fs_clarity_v write
-    // their result INTO gradedTex itself, inside this block, so a
-    // texture/clarity-only change must still invalidate the cache.
-    // `sharpenRadius` belongs here for the SAME reason but a DIFFERENT
-    // mechanism: unlike dehaze_amount/lumaNR/colorNR's amount-only
-    // sliders, Sharpening's Radius controls the blur KERNEL SIZE itself
-    // (fs_sharpen_h/fs_sharpen_v's own loop bound) -- omitting it here was
-    // a real bug this slice's own design review caught before it ever
-    // shipped: dragging Radius alone would silently show a stale blur
-    // until some UNRELATED slider happened to invalidate the block.
-    // Luminance/Color NR need nothing added -- both use FIXED radii, so
-    // their blur CONTENT never changes regardless of amount/detail/
-    // contrast, the same reasoning that already excludes dehaze_amount.
-    // Without this whole cache, an unthrottled mask-handle drag
-    // (handlePointerMove calling onMaskUpdated on every pointermove) would
-    // retrigger this ~19-pass chain every single frame. A VALUE-based key,
-    // not reference equality -- see spatialOpsInputsKey's own doc comment
-    // for why masks/toneCurvePoints/hslBands/splitToning being freshly
-    // rebuilt via $derived on every editStack change (regardless of which
-    // op changed) makes a reference check always report "changed,"
-    // silently defeating this cache. `spatialOpsInputsKey === null`
-    // (nothing cached yet, e.g. the very first render, or right after a
-    // fresh applyBitmapToGpu) is always treated as dirty.
-    // Lens Corrections' own inputs join this key for the same reason
-    // texture/clarity's own amounts do (see this key's own doc comment
-    // above): fs_lens_correct writes into lensCorrectedTex, which
-    // gradeBindGroup reads INSIDE this same dirty-gated block -- a
-    // lens-correction-only change (e.g. dragging Manual Distortion) that
-    // isn't in this key would silently show a stale, uncorrected preview
-    // until some unrelated slider happened to invalidate the block.
-    // Perspective Correction's own inputs join for the identical reason:
-    // fs_perspective writes into perspectiveCorrectedTex, which
-    // gradeBindGroup ALSO reads inside this same block.
-    // White Balance (temperature/tint) and Basic Tone (highlights/shadows/
-    // whites/blacks) belong here for the SAME reason exposure/contrast/
-    // saturation do, not a new one -- fs_grade applies all of them together
-    // in one apply_global_adjustments call (see that WGSL function's own
-    // parameter list) and writes the result into gradedTex, INSIDE this
-    // gated block. Omitting them was a real bug: the interactive Uniform
-    // buffer write always carries their current value (writeBuffer below is
-    // unconditional), but without fs_grade actually re-running, gradedTex
-    // stayed stale -- Temp/Tint/Highlights/Shadows/Whites/Blacks silently
-    // had zero visible effect on their own, until some unrelated slider in
-    // this key happened to invalidate the block and "catch up."
-    const spatialOpsKey = JSON.stringify({
-      exposure, contrast, saturation, temperature, tint, highlights, shadows, whites, blacks,
-      toneCurvePoints, hslBands, splitToning, texture, clarity,
-      sharpenRadius: sharpen.radius, lensCorrection, perspective,
-    });
-    if (spatialOpsKey !== spatialOpsInputsKey) {
-      spatialOpsInputsKey = spatialOpsKey;
-      runFullscreenPass(encoder, lensCorrectPipeline, lensCorrectBindGroup, lensCorrectedTex.createView());
-      runFullscreenPass(encoder, perspectivePipeline, perspectiveBindGroup, /** @type {GPUTexture} */ (perspectiveCorrectedTex).createView());
-      runFullscreenPass(encoder, gradePipeline, gradeBindGroup, gradedTex.createView());
-      runFullscreenPass(encoder, textureHPipeline, textureHBindGroup, textureBlurScratchTex.createView());
-      runFullscreenPass(encoder, textureVPipeline, textureVBindGroup, textureAdjustedTex.createView());
-      runFullscreenPass(encoder, clarityHPipeline, clarityHBindGroup, clarityBlurScratchTex.createView());
-      // Overwrites gradedTex in place -- see fs_clarity_v's own doc
-      // comment for why this is sound (sequential pass execution within
-      // one command encoder) and why no third "final graded" texture is
-      // needed.
-      runFullscreenPass(encoder, clarityVPipeline, clarityVBindGroup, gradedTex.createView());
-      // Sharpening / Noise Reduction: all three read gradedTex in this
-      // SAME post-Texture/Clarity, pre-Dehaze-recovery state -- see
-      // develop_engine.rs's own doc comment on the blur-source
-      // precomputation for the named, accepted limitation this implies.
-      // Order among these three (and relative to the atm-reduce chain
-      // below) doesn't matter -- all read the same stable gradedTex
-      // snapshot with no interdependency between them.
-      runFullscreenPass(encoder, sharpenHPipeline, sharpenHBindGroup, sharpenBlurHTex.createView());
-      runFullscreenPass(encoder, sharpenVPipeline, sharpenVBindGroup, sharpenBlurTex.createView());
-      runFullscreenPass(encoder, lumaNRHPipeline, lumaNRHBindGroup, lumaNRBlurHTex.createView());
-      runFullscreenPass(encoder, lumaNRVPipeline, lumaNRVBindGroup, lumaNRBlurTex.createView());
-      runFullscreenPass(encoder, colorNRHPipeline, colorNRHBindGroup, colorNRBlurHTex.createView());
-      runFullscreenPass(encoder, colorNRVPipeline, colorNRVBindGroup, colorNRBlurTex.createView());
-      // Captured as a local `const` for the same reason applyBitmapToGpu's
-      // own gpuDevice/reducePipeline aliases are -- TS can't narrow a
-      // reassignable outer `let` across a closure boundary.
-      const reducePipeline = atmReducePipeline;
-      atmReduceBindGroups.forEach((bg, i) => {
-        runFullscreenPass(encoder, reducePipeline, bg, atmLightChain[i].createView());
-      });
-      runFullscreenPass(encoder, minChannelPipeline, minChannelBindGroup, minChannelTex.createView());
-      runFullscreenPass(encoder, minHPipeline, minHBindGroup, darkChannelHTex.createView());
-      runFullscreenPass(encoder, minVPipeline, minVBindGroup, tRawTex.createView());
-      runFullscreenPass(encoder, meanHPipeline, meanHBindGroup, transmissionHTex.createView());
-      runFullscreenPass(encoder, meanVPipeline, meanVBindGroup, transmissionTex.createView());
-    }
-
-    // Pre-mask pass (M4 Slice 1): unconditional every render, same as the
-    // old single-pass fs_final always was -- Dehaze amount/Vignette/Grain/
-    // NR are all cheap per-pixel blends read fresh from their own uniform
-    // buffers every frame (unlike the expensive spatialOpsKey-gated block
-    // above), so this can't be folded into that gate without breaking
-    // live response to those sliders. Must run BEFORE fs_mask below --
-    // preMaskTex is fs_mask's own input, see that pass's own doc comment.
-    runFullscreenPass(encoder, preMaskPipeline, preMaskBindGroup, preMaskTex.createView());
-
-    runFullscreenPass(encoder, pipeline, bindGroup, context.getCurrentTexture().createView());
-
-    // Histogram: fs_final's OWN pipeline/bindGroup, unchanged, drawn a
-    // SECOND time into the small fixed-size histogramTex -- fs_mask's own
-    // `in.uv`-based coord proportionally re-maps across the same graded
-    // pixels the canvas above just got, so this needs no separate WGSL
-    // entry point or bind group (see histogramTex's own doc comment).
-    // Skipped while a previous readback is still in flight -- a buffer
-    // that's currently mapped (see readHistogramIfIdle) can't be copied
-    // into again without a validation error, and the next render (there
-    // will be one shortly, since this fires on every relevant UI change)
-    // will naturally catch up once that map resolves.
-    if (histogramTex && histogramReadbackBuffer && !histogramReadInFlight) {
-      runFullscreenPass(encoder, pipeline, bindGroup, histogramTex.createView());
-      encoder.copyTextureToBuffer(
-        { texture: histogramTex },
-        { buffer: histogramReadbackBuffer, bytesPerRow: HISTOGRAM_SIZE * 4 },
-        { width: HISTOGRAM_SIZE, height: HISTOGRAM_SIZE },
-      );
-    }
-
-    device.queue.submit([encoder.finish()]);
-    readHistogramIfIdle();
-  }
-
   $effect(() => {
     const path = imagePath;
     const canvas = canvasEl;
@@ -2794,7 +1367,7 @@
       // fine and this is a real app/shader bug, so they keep setting
       // `status = "error"` exactly as before this slice (see their own
       // doc comments inside `initGpu`), never masked as an environment gap.
-      if (!device) {
+      if (!gpu.device) {
         try {
           await initGpu(canvas);
         } catch (/** @type {any} */ e) {
@@ -2829,7 +1402,7 @@
   const RENDER_LATENCY_SAMPLE_CAP = 100;
 
   function recordRenderLatency(/** @type {number} */ startedAt) {
-    const capturedDevice = device;
+    const capturedDevice = gpu.device;
     if (!capturedDevice) return;
     capturedDevice.queue.onSubmittedWorkDone().then(() => {
       renderLatencySamples.push({ ts: Date.now(), ms: performance.now() - startedAt });

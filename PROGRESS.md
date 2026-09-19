@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor V1: WGSL shader source moved out of `DevelopCanvas.svelte` (2026-09-19)
+
+Third step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). The ~1,620-line inline `WGSL` template string is now ten section modules under `app/src/lib/gpu/shaders/` (`common`, `gradeUniforms`, `detailFilters`, `gradeMath`, `lens`, `perspective`, `grade`, `dehazeLocalContrast`, `premask`, `mask`; largest 302 lines) assembled in the original order by `index.js`. `DevelopCanvas.svelte` drops from 5,634 to 4,014 lines and just imports `WGSL`.
+
+- **Byte-identical, verified two ways**: the assembled string equals the old literal exactly (78,034 characters) — checked both against the raw source lines and against the original literal *evaluated by JavaScript*, so escape handling is covered. The literal had no backticks, backslashes, or `${` (asserted while splitting), so no escaping changes were needed.
+- **Tests**: `npm run check` 0 errors; vitest 102 passed (was 100, +2 new in `gpu/shaders/index.test.js`: every pipeline entry point is defined; no binding number is declared twice). The CPU/GPU parity and performance e2e specs (which exercise the real shader) run in CI on this PR — not run locally.
+- **Answers to the survey's open questions**: `MAX_MASKS` is a WGSL constant defined inside the shader text (now in `common.js`); `window.__developRenderPerf` is set in `DevelopCanvas.svelte` itself (`recordRenderLatency`), untouched by this step.
+- **Not touched**: `routes/m1-slice3-smoke/+page.svelte` keeps its own separate copy of an early shader (a throwaway diagnostic route; it is not the shipped shader despite its comment) — left alone.
+- `DevelopCanvas.svelte` is still 4,014 lines; V2–V4 (pure math, uniform packing, GPU setup, overlay markup) continue to bring it under the target.
+
 ## Refactor D1–D4: `develop_engine.rs` split into a `develop_engine/` module (2026-09-19)
 
 Second step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). `develop_engine.rs` (5,346 lines) is now `develop_engine/`: `color.rs` (shared math: luma, smoothstep, lerp, HSL conversion, `op_value`), `tone.rs`, `hsl_split.rs`, `effects.rs` (vignette, grain), `detail.rs` (sharpen, noise reduction, local contrast, dehaze filters), `masks.rs` (all mask kinds), `pipeline.rs` (`apply_edit_stack`, kept whole so the eight-pass order is unchanged), `crop.rs`, `lens.rs`, `perspective.rs`, and `tests/` (six files by topic plus `support.rs` for shared fixtures). Largest file: 739 lines. RFC-0008 planned four PRs (D1–D4); done as one because it's a scripted, mechanically verified move.

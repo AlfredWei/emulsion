@@ -1,0 +1,378 @@
+use super::support::*;
+use super::*;
+
+/// amount=0 must be an EXACT passthrough regardless of the rest of the
+/// algorithm -- not just numerically close to identity, structurally
+/// guaranteed by `apply_edit_stack` skipping the entire dark-channel/
+/// transmission computation at amount=0 (see its own doc comment), so
+/// this also doubles as a check that the skip path doesn't panic/
+/// misbehave on a real multi-pixel image.
+#[test]
+fn dehaze_amount_zero_is_an_exact_passthrough() {
+    let mut image = dehaze_test_image(20, 20, [176, 171, 166], [242, 242, 242]);
+    apply_edit_stack(&mut image, &stack_with(&[("dehaze", 0.0)]));
+    assert_eq!(*image.get_pixel(19, 19), image::Rgb([176, 171, 166]));
+    assert_eq!(*image.get_pixel(0, 0), image::Rgb([242, 242, 242]));
+}
+
+/// Hand-derived recovery at amount=100, chosen so `A=(1,1,1)` (the sky
+/// patch is pure white) -- this eliminates the `I^c/A^c` division's
+/// denominator entirely, keeping the arithmetic exact rather than
+/// approximated. Scene = (204,153,102) = (0.8, 0.6, 0.4) exactly (each
+/// is a clean multiple of 1/255).
+///
+/// minChannel(scene) = min(0.8,0.6,0.4)/1 = 0.4 (blue channel) --
+/// dominates the whole image's dark channel per `dehaze_test_image`'s
+/// own doc comment (patch too small to ever fill an entire 15x15
+/// window), so darkChannel = 0.4 everywhere, EXACTLY (not approximated
+/// -- every window, including ones centered on the patch itself,
+/// includes scene pixels, and scene's own minChannel is the global
+/// minimum).
+///
+/// t_raw = 1 - 0.95*0.4 = 0.62 exactly, uniform -> t_refined = 0.62
+/// exactly too (box-mean of a constant field is that same constant).
+///
+/// Recovery (a pixel far from the patch, e.g. (19,19)):
+/// r: (0.8-1.0)/0.62 + 1.0 = 1 - 0.2/0.62 = 1 - 10/31 = 0.677419 -> 172.7 -> 173
+/// g: (0.6-1.0)/0.62 + 1.0 = 1 - 0.4/0.62 = 1 - 20/31 = 0.354839 -> 90.5 -> 90
+/// b: (0.4-1.0)/0.62 + 1.0 = 1 - 0.6/0.62 = 1 - 30/31 = 0.032258 -> 8.2 -> 8
+#[test]
+fn dehaze_amount_100_matches_hand_derived_recovery() {
+    let mut image = dehaze_test_image(20, 20, [204, 153, 102], [255, 255, 255]);
+    apply_edit_stack(&mut image, &stack_with(&[("dehaze", 100.0)]));
+    let pixel = image.get_pixel(19, 19);
+    for (actual, expected) in pixel.0.iter().zip([173, 90, 8].iter()) {
+        assert!(
+            (*actual as i32 - expected).abs() <= 2,
+            "expected ~{expected:?}, got {actual} (full pixel {:?})",
+            pixel.0
+        );
+    }
+}
+
+/// A sky pixel that already equals atmospheric light exactly (I=A)
+/// should recover UNCHANGED -- physically sensible (a clear-sky pixel
+/// needs no correction) and a real property of the formula (`(A-A)/t +
+/// A = A` for any t), worth asserting explicitly rather than only
+/// checking the scene-pixel case above.
+#[test]
+fn dehaze_pixel_already_at_atmospheric_light_is_unchanged() {
+    let mut image = dehaze_test_image(20, 20, [204, 153, 102], [255, 255, 255]);
+    apply_edit_stack(&mut image, &stack_with(&[("dehaze", 100.0)]));
+    assert_eq!(*image.get_pixel(0, 0), image::Rgb([255, 255, 255]));
+}
+
+/// `dehaze_atmospheric_light` must pick a REAL pixel's whole RGB triple
+/// (argmax-by-luminance), not a synthesized independent-per-channel-max
+/// color -- the real bug a design review caught before this was
+/// written. `[1,0,0]` and `[0,1,0]` are each brightest in a DIFFERENT
+/// single channel; a per-channel-max implementation would incorrectly
+/// synthesize `[1,1,0]`, a color present in neither input pixel. The
+/// correct argmax-by-luminance picks `[0,1,0]` (luma 0.7152, the
+/// highest of the three candidates -- [1,0,0] is 0.2126, [0.5,0.5,0.5]
+/// is 0.5) as the WHOLE winning triple.
+#[test]
+fn dehaze_atmospheric_light_picks_a_real_pixel_not_a_synthesized_color() {
+    let pixels = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.5, 0.5, 0.5]];
+    assert_eq!(dehaze_atmospheric_light(&pixels), [0.0, 1.0, 0.0]);
+}
+
+/// `separable_min_filter` against a small hand-computed 5x1 array,
+/// radius=1 (3-tap window). Height=1 makes the vertical pass a no-op
+/// (each column's own single value, min'd with itself 3 times via
+/// clamped taps), isolating the horizontal pass's own correctness:
+/// x=0: taps (clamped) at indices 0,0,1 -> min(5,5,3)=3
+/// x=1: indices 0,1,2 -> min(5,3,8)=3
+/// x=2: indices 1,2,3 -> min(3,8,1)=1
+/// x=3: indices 2,3,4 -> min(8,1,9)=1
+/// x=4: indices 3,4,4 -> min(1,9,9)=1
+#[test]
+fn separable_min_filter_matches_hand_computed_values() {
+    let buf = [5.0f32, 3.0, 8.0, 1.0, 9.0];
+    let result = separable_min_filter(&buf, 5, 1, 1);
+    assert_eq!(result, vec![3.0, 3.0, 1.0, 1.0, 1.0]);
+}
+
+/// `separable_mean_filter` against the same 5x1 array/radius, same
+/// no-op-vertical-pass isolation as the min-filter test above:
+/// x=0: (5+5+3)/3 = 4.333..
+/// x=1: (5+3+8)/3 = 5.333..
+/// x=2: (3+8+1)/3 = 4.0
+/// x=3: (8+1+9)/3 = 6.0
+/// x=4: (1+9+9)/3 = 6.333..
+#[test]
+fn separable_mean_filter_matches_hand_computed_values() {
+    let buf = [5.0f32, 3.0, 8.0, 1.0, 9.0];
+    let result = separable_mean_filter(&buf, 5, 1, 1);
+    let expected = [13.0 / 3.0, 16.0 / 3.0, 4.0, 6.0, 19.0 / 3.0];
+    for (actual, expected) in result.iter().zip(expected.iter()) {
+        assert!((actual - expected).abs() < 0.001, "expected {expected}, got {actual}");
+    }
+}
+
+/// amount=0 must be an EXACT passthrough (the additive-delta formula
+/// makes this true even without a skip -- `delta = (luma-blurred)*0.0
+/// == 0.0` always), and `apply_edit_stack` also skips the call
+/// entirely at amount=0 for the same reason Dehaze does. Uses a
+/// non-uniform image (so the blur itself is doing real, non-trivial
+/// work) to make sure passthrough isn't just a degenerate side effect
+/// of a uniform field.
+#[test]
+fn apply_local_contrast_amount_zero_is_exact_passthrough() {
+    let mut graded = vec![[0.0, 0.0, 0.0], [0.3, 0.3, 0.3], [0.9, 0.9, 0.9]];
+    let before = graded.clone();
+    apply_local_contrast(&mut graded, 3, 1, 1, 0.0);
+    assert_eq!(graded, before);
+}
+
+/// A perfectly uniform field's box-mean equals that same constant
+/// everywhere (exact, not approximate), so `luma - blurred == 0` at
+/// every pixel regardless of amount -- Texture/Clarity must leave a
+/// flat-color image untouched at ANY amount, positive or negative.
+#[test]
+fn apply_local_contrast_uniform_field_is_unaffected_by_any_amount() {
+    let mut graded = vec![[0.47, 0.31, 0.16]; 9];
+    apply_local_contrast(&mut graded, 3, 3, 6, 100.0);
+    apply_local_contrast(&mut graded, 3, 3, 24, -100.0);
+    for rgb in &graded {
+        assert!((rgb[0] - 0.47).abs() < 1e-5, "{rgb:?}");
+        assert!((rgb[1] - 0.31).abs() < 1e-5, "{rgb:?}");
+        assert!((rgb[2] - 0.16).abs() < 1e-5, "{rgb:?}");
+    }
+}
+
+/// Hand-derived delta on a 3x1 row (radius=1, so every column's window
+/// spans the whole row after edge-clamping -- clamped taps repeat the
+/// boundary value, so each column's mean is a DIFFERENT weighted
+/// average, not a plain 3-way split). Gray pixels (r=g=b) make
+/// luma == the shared channel value exactly, sidestepping the luma
+/// weight constants entirely.
+///
+/// col0: taps (clamped) at indices 0,0,1 -> mean(0.0,0.0,0.3) = 0.1;
+///       luma=0.0; delta = (0.0-0.1)*1.0 = -0.1 -> expected -0.1
+/// col1: taps at indices 0,1,2 -> mean(0.0,0.3,0.9) = 0.4;
+///       luma=0.3; delta = (0.3-0.4)*1.0 = -0.1 -> expected 0.2
+/// col2: taps (clamped) at indices 1,2,2 -> mean(0.3,0.9,0.9) = 0.7;
+///       luma=0.9; delta = (0.9-0.7)*1.0 = 0.2 -> expected 1.1
+#[test]
+fn apply_local_contrast_matches_hand_derived_delta() {
+    let mut graded = vec![[0.0, 0.0, 0.0], [0.3, 0.3, 0.3], [0.9, 0.9, 0.9]];
+    apply_local_contrast(&mut graded, 3, 1, 1, 100.0);
+    let expected = [-0.1f32, 0.2, 1.1];
+    for (rgb, expected) in graded.iter().zip(expected.iter()) {
+        for c in rgb {
+            assert!((c - expected).abs() < 1e-4, "expected {expected}, got {rgb:?}");
+        }
+    }
+}
+
+/// Same setup as above at amount=50 -- the delta must scale linearly
+/// with amount (factor = amount/100), confirming `amount` isn't just a
+/// binary on/off switch.
+#[test]
+fn apply_local_contrast_amount_scales_delta_linearly() {
+    let mut graded = vec![[0.0, 0.0, 0.0], [0.3, 0.3, 0.3], [0.9, 0.9, 0.9]];
+    apply_local_contrast(&mut graded, 3, 1, 1, 50.0);
+    let expected = [-0.05f32, 0.25, 1.0];
+    for (rgb, expected) in graded.iter().zip(expected.iter()) {
+        for c in rgb {
+            assert!((c - expected).abs() < 1e-4, "expected {expected}, got {rgb:?}");
+        }
+    }
+}
+
+/// End-to-end through `apply_edit_stack` (not just the direct
+/// `apply_local_contrast` unit above): confirms the `op_value` wiring
+/// itself, and that a nonzero Texture/Clarity plus Dehaze all
+/// coexisting at amount=0 for the other two still leaves the image
+/// untouched -- the same "everything off is an exact passthrough"
+/// contract every other op in this stack already guarantees.
+#[test]
+fn texture_and_clarity_amount_zero_is_exact_passthrough_through_edit_stack() {
+    let mut image = dehaze_test_image(20, 20, [176, 171, 166], [242, 242, 242]);
+    apply_edit_stack(&mut image, &stack_with(&[("texture", 0.0), ("clarity", 0.0)]));
+    assert_eq!(*image.get_pixel(19, 19), image::Rgb([176, 171, 166]));
+    assert_eq!(*image.get_pixel(0, 0), image::Rgb([242, 242, 242]));
+}
+
+/// Hand-derived: a 3x3 luma buffer with a single bright spot at the
+/// center-right neighbor. At (1,1): xm=0,xp=2 -> gx = luma[1,2] -
+/// luma[1,0] = 1.0 - 0.0 = 1.0; ym=0,yp=2 -> gy = luma[2,1] -
+/// luma[0,1] = 0.0 - 0.0 = 0.0. magnitude = sqrt(1.0^2 + 0.0^2) * 0.5
+/// = 0.5 exactly.
+#[test]
+fn local_gradient_magnitude_matches_hand_computed_value() {
+    #[rustfmt::skip]
+    let buf = [
+        0.0, 0.0, 0.0,
+        0.0, 0.5, 1.0,
+        0.0, 0.0, 0.0,
+    ];
+    assert!((local_gradient_magnitude(&buf, 3, 3, 1, 1) - 0.5).abs() < 1e-6);
+}
+
+/// A flat buffer has zero gradient everywhere, including at the
+/// border (where clamping collapses `xm`/`xp` or `ym`/`yp` to the
+/// same index) -- confirms the clamping doesn't introduce a phantom
+/// gradient at the edges.
+#[test]
+fn local_gradient_magnitude_is_zero_on_a_flat_field_including_borders() {
+    let buf = [0.4f32; 9];
+    assert_eq!(local_gradient_magnitude(&buf, 3, 3, 0, 0), 0.0);
+    assert_eq!(local_gradient_magnitude(&buf, 3, 3, 1, 1), 0.0);
+    assert_eq!(local_gradient_magnitude(&buf, 3, 3, 2, 2), 0.0);
+}
+
+#[test]
+fn sharpen_delta_amount_zero_is_an_exact_passthrough() {
+    let s = Sharpen { amount: 0.0, radius: 80.0, detail: 100.0, masking: 0.0 };
+    assert_eq!(sharpen_delta(0.7, 0.3, 2.0, &s), 0.0);
+}
+
+/// Hand-derived: at detail=100/masking=0, both thresholds collapse to
+/// f32::EPSILON, so for any diff/grad_mag well above that floor both
+/// gates saturate to ~1.0 -- the delta reduces to essentially
+/// `diff * (amount/100) * SHARPEN_STRENGTH` with no meaningful
+/// gating, a clean near-exact value to check against.
+#[test]
+fn sharpen_delta_matches_hand_derived_value_at_full_detail_and_no_masking() {
+    let s = Sharpen { amount: 100.0, radius: 50.0, detail: 100.0, masking: 0.0 };
+    let delta = sharpen_delta(0.6, 0.5, 1.0, &s);
+    let expected = 0.1 * 1.0 * SHARPEN_STRENGTH;
+    assert!((delta - expected).abs() < 1e-4, "expected ~{expected}, got {delta}");
+}
+
+/// `sharpen_radius_px` boundary mapping: slider=0 -> the minimum
+/// radius (1px, since a 0px radius is meaningless), slider=100 -> the
+/// fixed maximum.
+#[test]
+fn sharpen_radius_px_maps_slider_bounds_correctly() {
+    assert_eq!(sharpen_radius_px(0.0), 1);
+    assert_eq!(sharpen_radius_px(100.0), SHARPEN_MAX_RADIUS_PX);
+}
+
+#[test]
+fn luma_nr_delta_amount_zero_is_an_exact_passthrough_even_at_full_contrast() {
+    let n = LumaNr { amount: 0.0, detail: 50.0, contrast: 100.0 };
+    assert_eq!(luma_nr_delta(0.6, 0.4, &n), 0.0);
+}
+
+/// Hand-derived: detail=0 -> edge_threshold = NR_DETAIL_SCALE exactly
+/// (0.05, no epsilon floor needed since it's already positive).
+/// Choosing diff = edge_threshold/2 = 0.025 gives smoothstep's own
+/// input t = 0.5 exactly, and smoothstep(0.5) = 0.5*0.5*(3-1.0) = 0.5
+/// exactly (the `t*t*(3-2t)` formula's own well-known value at its
+/// midpoint) -- so smooth_weight = 1 - 0.5 = 0.5, and at amount=100/
+/// contrast=0: smooth_delta = -0.025 * 1.0 * 0.5 = -0.0125 exactly.
+#[test]
+fn luma_nr_delta_matches_hand_derived_value_at_the_smoothstep_midpoint() {
+    let n = LumaNr { amount: 100.0, detail: 0.0, contrast: 0.0 };
+    let l = 0.525;
+    let blurred = 0.5; // diff = 0.025
+    let delta = luma_nr_delta(l, blurred, &n);
+    assert!((delta - (-0.0125)).abs() < 1e-5, "expected ~-0.0125, got {delta}");
+}
+
+/// Contrast restoration is scaled by `amount` too -- confirms it
+/// can't fire when amount=0 even with contrast=100 (already covered
+/// above), and separately confirms it DOES contribute a real,
+/// independent term when amount>0: at contrast=100 the restoration
+/// term exactly cancels part of the smoothing term (both proportional
+/// to the same `diff`), which is itself a meaningful, checkable
+/// property -- the combined delta must have a SMALLER magnitude than
+/// the smoothing-only delta (contrast=0) at the same amount.
+#[test]
+fn luma_nr_contrast_restoration_reduces_the_net_smoothing_effect() {
+    let no_restore = LumaNr { amount: 100.0, detail: 0.0, contrast: 0.0 };
+    let with_restore = LumaNr { amount: 100.0, detail: 0.0, contrast: 100.0 };
+    let l = 0.525;
+    let blurred = 0.5;
+    let d1 = luma_nr_delta(l, blurred, &no_restore).abs();
+    let d2 = luma_nr_delta(l, blurred, &with_restore).abs();
+    assert!(d2 < d1, "expected contrast restoration to shrink the net delta: {d2} vs {d1}");
+}
+
+#[test]
+fn color_nr_delta_amount_zero_is_an_exact_passthrough() {
+    let n = ColorNr { amount: 0.0, detail: 0.0 };
+    let delta = color_nr_delta([0.5, 0.3, 0.7], [0.4, 0.4, 0.6], &n);
+    assert_eq!(delta, [0.0, 0.0, 0.0]);
+}
+
+/// The property this slice's own design review verified algebraically
+/// (chroma_delta's weighted sum, using luma3's own Rec.709 weights,
+/// telescopes to exactly zero by construction): reconstructing
+/// `orig + color_nr_delta(orig, blurred, n)` must leave `luma3`
+/// UNCHANGED, regardless of the actual (nonzero) scalar `k` the
+/// gating produces. Uses a near-gray pixel with a small perturbation
+/// so `color_smooth_weight` isn't gated all the way to zero (a
+/// trivial, uninformative pass if k happened to be exactly 0).
+#[test]
+fn color_nr_delta_preserves_luminance_exactly() {
+    let n = ColorNr { amount: 100.0, detail: 0.0 };
+    let orig = [0.5f32, 0.5, 0.5];
+    let blurred = [0.51f32, 0.49, 0.505];
+    let delta = color_nr_delta(orig, blurred, &n);
+    // Sanity: k must actually be nonzero for this to be a meaningful
+    // check, not a trivial all-zero-delta pass.
+    assert!(delta.iter().any(|d| d.abs() > 1e-6), "delta was trivially zero: {delta:?}");
+    let new_rgb = [orig[0] + delta[0], orig[1] + delta[1], orig[2] + delta[2]];
+    let orig_luma = luma3(orig);
+    let new_luma = luma3(new_rgb);
+    assert!(
+        (new_luma - orig_luma).abs() < 1e-5,
+        "expected luma to stay at {orig_luma}, got {new_luma} (delta {delta:?})"
+    );
+}
+
+/// Same invariant, checked again at a DIFFERENT amount/detail (a
+/// different, nonzero `k`) and a different orig/blurred pair, so the
+/// exact-cancellation property isn't only verified at one coincidental
+/// parameter combination.
+#[test]
+fn color_nr_delta_preserves_luminance_exactly_at_a_different_k() {
+    let n = ColorNr { amount: 60.0, detail: 20.0 };
+    let orig = [0.2f32, 0.6, 0.35];
+    let blurred = [0.22f32, 0.58, 0.34];
+    let delta = color_nr_delta(orig, blurred, &n);
+    let new_rgb = [orig[0] + delta[0], orig[1] + delta[1], orig[2] + delta[2]];
+    assert!((luma3(new_rgb) - luma3(orig)).abs() < 1e-5);
+}
+
+/// End-to-end through `apply_edit_stack`, all three ops at amount=0
+/// (the default when absent): a real image is left byte-for-byte
+/// unchanged, the same contract every op in this stack already
+/// guarantees.
+#[test]
+fn sharpen_and_nr_absent_ops_are_exact_passthrough_through_edit_stack() {
+    let mut image = RgbImage::from_pixel(24, 24, image::Rgb([140, 90, 60]));
+    apply_edit_stack(&mut image, &stack_with(&[]));
+    assert_eq!(*image.get_pixel(12, 12), image::Rgb([140, 90, 60]));
+}
+
+/// End-to-end: strong Sharpening on a real image with an actual edge
+/// (a small bright patch in a uniform scene, same `dehaze_test_image`
+/// helper used for Dehaze's own end-to-end tests) visibly boosts
+/// contrast at the boundary -- the pixel immediately outside the
+/// patch (x=3, adjacent to the patch's own x=2 edge column, so BOTH
+/// the local gradient Masking reads and the wider blur Detail reads
+/// see a real edge there) should get darker (overshoot below the
+/// scene value) since unsharp masking always produces a halo at a
+/// real edge.
+#[test]
+fn sharpen_creates_a_visible_halo_at_a_real_edge_through_edit_stack() {
+    let mut image = dehaze_test_image(30, 30, [150, 150, 150], [220, 220, 220]);
+    let before = *image.get_pixel(3, 1); // immediately outside the 3x3 bright patch, still scene-colored
+    apply_edit_stack(
+        &mut image,
+        &EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({ "op": "sharpen", "amount": 100.0, "radius": 20.0, "detail": 100.0, "masking": 0.0 })],
+        },
+    );
+    let after = image.get_pixel(3, 1);
+    assert!(
+        after[0] < before[0],
+        "expected a darker halo pixel near the edge, before={before:?} after={after:?}"
+    );
+}

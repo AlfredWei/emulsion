@@ -12,6 +12,14 @@ Third step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). The ~1,620-l
 - **Not touched**: `routes/m1-slice3-smoke/+page.svelte` keeps its own separate copy of an early shader (a throwaway diagnostic route; it is not the shipped shader despite its comment) — left alone.
 - `DevelopCanvas.svelte` is still 4,014 lines; V2–V4 (pure math, uniform packing, GPU setup, overlay markup) continue to bring it under the target.
 
+## Refactor D1–D4: `develop_engine.rs` split into a `develop_engine/` module (2026-09-19)
+
+Second step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). `develop_engine.rs` (5,346 lines) is now `develop_engine/`: `color.rs` (shared math: luma, smoothstep, lerp, HSL conversion, `op_value`), `tone.rs`, `hsl_split.rs`, `effects.rs` (vignette, grain), `detail.rs` (sharpen, noise reduction, local contrast, dehaze filters), `masks.rs` (all mask kinds), `pipeline.rs` (`apply_edit_stack`, kept whole so the eight-pass order is unchanged), `crop.rs`, `lens.rs`, `perspective.rs`, and `tests/` (six files by topic plus `support.rs` for shared fixtures). Largest file: 739 lines. RFC-0008 planned four PRs (D1–D4); done as one because it's a scripted, mechanically verified move.
+
+- **Pure move, verified**: the multiset of non-blank source lines before vs after differs only by the `mod`/`use` boilerplate and `pub(super)` visibility on items that now cross files. `cargo test --lib` 380 passed / 2 ignored; build warning-free in both test and non-test builds. Callers (`export.rs`, `import.rs`, `preview_cache.rs`) unchanged: `apply_edit_stack`, `apply_crop`, `apply_lens_correction`, `apply_perspective` are still re-exported at `crate::develop_engine`. `crop_op`, `Crop`, `LensCorrection`, `Perspective` are no longer re-exported (no outside user).
+- **Not measured**: per-pixel performance. Functions now call across module boundaries within one crate; with no `#[inline]` and the default release profile (thin-local LTO) this should not matter, but no before/after export timing was taken. The e2e `develop-performance` and CPU/GPU parity specs run in CI on this PR.
+- Next: `DevelopCanvas.svelte` (V1: move the WGSL shader text out first, with an exact-match test).
+
 ## Refactor C1: `catalog.rs` split into a `catalog/` module (2026-09-19)
 
 First step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md). `catalog.rs` (4,012 lines) is now `catalog/` with 14 files, largest 735 lines: `mod.rs` (Catalog struct, open/harden), `schema.rs` (migrate), and one file per domain — images, merge_sources, culling, geo, faces, keywords, collections, backup, edit_stack, presets, export_plugins — each carrying its own types, methods, and tests; `test_support.rs` holds the two fixtures shared across domains. RFC-0008 planned this as three PRs (C1–C3); it was done in one because it's a scripted, mechanically verified move.

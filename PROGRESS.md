@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## RFC-0009: `+page.svelte` state design (2026-09-19)
+
+Design doc requested before any `+page.svelte` code moves ([RFC-0009](docs/rfc/RFC-0009-page-svelte-state-design.md), Proposed, docs only). Grounded in a parser pass over the file's 137 functions, 120 `$state`, 47 `$derived`, 5 `$effect`s and `onMount` (which names each reads and writes), not a skim.
+
+- **Shape:** per-domain `.svelte.js` store classes as module singletons (with a factory for tests), a strict store→store DAG, cross-store workflows in plain `actions/*.js`, `notify(msg)` for `statusMessage`, effects registered by `install…()` functions called from the owning component.
+- **Key findings:** 27 of 137 functions write more than one domain (all listed with destinations); `develop`/`editStack` is a dependency root, so **RFC-0008's P3–P5 order is amended** (develop before masks/presets/softProof); the 25 `editStack` projections must stay separate `$derived`s to keep tracking granularity; the five effects are independent so they can move to their owners; the persistence quartet (`persistTimer`, `pendingLabel`, `pendingSave`, `pendingIptcSave`) moves as one unit; six ordering invariants from `openDevelop`/`switchModule`/`flushEditStack` are written down as review checkpoints.
+- **Steps P1–P8** with risk ratings, per-step verification (check, vitest, build, e2e, line-multiset diff, a manual smoke list for what e2e doesn't cover), and review decisions recorded: **Accepted** — layered `lib/state` + `lib/actions` (confirmed by a coupling-matrix analysis; actions split by workflow, `develop` store holds state + persistence only), singleton stores with factories, amended step order, `collectionsUI` folded into `library`. RFC-0008 §6 now points here.
+- **Not verified yet:** that vitest compiles `.svelte.js` runes modules with the current config (first-step spike in P3).
+
 ## Refactor V3: GPU code moved out of `DevelopCanvas.svelte` (2026-09-19)
 
 Fifth step of [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md), and the one that had to be done carefully: the ~90 loose GPU variables (`device`, pipelines, textures, buffers, bind groups) were shared by ~1,100 lines of GPU code and the rest of the component. They are now fields of one plain object, and the GPU code lives in four modules under `lib/gpu/`: `gpuHandles.js` (the handle object, its types, `MAX_MASKS`/`HISTOGRAM_SIZE`; 408 lines), `pipelines.js` (`initGpu`; 270), `sourceTexture.js` (`applyBitmapToGpu`; 462), `renderFrame.js` (`writeAdjustmentsAndRender`, `syncMaskRasterization`, `readHistogramIfIdle`, `runFullscreenPass`; 474). `DevelopCanvas.svelte`: 3,805 → 2,378 lines (script 2,972 → 1,544).

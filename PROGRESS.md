@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P1: app-shell markup moved out of `+page.svelte` (2026-09-19)
+
+First code step of [RFC-0009](docs/rfc/RFC-0009-page-svelte-state-design.md) / [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md) §6: the three stateless shells. `+page.svelte` 4,788 → 4,357 lines.
+
+- **New components** (`lib/components/`): `AppTitlebar` (module switch + batch/import/export buttons, its scoped CSS incl. `.icon-btn`), `AppDialogs` (all 12 modals + backup prompt), `StatusStrip` (import/thumbnail/face progress, HDR-merge progress, or the status message, plus `.status`/`.import-progress*` CSS). Each takes values as props and reports actions as callbacks; none touches state.
+- **What changed in the markup**: only direct state writes inside templates became callbacks (`settingsOpen = true` → `onOpenSettings`, the ten `onCancel={() => (flag = false)}` lambdas, `showFaceRects` toggle, `confirmingRemoval = true`); the lambdas now live at the call site in the page. Everything else moved verbatim, with same-named props so the template text is unchanged.
+- **Verified by comparison**: non-blank, whitespace-normalized lines of old page vs page + three components: exactly 14 original lines gone (the direct writes above); everything else added is prop declarations, component tags/imports, and `<script>`/`<style>` wrappers. `npm run check` 0 errors/0 warnings, vitest 114 passed, `vite build` OK. DOM shape is unchanged (each shell renders its original root elements as direct children of `.app`, no wrapper), so e2e selectors (`.status`, `.export-btn`, `.dialog`, …) are unaffected; CI e2e is the confirmation.
+- **Docs sweep (standing rule: docs are updated with every refactor step)**: `docs/PROJECT_STRUCTURE.md` was badly stale and is rewritten to match the tree (all Rust modules incl. `develop_engine/`, `geocode.rs`, `metadata_writer.rs`; the frontend `lib/` layout incl. `gpu/`, the new shell components, e2e; the full RFC/ADR list) with a note mapping old single-file names cited in dated RFCs/ADRs to their split locations; `app/README.md` and the root README doc map refreshed. Dated RFCs/ADRs are decision records and are intentionally not rewritten.
+- **Next**: P2 (pure logic: `libraryFilters.js`, `keyboard.js`, `menuActions.js` + tests).
+
 ## RFC-0009: `+page.svelte` state design (2026-09-19)
 
 Design doc requested before any `+page.svelte` code moves ([RFC-0009](docs/rfc/RFC-0009-page-svelte-state-design.md), Proposed, docs only). Grounded in a parser pass over the file's 137 functions, 120 `$state`, 47 `$derived`, 5 `$effect`s and `onMount` (which names each reads and writes), not a skim.

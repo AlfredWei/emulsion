@@ -1,6 +1,6 @@
 # RFC-0009: `+page.svelte` state design (RFC-0008 §6, steps P3 onward)
 
-- Status: Proposed (review round 1 in progress; decisions in §8.2)
+- Status: Accepted (2026-09-19, review round 1; decisions in §8.2)
 - Date: 2026-09-19
 - Companion documents: [RFC-0008](RFC-0008-large-file-refactor.md) (the plan this unblocks), [PROGRESS.md](../../PROGRESS.md), [PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md)
 
@@ -54,14 +54,13 @@ export const selection = createSelectionStore(library);
 
 ```
 shell            (activeModule, statusMessage, settings dialog, panel layout)   ← any store may import it, for notify()
-library          (images, sources, filters, collections list, memberships, keywords)
+library          (images, sources, filters, collections list + create/add dialog flags, memberships, keywords)
 selection        → library
 develop          (version, edit stack, history, snapshots, persistence, adjustments view) → library
 masks            → develop           softProof → develop        presets → develop
 print            → library, selection, develop (currentExportItems)
 faces            → library, selection
 importFlow       → library, shell
-collectionsUI    → library, selection
 ```
 
 1. **Stores import stores only along this DAG, never actions or components.**
@@ -73,9 +72,9 @@ collectionsUI    → library, selection
 | Owner (file) | State (from the measured table) | Notes |
 |---|---|---|
 | `shell.svelte.js` | `activeModule`, `statusMessage`, `settingsOpen`, `panelWidths`, `panelResizeState`, `shortcuts` | `activeModule` is written only by the navigation orchestrator (§3.6) and `appEvents` |
-| `library.svelte.js` | `images`, `libraryViewMode`, `libraryZoomLevel`, sources (`activeFolderKey`, `activeCollectionId`, `showLastImportOnly`, `activePersonId`), `collections`, `manualMembership`, `personMembership`, `allImageKeywords`, the ten filter fields, `compareCandidateId`, `confirmingRemoval`; derived `baseImages`, `filteredImages`, `folderEntries`, `lastImportBatchId`, `keywordIdsByImage`, `cameraOptions`, `lensOptions`, `activeCollection`, `manualCollections`, `developFilmstripImages`, `compare*Image` | filtering/sorting math itself moves to pure `libraryFilters.js` (P2); the store wraps it in `$derived` |
+| `library.svelte.js` | `images`, `libraryViewMode`, `libraryZoomLevel`, sources (`activeFolderKey`, `activeCollectionId`, `showLastImportOnly`, `activePersonId`), `collections`, `manualMembership`, `personMembership`, `allImageKeywords`, the ten filter fields, `compareCandidateId`, `confirmingRemoval`, the four collection-dialog flags (`creatingCollection`, `creatingSmartCollection`, `creatingCollectionWithImages`, `pendingAddToCollectionImageIds`); derived `baseImages`, `filteredImages`, `folderEntries`, `lastImportBatchId`, `keywordIdsByImage`, `cameraOptions`, `lensOptions`, `activeCollection`, `manualCollections`, `developFilmstripImages`, `compare*Image` | filtering/sorting math itself moves to pure `libraryFilters.js` (P2); the store wraps it in `$derived` |
 | `selection.svelte.js` | `selectedId`, `selectedIds`; derived `selectedImage`, `selectedImages`, `keywordTargetImageIds` | |
-| `develop.svelte.js` | `developVersionId`, `developImagePath`, `editStack`, `history`, `historyIndex`, `snapshots`, `previewUrl`, `copiedSettings`, canvas readouts (`sourceWidth/Height`, `histogramData`, `hoverPixel`, `showClippingOverlay`, `showOriginal`, `spacePanning`, `cropAspectLock`, `highlightedHslBand`), `gpuFallbackActive`, `cpuFallbackPreviewUrl`; derived `canUndo`/`canRedo`, `developImageContentHash`; **private:** `persistTimer`, `pendingLabel`, `pendingSave`, `pendingIptcSave`, `previewToken`, `previewDebounceTimer`, `hslBandHighlightTimer`, `gpuFallbackTimer` | the four persistence variables move **together** (§3.6, I5) |
+| `develop.svelte.js` | `developVersionId`, `developImagePath`, `editStack`, `history`, `historyIndex`, `snapshots`, `previewUrl`, `copiedSettings`, canvas readouts (`sourceWidth/Height`, `histogramData`, `hoverPixel`, `showClippingOverlay`, `showOriginal`, `spacePanning`, `cropAspectLock`, `highlightedHslBand`), `gpuFallbackActive`, `cpuFallbackPreviewUrl`; derived `canUndo`/`canRedo`, `developImageContentHash`; **private:** `persistTimer`, `pendingLabel`, `pendingSave`, `pendingIptcSave`, `previewToken`, `previewDebounceTimer`, `hslBandHighlightTimer`, `gpuFallbackTimer` | the four persistence variables move **together** (§3.6, I5). Holds state, derived fields and persistence only; history/restore/reset are `actions/historyActions.js`, mask workflows `actions/maskActions.js`, adjustment transforms `developAdjustments.js` (§8.1) |
 | `developView.svelte.js` | the 25 `$derived` projections of `editStack` | one class with one `$derived` field per adjustment (§3.4) |
 | `masks.svelte.js` | `activeTool`, `selectedMaskId`, brush settings, `spotBrushSize`, `maskOverlaysVisible`, `showMaskOverlay`, `eyedropperTarget`, `colorRangeResampleTarget`; derived `masks`, `selectedMask`, `isResamplingColor` | |
 | `softProof.svelte.js` | the `softProof*` settings, `softProofPreviewUrl`, `softProofLoading`, `softProofTimer`; derived `softProofProfileLabel` | |
@@ -83,7 +82,6 @@ collectionsUI    → library, selection
 | `print.svelte.js` | the 13 `print*` settings, `printing`, `printReadyUrls`, `exportingPdf`, `exportItems`; derived `printColorManagementSettings`, `currentExportItems` | |
 | `faces.svelte.js` | `people`, `currentImageFaces`, `showFaceRects`, `hoveredFaceId`, `detectingFaces`, `faceScanProgress`, `faceDetectionCancelable`, `personAvatarSourceUrls`, `confirmingFaceDetectionOnImport`, `resolveFaceDetectionPrompt` | |
 | `importFlow.svelte.js` | `importing`, the three progress values, `importPhase`, `supportedExtensions`, `pendingImportBatchSize`, HDR/panorama merge flags and progress, `isDraggingFiles`, backup-prompt state, `pollingThumbnailsOnStartup` | |
-| `collectionsUI.svelte.js` | `creatingCollection`, `creatingSmartCollection`, `creatingCollectionWithImages`, `pendingAddToCollectionImageIds` | small; may fold into `library` if it stays under ~60 lines |
 | stays in the component that binds it | `imageViewerRef` (`bind:this`) → `LibraryModule` | reached by `keyboard.js` through a ctx getter |
 
 Timers and pending promises are **private fields of their owner** (JS `#private` or unexported), never exported, so nothing else can clear or race them.
@@ -161,8 +159,8 @@ RFC-0008 ordered P3 (`print`, `faces`, `presets`, `softProof`, `masks`) before P
 |---|---|---|
 | **P1** | Stateless markup shells: `AppTitlebar`, `AppDialogs`, `StatusStrip` (props/callbacks only, no store) | low — e2e selectors |
 | **P2** | Pure logic: `libraryFilters.js`, `keyboard.js`, `menuActions.js` + tests | low |
-| **P3** | `shell` (+`notify`), then leaf stores with no develop dependency: `print`, `faces`, `importFlow`, `collectionsUI`; the vitest-runes spike | medium |
-| **P4** | `library` + `selection` stores, `libraryActions.js`, `collectionsActions.js` | medium — 40+ readers of `images`/`selectedId` |
+| **P3** | `shell` (+`notify`), then leaf stores with no develop dependency: `print`, `faces`, `importFlow`; the vitest-runes spike | medium |
+| **P4** | `library` (incl. collection-dialog flags) + `selection` stores, `libraryActions.js`, `collectionsActions.js` | medium — 40+ readers of `images`/`selectedId` |
 | **P5** | `develop` (edit stack, history, persistence I1–I5), `developView`, `actions/navigation.js` | **high — do alone** |
 | **P6** | `masks`, `softProof`, `presets` (+`presetActions.js`), with their `install()` effects | medium |
 | **P7** | `appEvents.js` (the `onMount` body) | medium — window-close flush |
@@ -206,10 +204,10 @@ Result: the layered layout stands, with `actions/` split by workflow (`navigatio
 
 ### 8.2 Decisions
 
-1. **Layout:** `lib/state/*.svelte.js` + `lib/actions/*.js`, with the refinement above. Accepted in principle; the analysis above is the confirmation requested.
-2. **Store shape:** singleton with a factory alongside (as §3.1). Preferred in review.
+1. **Layout:** `lib/state/*.svelte.js` + `lib/actions/*.js`, with the refinement above. Accepted after the analysis above.
+2. **Store shape:** singleton with a factory alongside (as §3.1). Accepted; the rule that stores have no import-time side effects is what keeps this safe.
 3. **Amended step order (§6):** accepted.
-4. **`collectionsUI`:** under discussion — recommendation is to fold its four dialog flags into `library` (see PR thread).
+4. **`collectionsUI`:** folded into `library` — its four dialog flags become `library` fields; no separate store.
 
 ## 9. Consequences
 

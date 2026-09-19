@@ -2,6 +2,20 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P2: filters, keyboard and menu logic moved out of `+page.svelte` (2026-09-19)
+
+Second code step of [RFC-0009](docs/rfc/RFC-0009-page-svelte-state-design.md). `+page.svelte` 4,357 → 4,060 lines; three new modules, 52 new unit tests (vitest 114 → 166).
+
+- **`lib/libraryFilters.js`**: `selectBaseImages` (last-import / folder / person / smart or manual collection scope), `applyLibraryFilters` (search, flag, rating, colour, file type, camera, lens, date range), `cameraOptionsFor`/`lensOptionsFor`, `cameraLabel`. The page keeps the state and wraps them in the same `$derived`s.
+- **`lib/keyboard.js`** (`createKeyboardHandlers(ctx)`) and **`lib/menuActions.js`** (`createMenuHandler(ctx)`): the 300-line keydown handler, the keyup handler and the native-menu handler. `ctx` is a `handlerContext` object in the page: live getters/setters for state, the page's own functions for actions. It is the seam P4–P7 will swap for store fields.
+- **Reactivity preserved on purpose**: the moved `$derived` bodies read state lazily (e.g. `ratingOp` only when a minimum rating is set). Passing a plain object of all values would have made the derived track more signals, so `libraryFilterInputs` is a getter object (same technique as V3's `renderInputs`); two tests assert the lazy reads.
+- **Verified by comparison**: normalizing the `ctx.`/`inputs.` prefixes, every non-blank source line before vs after is identical except the 14 wrapper lines (the `$derived` heads/closers, `cameraLabel`'s `function` → `export function`) and three imports that became unused. The rewrite was done with the acorn scope-aware rewriter (no regex renaming). `npm run check` 0 errors, vitest 166 passed, `vite build` OK.
+- **Tests are new coverage, and were mutation-checked**: keyboard behaviour previously had none below e2e. 25 keyboard tests (typing targets, rating/flag/colour keys, remapped shortcuts, modifiers, modal guards, arrows in each view mode, Loupe/Develop hotkeys, space-pan, Develop undo/redo/overlay keys), 6 menu tests, 21 filter/scope tests. Deliberately breaking a toggle, a `>=` and a module guard each failed exactly the expected tests.
+- **Noted, not changed** (this is a pure move): `COLOR_KEYS` is dead code (nothing reads it); it moved verbatim with its comment.
+- **Docs**: `PROJECT_STRUCTURE.md` lists the new `lib/` modules.
+- **Not run locally**: e2e (CI). Keyboard/menu were not exercised in the Tauri window.
+- **Next**: P3 (`shell` + leaf stores `print`, `faces`, `importFlow`; first the vitest-runes spike).
+
 ## Refactor P1: app-shell markup moved out of `+page.svelte` (2026-09-19)
 
 First code step of [RFC-0009](docs/rfc/RFC-0009-page-svelte-state-design.md) / [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md) §6: the three stateless shells. `+page.svelte` 4,788 → 4,357 lines.

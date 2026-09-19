@@ -2,6 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5.5 Slice 0 — RFC-0007 (Map & geolocation) drafted for review (2026-09-19)
+
+"Next slice" after M5 closed is M5.5. Per this project's RFC-first practice for architecture-significant work, [RFC-0007](docs/rfc/RFC-0007-map-geolocation.md) comes first; no implementation yet. Findings that shaped it:
+
+- GPS columns and single-photo `set_geo_location` already exist (M4) — no schema work; batch/search/pin-drop all funnel into the same catalog write.
+- **Export writes no EXIF at all today** (`little_exif` is dev-dependency only), so M5.5's "round-trips through export" exit criterion needs new EXIF-GPS-writing code, planned as its own slice.
+- **Reverse geocoding sends a photo's coordinates to Google**, which the M5.5 text ("only the searched text leaves the device") doesn't actually permit. RFC recommends keeping it as explicit per-action and amending the wording, or cutting it — the main review decision.
+- Plan: API key user-supplied (no bundled key), geocoding in Rust via existing `reqwest`, map in the webview via Maps JS API with a WebView spike before building on it, 4 slices (search+assign → export GPS → map view → pin-drop/reverse).
+
+Awaiting review; three open questions listed in RFC §5.
+
 ## Docs: README brought current + a new user-facing guide (2026-09-18)
 
 User request ("update ReadMe and product manual"). README.md's "Current state" and "Status" sections still said **"M0 complete, M1 in progress"** — badly stale; the project is actually M0–M4.5 done with M5 essentially complete. This had apparently never been updated since M1 despite PROGRESS.md being kept current the whole way, a real gap in this project's own "keep the docs honest" practice.

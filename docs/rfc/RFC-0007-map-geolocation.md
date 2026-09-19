@@ -9,7 +9,7 @@
 M5.5 asks for: search an address/place name to set a photo's (or a batch's) location, a world-map view of every geolocated photo, and location edits that round-trip to exported files as EXIF GPS. Three facts about today's code shape the design:
 
 - **The catalog already stores GPS.** `images.latitude/longitude/altitude` exist (`catalog.rs`), populated from EXIF at import and editable one photo at a time via `set_geo_location` (M4's manual-entry fields in `MetadataPanel`). There is no schema work; every new entry path (search, pin-drop, batch) writes these same columns, which is what makes the "no divergent write path" exit criterion cheap to satisfy.
-- **Export writes no EXIF at all.** `export.rs` encodes a bare JPEG via `JpegEncoder`; `little_exif` is only a *dev*-dependency (used to build test fixtures in `metadata.rs`). The exit criterion "round-trips through export as EXIF GPS" therefore requires new export functionality, not just wiring — the largest piece of this milestone that isn't obviously map-related.
+- **Export wrote no EXIF at all** when this RFC was drafted (`export.rs` encoded a bare JPEG). The "round-trips through export as EXIF GPS" criterion therefore needed new export functionality, which was split out and built first as the EXIF/IPTC writer slice (§3.6).
 - **This is the first feature that talks to a third-party web service on the user's behalf.** `reqwest` is already a dependency (face-model download, ADR-0007), but that is a one-time fetch of a public file. A user-triggered geocoding call carries user-typed text to Google; the map view loads Google-served script and tiles. This needs an explicit privacy boundary (§3.4), not just an implementation.
 
 ## 2. Non-goals
@@ -60,30 +60,28 @@ New command `set_geo_location_batch(image_ids, lat, lng, altitude?)` executing a
 
 Edits are catalog-only and therefore already non-destructive to originals. Undo is out of scope for v0: overwriting a photo's existing location cannot be reverted except by re-entering the old value (a known limitation; "undo last location assign" is a natural follow-up, not required by the exit criteria).
 
-### 3.6 Export: EXIF GPS on output
+### 3.6 Export: EXIF GPS on output — delivered by a prerequisite slice
 
-Promote `little_exif` from dev-dependency to dependency (already vetted by the metadata tests) and, in `export_one`, after encoding, write GPS tags (`GPSLatitude/Ref`, `GPSLongitude/Ref`, `GPSAltitude/Ref`) when the image has coordinates. Coordinates convert decimal degrees → degree/minute/second rationals with hemisphere refs; tested by round-trip: write, then read back with the existing `kamadak-exif` import-side parser and assert equality within rational precision. This directly verifies exit criterion 3 ("search-assigned and manually-entered coordinates round-trip as identical EXIF GPS fields") because both origins are the same catalog columns.
-
-Scope note: this makes export the first place EXIF is written. Only GPS is added in this slice; broader metadata-on-export (camera/lens/keywords) is a separate, larger question deliberately not opened here — worth its own line in the roadmap but not blocking M5.5.
+Per review, the EXIF/IPTC writer is built **before** this milestone as its own slice (PR #134): `metadata_writer.rs` embeds EXIF (including GPS) and IPTC in exported JPEGs, with per-export user toggles for EXIF, GPS, and IPTC. It reads coordinates from the same catalog columns every entry path here writes, so this milestone needs no export work of its own. Its tests already round-trip GPS through the import-side parser, which covers the "manual and search-assigned coordinates export identically" criterion (both are the same columns). What remains for M5.5 is only to confirm that end-to-end once search/batch assignment exists.
 
 ## 4. Slice plan
 
-1. **Search & assign (backend + panel):** settings key storage, `geocode_search`, `set_geo_location_batch`, Settings → Map key field, a "Set location" search box in the metadata panel operating on the selection. Parser tests on recorded Google JSON; batch transaction test.
-2. **Export EXIF GPS:** promote `little_exif`, write GPS in `export_one`, round-trip test through `kamadak-exif`.
-3. **Map view:** WebView spike first (§3.3), then the world-map Library view, client-side clustering, click-to-filter.
-4. **Pin-drop & reverse geocode:** drag-to-adjust picker reusing the map surface; reverse-geocode button per §3.4 (or dropped, depending on the review decision).
+0. **Prerequisite (done, PR #134): EXIF/IPTC export writer** with per-export toggles — see §3.6.
+1. **Search & assign (backend + panel):** settings key storage, `geocode_search`, `set_geo_location_batch`, Settings → Map key field, a "Set location" search box in the metadata panel operating on the selection. Parser tests on recorded Google JSON; batch transaction test; end-to-end check that an assigned location appears in an exported file.
+2. **Map view:** WebView spike first (§3.3), then the world-map Library view, client-side clustering, click-to-filter.
+3. **Pin-drop & reverse geocode:** drag-to-adjust picker reusing the map surface; reverse-geocode button per §3.4 (or dropped, depending on the review decision).
 
-Slices 1 and 2 are independently shippable and don't need the map at all; slice 3 carries the only real technical risk.
+Slice 1 is independently shippable and doesn't need the map at all; slice 2 carries the only real technical risk.
 
 ## 5. Open questions for review
 
 1. **Reverse geocoding (§3.4):** keep as explicit-per-action with the amended privacy wording, or cut?
-2. **Slice order:** 1→2→3→4 as above, or map view earlier, at the cost of doing the riskiest slice before the useful-and-safe ones?
+2. **Slice order:** 1→2→3 as above, or map view earlier, at the cost of doing the riskiest slice before the useful-and-safe one?
 3. **Provider:** Google-only behind a trait (recommended), or also ship a keyless OSM fallback so the feature works with no setup?
 
 ## 6. Consequences
 
 - New Settings surface (key) and the first explicit third-party privacy boundary; documented in the user guide and PRD §3's exception text.
-- Export gains EXIF writing infrastructure that later metadata work can extend.
+- Export gains EXIF/IPTC writing infrastructure (via the prerequisite slice) that later metadata work can extend.
 - A `Geocoder` trait boundary keeps a provider swap (or offline geocoder, if ever un-deferred) local to one module.
 - No ADR yet; if slice 3's WebView spike or the provider decision produces a lasting architectural choice, it gets an ADR after shipping, per this project's RFC-then-ADR practice.

@@ -117,6 +117,9 @@ src/
 │   │                        render/histogram), atmChain.js + brushRaster.js (pure helpers), shaders/*.js (the
 │   │                        WGSL sections, assembled by shaders/index.js)
 │   ├── maskGeometry.js, cropMath.js, stepMath.js, histogramMath.js   Pure geometry/math helpers (with tests)
+│   ├── state/               Shared app state as `.svelte.js` store classes (RFC-0009): shell.svelte.js (active
+│   │                        module, status/notify, settings dialog, Develop rail widths, shortcuts);
+│   │                        more land per RFC-0009 P3+. Tested via lib/state/*.test.js
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)

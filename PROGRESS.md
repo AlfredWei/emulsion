@@ -2,6 +2,18 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P3a: first store (`shell`) + runes test setup (2026-09-19)
+
+First step of RFC-0009 P3. `+page.svelte` 4,055 → 4,004 lines; new `lib/state/shell.svelte.js`, 11 store tests + 2 setup guards (vitest 166 → 179).
+
+- **Test setup (the spike RFC-0009 called for)**: vitest could not run runes modules at all with the old config. It took three changes (bare `svelte()` plugin, `ssr.resolve.conditions: ["browser"]`, and forcing client compile for the plugin's hooks); the last is the subtle one, because a server compile strips `$effect` and store tests would pass while effects never ran. `lib/state/svelteRunes.test.js` guards it; RFC-0009 §5.6 records the finding and the ablation. No new dependency.
+- **`shell` store** owns `activeModule`, `statusMessage`, `settingsOpen`, `panelWidths`, `panelResizeState`, `shortcuts`, `notify(msg)`, and the three panel-resize pointer handlers (single-domain, so they moved with their state; arrow fields so the template can pass them unbound). Singleton + `createShellStore(initial)` for tests.
+- **Codemod, not regex**: a scope-aware rewriter over Svelte's own parser (script *and* template) rewrote 15 script + 10 template references, expanded 3 attribute shorthands (`{activeModule}` → `activeModule={shell.activeModule}`), and turned the 35 `statusMessage = x` writes into `shell.notify(x)`. The tool is generic; P3b–d reuse it.
+- **Verified by comparison**: after normalizing `shell.`, `notify(...)`, the only differing lines are the six declarations, the three handlers + their imports/comments (now in the store), and the shorthand expansions. `npm run check` 0 errors; vitest 179 passed; mutation-checked the store tests (flipped resize sign, dropped persistence, dropped drag end: each failed the expected tests).
+- **Docs**: RFC-0009 (§5.6 spike outcome, import-time wording), `PROJECT_STRUCTURE.md` (`lib/state/`).
+- **Not run locally**: e2e (CI); the Tauri window (rail resize drag, status messages).
+- **Next**: P3b `print`, P3c `faces`, P3d `importFlow` stores.
+
 ## Refactor P2: filters, keyboard and menu logic moved out of `+page.svelte` (2026-09-19)
 
 Second code step of [RFC-0009](docs/rfc/RFC-0009-page-svelte-state-design.md). `+page.svelte` 4,357 → 4,055 lines; three new modules, 52 new unit tests (vitest 114 → 166).

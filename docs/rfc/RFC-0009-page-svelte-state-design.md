@@ -149,7 +149,7 @@ Every step is its own PR that passes: `npm run check` (0 errors), `npm test` (vi
 3. **e2e DOM sensitivities** (P1/P8 only): `.develop-body > .history-rail` and `.develop-body > .panel` (`panel-resize`), `.status` (`hdr-merge`), `.dialog`, `.export-btn` (`golden-path`), `.folder-btn`, `.tab-btn` (`storage-settings`) must exist with the same parent/child structure; scoped CSS moves with the markup it styles.
 4. **Manual smoke list** for behavior the e2e suite does not exercise, run in the Tauri window before requesting review on P4–P8: keyboard shortcuts (rating/flag/label/arrows/undo/redo), menu actions, drag-and-drop import, HDR and panorama merge, faces scan, print/PDF export, collection create/add/remove, rapid clicking through the filmstrip (I1–I3), and quit-during-edit persistence (I5).
 5. **New tests where the design creates seams:** `libraryFilters.test.js`, `keyboard.test.js` and `menuActions.test.js` (fake `ctx`), and store tests through the factories.
-6. **First-step spike (P3):** confirm vitest compiles a `.svelte.js` runes module with the repo's current config (no `.svelte.js` exists yet, and `vite.config.js` relies on the SvelteKit plugin). If it does not, add the minimal config before continuing; if a store cannot be unit-tested, it is still verified by check + e2e.
+6. **First-step spike (P3) — done (2026-09-19).** Vitest could **not** compile runes modules with the original config, and getting it right took three things, not one (`app/vitest.config.js`): the bare `svelte()` compiler plugin; `ssr.resolve.conditions: ["browser"]` (Vitest's Node environment resolves Svelte's *server* runtime otherwise, where `flushSync` is a no-op); and forcing `ssr: false` on the plugin's hooks, because vite-plugin-svelte compiles `.svelte.js` for the server whenever a transform is flagged `ssr`, which **strips `$effect`/`$effect.root`** — stores would still pass their tests while effects silently never ran. `lib/state/svelteRunes.test.js` guards this (it asserts an effect re-runs when a store field changes). Ablation showed `inline: [/svelte/]` and `resolve.conditions` are not needed. No jsdom dependency was added.
 
 ## 6. Step order (amends RFC-0008 §6's P3–P5)
 
@@ -177,7 +177,7 @@ After P7 the script is glue (~150 lines). Markup (~820) plus styles (~320) is ~1
 | Behavior change from reordering statements inside orchestrators | Orchestrators are the current bodies moved verbatim; invariants I1–I6 are comment-preserved and reviewed line-by-line |
 | Import cycles between stores | The DAG in §3.2; a lint-style test (`stores.dag.test.js`) parses each store file's imports and fails on an edge not in the table |
 | P5 blast radius (edit stack is read by ~30 functions) | P5 done alone, preceded by the rewrite tooling proving zero unresolved references; merged only after the smoke list |
-| Hidden dependence on load-time evaluation order of module singletons | Stores have no side effects at import; `install…()` is explicit |
+| Hidden dependence on load-time evaluation order of module singletons | Stores do nothing at import beyond (for `shell`) reading two persisted UI preferences from localStorage, whose loaders fall back to defaults; `install…()` is explicit |
 
 ## 8. Layout analysis and decisions
 

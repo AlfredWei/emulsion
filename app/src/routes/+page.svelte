@@ -26,19 +26,10 @@
   import PrintPanel from "$lib/components/PrintPanel.svelte";
   import PrintLayoutView from "$lib/components/PrintLayoutView.svelte";
   import CatalogRail from "$lib/components/CatalogRail.svelte";
-  import { getStoredShortcuts } from "$lib/shortcuts.js";
+  import { shell } from "$lib/state/shell.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import { selectBaseImages, applyLibraryFilters, cameraOptionsFor, lensOptionsFor } from "$lib/libraryFilters.js";
-  import {
-    getStoredPanelWidths,
-    saveStoredPanelWidths,
-    clamp as clampPanelWidth,
-    HISTORY_PANEL_MIN_WIDTH,
-    HISTORY_PANEL_MAX_WIDTH,
-    DEVELOP_PANEL_MIN_WIDTH,
-    DEVELOP_PANEL_MAX_WIDTH,
-  } from "$lib/panelLayout.js";
   import {
     importFolder,
     importFiles,
@@ -180,17 +171,12 @@
   let selectedId = $state(/** @type {number | null} */ (null));
   let selectedIds = $state(/** @type {Set<number>} */ (new Set()));
   let confirmingRemoval = $state(false);
-  let activeModule = $state("library"); // "library" | "develop" | "print" | "people"
-  let libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"));
+   let libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"));
   let libraryZoomLevel = $state(1);
   let imageViewerRef = $state(/** @type {any} */ (null));
-  let shortcuts = $state(getStoredShortcuts());
-  // M4.5: Develop's left (History) and right (adjustments) rail widths,
-  // drag-resizable, persisted across sessions -- see panelLayout.js.
-  let panelWidths = $state(getStoredPanelWidths());
-  let panelResizeState = $state(
-    /** @type {{ which: "history" | "develop", startX: number, startWidth: number } | null} */ (null),
-  );
+
+  
+
   let compareCandidateId = $state(/** @type {number | null} */ (null));
   let importing = $state(false);
   // Populated from the backend's "import-progress" event (lib.rs's
@@ -218,10 +204,8 @@
   // describe -- switched to "thumbnails" once cataloging resolves, then
   // "faces" once thumbnail backfill resolves.
   let importPhase = $state(/** @type {"cataloging" | "thumbnails" | "faces"} */ ("cataloging"));
-  let statusMessage = $state("");
-  // M3 Slice 1: general Settings dialog, app-level (not module-scoped, so
-  // it's not gated on activeModule like Export/Remove are).
-  let settingsOpen = $state(false);
+
+  
 
   // Collections (M2 Slice 5). `activeCollectionId === null` means "All
   // Photos" (no filter). `manualMembership` caches a manual collection's
@@ -746,7 +730,7 @@
       await refreshCurrentImageFaces();
       await refreshPeople();
     } catch (/** @type {any} */ e) {
-      statusMessage = `Face detection failed: ${e}`;
+      shell.notify(`Face detection failed: ${e}`);
     } finally {
       detectingFaces = false;
       faceDetectionCancelable = false;
@@ -765,7 +749,7 @@
   function handleDetectFacesForSelection() {
     const targets = selectedImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
     if (targets.length === 0) {
-      statusMessage = "Every selected photo has already been scanned for faces.";
+      shell.notify("Every selected photo has already been scanned for faces.");
       return;
     }
     runFaceDetection(targets, true);
@@ -778,7 +762,7 @@
   function handleDetectFacesForFolder() {
     const targets = filteredImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
     if (targets.length === 0) {
-      statusMessage = "Every photo in this view has already been scanned for faces.";
+      shell.notify("Every photo in this view has already been scanned for faces.");
       return;
     }
     runFaceDetection(targets, true);
@@ -836,13 +820,13 @@
       }
       printReadyUrls = next;
       if (failures.length > 0) {
-        statusMessage = `Print: ${failures.length} photo(s) could not be prepared (${failures[0]})`;
+        shell.notify(`Print: ${failures.length} photo(s) could not be prepared (${failures[0]})`);
         if (failures.length === results.length) return;
       }
       await tick();
       window.print();
     } catch (e) {
-      statusMessage = `Print failed: ${e}`;
+      shell.notify(`Print failed: ${e}`);
     } finally {
       printing = false;
     }
@@ -896,9 +880,9 @@
             : null,
         },
       });
-      statusMessage = `Exported PDF to ${destinationPath}`;
+      shell.notify(`Exported PDF to ${destinationPath}`);
     } catch (e) {
-      statusMessage = `PDF export failed: ${e}`;
+      shell.notify(`PDF export failed: ${e}`);
     } finally {
       exportingPdf = false;
     }
@@ -1245,9 +1229,9 @@
     if (!path) return; // user cancelled
     try {
       await exportPresetFile(preset.name, preset.edit_stack, path);
-      statusMessage = `Exported "${preset.name}"`;
+      shell.notify(`Exported "${preset.name}"`);
     } catch (/** @type {any} */ e) {
-      statusMessage = `Export preset failed: ${e}`;
+      shell.notify(`Export preset failed: ${e}`);
     }
   }
 
@@ -1262,9 +1246,9 @@
       const filtered = presetEligibleOps({ schema_version: raw.schema_version, ops: raw.ops });
       const preset = await createPreset(raw.name, filtered);
       presets = [...presets, preset];
-      statusMessage = `Imported "${raw.name}"`;
+      shell.notify(`Imported "${raw.name}"`);
     } catch (/** @type {any} */ e) {
-      statusMessage = `Import preset failed: ${e}`;
+      shell.notify(`Import preset failed: ${e}`);
     }
   }
 
@@ -1317,9 +1301,9 @@
       if (developVersionId !== null && targets.includes(developVersionId)) {
         editStack = await getEditStack(developVersionId);
       }
-      statusMessage = `Applied "${preset.name}" to ${targets.length} photo${targets.length === 1 ? "" : "s"}`;
+      shell.notify(`Applied "${preset.name}" to ${targets.length} photo${targets.length === 1 ? "" : "s"}`);
     } catch (/** @type {any} */ e) {
-      statusMessage = `Apply preset failed: ${e}`;
+      shell.notify(`Apply preset failed: ${e}`);
     } finally {
       applyingPreset = false;
     }
@@ -1344,7 +1328,7 @@
   function handleCopySettingsConfirmed(/** @type {string[]} */ groupIds) {
     copySettingsDialogOpen = false;
     copiedSettings = copySettingsOps(editStack, groupIds);
-    statusMessage = "Copied settings";
+    shell.notify("Copied settings");
   }
 
   /** The Copy/Paste Settings buttons live at the bottom of DevelopPanel
@@ -1360,7 +1344,7 @@
     // handleApplyPreset's own comment.
     await flushEditStack("Paste Settings");
     regenerateThumbnailFor(versionId);
-    statusMessage = "Pasted settings";
+    shell.notify("Pasted settings");
   }
 
   // Guards "Paste Settings to Selection" while a batch paste is in
@@ -1393,9 +1377,9 @@
       if (developVersionId !== null && targets.includes(developVersionId)) {
         editStack = await getEditStack(developVersionId);
       }
-      statusMessage = `Pasted settings to ${targets.length} photo${targets.length === 1 ? "" : "s"}`;
+      shell.notify(`Pasted settings to ${targets.length} photo${targets.length === 1 ? "" : "s"}`);
     } catch (/** @type {any} */ e) {
-      statusMessage = `Paste settings failed: ${e}`;
+      shell.notify(`Paste settings failed: ${e}`);
     } finally {
       pastingSettingsToSelection = false;
     }
@@ -1417,7 +1401,7 @@
     refreshCurrentImageFaces();
   });
   let currentExportItems = $derived.by(() => {
-    if (activeModule === "develop" && developVersionId !== null) {
+    if (shell.activeModule === "develop" && developVersionId !== null) {
       return [{ path: developImagePath, version_id: developVersionId }];
     }
     if (selectedImages.length > 0) {
@@ -1890,11 +1874,11 @@
     thumbnailProgress = null;
     faceDetectionProgress = null;
     importPhase = "cataloging";
-    statusMessage = "";
+    shell.notify("");
     try {
       const summary = await doImport();
       if (!summary) return; // user cancelled the dialog
-      statusMessage = `Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`;
+      shell.notify(`Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`);
       await refresh();
       // Cataloging (importProgress, tracked above) is only half of "import
       // done" from the user's perspective -- a freshly-imported JPEG has
@@ -1927,11 +1911,11 @@
           await detectFacesForImportBatch(summary.import_batch);
           await refreshPeople();
         } catch (/** @type {any} */ e) {
-          statusMessage = `${statusMessage} (face detection failed: ${e})`;
+          shell.notify(`${shell.statusMessage} (face detection failed: ${e})`);
         }
       }
     } catch (/** @type {any} */ e) {
-      statusMessage = `Import failed: ${e}`;
+      shell.notify(`Import failed: ${e}`);
     } finally {
       importing = false;
       importProgress = null;
@@ -2044,7 +2028,7 @@
         selectedId = nextImg.version_id;
         selectedIds = new Set([nextImg.version_id]);
       }
-      if (activeModule === "develop") {
+      if (shell.activeModule === "develop") {
         openDevelop(nextImg.version_id);
       }
     }
@@ -2076,7 +2060,7 @@
         selectedId = prevImg.version_id;
         selectedIds = new Set([prevImg.version_id]);
       }
-      if (activeModule === "develop") {
+      if (shell.activeModule === "develop") {
         openDevelop(prevImg.version_id);
       }
     }
@@ -2239,12 +2223,12 @@
     try {
       await removeImages(imageIds);
     } catch (/** @type {any} */ e) {
-      statusMessage = `Remove failed: ${e}`;
+      shell.notify(`Remove failed: ${e}`);
       return;
     }
     const removedVersionIds = new Set(selectedImages.map((img) => img.version_id));
     images = images.filter((img) => !removedVersionIds.has(img.version_id));
-    statusMessage = `Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from catalog`;
+    shell.notify(`Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from catalog`);
     selectedId = null;
     selectedIds = new Set();
     // If the image open in Develop was just removed, clear that state too --
@@ -2287,7 +2271,7 @@
     if (imageIds.length < 2) return;
     mergingHdr = true;
     hdrMergeProgress = null;
-    statusMessage = "";
+    shell.notify("");
     try {
       const resultImageId = await mergeHdrBracket(imageIds);
       await refresh();
@@ -2305,9 +2289,9 @@
         // update on the merge result's thumbnail.
         prioritizeThumbnail(merged.version_id);
       }
-      statusMessage = `Merged ${imageIds.length} photos into one HDR image`;
+      shell.notify(`Merged ${imageIds.length} photos into one HDR image`);
     } catch (/** @type {any} */ e) {
-      statusMessage = `HDR merge failed: ${e}`;
+      shell.notify(`HDR merge failed: ${e}`);
     } finally {
       mergingHdr = false;
       hdrMergeProgress = null;
@@ -2329,7 +2313,7 @@
     const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
     if (imageIds.length < 2) return;
     mergingPanorama = true;
-    statusMessage = "";
+    shell.notify("");
     try {
       const resultImageId = await mergePanorama(imageIds);
       await refresh();
@@ -2339,9 +2323,9 @@
         selectedIds = new Set([merged.version_id]);
         prioritizeThumbnail(merged.version_id);
       }
-      statusMessage = `Stitched ${imageIds.length} photos into one panorama`;
+      shell.notify(`Stitched ${imageIds.length} photos into one panorama`);
     } catch (/** @type {any} */ e) {
-      statusMessage = `Panorama merge failed: ${e}`;
+      shell.notify(`Panorama merge failed: ${e}`);
     } finally {
       mergingPanorama = false;
     }
@@ -2399,7 +2383,7 @@
     // the wrong one would silently leave the mutated one's cache stale.
     if (manualMembership.has(collectionId)) await loadManualMembership(collectionId);
     await refreshCollections();
-    statusMessage = `Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to collection`;
+    shell.notify(`Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to collection`);
   }
 
   async function handleCreateCollectionWithImages(/** @type {string} */ name) {
@@ -2408,7 +2392,7 @@
     pendingAddToCollectionImageIds = [];
     await createCollectionWithImages(name, imageIds);
     await refreshCollections();
-    statusMessage = `Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to "${name}"`;
+    shell.notify(`Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to "${name}"`);
   }
 
   async function handleRemoveFromCollection() {
@@ -2421,7 +2405,7 @@
     const removedVersionIds = new Set(selectedImages.map((img) => img.version_id));
     selectedIds = new Set([...selectedIds].filter((id) => !removedVersionIds.has(id)));
     if (selectedId !== null && removedVersionIds.has(selectedId)) selectedId = null;
-    statusMessage = `Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from collection`;
+    shell.notify(`Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from collection`);
   }
 
   // Everything the keyboard and menu handlers (lib/keyboard.js, lib/menuActions.js) read or
@@ -2431,7 +2415,7 @@
   // with store fields.
   const handlerContext = {
     get activeModule() {
-      return activeModule;
+      return shell.activeModule;
     },
     get backupPromptOpen() {
       return backupPromptOpen;
@@ -2517,13 +2501,13 @@
     selectNextImage,
     selectPrevImage,
     get settingsOpen() {
-      return settingsOpen;
+      return shell.settingsOpen;
     },
     set settingsOpen(value) {
-      settingsOpen = value;
+      shell.settingsOpen = value;
     },
     get shortcuts() {
-      return shortcuts;
+      return shell.shortcuts;
     },
     get showMaskOverlay() {
       return showMaskOverlay;
@@ -2628,7 +2612,7 @@
     snapshots = freshSnapshots;
     activeTool = null;
     selectedMaskId = null;
-    activeModule = "develop";
+    shell.activeModule = "develop";
 
     // Lens Corrections (M3): re-resolved fresh on every open, matching
     // History/Snapshots' own "never carry over the previous photo's data"
@@ -2655,7 +2639,7 @@
   }
 
   async function switchModule(/** @type {string} */ target) {
-    if (activeModule === "develop" && target !== "develop") {
+    if (shell.activeModule === "develop" && target !== "develop") {
       // Awaited -- same unawaited-dependent-IPC-calls hazard openDevelop's
       // own flush/regen pair guards against, see that function's own doc
       // comment.
@@ -2676,7 +2660,7 @@
     if (target === "people") {
       refreshPeople();
     }
-    activeModule = target;
+    shell.activeModule = target;
   }
 
   // Human-readable History labels for handleAdjustmentChange's generic
@@ -3075,7 +3059,7 @@
     // on screen, not the last-persisted one. Awaited for the same
     // unawaited-dependent-IPC-calls hazard openDevelop's own flush/regen
     // pair guards against, see that function's own doc comment.
-    if (activeModule === "develop") {
+    if (shell.activeModule === "develop") {
       await flushEditStack();
       regenerateThumbnailFor(developVersionId);
     }
@@ -3122,7 +3106,7 @@
         // underneath could get stuck uninteractive after event.preventDefault()
         // already fired. This removes the ambiguity outright rather than
         // relying on template order as an implicit invariant.
-        settingsOpen = false;
+        shell.settingsOpen = false;
 
         // M2 Slice 2: an IPTC field saves on blur, so a value typed but not
         // yet blurred (e.g. the user clicks the window's close button while
@@ -3174,7 +3158,7 @@
       getCurrentWebview()
         .onDragDropEvent((event) => {
           if (event.payload.type === "enter" || event.payload.type === "over") {
-            if (activeModule === "library") isDraggingFiles = true;
+            if (shell.activeModule === "library") isDraggingFiles = true;
           } else if (event.payload.type === "leave") {
             isDraggingFiles = false;
           } else if (event.payload.type === "drop") {
@@ -3192,7 +3176,7 @@
     }
 
     const onShortcutsUpdated = (/** @type {any} */ event) => {
-      if (event.detail) shortcuts = event.detail;
+      if (event.detail) shell.shortcuts = event.detail;
     };
     window.addEventListener("shortcuts-updated", onShortcutsUpdated);
 
@@ -3298,49 +3282,14 @@
     };
   });
 
-  // M4.5: drag-resize for Develop's History (left) and adjustments (right)
-  // rails -- same pointerdown/pointermove/pointerup + setPointerCapture
-  // skeleton as DevelopCanvas.svelte's crop-handle dragging (the
-  // try/catch there is for the same reason: setPointerCapture can throw
-  // and must not abort the drag-state assignment).
-  function handlePanelResizePointerDown(/** @type {PointerEvent} */ e, /** @type {"history" | "develop"} */ which) {
-    e.preventDefault();
-    panelResizeState = { which, startX: e.clientX, startWidth: panelWidths[which] };
-    try {
-      /** @type {HTMLElement} */ (e.currentTarget).setPointerCapture(e.pointerId);
-    } catch {
-      // Non-fatal -- see DevelopCanvas's crop-handle drag for why.
-    }
-  }
 
-  function handlePanelResizePointerMove(/** @type {PointerEvent} */ e) {
-    if (!panelResizeState) return;
-    const { which, startX, startWidth } = panelResizeState;
-    // History sits on the left (dragging right grows it); the adjustments
-    // panel sits on the right (dragging right shrinks it) -- opposite sign.
-    const dx = e.clientX - startX;
-    const delta = which === "history" ? dx : -dx;
-    const [min, max] =
-      which === "history" ? [HISTORY_PANEL_MIN_WIDTH, HISTORY_PANEL_MAX_WIDTH] : [DEVELOP_PANEL_MIN_WIDTH, DEVELOP_PANEL_MAX_WIDTH];
-    panelWidths = { ...panelWidths, [which]: clampPanelWidth(startWidth + delta, min, max) };
-  }
-
-  function handlePanelResizePointerUp(/** @type {PointerEvent} */ e) {
-    try {
-      /** @type {HTMLElement} */ (e.currentTarget).releasePointerCapture(e.pointerId);
-    } catch {
-      // Non-fatal -- see DevelopCanvas's crop-handle drag for why.
-    }
-    if (panelResizeState) saveStoredPanelWidths(panelWidths);
-    panelResizeState = null;
-  }
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} onkeyup={handleGlobalKeyup} onblur={() => (spacePanning = false)} />
 
 <div class="app">
   <AppTitlebar
-    {activeModule}
+    activeModule={shell.activeModule}
     {currentExportItems}
     {activeCollectionId}
     {activeCollection}
@@ -3372,11 +3321,11 @@
     {handleImportFolder}
     onToggleFaceRects={() => (showFaceRects = !showFaceRects)}
     onRequestRemoval={() => (confirmingRemoval = true)}
-    onOpenSettings={() => (settingsOpen = true)}
+    onOpenSettings={() => (shell.settingsOpen = true)}
   />
 
   <AppDialogs
-    {settingsOpen}
+    settingsOpen={shell.settingsOpen}
     {exportItems}
     {copySettingsDialogOpen}
     {confirmingFaceDetectionOnImport}
@@ -3392,7 +3341,7 @@
     {confirmingDeletePresetId}
     {backupPromptSettings}
     {backupPromptOpen}
-    onCloseSettings={() => (settingsOpen = false)}
+    onCloseSettings={() => (shell.settingsOpen = false)}
     onCloseExport={() => (exportItems = null)}
     onCancelCopySettings={() => (copySettingsDialogOpen = false)}
     onCancelRemoval={() => (confirmingRemoval = false)}
@@ -3429,10 +3378,10 @@
     {importProgress}
     {mergingHdr}
     {hdrMergeProgress}
-    {statusMessage}
+    statusMessage={shell.statusMessage}
   />
 
-  {#if activeModule === "library"}
+  {#if shell.activeModule === "library"}
     <LibraryFilterBar
       searchQuery={searchQuery}
       flagFilter={flagFilter}
@@ -3631,17 +3580,17 @@
         onContactChange={(contact) =>
           selectedImage && handleContactChange(selectedImage.image_id, contact)}
         onKeywordAssigned={(name, count) =>
-          (statusMessage = `Added "${name}" to ${count} photo${count === 1 ? "" : "s"}`)}
+          (shell.notify(`Added "${name}" to ${count} photo${count === 1 ? "" : "s"}`))}
         onGeoLocationChange={(lat, lon, alt) => {
           if (selectedImage) {
             patchLocal(selectedImage.version_id, { latitude: lat, longitude: lon, altitude: alt });
-            statusMessage = lat != null ? "Updated GPS coordinates" : "Removed GPS coordinates";
+            shell.notify(lat != null ? "Updated GPS coordinates" : "Removed GPS coordinates");
           }
         }}
         onGeoLocationApplied={(imageIds, lat, lon) => {
           const ids = new Set(imageIds);
           images = images.map((img) => (ids.has(img.image_id) ? { ...img, latitude: lat, longitude: lon } : img));
-          statusMessage = `Set location for ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"}`;
+          shell.notify(`Set location for ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"}`);
         }}
         faces={currentImageFaces}
         {people}
@@ -3656,7 +3605,7 @@
         onSetFaceExcluded={handleSetFaceExcluded}
       />
     </div>
-  {:else if activeModule === "develop" && developImagePath}
+  {:else if shell.activeModule === "develop" && developImagePath}
     <div class="develop-body">
       <HistoryPanel
         {history}
@@ -3677,16 +3626,16 @@
         onPeekPreset={handlePeekPreset}
         onPeekEnd={clearPreview}
         {previewUrl}
-        width={panelWidths.history}
+        width={shell.panelWidths.history}
       />
       <div
         class="panel-resize-handle"
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize History panel"
-        onpointerdown={(e) => handlePanelResizePointerDown(e, "history")}
-        onpointermove={handlePanelResizePointerMove}
-        onpointerup={handlePanelResizePointerUp}
+        onpointerdown={(e) => shell.handlePanelResizePointerDown(e, "history")}
+        onpointermove={shell.handlePanelResizePointerMove}
+        onpointerup={shell.handlePanelResizePointerUp}
       ></div>
       <DevelopCanvas
         imagePath={developImagePath}
@@ -3763,12 +3712,12 @@
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize adjustments panel"
-        onpointerdown={(e) => handlePanelResizePointerDown(e, "develop")}
-        onpointermove={handlePanelResizePointerMove}
-        onpointerup={handlePanelResizePointerUp}
+        onpointerdown={(e) => shell.handlePanelResizePointerDown(e, "develop")}
+        onpointermove={shell.handlePanelResizePointerMove}
+        onpointerup={shell.handlePanelResizePointerUp}
       ></div>
       <DevelopPanel
-        width={panelWidths.develop}
+        width={shell.panelWidths.develop}
         {histogramData}
         {showClippingOverlay}
         onToggleClippingOverlay={handleToggleClippingOverlay}
@@ -3869,7 +3818,7 @@
       onCropAngleChange={(v) => handleCropChange({ angle: v })}
       onCropReset={handleCropReset}
     />
-  {:else if activeModule === "print"}
+  {:else if shell.activeModule === "print"}
     <div class="print-body">
       <PrintLayoutView
         items={printItems}
@@ -3920,13 +3869,13 @@
     <div class="placeholder">Double-click a photo in Library to open it here.</div>
   {/if}
 
-  {#if activeModule === "develop" && developImagePath}
+  {#if shell.activeModule === "develop" && developImagePath}
     <DevelopInfoBar imagePath={developImagePath} />
   {/if}
 
-  {#if activeModule === "library"}
+  {#if shell.activeModule === "library"}
     <Filmstrip images={filteredImages} {selectedIds} onSelect={handleSelect} onOpen={openDevelop} />
-  {:else if activeModule === "develop"}
+  {:else if shell.activeModule === "develop"}
     <Filmstrip
       images={developFilmstripImages}
       selectedIds={new Set(developVersionId !== null ? [developVersionId] : [])}

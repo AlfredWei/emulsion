@@ -56,7 +56,9 @@ src-tauri/
 ├── src/
 │   ├── main.rs          Entry point, just calls into lib.rs
 │   ├── lib.rs            Tauri command definitions + app setup (catalog opened here)
-│   ├── catalog.rs         SQLite catalog: schema, Catalog struct, all DB methods
+│   ├── catalog/           SQLite catalog, one file per domain: mod.rs (Catalog struct, open), schema.rs (migrate),
+│   │                      images, merge_sources, culling, geo, faces, keywords, collections, backup, edit_stack,
+│   │                      presets, export_plugins (each with its own tests; test_support.rs = shared fixtures)
 │   ├── import.rs          Import pipeline: scan a folder, hash, dedupe, thumbnail
 │   └── raw_decode.rs       LibRaw (via `rsraw`) wrapper for decoding RAW files
 ├── capabilities/

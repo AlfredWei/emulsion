@@ -194,13 +194,13 @@ Inserted between M4 and M5 (2026-08-30, user request after M4's Print Module shi
 **Rough size:** 1–2 months · **Lightroom analog:** Map module, v4.0, 2012 (closes the "Map/geotagging view" item M4 flagged as optional-pending-demand-signal, its own §"Decide and scope" line, 2026-08-20) — user request (2026-09-18).
 
 ### Scope
-- Google Maps integration: forward geocoding (search an address or place name → coordinates) to set or move one photo's or a batch's GPS location; reverse geocoding to label a photo's existing coordinates.
+- Forward geocoding (search an address or place name → coordinates) to set or move one photo's or a batch's GPS location, via OpenStreetMap (default, no account) or Google (optional, user's own API key; better at landmark names); reverse geocoding, on explicit request per photo, to label existing coordinates.
 - Manual pin-drop / drag-to-adjust on the map as an alternative to text search, on top of M4's existing manual coordinate-entry fields.
 - Batch: select multiple photos in Library, assign them all to the same searched/dropped location in one action.
-- World map view: a new Library view mode plotting every geolocated photo in the catalog as pins/clusters; clicking a pin/cluster filters the Library grid to just those photos.
+- World map view: a new Library view mode plotting every geolocated photo in the catalog as pins/clusters, rendered with Leaflet + OpenStreetMap tiles (decided 2026-09-19: no Google map dependency, so no billing account is ever required); clicking a pin/cluster filters the Library grid to just those photos.
 - Location edits (search-assigned, pin-dropped, or manually typed) all write the same EXIF GPS fields on export — no divergent write path depending on how the coordinates were set.
 - **Prerequisite slice — EXIF/IPTC export writer** (2026-09-19, user request; built before any geo work): export can embed EXIF (camera/exposure/capture time, GPS) and IPTC (caption/copyright/contact/keywords), each chosen per export in the Export dialog. Geo features then only have to populate the catalog's GPS columns; the writer already carries them to the file.
-- **Explicit, scoped exception to the "no cloud" non-goal** ([PRD §3](PRD.md#3-non-goals-permanent-not-just-later)): a user-initiated address/place-name search calls an external geocoding API — only the searched text leaves the device, never catalog or photo data, and only when the user actually searches. Documented here rather than silently contradicting the PRD's local-first framing.
+- **Explicit, scoped exception to the "no cloud" non-goal** ([PRD §3](PRD.md#3-non-goals-permanent-not-just-later)): a user-initiated address/place-name search calls an external geocoding service (the searched text leaves the device), an explicit user-requested reverse-geocode of a photo sends that photo's coordinates, and the map view loads tiles from a map server. No other catalog or photo data leaves the device, and nothing is sent unless the user searches, asks for a lookup, or opens the map. Documented here rather than silently contradicting the PRD's local-first framing.
 
 ### Explicitly deferred
 - Any "travel map" storytelling feature (route lines, timeline scrubbing) beyond pin/cluster display.

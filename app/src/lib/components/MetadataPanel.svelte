@@ -7,6 +7,7 @@
     listKeywords,
     setGeoLocation,
   } from "$lib/api/catalog.js";
+  import { geocodeSearch, setGeoLocationBatch, getMapSettings } from "$lib/api/map.js";
   import { revealInFileManager } from "$lib/api/system.js";
   import LibraryHistogram from "$lib/components/LibraryHistogram.svelte";
 
@@ -28,6 +29,7 @@
    *   onContactChange: (contact: string) => void,
    *   onKeywordAssigned: (name: string, imageCount: number) => void,
    *   onGeoLocationChange?: (lat: number | null, lon: number | null, alt: number | null) => void,
+   *   onGeoLocationApplied?: (imageIds: number[], lat: number, lon: number) => void,
    *   faces?: import('$lib/api/faces.js').FaceRow[],
    *   people?: import('$lib/api/faces.js').PersonRow[],
    *   detectingFaces?: boolean,
@@ -53,6 +55,7 @@
     onContactChange,
     onKeywordAssigned,
     onGeoLocationChange,
+    onGeoLocationApplied,
     faces = [],
     people = [],
     detectingFaces = false,
@@ -163,6 +166,66 @@
     }
     editingGps = false;
     onGeoLocationChange?.(lat, lon, alt);
+  }
+
+  // Place search (M5.5, RFC-0007). Applies to the whole current selection
+  // (`targetImageIds`), not just the anchor -- the results header says how
+  // many photos a click will affect.
+  let placeQuery = $state("");
+  let placeResults = $state(/** @type {import('$lib/api/map.js').GeocodeCandidate[] | null} */ (null));
+  let placeError = $state("");
+  let placeSearching = $state(false);
+  let mapProvider = $state(/** @type {import('$lib/api/map.js').GeocodeProvider} */ ("osm"));
+  let googleKeyPresent = $state(false);
+  // OpenStreetMap needs no setup; Google only works once a key is saved.
+  let searchAvailable = $derived(mapProvider === "osm" || googleKeyPresent);
+
+  async function refreshMapSettings() {
+    try {
+      const m = await getMapSettings();
+      mapProvider = m.provider;
+      googleKeyPresent = m.has_google_key;
+    } catch {
+      // Not running under Tauri (e.g. plain vite dev): leave defaults.
+    }
+  }
+  // Re-checked per selected image so a provider/key change in Settings
+  // shows up without reloading the app.
+  $effect(() => {
+    void image;
+    refreshMapSettings();
+  });
+
+  async function handlePlaceSearch() {
+    if (!placeQuery.trim() || placeSearching) return;
+    placeSearching = true;
+    placeError = "";
+    placeResults = null;
+    try {
+      placeResults = await geocodeSearch(placeQuery);
+    } catch (/** @type {any} */ e) {
+      placeError = String(e);
+    } finally {
+      placeSearching = false;
+    }
+  }
+
+  async function handleApplyPlace(/** @type {import('$lib/api/map.js').GeocodeCandidate} */ place) {
+    const ids = [...targetImageIds];
+    if (ids.length === 0) return;
+    placeError = "";
+    try {
+      await setGeoLocationBatch(ids, place.latitude, place.longitude);
+      if (image && ids.includes(image.image_id)) {
+        image.latitude = place.latitude;
+        image.longitude = place.longitude;
+      }
+      onGeoLocationApplied?.(ids, place.latitude, place.longitude);
+      placeResults = null;
+      placeQuery = "";
+    } catch (/** @type {any} */ e) {
+      placeError = String(e);
+    }
   }
 
   function handleReveal() {
@@ -503,6 +566,45 @@
         {editingGps ? "Cancel" : hasGps ? "Edit" : "+ Add GPS"}
       </button>
     </div>
+
+    {#if searchAvailable}
+      <form class="place-search" onsubmit={(e) => { e.preventDefault(); handlePlaceSearch(); }}>
+        <input
+          type="text"
+          placeholder="Search place or address…"
+          aria-label="Search place or address"
+          bind:value={placeQuery}
+        />
+        <button type="submit" disabled={placeSearching || !placeQuery.trim()}>
+          {placeSearching ? "…" : "Search"}
+        </button>
+      </form>
+      {#if placeError}
+        <div class="place-msg place-error">{placeError}</div>
+      {:else if placeResults !== null}
+        {#if placeResults.length === 0}
+          <div class="place-msg">No places found.</div>
+        {:else}
+          <div class="place-msg">
+            Apply to {targetImageIds.length} photo{targetImageIds.length === 1 ? "" : "s"}:
+          </div>
+          <ul class="place-results">
+            {#each placeResults as place (place.label + place.latitude + place.longitude)}
+              <li>
+                <button type="button" onclick={() => handleApplyPlace(place)} title={place.label}>
+                  {place.label}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {/if}
+      {#if mapProvider === "osm"}
+        <div class="place-msg">Search data © OpenStreetMap contributors</div>
+      {/if}
+    {:else}
+      <div class="place-msg">Google search needs an API key — add one in Settings → Map, or switch to OpenStreetMap.</div>
+    {/if}
 
     {#if editingGps}
       <div class="gps-edit-form">
@@ -1011,6 +1113,70 @@
     transform: translateY(0);
   }
 
+  .place-search {
+    display: flex;
+    gap: 4px;
+    padding: 2px 4px 4px;
+  }
+  .place-search input {
+    flex: 1;
+    min-width: 0;
+    padding: 3px 6px;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    box-sizing: border-box;
+  }
+  .place-search button {
+    all: unset;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    cursor: pointer;
+  }
+  .place-search button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .place-msg {
+    padding: 0 4px 4px;
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    word-break: break-word;
+  }
+  .place-error {
+    color: var(--text-secondary);
+  }
+  .place-results {
+    list-style: none;
+    margin: 0 0 6px;
+    padding: 0 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .place-results button {
+    all: unset;
+    box-sizing: border-box;
+    width: 100%;
+    padding: 4px 6px;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-panel-raised);
+    border-radius: var(--radius-s);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .place-results button:hover {
+    filter: brightness(1.15);
+  }
   .gps-edit-form {
     display: flex;
     flex-direction: column;

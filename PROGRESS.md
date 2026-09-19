@@ -2,6 +2,18 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5.5 Slice 1 — place search & batch location assign, OpenStreetMap default + optional Google (2026-09-19)
+
+First implementation slice of [RFC-0007](docs/rfc/RFC-0007-map-geolocation.md), building on the EXIF/IPTC writer that landed first. **Revised after review**: the first cut was Google-only; learning that Google needs a billing account (card) even inside its free tier, the decisions were (1) both providers with OpenStreetMap the no-setup default, (2) keep reverse geocoding but explicit-per-photo in a later slice, (3) map view is worthwhile but a later slice. Recorded as [RFC-0007 §7](docs/rfc/RFC-0007-map-geolocation.md#7-update-2026-09-19-review-decisions-and-what-they-change), which also records the accepted decision that the later map-view slice uses Leaflet + OSM tiles regardless of geocoding provider (Google stays optional for search only).
+
+- **`geocode.rs`**: `Provider::{Osm, Google}`. Nominatim (default): identifying User-Agent, process-wide throttle of 1 request per 1.1s per its usage policy (pure `wait_for_slot` tested; the live wait is not), string-coordinate parsing that skips unparseable items. Google: user's key; `REQUEST_DENIED` messages surfaced, quota statuses mapped. Both cap at 5 results, 10s timeout, and strip the URL from network errors (Google's contains the key). Parsing is pure and tested on recorded-shape JSON; CI never touches the network. No provider trait — two providers is a two-arm `match`.
+- **Settings**: `geocode_provider` and `maps_api_key` in the catalog `settings` table; `get_map_settings` returns the provider and only *whether* a Google key exists — the key is never sent back to the frontend. Settings → Map has the provider radios and shows the key field only when Google is selected.
+- **`set_geo_location_batch`**: one transaction, lat/lng only (altitude preserved), skips nonexistent ids, range/NaN-validated at the command. Manual single-photo entry is unchanged and still doesn't range-check.
+- **UI**: metadata panel Location section has a place search (works out of the box on OSM; shows an OSM attribution line; on Google without a key it points to Settings), applying the chosen result to the whole selection ("Apply to N photos") with the grid patched locally.
+- **Verified**: `cargo test --lib` 380/380 (was 362 before this slice); `npm run check` 0 errors; Settings → Map tab renders with OSM as default in a live `vite dev`. **Not verified**: any real Nominatim or Google request (parsers only tested on hand-written bodies modeled on documented responses), provider switching and the panel search/apply flow (need the real Tauri window's IPC), and the Nominatim throttle under real timing.
+- **Cleanup**: fixed the 4 `has_tags is never read` compiler warnings in `metadata_writer.rs` (from the previous slice) by collecting EXIF tags in a `Vec` and returning `None` when empty, instead of a flag set by a macro. Build is now warning-free; behavior unchanged (all writer tests still pass).
+- **Docs**: USER_GUIDE Map section, MILESTONES M5.5 scope/privacy wording, and RFC-0007 §7 updated.
+
 ## Export: EXIF/IPTC writer, chosen per export (2026-09-19)
 
 User request: add an EXIF/IPTC writer as a slice *before* any geo implementation, with the user deciding at export time whether to write it. Export previously wrote a bare JPEG (no EXIF at all), which RFC-0007 had already flagged as the hidden cost of M5.5's "round-trips through export" criterion.
@@ -24,6 +36,14 @@ User request: add an EXIF/IPTC writer as a slice *before* any geo implementation
 - Plan: API key user-supplied (no bundled key), geocoding in Rust via existing `reqwest`, map in the webview via Maps JS API with a WebView spike before building on it, 4 slices (search+assign → export GPS → map view → pin-drop/reverse).
 
 Awaiting review; three open questions listed in RFC §5.
+
+## Plan: splitting the four 4k+-line files (2026-09-19)
+
+User request: four files exceed 4,000 lines (`DevelopCanvas.svelte` 5,634, `develop_engine.rs` 5,346, `+page.svelte` 4,788, `catalog.rs` 4,012), hurting readability. [RFC-0008](docs/rfc/RFC-0008-large-file-refactor.md) is the plan — **no code changed yet**, awaiting review. Structure was surveyed per file by read-only subagents (grep-based; line numbers approximate, re-derived per step).
+
+- Behavior-preserving pure moves, ~15 small PRs, each green on its own; targets ~1,000 lines (Rust) / ~800 (Svelte) per file.
+- Order: `catalog` → `develop_engine` → `DevelopCanvas` (WGSL string out first, verified byte-identical) → `+page.svelte` last (shared-state store needs a short design first; riskiest).
+- Open decisions: size thresholds, interleaving with the M5.5 map-view work (suggested: do the Rust splits before it), and whether to plan the 1.5k–2.2k-line second tier (`lib.rs`, `lib/api/develop.js`, `DevelopPanel`, `MetadataPanel`).
 
 ## Docs: README brought current + a new user-facing guide (2026-09-18)
 

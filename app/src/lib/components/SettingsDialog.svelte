@@ -2,6 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
+  import { getMapSettings, setGeocodeProvider, setMapsApiKey } from "$lib/api/map.js";
   import {
     listExportPlugins,
     addExportPlugin,
@@ -22,7 +23,7 @@
    */
   let { open: isOpen, onClose } = $props();
 
-  let activeTab = $state(/** @type {"backup" | "shortcuts" | "storage" | "exportPlugins"} */ ("shortcuts"));
+  let activeTab = $state(/** @type {"backup" | "shortcuts" | "storage" | "exportPlugins" | "map"} */ ("shortcuts"));
 
   // Backup settings state
   let settings = $state(/** @type {import('$lib/api/backup.js').BackupSettings | null} */ (null));
@@ -33,6 +34,46 @@
   let storageInfo = $state(/** @type {import('$lib/api/storage.js').StorageInfo | null} */ (null));
   let movingCache = $state(false);
   let storageError = $state("");
+
+  // Map settings state (M5.5): the key is write-only from here -- the
+  // backend never sends it back, so this field can only set or clear it.
+  let mapProvider = $state(/** @type {import('$lib/api/map.js').GeocodeProvider} */ ("osm"));
+  let mapsKeySaved = $state(false);
+  let mapsKeyInput = $state("");
+  let mapsError = $state("");
+
+  /** @param {import('$lib/api/map.js').GeocodeProvider} provider */
+  async function handleProviderChange(provider) {
+    mapsError = "";
+    try {
+      await setGeocodeProvider(provider);
+      mapProvider = provider;
+    } catch (/** @type {any} */ e) {
+      mapsError = String(e);
+    }
+  }
+
+  async function handleSaveMapsKey() {
+    mapsError = "";
+    try {
+      await setMapsApiKey(mapsKeyInput);
+      mapsKeySaved = mapsKeyInput.trim().length > 0;
+      mapsKeyInput = "";
+    } catch (/** @type {any} */ e) {
+      mapsError = String(e);
+    }
+  }
+
+  async function handleRemoveMapsKey() {
+    mapsError = "";
+    try {
+      await setMapsApiKey(null);
+      mapsKeySaved = false;
+      mapsKeyInput = "";
+    } catch (/** @type {any} */ e) {
+      mapsError = String(e);
+    }
+  }
 
   // Shortcuts settings state
   let shortcuts = $state(getStoredShortcuts());
@@ -58,7 +99,13 @@
       recordingId = null;
       pluginForm = null;
       pluginError = "";
+      mapsError = "";
+      mapsKeyInput = "";
       shortcuts = getStoredShortcuts();
+      getMapSettings().then((m) => {
+        mapProvider = m.provider;
+        mapsKeySaved = m.has_google_key;
+      });
       getBackupSettings().then((s) => (settings = s));
       getStorageInfo().then((s) => (storageInfo = s));
       listExportPlugins().then((p) => (plugins = p));
@@ -282,6 +329,14 @@
           >
             Export Plugins
           </button>
+          <button
+            type="button"
+            class="tab-btn"
+            class:active={activeTab === "map"}
+            onclick={() => (activeTab = "map")}
+          >
+            Map
+          </button>
         </div>
       </div>
 
@@ -418,6 +473,68 @@
 
           {#if storageError}
             <div class="status">{storageError}</div>
+          {/if}
+        </section>
+      {:else if activeTab === "map"}
+        <section class="backup-section">
+          <p class="storage-note">
+            Choose what powers place search when you set a photo's location. Only the text you type into the search
+            box is sent (and only when you press Search) — catalog and photo data never leave this computer.
+          </p>
+          <div class="row">
+            <label class="checkbox-row">
+              <input
+                type="radio"
+                name="geocode-provider"
+                checked={mapProvider === "osm"}
+                onchange={() => handleProviderChange("osm")}
+              />
+              OpenStreetMap — no setup, no account
+            </label>
+            <label class="checkbox-row">
+              <input
+                type="radio"
+                name="geocode-provider"
+                checked={mapProvider === "google"}
+                onchange={() => handleProviderChange("google")}
+              />
+              Google — better at landmark and business names; needs your own API key
+            </label>
+          </div>
+
+          {#if mapProvider === "google"}
+            <p class="storage-note">
+              Create a key in Google Cloud Console and enable the Geocoding API. Google requires a billing account
+              (a card) even though monthly usage this light is inside its free allowance. The key stays in your local
+              catalog and is never shown again here.
+            </p>
+            <div class="row">
+              <label class="label" for="maps-api-key">Google Maps API key</label>
+              <input
+                id="maps-api-key"
+                type="password"
+                autocomplete="off"
+                bind:value={mapsKeyInput}
+                placeholder={mapsKeySaved ? "Key saved — paste a new one to replace it" : "Paste your API key"}
+              />
+            </div>
+            <div class="backup-now-row">
+              <button class="primary" type="button" onclick={handleSaveMapsKey} disabled={!mapsKeyInput.trim()}>
+                Save Key
+              </button>
+              {#if mapsKeySaved}
+                <button class="secondary" type="button" onclick={handleRemoveMapsKey}>Remove Key</button>
+                <span class="last-backup">Key saved</span>
+              {/if}
+            </div>
+          {:else}
+            <p class="storage-note">
+              Uses OpenStreetMap's public Nominatim service, limited to about one search per second. Search data ©
+              OpenStreetMap contributors.
+            </p>
+          {/if}
+          {#if mapsError}
+            <div class="status">{mapsError}</div>
           {/if}
         </section>
       {:else if activeTab === "exportPlugins"}

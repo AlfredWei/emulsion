@@ -2,6 +2,7 @@ mod catalog;
 mod develop_engine;
 mod export;
 mod export_plugin;
+mod geocode;
 // M5 Slice 6 (face detection, RFC-0005): the clustering half of the
 // pipeline, hand-rolled and unit-tested against synthetic vectors.
 mod face_cluster;
@@ -1503,6 +1504,63 @@ async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, versio
     .map_err(|e| e.to_string())?
 }
 
+/// Forward geocoding (RFC-0007). Provider and key are read under a brief
+/// catalog lock and the lock released before the network call, so a slow
+/// request never stalls the rest of the app. The frontend only ever learns
+/// whether a Google key exists (`get_map_settings`), never the key itself.
+#[tauri::command]
+async fn geocode_search(state: State<'_, AppState>, query: String) -> Result<Vec<geocode::GeocodeCandidate>, String> {
+    let (provider, api_key) = {
+        let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+        let provider = geocode::Provider::from_setting(
+            catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref(),
+        );
+        (provider, catalog.get_maps_api_key().map_err(|e| e.to_string())?)
+    };
+    geocode::search(provider, &query, api_key.as_deref()).await.map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct MapSettings {
+    provider: geocode::Provider,
+    has_google_key: bool,
+}
+
+#[tauri::command]
+fn set_geo_location_batch(
+    state: State<'_, AppState>,
+    image_ids: Vec<i64>,
+    latitude: f64,
+    longitude: f64,
+) -> Result<usize, String> {
+    geocode::validate_coordinates(latitude, longitude)?;
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .set_geo_location_batch(&image_ids, latitude, longitude)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_map_settings(state: State<'_, AppState>) -> Result<MapSettings, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    Ok(MapSettings {
+        provider: geocode::Provider::from_setting(catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref()),
+        has_google_key: catalog.get_maps_api_key().map_err(|e| e.to_string())?.is_some(),
+    })
+}
+
+#[tauri::command]
+fn set_geocode_provider(state: State<'_, AppState>, provider: geocode::Provider) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_geocode_provider(provider.as_setting()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_maps_api_key(state: State<'_, AppState>, key: Option<String>) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_maps_api_key(key.as_deref()).map_err(|e| e.to_string())
+}
+
 #[derive(serde::Deserialize)]
 struct ExportItem {
     path: String,
@@ -1992,6 +2050,11 @@ pub fn run() {
             export_preset_file,
             regenerate_thumbnail,
             export_images,
+            geocode_search,
+            set_geo_location_batch,
+            get_map_settings,
+            set_geocode_provider,
+            set_maps_api_key,
             get_backup_settings,
             update_backup_settings,
             get_storage_info,

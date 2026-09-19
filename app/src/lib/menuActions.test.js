@@ -17,7 +17,7 @@ function makeCtx(over = {}) {
     handlePasteSettings: vi.fn(async () => {}),
     handleSelectAll: vi.fn(),
     handleDeselectAll: vi.fn(),
-    switchModule: vi.fn(async () => {}),
+    switchModule: vi.fn(/** @type {(target: string) => Promise<void>} */ (async () => {})),
     handleToggleClippingOverlay: vi.fn(),
     ...over,
   };

@@ -4,7 +4,7 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 ## Refactor P2: filters, keyboard and menu logic moved out of `+page.svelte` (2026-09-19)
 
-Second code step of [RFC-0009](docs/rfc/RFC-0009-page-svelte-state-design.md). `+page.svelte` 4,357 → 4,060 lines; three new modules, 52 new unit tests (vitest 114 → 166).
+Second code step of [RFC-0009](docs/rfc/RFC-0009-page-svelte-state-design.md). `+page.svelte` 4,357 → 4,055 lines; three new modules, 52 new unit tests (vitest 114 → 166).
 
 - **`lib/libraryFilters.js`**: `selectBaseImages` (last-import / folder / person / smart or manual collection scope), `applyLibraryFilters` (search, flag, rating, colour, file type, camera, lens, date range), `cameraOptionsFor`/`lensOptionsFor`, `cameraLabel`. The page keeps the state and wraps them in the same `$derived`s.
 - **`lib/keyboard.js`** (`createKeyboardHandlers(ctx)`) and **`lib/menuActions.js`** (`createMenuHandler(ctx)`): the 300-line keydown handler, the keyup handler and the native-menu handler. `ctx` is a `handlerContext` object in the page: live getters/setters for state, the page's own functions for actions. It is the seam P4–P7 will swap for store fields.

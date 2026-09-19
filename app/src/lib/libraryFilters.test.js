@@ -9,7 +9,7 @@ import {
 
 /** @param {Partial<import('./api/catalog.js').ImageSummary> & { image_id: number }} o */
 function img(o) {
-  return {
+  return /** @type {any} */ ({
     version_id: o.image_id * 10,
     path: `/photos/2026/trip/img${o.image_id}.jpg`,
     rating: 0,
@@ -21,7 +21,7 @@ function img(o) {
     captured_at: null,
     import_batch: 1,
     ...o,
-  };
+  });
 }
 
 const NO_FILTERS = {

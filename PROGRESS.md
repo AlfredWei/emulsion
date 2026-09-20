@@ -2,6 +2,20 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P3c: `faces` store and `actions/faceActions.js` (2026-09-20)
+
+Third step of RFC-0009 P3. `+page.svelte` 3,873 → 3,740 lines; new `lib/state/faces.svelte.js` and `lib/actions/faceActions.js`; 20 new tests (vitest 198 → 218).
+
+- **`faces` store**: people, the current photo's faces, face-rect overlay flags, the shared detection in-flight/progress/cancelable state, avatar source URLs, and the import-time "Detect faces?" prompt. The prompt was a promise bridge (a module-level resolver plus three functions in the page); it is now three store members with a private `#resolveDetectionPrompt`, passed to the dialog as unbound arrow fields.
+- **`faceActions.js`**: the six functions that touch only faces state plus IPC (`refreshPeople`, rename, reassign, create-and-tag, mark-not-a-face, cancel).
+- **Split by dependency, recorded in RFC-0009**: `refreshCurrentImageFaces`, `runFaceDetection` and the three `handleDetectFaces…` handlers stay in the page until P4, because they read `selectedImage`/`selectedImages`/`filteredImages` and write `images` (library/selection stores don't exist yet).
+- **Tool fix found by the comparison**: the extraction tool collapsed a multi-line import into one ~450-character line when it pruned names from it. Caught in the line-diff, repaired, and the tool now preserves multi-line style.
+- **Verified by comparison**: mapping the new names back, the only differing lines are the 11 declarations and 3 prompt functions (now in the store), moved comments, shorthand expansions and import changes; the six function bodies are unchanged. `npm run check` 0 errors, vitest 218 passed, `vite build` OK.
+- **Tests, mutation-checked** (4 deliberate breaks, each failed the expected tests): prompt bridge (confirm/cancel, stray clicks, single delivery, unbound handlers, re-prompt), and the people operations with the API mocked (avatar decode cached per path and shared covers decoded once, a failed decode becomes `null`, optimistic rename, reassign name lookup, create→rename→reassign order, exclude removes locally).
+- **Docs**: RFC-0009 ownership table, `PROJECT_STRUCTURE.md`.
+- **Not run locally**: e2e (CI); the Tauri window (tag popover, People rail, import prompt).
+- **Next**: P3d `importFlow`.
+
 ## Refactor P3b: `print` store and `actions/printActions.js` (2026-09-20)
 
 Second step of RFC-0009 P3. `+page.svelte` 4,004 → 3,884 lines; new `lib/state/print.svelte.js` and `lib/actions/printActions.js`; 19 new tests (vitest 179 → 198).

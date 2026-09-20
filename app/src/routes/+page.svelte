@@ -28,6 +28,7 @@
   import CatalogRail from "$lib/components/CatalogRail.svelte";
   import { shell } from "$lib/state/shell.svelte.js";
   import { print } from "$lib/state/print.svelte.js";
+  import { faces } from "$lib/state/faces.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import { selectBaseImages, applyLibraryFilters, cameraOptionsFor, lensOptionsFor } from "$lib/libraryFilters.js";
@@ -59,7 +60,6 @@
     listCollectionImageIds,
   } from "$lib/api/catalog.js";
   import {
-    getDevelopPreview,
     getEditStack,
     setEditStack,
     getHistory,
@@ -146,19 +146,16 @@
   import { buildKeywordIdsByImage } from "$lib/collectionRules.js";
   import { buildFolderEntries } from "$lib/libraryFolders.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
-    import {
-    detectFacesForImportBatch,
-    detectFacesForImages,
-    cancelFaceDetection,
-    listPeople,
-    getFacesForImage,
-    createPerson,
-    renamePerson,
-    reassignFace,
-    setFaceExcluded,
-    getImagesForPerson,
-  } from "$lib/api/faces.js";
+    import { detectFacesForImportBatch, detectFacesForImages, getFacesForImage, getImagesForPerson } from "$lib/api/faces.js";
   import { handleChoosePrintCustomProfile, handlePrint, handleExportPdf } from "$lib/actions/printActions.js";
+  import {
+    refreshPeople,
+    handleRenamePerson,
+    handleReassignFace,
+    handleCreatePersonAndTagFace,
+    handleSetFaceExcluded,
+    handleCancelFaceDetection,
+  } from "$lib/actions/faceActions.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -584,130 +581,24 @@
   // image) taken when entering Print (see switchModule), matching how
   // Develop snapshots its own open image while Library's grid is hidden.
 
-  
 
-  
-
-  
-
-  
-
-  
-
-  
-
-  
   // Populated by handlePrint right before window.print() -- swapped into
   // PrintLayoutView's <img> src in place of the live (lower-resolution)
   // layout preview, so the actual OS print dialog sees the real
   // full-resolution, color-managed payload.
 
 
-  // People/Faces (M5 Slice 6, RFC-0005; folded into Library mode by the
-  // 2026-09-17 redesign -- see RFC-0005 §7). Detected faces for the
-  // CURRENTLY SELECTED photo show up in MetadataPanel's own "People"
-  // section, and face rectangles overlay the Loupe view when
-  // `showFaceRects` is on. `people` also backs the tag popover's "search
-  // existing people" suggestions in MetadataPanel AND (2026-09-18 user
-  // request) CatalogRail's own collapsible People section, which closes
-  // the "no way to browse by named person" gap RFC-0005 §7 explicitly
-  // left open -- that's what brought avatar decoding back after the
-  // 2026-09-17 fold removed it as unneeded.
-  let people = $state(/** @type {import('$lib/api/faces.js').PersonRow[]} */ ([]));
-  let currentImageFaces = $state(/** @type {import('$lib/api/faces.js').FaceRow[]} */ ([]));
-  let showFaceRects = $state(false);
-  let hoveredFaceId = $state(/** @type {number | null} */ (null));
-
-  // Shared by all three detection entry points below (MetadataPanel's
-  // per-photo "Face" button, Library's multi-select batch action, and
-  // "Detect Faces in Folder") -- only one `detect_faces_for_images` job is
-  // ever meaningfully in flight at a time in this single-window app (see
-  // lib.rs's `AppState.face_detection_cancel` doc comment), so one shared
-  // in-flight flag is enough; `detectingFaces` also gates the "Face"
-  // button so a per-photo click can't race a folder-wide job sharing the
-  // same backend cancel flag.
-  let detectingFaces = $state(false);
-  let faceScanProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
-  let faceDetectionCancelable = $state(false);
-
-  // CatalogRail's People section avatar crop source, keyed by SOURCE PATH
-  // (not person id -- several people can share a cover photo), same
-  // precedent the pre-2026-09-17 standalone PeopleGrid used: decoding is
-  // the expensive part, the per-person crop itself is a pure CSS
-  // background-position/size trick done in CatalogRail.
-  let personAvatarSourceUrls = $state(/** @type {Record<string, string | null>} */ ({}));
-
-  /** Refetches the People rail AND resolves any newly-seen cover photo to
-   * a real decoded-preview URL (source files are often RAW/HEIC -- not
-   * directly renderable by an `<img>`/CSS `background-image`, so this
-   * reuses the same Develop-preview decode Library/Develop already rely
-   * on). Cached by path across calls -- renaming/reassigning people
-   * doesn't change whose photo is whose cover most of the time, so this
-   * only ever decodes a genuinely new cover photo. */
-  async function refreshPeople() {
-    people = await listPeople();
-    const uniquePaths = [...new Set(people.map((p) => p.cover_image_path).filter((p) => p !== null))];
-    const missing = uniquePaths.filter((p) => !(p in personAvatarSourceUrls));
-    if (missing.length === 0) return;
-    const resolved = await Promise.all(
-      missing.map((path) =>
-        getDevelopPreview(/** @type {string} */ (path), null)
-          .then((info) => convertFileSrc(info.path))
-          .catch(() => null),
-      ),
-    );
-    const next = { ...personAvatarSourceUrls };
-    missing.forEach((path, i) => (next[/** @type {string} */ (path)] = resolved[i]));
-    personAvatarSourceUrls = next;
-  }
-
   /** Refetches the faces for whichever photo is currently selected --
    * called on selection change (see the `$effect` below) and after any
    * tag/rename/reassign/exclude/detect action touches the selected photo. */
   async function refreshCurrentImageFaces() {
     if (!selectedImage) {
-      currentImageFaces = [];
+      faces.currentImageFaces = [];
       return;
     }
-    currentImageFaces = await getFacesForImage(selectedImage.image_id);
+    faces.currentImageFaces = await getFacesForImage(selectedImage.image_id);
   }
 
-  async function handleRenamePerson(/** @type {number} */ personId, /** @type {string | null} */ name) {
-    people = people.map((p) => (p.id === personId ? { ...p, name } : p));
-    currentImageFaces = currentImageFaces.map((f) => (f.person_id === personId ? { ...f, person_name: name } : f));
-    await renamePerson(personId, name);
-  }
-
-  /** Existing-person pick from the tag popover, or the face menu's
-   * "Reassign to…" -- `personId: null` (from `setFaceExcluded`'s own
-   * caller below) clears the face back to unclustered. */
-  async function handleReassignFace(/** @type {number} */ faceId, /** @type {number | null} */ personId) {
-    const personName = personId === null ? null : (people.find((p) => p.id === personId)?.name ?? null);
-    currentImageFaces = currentImageFaces.map((f) =>
-      f.id === faceId ? { ...f, person_id: personId, person_name: personName } : f,
-    );
-    await reassignFace(faceId, personId);
-    await refreshPeople();
-  }
-
-  /** The tag popover's "+ New person…" row: creates the person, names it,
-   * then assigns this face to it -- three IPC calls composed here rather
-   * than inside a single backend command, matching how the rest of this
-   * app composes existing collection/keyword commands from the frontend. */
-  async function handleCreatePersonAndTagFace(/** @type {number} */ faceId, /** @type {string} */ name) {
-    const personId = await createPerson(faceId);
-    await renamePerson(personId, name);
-    await handleReassignFace(faceId, personId);
-  }
-
-  /** "Not a face" (kept, not deleted) -- removes it from the current
-   * photo's face list immediately, matching `get_faces_for_image`'s own
-   * `excluded = 0` filter. */
-  async function handleSetFaceExcluded(/** @type {number} */ faceId, /** @type {boolean} */ excluded) {
-    if (excluded) currentImageFaces = currentImageFaces.filter((f) => f.id !== faceId);
-    await setFaceExcluded(faceId, excluded);
-    await refreshPeople();
-  }
 
   /** Shared runner behind all three manual detection entry points --
    * on-demand detection outside the import flow (People-tab UX fix,
@@ -715,10 +606,10 @@
    * `cancelable` controls whether a Cancel affordance is shown; the tiny
    * single-photo case passes `false` (nothing worth canceling). */
   async function runFaceDetection(/** @type {number[]} */ imageIds, /** @type {boolean} */ cancelable) {
-    if (detectingFaces || imageIds.length === 0) return;
-    detectingFaces = true;
-    faceDetectionCancelable = cancelable;
-    faceScanProgress = { current: 0, total: imageIds.length };
+    if (faces.detectingFaces || imageIds.length === 0) return;
+    faces.detectingFaces = true;
+    faces.detectionCancelable = cancelable;
+    faces.scanProgress = { current: 0, total: imageIds.length };
     try {
       await detectFacesForImages(imageIds);
       images = images.map((img) => (imageIds.includes(img.image_id) ? { ...img, faces_scanned: true } : img));
@@ -727,9 +618,9 @@
     } catch (/** @type {any} */ e) {
       shell.notify(`Face detection failed: ${e}`);
     } finally {
-      detectingFaces = false;
-      faceDetectionCancelable = false;
-      faceScanProgress = null;
+      faces.detectingFaces = false;
+      faces.detectionCancelable = false;
+      faces.scanProgress = null;
     }
   }
 
@@ -761,10 +652,6 @@
       return;
     }
     runFaceDetection(targets, true);
-  }
-
-  function handleCancelFaceDetection() {
-    cancelFaceDetection().catch(() => {});
   }
 
 
@@ -1716,37 +1603,6 @@
   /** @type {string[] | null} */
   let supportedExtensions = $state(null);
 
-  // Import-time face-detection opt-in (Library-integration redesign,
-  // 2026-09-17): detection used to run silently on every import; now the
-  // user is asked first, same promise-bridge pattern BackupPromptDialog
-  // already established for a modal that a plain async function needs to
-  // await mid-flow.
-  let confirmingFaceDetectionOnImport = $state(false);
-  let pendingImportBatchSize = $state(0);
-  /** @type {((run: boolean) => void) | null} */
-  let resolveFaceDetectionPrompt = null;
-
-  function promptFaceDetectionOnImport(/** @type {number} */ count) {
-    pendingImportBatchSize = count;
-    confirmingFaceDetectionOnImport = true;
-    return /** @type {Promise<boolean>} */ (
-      new Promise((resolve) => {
-        resolveFaceDetectionPrompt = resolve;
-      })
-    );
-  }
-
-  function handleFaceDetectionPromptConfirm() {
-    confirmingFaceDetectionOnImport = false;
-    resolveFaceDetectionPrompt?.(true);
-    resolveFaceDetectionPrompt = null;
-  }
-
-  function handleFaceDetectionPromptCancel() {
-    confirmingFaceDetectionOnImport = false;
-    resolveFaceDetectionPrompt?.(false);
-    resolveFaceDetectionPrompt = null;
-  }
 
   async function runImport(/** @type {() => Promise<import('$lib/api/catalog.js').ImportSummary | null>} */ doImport) {
     importing = true;
@@ -1780,12 +1636,12 @@
       // silently and unconditionally, which surprised users who didn't
       // want the one-time model download or the extra wait. Now a THIRD
       // visible phase of the same progress bar, but only if the user says
-      // yes to `promptFaceDetectionOnImport`. Its own failure (e.g. no
+      // yes to `faces.promptDetectionOnImport`. Its own failure (e.g. no
       // network for the one-time model download) is caught separately and
       // does NOT fail the whole import -- cataloging + thumbnails already
       // succeeded, and a photo whose detection pass fails this way can
       // still be scanned later via the "Face"/"Detect Faces" actions.
-      if (summary.imported > 0 && (await promptFaceDetectionOnImport(summary.imported))) {
+      if (summary.imported > 0 && (await faces.promptDetectionOnImport(summary.imported))) {
         importPhase = "faces";
         try {
           await detectFacesForImportBatch(summary.import_batch);
@@ -3141,7 +2997,7 @@
     let unlistenFaceScanProgress = /** @type {(() => void) | undefined} */ (undefined);
     try {
       listen("face-detection-scan-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
-        faceScanProgress = event.payload;
+        faces.scanProgress = event.payload;
       }).then((fn) => {
         unlistenFaceScanProgress = fn;
       });
@@ -3181,10 +3037,10 @@
     {pastingSettingsToSelection}
     {mergingHdr}
     {mergingPanorama}
-    {detectingFaces}
-    {faceScanProgress}
-    {faceDetectionCancelable}
-    {showFaceRects}
+    detectingFaces={faces.detectingFaces}
+    faceScanProgress={faces.scanProgress}
+    faceDetectionCancelable={faces.detectionCancelable}
+    showFaceRects={faces.showFaceRects}
     {importing}
     {switchModule}
     {handleRemoveFromCollection}
@@ -3199,7 +3055,7 @@
     {handleExportClick}
     {handleImportFiles}
     {handleImportFolder}
-    onToggleFaceRects={() => (showFaceRects = !showFaceRects)}
+    onToggleFaceRects={() => (faces.showFaceRects = !faces.showFaceRects)}
     onRequestRemoval={() => (confirmingRemoval = true)}
     onOpenSettings={() => (shell.settingsOpen = true)}
   />
@@ -3208,8 +3064,8 @@
     settingsOpen={shell.settingsOpen}
     {exportItems}
     {copySettingsDialogOpen}
-    {confirmingFaceDetectionOnImport}
-    {pendingImportBatchSize}
+    confirmingFaceDetectionOnImport={faces.confirmingDetectionOnImport}
+    pendingImportBatchSize={faces.pendingImportBatchSize}
     {confirmingRemoval}
     {selectedIds}
     {confirmingReset}
@@ -3236,8 +3092,8 @@
     onCancelCreatePreset={() => (creatingPreset = false)}
     onCancelDeletePreset={() => (confirmingDeletePresetId = null)}
     {handleCopySettingsConfirmed}
-    {handleFaceDetectionPromptConfirm}
-    {handleFaceDetectionPromptCancel}
+    handleFaceDetectionPromptConfirm={faces.confirmDetectionPrompt}
+    handleFaceDetectionPromptCancel={faces.cancelDetectionPrompt}
     {handleRemoveConfirmed}
     {handleResetEditStack}
     {handleCreateCollection}
@@ -3328,8 +3184,8 @@
         {folderEntries}
         {collections}
         {keywordIdsByImage}
-        {people}
-        avatarUrls={personAvatarSourceUrls}
+        people={faces.people}
+        avatarUrls={faces.avatarSourceUrls}
         onSelectAllPhotos={selectAllPhotos}
         onSelectLastImport={selectLastImport}
         onSelectFolder={selectFolder}
@@ -3396,9 +3252,9 @@
               onOpenDevelop={() => openDevelop(currentImg.version_id)}
               zoomLevel={libraryZoomLevel}
               onZoomChange={(z) => (libraryZoomLevel = z)}
-              faces={currentImg.image_id === selectedImage?.image_id ? currentImageFaces : []}
-              {showFaceRects}
-              {hoveredFaceId}
+              faces={currentImg.image_id === selectedImage?.image_id ? faces.currentImageFaces : []}
+              showFaceRects={faces.showFaceRects}
+              hoveredFaceId={faces.hoveredFaceId}
             />
           {:else if libraryViewMode === "compare" && compareSelectImage && compareCandidateImage}
             <LibraryCompareView
@@ -3472,12 +3328,12 @@
           images = images.map((img) => (ids.has(img.image_id) ? { ...img, latitude: lat, longitude: lon } : img));
           shell.notify(`Set location for ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"}`);
         }}
-        faces={currentImageFaces}
-        {people}
-        {detectingFaces}
-        faceDetectionProgress={faceScanProgress}
-        {hoveredFaceId}
-        onHoverFace={(faceId) => (hoveredFaceId = faceId)}
+        faces={faces.currentImageFaces}
+        people={faces.people}
+        detectingFaces={faces.detectingFaces}
+        faceDetectionProgress={faces.scanProgress}
+        hoveredFaceId={faces.hoveredFaceId}
+        onHoverFace={(faceId) => (faces.hoveredFaceId = faceId)}
         onDetectFaces={handleDetectFacesForSelected}
         onTagFace={handleReassignFace}
         onCreateAndTagFace={handleCreatePersonAndTagFace}

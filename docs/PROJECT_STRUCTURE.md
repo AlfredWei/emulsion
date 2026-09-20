@@ -122,12 +122,15 @@ src/
 │   │                        print.svelte.js (Print module settings/state), faces.svelte.js (People/Faces state +
 │   │                        import-time detection prompt), importFlow.svelte.js (import/merge progress + the
 │   │                        close-time backup prompt), library.svelte.js (image list, sources,
-│   │                        filters, collections + their derived sets); more land per RFC-0009 P4b+.
+│   │                        filters, collections + their derived sets), selection.svelte.js (selected ids/anchor, selected images,
+│   │                        Compare pair); more land per RFC-0009 P4c+.
 │   │                        Tested via lib/state/*.test.js
 │   ├── actions/             Workflows that write more than one store (RFC-0009 §3.2): printActions.js
 │   │                        (print, export PDF, choose print profile), faceActions.js (people/face
 │   │                        operations), backupActions.js (backup prompt answers), libraryActions.js (source switching, image/
-│   │                        collection refresh, thumbnail patches, collection create/delete); more land per RFC-0009
+│   │                        collection refresh, thumbnail patches, collection create/delete), selectionActions.js (click/range/
+│   │                        step/select-all, Compare navigation), collectionsActions.js (add to / remove from collection);
+│   │                        more land per RFC-0009
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)

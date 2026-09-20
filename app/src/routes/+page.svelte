@@ -31,6 +31,7 @@
   import { faces } from "$lib/state/faces.svelte.js";
   import { importFlow } from "$lib/state/importFlow.svelte.js";
   import { library } from "$lib/state/library.svelte.js";
+  import { selection } from "$lib/state/selection.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import {
@@ -48,10 +49,7 @@
     mergeHdrBracket,
     mergePanorama,
     listAllImageKeywords,
-    createCollectionWithImages,
     updateSmartCollectionRules,
-    addImagesToCollection,
-    removeImagesFromCollection,
   } from "$lib/api/catalog.js";
   import {
     getEditStack,
@@ -156,7 +154,6 @@
     selectLastImport,
     selectFolder,
     refreshCollections,
-    loadManualMembership,
     handleResetFilters,
     selectCollection,
     refresh,
@@ -167,16 +164,23 @@
     handleCreateSmartCollection,
     handleDeleteCollection,
   } from "$lib/actions/libraryActions.js";
+  import {
+    targetVersionIds,
+    selectGridStep,
+    handleSelectAll,
+    handleDeselectAll,
+    handleSelect,
+    handleCompareNextCandidate,
+    handleComparePrevCandidate,
+    handleCompareSwap,
+    handleCompareMakeSelect,
+  } from "$lib/actions/selectionActions.js";
+  import {
+    handleAddToCollectionSelect,
+    handleCreateCollectionWithImages,
+    handleRemoveFromCollection,
+  } from "$lib/actions/collectionsActions.js";
 
-  // Multi-select (M2 Slice 3): `selectedIds` is the full selection,
-  // `selectedId` stays as the anchor/primary -- the last plainly-clicked
-  // image, which drives MetadataPanel, Shift-range endpoints, and any
-  // single-image concern. Reassigned immutably on every change: Svelte 5's
-  // $state doesn't deep-proxy Set, so in-place .add()/.delete() would
-  // silently not react -- and reassignment matches the images-array idiom
-  // used everywhere else in this file anyway.
-  let selectedId = $state(/** @type {number | null} */ (null));
-  let selectedIds = $state(/** @type {Set<number>} */ (new Set()));
   let imageViewerRef = $state(/** @type {any} */ (null));
 
   // Presets (M3): global, catalog-wide, same "fetch once at startup, keep
@@ -365,11 +369,11 @@
    * called on selection change (see the `$effect` below) and after any
    * tag/rename/reassign/exclude/detect action touches the selected photo. */
   async function refreshCurrentImageFaces() {
-    if (!selectedImage) {
+    if (!selection.selectedImage) {
       faces.currentImageFaces = [];
       return;
     }
-    faces.currentImageFaces = await getFacesForImage(selectedImage.image_id);
+    faces.currentImageFaces = await getFacesForImage(selection.selectedImage.image_id);
   }
 
 
@@ -399,14 +403,14 @@
 
   /** MetadataPanel's per-photo "Face" button. */
   function handleDetectFacesForSelected() {
-    if (!selectedImage) return;
-    runFaceDetection([selectedImage.image_id], false);
+    if (!selection.selectedImage) return;
+    runFaceDetection([selection.selectedImage.image_id], false);
   }
 
   /** Library's multi-select batch action -- every selected photo not yet
    * scanned (already-scanned photos are silently skipped, not re-run). */
   function handleDetectFacesForSelection() {
-    const targets = selectedImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
+    const targets = selection.selectedImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
     if (targets.length === 0) {
       shell.notify("Every selected photo has already been scanned for faces.");
       return;
@@ -819,7 +823,7 @@
     if (!value) return;
     const preset = presets.find((p) => p.id === Number(value));
     if (!preset) return;
-    const targets = [...selectedIds];
+    const targets = [...selection.selectedIds];
     if (targets.length === 0) return;
     applyingPreset = true;
     try {
@@ -900,7 +904,7 @@
    * guard -- rather than inventing a second batch pattern. */
   async function handlePasteSettingsToSelection() {
     if (!copiedSettings) return;
-    const targets = [...selectedIds];
+    const targets = [...selection.selectedIds];
     if (targets.length === 0) return;
     const settingsToApply = copiedSettings;
     pastingSettingsToSelection = true;
@@ -925,11 +929,6 @@
     }
   }
 
-  // What Export would act on right now: the open Develop image, or every
-  // selected Library image (M2 Slice 3 batch export -- the frontend-only
-  // follow-up M1 Slice 5's export_batch was explicitly built to accept).
-  let selectedImage = $derived(library.images.find((img) => img.version_id === selectedId) ?? null);
-  let selectedImages = $derived(library.images.filter((img) => selectedIds.has(img.version_id)));
 
   // People/Faces: reload the current photo's detected faces whenever the
   // single-image selection changes (image_id, not version_id -- faces are
@@ -937,17 +936,21 @@
   // the same source doesn't need a refetch). Cleared, not stale, when
   // nothing is selected.
   $effect(() => {
-    void selectedImage?.image_id;
+    void selection.selectedImage?.image_id;
     refreshCurrentImageFaces();
   });
+
+  // What Export would act on right now: the open Develop image, or every
+  // selected Library image (M2 Slice 3 batch export -- the frontend-only
+  // follow-up M1 Slice 5's export_batch was explicitly built to accept).
   let currentExportItems = $derived.by(() => {
     if (shell.activeModule === "develop" && developVersionId !== null) {
       return [{ path: developImagePath, version_id: developVersionId }];
     }
-    if (selectedImages.length > 0) {
-      return selectedImages.map((img) => ({ path: img.path, version_id: img.version_id }));
+    if (selection.selectedImages.length > 0) {
+      return selection.selectedImages.map((img) => ({ path: img.path, version_id: img.version_id }));
     }
-    return selectedImage ? [{ path: selectedImage.path, version_id: selectedImage.version_id }] : [];
+    return selection.selectedImage ? [{ path: selection.selectedImage.path, version_id: selection.selectedImage.version_id }] : [];
   });
   let exportItems = $state(/** @type {{ path: string, version_id: number }[] | null} */ (null));
 
@@ -956,42 +959,7 @@
   // the anchor image -- unconditional on "the acted-on cell is part of
   // the selection" (unlike targetVersionIds below) since there's no
   // per-cell click event here, just "apply to whatever's selected".
-  let keywordTargetImageIds = $derived(
-    selectedImages.length > 0
-      ? selectedImages.map((img) => img.image_id)
-      : selectedImage
-        ? [selectedImage.image_id]
-        : [],
-  );
 
-  let compareSelectImage = $derived.by(() => {
-    if (selectedId !== null) {
-      const match = library.filteredImages.find((img) => img.version_id === selectedId);
-      if (match) return match;
-    }
-    return library.filteredImages[0] ?? null;
-  });
-
-  let compareCandidateImage = $derived.by(() => {
-    if (library.compareCandidateId !== null) {
-      const match = library.filteredImages.find((img) => img.version_id === library.compareCandidateId);
-      if (match) return match;
-    }
-    if (selectedIds.size >= 2) {
-      const otherId = [...selectedIds].find((id) => id !== selectedId);
-      if (otherId != null) {
-        const match = library.filteredImages.find((img) => img.version_id === otherId);
-        if (match) return match;
-      }
-    }
-    if (compareSelectImage && library.filteredImages.length > 1) {
-      const selIdx = library.filteredImages.findIndex((img) => img.version_id === compareSelectImage.version_id);
-      if (selIdx >= 0) {
-        return library.filteredImages[(selIdx + 1) % library.filteredImages.length];
-      }
-    }
-    return compareSelectImage;
-  });
 
   // Persistence is debounced (not written on every slider tick) so a drag
   // doesn't flood the catalog with writes -- flushed immediately whenever
@@ -1370,25 +1338,6 @@
   }
 
 
-  // Batch rate/flag/color-label (MILESTONES.md M2 scope, deferred from
-  // Slice 3's multi-select work): Lightroom-style -- acting on a cell that
-  // is part of an active multi-selection applies to the whole selection,
-  // not just that one cell. Acting on a cell OUTSIDE the current
-  // selection (or when only one image is selected) stays single-target,
-  // unaffected by an unrelated selection elsewhere. When called without an
-  // explicit versionId (e.g. from toolbar / metadata panel / hotkey), applies
-  // to all currently selected images (or the anchor image).
-  function targetVersionIds(/** @type {number | null | undefined} */ versionId) {
-    if (versionId !== undefined && versionId !== null) {
-      if (selectedIds.size > 1 && selectedIds.has(versionId)) {
-        return [...selectedIds];
-      }
-      return [versionId];
-    }
-    if (selectedIds.size > 0) return [...selectedIds];
-    return selectedId !== null ? [selectedId] : [];
-  }
-
   async function handleRatingChange(/** @type {number | null | undefined} */ versionId, /** @type {number} */ rating) {
     const targets = targetVersionIds(versionId);
     if (targets.length === 0) return;
@@ -1413,29 +1362,29 @@
   // Keyboard navigation & selection helpers
   function selectNextImage(/** @type {boolean=} */ extend) {
     if (library.filteredImages.length === 0) return;
-    if (selectedId === null) {
+    if (selection.selectedId === null) {
       const first = library.filteredImages[0];
-      selectedId = first.version_id;
-      selectedIds = new Set([first.version_id]);
+      selection.selectedId = first.version_id;
+      selection.selectedIds = new Set([first.version_id]);
       return;
     }
-    const idx = library.filteredImages.findIndex((img) => img.version_id === selectedId);
+    const idx = library.filteredImages.findIndex((img) => img.version_id === selection.selectedId);
     if (idx === -1) {
       const first = library.filteredImages[0];
-      selectedId = first.version_id;
-      selectedIds = new Set([first.version_id]);
+      selection.selectedId = first.version_id;
+      selection.selectedIds = new Set([first.version_id]);
       return;
     }
     if (idx < library.filteredImages.length - 1) {
       const nextImg = library.filteredImages[idx + 1];
       if (extend) {
-        const next = new Set(selectedIds);
+        const next = new Set(selection.selectedIds);
         next.add(nextImg.version_id);
-        selectedIds = next;
-        selectedId = nextImg.version_id;
+        selection.selectedIds = next;
+        selection.selectedId = nextImg.version_id;
       } else {
-        selectedId = nextImg.version_id;
-        selectedIds = new Set([nextImg.version_id]);
+        selection.selectedId = nextImg.version_id;
+        selection.selectedIds = new Set([nextImg.version_id]);
       }
       if (shell.activeModule === "develop") {
         openDevelop(nextImg.version_id);
@@ -1445,29 +1394,29 @@
 
   function selectPrevImage(/** @type {boolean=} */ extend) {
     if (library.filteredImages.length === 0) return;
-    if (selectedId === null) {
+    if (selection.selectedId === null) {
       const last = library.filteredImages[library.filteredImages.length - 1];
-      selectedId = last.version_id;
-      selectedIds = new Set([last.version_id]);
+      selection.selectedId = last.version_id;
+      selection.selectedIds = new Set([last.version_id]);
       return;
     }
-    const idx = library.filteredImages.findIndex((img) => img.version_id === selectedId);
+    const idx = library.filteredImages.findIndex((img) => img.version_id === selection.selectedId);
     if (idx === -1) {
       const first = library.filteredImages[0];
-      selectedId = first.version_id;
-      selectedIds = new Set([first.version_id]);
+      selection.selectedId = first.version_id;
+      selection.selectedIds = new Set([first.version_id]);
       return;
     }
     if (idx > 0) {
       const prevImg = library.filteredImages[idx - 1];
       if (extend) {
-        const next = new Set(selectedIds);
+        const next = new Set(selection.selectedIds);
         next.add(prevImg.version_id);
-        selectedIds = next;
-        selectedId = prevImg.version_id;
+        selection.selectedIds = next;
+        selection.selectedId = prevImg.version_id;
       } else {
-        selectedId = prevImg.version_id;
-        selectedIds = new Set([prevImg.version_id]);
+        selection.selectedId = prevImg.version_id;
+        selection.selectedIds = new Set([prevImg.version_id]);
       }
       if (shell.activeModule === "develop") {
         openDevelop(prevImg.version_id);
@@ -1475,146 +1424,6 @@
     }
   }
 
-  function selectGridStep(/** @type {number} */ step, /** @type {boolean=} */ extend) {
-    if (library.filteredImages.length === 0) return;
-    if (selectedId === null) {
-      const first = library.filteredImages[0];
-      selectedId = first.version_id;
-      selectedIds = new Set([first.version_id]);
-      return;
-    }
-    const idx = library.filteredImages.findIndex((img) => img.version_id === selectedId);
-    if (idx === -1) return;
-    const targetIdx = Math.max(0, Math.min(library.filteredImages.length - 1, idx + step));
-    const targetImg = library.filteredImages[targetIdx];
-    if (!targetImg) return;
-    if (extend) {
-      const [from, to] = idx <= targetIdx ? [idx, targetIdx] : [targetIdx, idx];
-      selectedIds = new Set(library.filteredImages.slice(from, to + 1).map((img) => img.version_id));
-      selectedId = targetImg.version_id;
-    } else {
-      selectedId = targetImg.version_id;
-      selectedIds = new Set([targetImg.version_id]);
-    }
-  }
-
-  function handleSelectAll() {
-    if (library.filteredImages.length === 0) return;
-    selectedIds = new Set(library.filteredImages.map((img) => img.version_id));
-    if (selectedId === null || !selectedIds.has(selectedId)) {
-      selectedId = library.filteredImages[0].version_id;
-    }
-  }
-
-  function handleDeselectAll() {
-    if (library.libraryViewMode !== "grid") {
-      library.libraryViewMode = "grid";
-      return;
-    }
-    selectedIds = new Set();
-    selectedId = null;
-  }
-
-  function handleCompareNextCandidate() {
-    if (library.filteredImages.length === 0) return;
-    const curCandidate = compareCandidateImage;
-    const curSelect = compareSelectImage;
-    const cIdx = curCandidate
-      ? library.filteredImages.findIndex((img) => img.version_id === curCandidate.version_id)
-      : 0;
-    const nextIdx = (cIdx + 1) % library.filteredImages.length;
-    const nextCand = library.filteredImages[nextIdx];
-    library.compareCandidateId = nextCand.version_id;
-    if (curSelect) {
-      selectedIds = new Set([curSelect.version_id, nextCand.version_id]);
-    }
-  }
-
-  function handleComparePrevCandidate() {
-    if (library.filteredImages.length === 0) return;
-    const curCandidate = compareCandidateImage;
-    const curSelect = compareSelectImage;
-    const cIdx = curCandidate
-      ? library.filteredImages.findIndex((img) => img.version_id === curCandidate.version_id)
-      : 0;
-    const prevIdx = (cIdx - 1 + library.filteredImages.length) % library.filteredImages.length;
-    const prevCand = library.filteredImages[prevIdx];
-    library.compareCandidateId = prevCand.version_id;
-    if (curSelect) {
-      selectedIds = new Set([curSelect.version_id, prevCand.version_id]);
-    }
-  }
-
-  function handleCompareSwap() {
-    const curSelect = compareSelectImage;
-    const curCand = compareCandidateImage;
-    if (!curSelect || !curCand) return;
-    const oldSelId = curSelect.version_id;
-    const oldCandId = curCand.version_id;
-    selectedId = oldCandId;
-    library.compareCandidateId = oldSelId;
-    selectedIds = new Set([oldCandId, oldSelId]);
-  }
-
-  function handleCompareMakeSelect() {
-    const curCand = compareCandidateImage;
-    if (!curCand) return;
-    selectedId = curCand.version_id;
-    const newSelIdx = library.filteredImages.findIndex((img) => img.version_id === curCand.version_id);
-    if (library.filteredImages.length > 1) {
-      const nextCandIdx = (newSelIdx + 1) % library.filteredImages.length;
-      library.compareCandidateId = library.filteredImages[nextCandIdx].version_id;
-      selectedIds = new Set([selectedId, library.compareCandidateId]);
-    } else {
-      selectedIds = new Set([selectedId]);
-    }
-  }
-
-  // Multi-select click semantics (M2 Slice 3), standard file-manager
-  // behavior: plain click replaces the selection and moves the anchor;
-  // Cmd/Ctrl toggles one image in/out; Shift selects the contiguous range
-  // (in `filteredImages` order) from the anchor to the clicked image.
-  //
-  // The range is computed over `filteredImages`, NOT the full `images`
-  // array (M2 Slice 5 fix): while no collection filter is active the two
-  // are identical, but once a collection filters the grid, indexing into
-  // the unfiltered `images` array would compute a range over catalog-wide
-  // positions that don't correspond to what's on screen -- Shift-click
-  // could silently pull hidden/filtered-out images into the selection,
-  // which then flows into remove/batch-culling/keyword-assignment against
-  // images the user never saw or selected. LibraryGrid's virtualization
-  // is a separate, narrower concern (it only slices what's *rendered*
-  // within the already-filtered set for scroll performance) and doesn't
-  // affect this.
-  function handleSelect(/** @type {number} */ versionId, /** @type {MouseEvent=} */ event) {
-    if (event?.shiftKey && selectedId !== null) {
-      const anchorIndex = library.filteredImages.findIndex((img) => img.version_id === selectedId);
-      const clickedIndex = library.filteredImages.findIndex((img) => img.version_id === versionId);
-      if (anchorIndex !== -1 && clickedIndex !== -1) {
-        const [from, to] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
-        selectedIds = new Set(library.filteredImages.slice(from, to + 1).map((img) => img.version_id));
-        return; // anchor stays put, Lightroom/Finder-style
-      }
-      // Stale anchor (e.g. it was just removed, or is outside the current
-      // filter): fall through to plain select.
-    }
-    if (event?.metaKey || event?.ctrlKey) {
-      const next = new Set(selectedIds);
-      if (next.has(versionId)) {
-        next.delete(versionId);
-        if (selectedId === versionId) {
-          selectedId = next.size > 0 ? [...next][next.size - 1] : null;
-        }
-      } else {
-        next.add(versionId);
-        selectedId = versionId;
-      }
-      selectedIds = next;
-      return;
-    }
-    selectedId = versionId;
-    selectedIds = new Set([versionId]);
-  }
 
   // Non-destructive removal (M2 Slice 3): catalog rows + app-owned derived
   // files only -- the backend never touches source files. `await` the
@@ -1627,7 +1436,7 @@
     // blur-save to fire before the rows it targets can disappear.
     /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
 
-    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
+    const imageIds = [...new Set(selection.selectedImages.map((img) => img.image_id))];
     if (imageIds.length === 0) return;
     try {
       await removeImages(imageIds);
@@ -1635,11 +1444,11 @@
       shell.notify(`Remove failed: ${e}`);
       return;
     }
-    const removedVersionIds = new Set(selectedImages.map((img) => img.version_id));
+    const removedVersionIds = new Set(selection.selectedImages.map((img) => img.version_id));
     library.images = library.images.filter((img) => !removedVersionIds.has(img.version_id));
     shell.notify(`Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from catalog`);
-    selectedId = null;
-    selectedIds = new Set();
+    selection.selectedId = null;
+    selection.selectedIds = new Set();
     // If the image open in Develop was just removed, clear that state too --
     // otherwise the develop branch keeps rendering a deleted image, and a
     // pending debounced edit-stack save would fire a pointless IPC call
@@ -1667,7 +1476,7 @@
    * `handleRemoveConfirmed`'s own dedupe: a virtual copy's version_id is
    * a distinct selection entry but not a distinct source photo. */
   async function handleMergeHdrBracket() {
-    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
+    const imageIds = [...new Set(selection.selectedImages.map((img) => img.image_id))];
     if (imageIds.length < 2) return;
     importFlow.mergingHdr = true;
     importFlow.hdrMergeProgress = null;
@@ -1677,8 +1486,8 @@
       await refresh();
       const merged = library.images.find((img) => img.image_id === resultImageId);
       if (merged) {
-        selectedId = merged.version_id;
-        selectedIds = new Set([merged.version_id]);
+        selection.selectedId = merged.version_id;
+        selection.selectedIds = new Set([merged.version_id]);
         // A merge result isn't tagged with an import_batch (it's not from
         // import_paths_with_progress), so backfillMissingThumbnails'
         // batch-scoping doesn't apply here -- prioritizeThumbnail's
@@ -1710,7 +1519,7 @@
    * mergePanorama's own doc comment) into one new wide composite,
    * cataloged exactly like an HDR merge result. */
   async function handleMergePanorama() {
-    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
+    const imageIds = [...new Set(selection.selectedImages.map((img) => img.image_id))];
     if (imageIds.length < 2) return;
     importFlow.mergingPanorama = true;
     shell.notify("");
@@ -1719,8 +1528,8 @@
       await refresh();
       const merged = library.images.find((img) => img.image_id === resultImageId);
       if (merged) {
-        selectedId = merged.version_id;
-        selectedIds = new Set([merged.version_id]);
+        selection.selectedId = merged.version_id;
+        selection.selectedIds = new Set([merged.version_id]);
         prioritizeThumbnail(merged.version_id);
       }
       shell.notify(`Stitched ${imageIds.length} photos into one panorama`);
@@ -1731,49 +1540,6 @@
     }
   }
 
-
-  // "Add to Collection…" toolbar picker, from a multi-selection.
-  async function handleAddToCollectionSelect(/** @type {string} */ value) {
-    if (!value) return;
-    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
-    if (imageIds.length === 0) return;
-    if (value === "__new__") {
-      library.pendingAddToCollectionImageIds = imageIds;
-      library.creatingCollectionWithImages = true;
-      return;
-    }
-    const collectionId = Number(value);
-    await addImagesToCollection(collectionId, imageIds);
-    // Invalidate by the collection id that was actually just mutated, not
-    // by activeCollectionId -- those differ when adding to a DIFFERENT
-    // collection than the one currently being viewed, and invalidating
-    // the wrong one would silently leave the mutated one's cache stale.
-    if (library.manualMembership.has(collectionId)) await loadManualMembership(collectionId);
-    await refreshCollections();
-    shell.notify(`Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to collection`);
-  }
-
-  async function handleCreateCollectionWithImages(/** @type {string} */ name) {
-    library.creatingCollectionWithImages = false;
-    const imageIds = library.pendingAddToCollectionImageIds;
-    library.pendingAddToCollectionImageIds = [];
-    await createCollectionWithImages(name, imageIds);
-    await refreshCollections();
-    shell.notify(`Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to "${name}"`);
-  }
-
-  async function handleRemoveFromCollection() {
-    if (library.activeCollectionId === null) return;
-    const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
-    if (imageIds.length === 0) return;
-    await removeImagesFromCollection(library.activeCollectionId, imageIds);
-    await loadManualMembership(library.activeCollectionId); // mutated === active here, still the right id
-    await refreshCollections();
-    const removedVersionIds = new Set(selectedImages.map((img) => img.version_id));
-    selectedIds = new Set([...selectedIds].filter((id) => !removedVersionIds.has(id)));
-    if (selectedId !== null && removedVersionIds.has(selectedId)) selectedId = null;
-    shell.notify(`Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from collection`);
-  }
 
   // Everything the keyboard and menu handlers (lib/keyboard.js, lib/menuActions.js) read or
   // write. State goes through live getters/setters -- never copied values -- so the handlers
@@ -1847,19 +1613,19 @@
     },
     openDevelop,
     get selectedId() {
-      return selectedId;
+      return selection.selectedId;
     },
     set selectedId(value) {
-      selectedId = value;
+      selection.selectedId = value;
     },
     get selectedIds() {
-      return selectedIds;
+      return selection.selectedIds;
     },
     set selectedIds(value) {
-      selectedIds = value;
+      selection.selectedIds = value;
     },
     get selectedImage() {
-      return selectedImage;
+      return selection.selectedImage;
     },
     get selectedMask() {
       return selectedMask;
@@ -2660,7 +2426,7 @@
     {currentExportItems}
     activeCollectionId={library.activeCollectionId}
     activeCollection={library.activeCollection}
-    {selectedIds}
+    selectedIds={selection.selectedIds}
     manualCollections={library.manualCollections}
     {applyingPreset}
     {presets}
@@ -2698,7 +2464,7 @@
     confirmingFaceDetectionOnImport={faces.confirmingDetectionOnImport}
     pendingImportBatchSize={faces.pendingImportBatchSize}
     confirmingRemoval={library.confirmingRemoval}
-    {selectedIds}
+    selectedIds={selection.selectedIds}
     {confirmingReset}
     creatingCollection={library.creatingCollection}
     creatingCollectionWithImages={library.creatingCollectionWithImages}
@@ -2855,11 +2621,11 @@
           {#if library.libraryViewMode === "grid"}
             <LibraryGrid
               images={library.filteredImages}
-              {selectedIds}
+              selectedIds={selection.selectedIds}
               onSelect={handleSelect}
               onOpen={(vid) => {
-                selectedId = vid;
-                selectedIds = new Set([vid]);
+                selection.selectedId = vid;
+                selection.selectedIds = new Set([vid]);
                 library.libraryViewMode = "loupe";
                 prioritizeThumbnail(vid);
               }}
@@ -2867,8 +2633,8 @@
               onFlagChange={handleFlagChange}
               onColorLabelChange={handleColorLabelChange}
             />
-          {:else if library.libraryViewMode === "loupe" && (selectedImage || library.filteredImages[0])}
-            {@const currentImg = selectedImage ?? library.filteredImages[0]}
+          {:else if library.libraryViewMode === "loupe" && (selection.selectedImage || library.filteredImages[0])}
+            {@const currentImg = selection.selectedImage ?? library.filteredImages[0]}
             {@const curIdx = library.filteredImages.findIndex((img) => img.version_id === currentImg.version_id)}
             <LibraryImageViewer
               bind:this={imageViewerRef}
@@ -2883,14 +2649,14 @@
               onOpenDevelop={() => openDevelop(currentImg.version_id)}
               zoomLevel={library.libraryZoomLevel}
               onZoomChange={(z) => (library.libraryZoomLevel = z)}
-              faces={currentImg.image_id === selectedImage?.image_id ? faces.currentImageFaces : []}
+              faces={currentImg.image_id === selection.selectedImage?.image_id ? faces.currentImageFaces : []}
               showFaceRects={faces.showFaceRects}
               hoveredFaceId={faces.hoveredFaceId}
             />
-          {:else if library.libraryViewMode === "compare" && compareSelectImage && compareCandidateImage}
+          {:else if library.libraryViewMode === "compare" && selection.compareSelectImage && selection.compareCandidateImage}
             <LibraryCompareView
-              selectImage={compareSelectImage}
-              candidateImage={compareCandidateImage}
+              selectImage={selection.compareSelectImage}
+              candidateImage={selection.compareCandidateImage}
               onSwap={handleCompareSwap}
               onMakeSelect={handleCompareMakeSelect}
               onNextCandidate={library.filteredImages.length > 1 ? handleCompareNextCandidate : undefined}
@@ -2901,14 +2667,14 @@
             />
           {:else if library.libraryViewMode === "survey"}
             <LibrarySurveyView
-              images={selectedImages.length > 0 ? selectedImages : library.filteredImages.slice(0, 4)}
-              primaryId={selectedId}
-              onSetPrimary={(vid) => (selectedId = vid)}
+              images={selection.selectedImages.length > 0 ? selection.selectedImages : library.filteredImages.slice(0, 4)}
+              primaryId={selection.selectedId}
+              onSetPrimary={(vid) => (selection.selectedId = vid)}
               onDeselect={(vid) => {
-                const next = new Set(selectedIds);
+                const next = new Set(selection.selectedIds);
                 next.delete(vid);
-                selectedIds = next;
-                if (selectedId === vid) selectedId = next.size > 0 ? [...next][0] : null;
+                selection.selectedIds = next;
+                if (selection.selectedId === vid) selection.selectedId = next.size > 0 ? [...next][0] : null;
               }}
               onOpen={(vid) => openDevelop(vid)}
               onRatingChange={handleRatingChange}
@@ -2920,7 +2686,7 @@
           <!-- Library Bottom Toolbar -->
           <LibraryToolbar
             viewMode={library.libraryViewMode}
-            selectedCount={selectedIds.size}
+            selectedCount={selection.selectedIds.size}
             totalCount={library.filteredImages.length}
             zoomLevel={library.libraryZoomLevel}
             onViewModeChange={(m) => (library.libraryViewMode = m)}
@@ -2935,22 +2701,22 @@
       {/if}
 
       <MetadataPanel
-        image={selectedImage}
-        targetImageIds={keywordTargetImageIds}
-        selectedCount={selectedIds.size}
-        onRatingChange={(rating) => handleRatingChange(selectedId, rating)}
-        onFlagChange={(flag) => handleFlagChange(selectedId, flag)}
-        onColorLabelChange={(color) => handleColorLabelChange(selectedId, color)}
-        onCaptionChange={(caption) => selectedId !== null && handleCaptionChange(selectedId, caption)}
+        image={selection.selectedImage}
+        targetImageIds={selection.keywordTargetImageIds}
+        selectedCount={selection.selectedIds.size}
+        onRatingChange={(rating) => handleRatingChange(selection.selectedId, rating)}
+        onFlagChange={(flag) => handleFlagChange(selection.selectedId, flag)}
+        onColorLabelChange={(color) => handleColorLabelChange(selection.selectedId, color)}
+        onCaptionChange={(caption) => selection.selectedId !== null && handleCaptionChange(selection.selectedId, caption)}
         onCopyrightChange={(copyright) =>
-          selectedImage && handleCopyrightChange(selectedImage.image_id, copyright)}
+          selection.selectedImage && handleCopyrightChange(selection.selectedImage.image_id, copyright)}
         onContactChange={(contact) =>
-          selectedImage && handleContactChange(selectedImage.image_id, contact)}
+          selection.selectedImage && handleContactChange(selection.selectedImage.image_id, contact)}
         onKeywordAssigned={(name, count) =>
           (shell.notify(`Added "${name}" to ${count} photo${count === 1 ? "" : "s"}`))}
         onGeoLocationChange={(lat, lon, alt) => {
-          if (selectedImage) {
-            patchLocal(selectedImage.version_id, { latitude: lat, longitude: lon, altitude: alt });
+          if (selection.selectedImage) {
+            patchLocal(selection.selectedImage.version_id, { latitude: lat, longitude: lon, altitude: alt });
             shell.notify(lat != null ? "Updated GPS coordinates" : "Removed GPS coordinates");
           }
         }}
@@ -3241,7 +3007,7 @@
   {/if}
 
   {#if shell.activeModule === "library"}
-    <Filmstrip images={library.filteredImages} {selectedIds} onSelect={handleSelect} onOpen={openDevelop} />
+    <Filmstrip images={library.filteredImages} selectedIds={selection.selectedIds} onSelect={handleSelect} onOpen={openDevelop} />
   {:else if shell.activeModule === "develop"}
     <Filmstrip
       images={developFilmstripImages}

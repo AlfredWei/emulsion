@@ -5,7 +5,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { listen } from "@tauri-apps/api/event";
-  import { onMount, tick } from "svelte";
+  import { onMount } from "svelte";
   import AppTitlebar from "$lib/components/AppTitlebar.svelte";
   import AppDialogs from "$lib/components/AppDialogs.svelte";
   import StatusStrip from "$lib/components/StatusStrip.svelte";
@@ -27,6 +27,7 @@
   import PrintLayoutView from "$lib/components/PrintLayoutView.svelte";
   import CatalogRail from "$lib/components/CatalogRail.svelte";
   import { shell } from "$lib/state/shell.svelte.js";
+  import { print } from "$lib/state/print.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import { selectBaseImages, applyLibraryFilters, cameraOptionsFor, lensOptionsFor } from "$lib/libraryFilters.js";
@@ -145,8 +146,7 @@
   import { buildKeywordIdsByImage } from "$lib/collectionRules.js";
   import { buildFolderEntries } from "$lib/libraryFolders.js";
   import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
-  import { getPrintReadyImages, exportPrintPdf, PAPER_SIZES } from "$lib/api/print.js";
-  import {
+    import {
     detectFacesForImportBatch,
     detectFacesForImages,
     cancelFaceDetection,
@@ -158,6 +158,7 @@
     setFaceExcluded,
     getImagesForPerson,
   } from "$lib/api/faces.js";
+  import { handleChoosePrintCustomProfile, handlePrint, handleExportPdf } from "$lib/actions/printActions.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -175,7 +176,6 @@
   let libraryZoomLevel = $state(1);
   let imageViewerRef = $state(/** @type {any} */ (null));
 
-  
 
   let compareCandidateId = $state(/** @type {number | null} */ (null));
   let importing = $state(false);
@@ -205,7 +205,6 @@
   // "faces" once thumbnail backfill resolves.
   let importPhase = $state(/** @type {"cataloging" | "thumbnails" | "faces"} */ ("cataloging"));
 
-  
 
   // Collections (M2 Slice 5). `activeCollectionId === null` means "All
   // Photos" (no filter). `manualMembership` caches a manual collection's
@@ -584,29 +583,25 @@
   // `printItems` is a snapshot of Library's selection (or the open Develop
   // image) taken when entering Print (see switchModule), matching how
   // Develop snapshots its own open image while Library's grid is hidden.
-  let printItems = $state(/** @type {{ path: string, version_id: number }[]} */ ([]));
-  let printTemplate = $state(/** @type {"single" | "contact-sheet"} */ ("single"));
-  let printFitMode = $state(/** @type {"fit" | "fill"} */ ("fit"));
-  let printRows = $state(2);
-  let printCols = $state(2);
-  let printCellSpacing = $state(0.1);
-  let printPaperSize = $state("letter");
-  let printOrientation = $state(/** @type {"portrait" | "landscape"} */ ("portrait"));
-  let printMargins = $state({ top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 });
-  let printColorManaged = $state(false);
-  let printProfileTarget = $state(
-    /** @type {"srgb" | "adobe-rgb" | "prophoto-rgb" | "custom"} */ ("srgb"),
-  );
-  let printCustomProfilePath = $state(/** @type {string | null} */ (null));
-  let printIntent = $state(
-    /** @type {"perceptual" | "relative" | "saturation" | "absolute"} */ ("relative"),
-  );
-  let printing = $state(false);
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
   // Populated by handlePrint right before window.print() -- swapped into
   // PrintLayoutView's <img> src in place of the live (lower-resolution)
   // layout preview, so the actual OS print dialog sees the real
   // full-resolution, color-managed payload.
-  let printReadyUrls = $state(/** @type {Record<number, string>} */ ({}));
+
 
   // People/Faces (M5 Slice 6, RFC-0005; folded into Library mode by the
   // 2026-09-17 redesign -- see RFC-0005 §7). Detected faces for the
@@ -772,121 +767,6 @@
     cancelFaceDetection().catch(() => {});
   }
 
-  /** Same file-picker precedent as `handleChooseCustomProfile` above, kept
-   * separate since it targets Print's own (not Soft Proof's) state. */
-  async function handleChoosePrintCustomProfile() {
-    const path = await open({ multiple: false, filters: [{ name: "ICC Profile", extensions: ["icc", "icm"] }] });
-    if (!path || Array.isArray(path)) return;
-    printCustomProfilePath = path;
-    printProfileTarget = "custom";
-  }
-
-  let printColorManagementSettings = $derived(
-    printColorManaged
-      ? { target: printProfileTarget, customProfilePath: printCustomProfilePath, intent: printIntent }
-      : null,
-  );
-
-  /** Generates the full-resolution, color-managed print payload for every
-   * item in this print job, swaps it into the layout view, then triggers
-   * the OS-native print dialog. Awaiting `tick()` before `window.print()`
-   * gives the swapped `<img src>`s a chance to actually load -- the OS
-   * dialog reads whatever's currently painted, not a promise. */
-  async function handlePrint() {
-    if (printItems.length === 0 || printing) return;
-    printing = true;
-    try {
-      const results = await getPrintReadyImages(
-        printItems.map((item) => item.version_id),
-        {
-          profile: printColorManaged
-            ? {
-                target: printProfileTarget,
-                custom_profile_path: printCustomProfilePath,
-                intent: printIntent,
-                gamut_warning: false,
-              }
-            : null,
-        },
-      );
-      const next = { ...printReadyUrls };
-      const failures = [];
-      for (const result of results) {
-        if (result.path) {
-          next[result.version_id] = convertFileSrc(result.path);
-        } else {
-          failures.push(result.error ?? "unknown error");
-        }
-      }
-      printReadyUrls = next;
-      if (failures.length > 0) {
-        shell.notify(`Print: ${failures.length} photo(s) could not be prepared (${failures[0]})`);
-        if (failures.length === results.length) return;
-      }
-      await tick();
-      window.print();
-    } catch (e) {
-      shell.notify(`Print failed: ${e}`);
-    } finally {
-      printing = false;
-    }
-  }
-
-  let exportingPdf = $state(false);
-
-  /** "Export as PDF" -- a direct alternative to handlePrint's window.print()
-   * flow: picks a destination via the same save-dialog convention as
-   * Export/preset-export, then asks the Rust side to compose a real PDF
-   * from the print-ready rasters (same generation/caching path handlePrint
-   * uses via get_print_ready_images), skipping the OS print dialog. */
-  async function handleExportPdf() {
-    if (printItems.length === 0 || exportingPdf) return;
-    const destinationPath = await save({
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-      defaultPath: "print.pdf",
-    });
-    if (!destinationPath) return;
-    exportingPdf = true;
-    try {
-      const paper = PAPER_SIZES[/** @type {keyof typeof PAPER_SIZES} */ (printPaperSize)] ?? PAPER_SIZES.letter;
-      const pageWidthIn = printOrientation === "landscape" ? paper.heightIn : paper.widthIn;
-      const pageHeightIn = printOrientation === "landscape" ? paper.widthIn : paper.heightIn;
-      await exportPrintPdf({
-        version_ids: printItems.map((item) => item.version_id),
-        destination_path: destinationPath,
-        layout: {
-          template: printTemplate,
-          fit_mode: printFitMode,
-          rows: printRows,
-          cols: printCols,
-          cell_spacing_in: printCellSpacing,
-        },
-        page: {
-          width_in: pageWidthIn,
-          height_in: pageHeightIn,
-          margin_top_in: printMargins.top,
-          margin_right_in: printMargins.right,
-          margin_bottom_in: printMargins.bottom,
-          margin_left_in: printMargins.left,
-        },
-        color_management: {
-          profile: printColorManaged
-            ? {
-                target: printProfileTarget,
-                custom_profile_path: printCustomProfilePath,
-                intent: printIntent,
-                gamut_warning: false,
-              }
-            : null,
-        },
-      });
-      shell.notify(`Exported PDF to ${destinationPath}`);
-    } catch (e) {
-      shell.notify(`PDF export failed: ${e}`);
-    } finally {
-      exportingPdf = false;
-    }
-  }
 
   // Debounced (same 250ms settle as scheduleFlush below, a separate timer
   // for a separate purpose -- this refetches a PREVIEW, it never writes
@@ -2654,8 +2534,8 @@
       // taken once on entry so the print job doesn't silently change out
       // from under the user if they alter Library's selection afterward
       // (Library's own grid is hidden while inside Print, same as Develop).
-      printItems = currentExportItems;
-      printReadyUrls = {};
+      print.items = currentExportItems;
+      print.readyUrls = {};
     }
     if (target === "people") {
       refreshPeople();
@@ -3821,47 +3701,47 @@
   {:else if shell.activeModule === "print"}
     <div class="print-body">
       <PrintLayoutView
-        items={printItems}
-        template={printTemplate}
-        fitMode={printFitMode}
-        rows={printRows}
-        cols={printCols}
-        cellSpacing={printCellSpacing}
-        paperSize={printPaperSize}
-        orientation={printOrientation}
-        margins={printMargins}
-        colorManagement={printColorManagementSettings}
-        {printReadyUrls}
+        items={print.items}
+        template={print.template}
+        fitMode={print.fitMode}
+        rows={print.rows}
+        cols={print.cols}
+        cellSpacing={print.cellSpacing}
+        paperSize={print.paperSize}
+        orientation={print.orientation}
+        margins={print.margins}
+        colorManagement={print.colorManagementSettings}
+        printReadyUrls={print.readyUrls}
       />
       <PrintPanel
-        itemCount={printItems.length}
-        template={printTemplate}
-        onTemplateChange={(v) => (printTemplate = v)}
-        fitMode={printFitMode}
-        onFitModeChange={(v) => (printFitMode = v)}
-        rows={printRows}
-        cols={printCols}
-        onRowsChange={(v) => (printRows = v)}
-        onColsChange={(v) => (printCols = v)}
-        cellSpacing={printCellSpacing}
-        onCellSpacingChange={(v) => (printCellSpacing = v)}
-        paperSize={printPaperSize}
-        onPaperSizeChange={(v) => (printPaperSize = v)}
-        orientation={printOrientation}
-        onOrientationChange={(v) => (printOrientation = v)}
-        margins={printMargins}
-        onMarginChange={(side, v) => (printMargins = { ...printMargins, [side]: v })}
-        colorManaged={printColorManaged}
-        onColorManagedChange={(v) => (printColorManaged = v)}
-        profileTarget={printProfileTarget}
-        onProfileTargetChange={(v) => (printProfileTarget = /** @type {typeof printProfileTarget} */ (v))}
-        customProfilePath={printCustomProfilePath}
+        itemCount={print.items.length}
+        template={print.template}
+        onTemplateChange={(v) => (print.template = v)}
+        fitMode={print.fitMode}
+        onFitModeChange={(v) => (print.fitMode = v)}
+        rows={print.rows}
+        cols={print.cols}
+        onRowsChange={(v) => (print.rows = v)}
+        onColsChange={(v) => (print.cols = v)}
+        cellSpacing={print.cellSpacing}
+        onCellSpacingChange={(v) => (print.cellSpacing = v)}
+        paperSize={print.paperSize}
+        onPaperSizeChange={(v) => (print.paperSize = v)}
+        orientation={print.orientation}
+        onOrientationChange={(v) => (print.orientation = v)}
+        margins={print.margins}
+        onMarginChange={(side, v) => (print.margins = { ...print.margins, [side]: v })}
+        colorManaged={print.colorManaged}
+        onColorManagedChange={(v) => (print.colorManaged = v)}
+        profileTarget={print.profileTarget}
+        onProfileTargetChange={(v) => (print.profileTarget = /** @type {typeof print.profileTarget} */ (v))}
+        customProfilePath={print.customProfilePath}
         onChooseCustomProfile={handleChoosePrintCustomProfile}
-        intent={printIntent}
-        onIntentChange={(v) => (printIntent = /** @type {typeof printIntent} */ (v))}
-        {printing}
+        intent={print.intent}
+        onIntentChange={(v) => (print.intent = /** @type {typeof print.intent} */ (v))}
+        printing={print.printing}
         onPrint={handlePrint}
-        {exportingPdf}
+        exportingPdf={print.exportingPdf}
         onExportPdf={handleExportPdf}
       />
     </div>

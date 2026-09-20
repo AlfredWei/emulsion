@@ -29,6 +29,7 @@
   import { shell } from "$lib/state/shell.svelte.js";
   import { print } from "$lib/state/print.svelte.js";
   import { faces } from "$lib/state/faces.svelte.js";
+  import { importFlow } from "$lib/state/importFlow.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import { selectBaseImages, applyLibraryFilters, cameraOptionsFor, lensOptionsFor } from "$lib/libraryFilters.js";
@@ -145,7 +146,7 @@
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { buildKeywordIdsByImage } from "$lib/collectionRules.js";
   import { buildFolderEntries } from "$lib/libraryFolders.js";
-  import { getBackupSettings, updateBackupSettings, isBackupDue } from "$lib/api/backup.js";
+  import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
     import { detectFacesForImportBatch, detectFacesForImages, getFacesForImage, getImagesForPerson } from "$lib/api/faces.js";
   import { handleChoosePrintCustomProfile, handlePrint, handleExportPdf } from "$lib/actions/printActions.js";
   import {
@@ -156,6 +157,7 @@
     handleSetFaceExcluded,
     handleCancelFaceDetection,
   } from "$lib/actions/faceActions.js";
+  import { handleBackupDone, handleBackupSkip } from "$lib/actions/backupActions.js";
 
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   let images = $state([]);
@@ -169,38 +171,12 @@
   let selectedId = $state(/** @type {number | null} */ (null));
   let selectedIds = $state(/** @type {Set<number>} */ (new Set()));
   let confirmingRemoval = $state(false);
-   let libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"));
+  let libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"));
   let libraryZoomLevel = $state(1);
   let imageViewerRef = $state(/** @type {any} */ (null));
 
 
   let compareCandidateId = $state(/** @type {number | null} */ (null));
-  let importing = $state(false);
-  // Populated from the backend's "import-progress" event (lib.rs's
-  // import_folder/import_files -- see the listener setup below) while
-  // `importing` is true; null before the first event of a given import
-  // arrives (e.g. a large folder still being walked) or once the cataloging
-  // phase finishes and the thumbnail-backfill phase (thumbnailProgress,
-  // below) takes over.
-  let importProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
-  // Populated from "thumbnail-progress" (lib.rs's backfill_missing_thumbnails)
-  // while runImport awaits that call -- the SECOND phase of the same
-  // progress bar, shown after importProgress's cataloging phase completes.
-  // `importing` stays true through both phases so "import done" and
-  // "every thumbnail ready" read as the same moment, not "done" followed
-  // by an untracked silent wait.
-  let thumbnailProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
-  // Populated from "face-detection-progress" (lib.rs's
-  // detect_faces_for_import_batch) while runImport awaits that call -- the
-  // THIRD phase of the same progress bar, same "stay visible until
-  // genuinely done" treatment thumbnails already got (M5 Slice 6 follow-up
-  // -- this used to be a silent fire-and-forget call with no user-visible
-  // feedback at all).
-  let faceDetectionProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
-  // Which of the three runImport phases the progress bar should currently
-  // describe -- switched to "thumbnails" once cataloging resolves, then
-  // "faces" once thumbnail backfill resolves.
-  let importPhase = $state(/** @type {"cataloging" | "thumbnails" | "faces"} */ ("cataloging"));
 
 
   // Collections (M2 Slice 5). `activeCollectionId === null` means "All
@@ -1469,44 +1445,6 @@
     snapshots = snapshots.filter((s) => s.id !== snapshotId);
   }
 
-  // Catalog backup (PRD §7.6): the close handler needs to actually wait for
-  // the user's dialog interaction before destroying the window -- a
-  // genuinely new pattern here, since every other dialog in this app is
-  // fire-and-forget from its caller's perspective. `resolveBackupPrompt`
-  // always eventually fires: "Skip This Time" is always available even if
-  // "Back Up Now" fails, so this promise is guaranteed to settle.
-  let backupPromptOpen = $state(false);
-  let backupPromptSettings = $state(/** @type {import('$lib/api/backup.js').BackupSettings | null} */ (null));
-  let resolveBackupPrompt = /** @type {(() => void) | null} */ (null);
-
-  function showBackupPromptAndWait(/** @type {import('$lib/api/backup.js').BackupSettings} */ settings) {
-    return new Promise((resolve) => {
-      backupPromptSettings = settings;
-      resolveBackupPrompt = () => resolve(undefined);
-      backupPromptOpen = true;
-    });
-  }
-
-  function closeBackupPrompt() {
-    backupPromptOpen = false;
-    resolveBackupPrompt?.();
-    resolveBackupPrompt = null;
-  }
-
-  /** @param {import('$lib/api/backup.js').BackupSettings} settings */
-  function handleBackupDone(settings) {
-    updateBackupSettings(settings).catch(() => {});
-    closeBackupPrompt();
-  }
-
-  /** @param {import('$lib/api/backup.js').BackupSettings} settings */
-  function handleBackupSkip(settings) {
-    // Resets the due-clock so skipping doesn't re-prompt on literally the
-    // next close -- a deliberate simplification of Lightroom's own more
-    // precise "postpone until the next real interval" semantics.
-    updateBackupSettings({ ...settings, last_backup_at: new Date().toISOString() }).catch(() => {});
-    closeBackupPrompt();
-  }
 
   // Thumbnail refresh after a Develop edit -- entirely separate from
   // pendingSave/pendingIptcSave on purpose. Chaining this onto the same
@@ -1600,16 +1538,13 @@
       .catch(() => {});
   }
 
-  /** @type {string[] | null} */
-  let supportedExtensions = $state(null);
-
 
   async function runImport(/** @type {() => Promise<import('$lib/api/catalog.js').ImportSummary | null>} */ doImport) {
-    importing = true;
-    importProgress = null;
-    thumbnailProgress = null;
-    faceDetectionProgress = null;
-    importPhase = "cataloging";
+    importFlow.importing = true;
+    importFlow.catalogProgress = null;
+    importFlow.thumbnailProgress = null;
+    importFlow.faceDetectionProgress = null;
+    importFlow.phase = "cataloging";
     shell.notify("");
     try {
       const summary = await doImport();
@@ -1628,7 +1563,7 @@
       // thumbnail count -- importProgress itself is left as whatever it
       // last was (100%), not cleared, so there's no momentary "0 / 0"
       // flash between the two phases.
-      importPhase = "thumbnails";
+      importFlow.phase = "thumbnails";
       await backfillMissingThumbnails(summary.import_batch);
       await refresh();
       // Face detection (M5 Slice 6 follow-up; opt-in per the 2026-09-17
@@ -1642,7 +1577,7 @@
       // succeeded, and a photo whose detection pass fails this way can
       // still be scanned later via the "Face"/"Detect Faces" actions.
       if (summary.imported > 0 && (await faces.promptDetectionOnImport(summary.imported))) {
-        importPhase = "faces";
+        importFlow.phase = "faces";
         try {
           await detectFacesForImportBatch(summary.import_batch);
           await refreshPeople();
@@ -1653,10 +1588,10 @@
     } catch (/** @type {any} */ e) {
       shell.notify(`Import failed: ${e}`);
     } finally {
-      importing = false;
-      importProgress = null;
-      thumbnailProgress = null;
-      faceDetectionProgress = null;
+      importFlow.importing = false;
+      importFlow.catalogProgress = null;
+      importFlow.thumbnailProgress = null;
+      importFlow.faceDetectionProgress = null;
     }
   }
 
@@ -1667,7 +1602,6 @@
     });
   }
 
-  let isDraggingFiles = $state(false);
 
   function handleDropImport(/** @type {string[]} */ paths) {
     if (!paths || paths.length === 0) return;
@@ -1680,11 +1614,11 @@
     // M2 Slice 1: a separate entry point from folder import -- Tauri's
     // dialog plugin has independent `directory`/`multiple` flags, no mode
     // that lets one native dialog pick either files or a folder.
-    if (!supportedExtensions) supportedExtensions = await getSupportedExtensions();
+    if (!importFlow.supportedExtensions) importFlow.supportedExtensions = await getSupportedExtensions();
     return runImport(async () => {
       const paths = await open({
         multiple: true,
-        filters: [{ name: "Photos", extensions: /** @type {string[]} */ (supportedExtensions) }],
+        filters: [{ name: "Photos", extensions: /** @type {string[]} */ (importFlow.supportedExtensions) }],
       });
       return paths ? importFiles(/** @type {string[]} */ (paths)) : null;
     });
@@ -1981,15 +1915,6 @@
     }
   }
 
-  // HDR merge (M5, RFC-0003). Guards the button/re-entrancy the same
-  // narrow way applyingPreset/pastingSettingsToSelection do above.
-  let mergingHdr = $state(false);
-  // Populated from "hdr-merge-progress" (lib.rs's merge_hdr_bracket, via
-  // hdr_merge::merge_bracket's own on_progress callback) while mergingHdr
-  // is true -- one step per RAW frame decoded, plus align/merge/tone-map,
-  // so the multi-second pipeline shows real movement instead of looking
-  // hung. Same shape/precedent as importProgress/thumbnailProgress above.
-  let hdrMergeProgress = $state(/** @type {{ current: number, total: number } | null} */ (null));
 
   /** Merges the current Library selection (2+ RAW photos, in whatever
    * order `selectedImages` iterates -- see mergeHdrBracket's own doc
@@ -2005,8 +1930,8 @@
   async function handleMergeHdrBracket() {
     const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
     if (imageIds.length < 2) return;
-    mergingHdr = true;
-    hdrMergeProgress = null;
+    importFlow.mergingHdr = true;
+    importFlow.hdrMergeProgress = null;
     shell.notify("");
     try {
       const resultImageId = await mergeHdrBracket(imageIds);
@@ -2029,8 +1954,8 @@
     } catch (/** @type {any} */ e) {
       shell.notify(`HDR merge failed: ${e}`);
     } finally {
-      mergingHdr = false;
-      hdrMergeProgress = null;
+      importFlow.mergingHdr = false;
+      importFlow.hdrMergeProgress = null;
     }
   }
 
@@ -2038,7 +1963,7 @@
   // handleMergeHdrBracket above -- the only real difference is no
   // RAW-only client pre-check (any format works for a stitch) and the
   // dedupe-by-image_id reasoning still applies unchanged.
-  let mergingPanorama = $state(false);
+
 
   /** Stitches the current Library selection (2+ photos, in whatever
    * order the user selected them -- unlike HDR merge, that order DOES
@@ -2048,7 +1973,7 @@
   async function handleMergePanorama() {
     const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
     if (imageIds.length < 2) return;
-    mergingPanorama = true;
+    importFlow.mergingPanorama = true;
     shell.notify("");
     try {
       const resultImageId = await mergePanorama(imageIds);
@@ -2063,7 +1988,7 @@
     } catch (/** @type {any} */ e) {
       shell.notify(`Panorama merge failed: ${e}`);
     } finally {
-      mergingPanorama = false;
+      importFlow.mergingPanorama = false;
     }
   }
 
@@ -2154,7 +2079,7 @@
       return shell.activeModule;
     },
     get backupPromptOpen() {
-      return backupPromptOpen;
+      return importFlow.backupPromptOpen;
     },
     get confirmingDeletePresetId() {
       return confirmingDeletePresetId;
@@ -2881,7 +2806,7 @@
 
         // Always resolves -- "Skip This Time" is always available even if
         // "Back Up Now" fails, so this can never trap the user unable to quit.
-        if (backupDue && backupSettings !== null) await showBackupPromptAndWait(backupSettings);
+        if (backupDue && backupSettings !== null) await importFlow.showBackupPromptAndWait(backupSettings);
 
         await getCurrentWindow().destroy();
       })
@@ -2894,11 +2819,11 @@
       getCurrentWebview()
         .onDragDropEvent((event) => {
           if (event.payload.type === "enter" || event.payload.type === "over") {
-            if (shell.activeModule === "library") isDraggingFiles = true;
+            if (shell.activeModule === "library") importFlow.isDraggingFiles = true;
           } else if (event.payload.type === "leave") {
-            isDraggingFiles = false;
+            importFlow.isDraggingFiles = false;
           } else if (event.payload.type === "drop") {
-            isDraggingFiles = false;
+            importFlow.isDraggingFiles = false;
             if (event.payload.paths && event.payload.paths.length > 0) {
               handleDropImport(event.payload.paths);
             }
@@ -2937,7 +2862,7 @@
     let unlistenImportProgress = /** @type {(() => void) | undefined} */ (undefined);
     try {
       listen("import-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
-        importProgress = event.payload;
+        importFlow.catalogProgress = event.payload;
       }).then((fn) => {
         unlistenImportProgress = fn;
       });
@@ -2952,7 +2877,7 @@
     let unlistenThumbnailProgress = /** @type {(() => void) | undefined} */ (undefined);
     try {
       listen("thumbnail-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
-        thumbnailProgress = event.payload;
+        importFlow.thumbnailProgress = event.payload;
       }).then((fn) => {
         unlistenThumbnailProgress = fn;
       });
@@ -2965,7 +2890,7 @@
     let unlistenHdrMergeProgress = /** @type {(() => void) | undefined} */ (undefined);
     try {
       listen("hdr-merge-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
-        hdrMergeProgress = event.payload;
+        importFlow.hdrMergeProgress = event.payload;
       }).then((fn) => {
         unlistenHdrMergeProgress = fn;
       });
@@ -2981,7 +2906,7 @@
     let unlistenFaceDetectionProgress = /** @type {(() => void) | undefined} */ (undefined);
     try {
       listen("face-detection-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
-        faceDetectionProgress = event.payload;
+        importFlow.faceDetectionProgress = event.payload;
       }).then((fn) => {
         unlistenFaceDetectionProgress = fn;
       });
@@ -3035,13 +2960,13 @@
     {presets}
     {copiedSettings}
     {pastingSettingsToSelection}
-    {mergingHdr}
-    {mergingPanorama}
+    mergingHdr={importFlow.mergingHdr}
+    mergingPanorama={importFlow.mergingPanorama}
     detectingFaces={faces.detectingFaces}
     faceScanProgress={faces.scanProgress}
     faceDetectionCancelable={faces.detectionCancelable}
     showFaceRects={faces.showFaceRects}
-    {importing}
+    importing={importFlow.importing}
     {switchModule}
     {handleRemoveFromCollection}
     {handleAddToCollectionSelect}
@@ -3075,8 +3000,8 @@
     {creatingSnapshot}
     {creatingPreset}
     {confirmingDeletePresetId}
-    {backupPromptSettings}
-    {backupPromptOpen}
+    backupPromptSettings={importFlow.backupPromptSettings}
+    backupPromptOpen={importFlow.backupPromptOpen}
     onCloseSettings={() => (shell.settingsOpen = false)}
     onCloseExport={() => (exportItems = null)}
     onCancelCopySettings={() => (copySettingsDialogOpen = false)}
@@ -3107,13 +3032,13 @@
   />
 
   <StatusStrip
-    {importing}
-    {importPhase}
-    {thumbnailProgress}
-    {faceDetectionProgress}
-    {importProgress}
-    {mergingHdr}
-    {hdrMergeProgress}
+    importing={importFlow.importing}
+    importPhase={importFlow.phase}
+    thumbnailProgress={importFlow.thumbnailProgress}
+    faceDetectionProgress={importFlow.faceDetectionProgress}
+    importProgress={importFlow.catalogProgress}
+    mergingHdr={importFlow.mergingHdr}
+    hdrMergeProgress={importFlow.hdrMergeProgress}
     statusMessage={shell.statusMessage}
   />
 
@@ -3153,18 +3078,18 @@
       class="body library-body"
       role="region"
       aria-label="Library view"
-      class:drag-over={isDraggingFiles}
+      class:drag-over={importFlow.isDraggingFiles}
       ondragover={(e) => {
         e.preventDefault();
-        isDraggingFiles = true;
+        importFlow.isDraggingFiles = true;
       }}
-      ondragleave={() => (isDraggingFiles = false)}
+      ondragleave={() => (importFlow.isDraggingFiles = false)}
       ondrop={(e) => {
         e.preventDefault();
-        isDraggingFiles = false;
+        importFlow.isDraggingFiles = false;
       }}
     >
-      {#if isDraggingFiles}
+      {#if importFlow.isDraggingFiles}
         <div class="drop-overlay">
           <div class="drop-card">
             <span class="drop-icon">📥</span>
@@ -3201,8 +3126,8 @@
         <div class="empty">
           <p>No photos yet.</p>
           <div class="empty-actions">
-            <button onclick={handleImportFolder} disabled={importing}>Import a folder…</button>
-            <button class="secondary" onclick={handleImportFiles} disabled={importing}>Import files…</button>
+            <button onclick={handleImportFolder} disabled={importFlow.importing}>Import a folder…</button>
+            <button class="secondary" onclick={handleImportFiles} disabled={importFlow.importing}>Import files…</button>
           </div>
         </div>
       {:else if filteredImages.length === 0}

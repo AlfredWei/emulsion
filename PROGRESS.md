@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P3b: `print` store and `actions/printActions.js` (2026-09-20)
+
+Second step of RFC-0009 P3. `+page.svelte` 4,004 → 3,884 lines; new `lib/state/print.svelte.js` and `lib/actions/printActions.js`; 19 new tests (vitest 179 → 198).
+
+- **`print` store** holds the 13 Print settings, `printing`, `exportingPdf`, `readyUrls`, and the derived colour-management settings (fields drop the `print` prefix: `print.template`, `print.readyUrls`). **`printActions.js`** holds the three workflows that use it: `handlePrint`, `handleExportPdf`, `handleChoosePrintCustomProfile`; they report through `shell.notify`.
+- **Deviation from RFC-0009's table, recorded there**: `exportItems`/`currentExportItems` stay in the page. `currentExportItems` reads develop and selection state (no stores until P4/P5) and `exportItems` is the Export dialog's flag, so both move later.
+- **Tooling** (reusable for P3c/d): the codemod gained a rename map (`printTemplate` → `print.template`); a new function-extraction tool moves functions plus their leading comments into a module, carries exactly the imports they use, and prunes the page's now-unused imports (it printed which: `getPrintReadyImages`, `tick`, `PAPER_SIZES`, `exportPrintPdf`).
+- **Verified by comparison**: mapping the new names back, the only differing lines are the 17 declarations (now in the store), import reshuffling, one reworded comment (a "`handleChooseCustomProfile` above" pointer that would dangle in the new module), and shorthand expansions; the three function bodies are unchanged. Two JSDoc `typeof printX` casts inside template lambdas needed a manual fix (comments aren't code). `npm run check` 0 errors, vitest 198 passed, `vite build` OK.
+- **Tests, mutation-checked**: the workflows were untested. Now covered, with Tauri and the API layer mocked: busy guards, colour-managed vs plain profile, partial failure (report + still print), total failure (no print dialog), exceptions clear the busy flag, merging ready URLs, PDF request building, landscape swap, unknown paper size fallback. Four deliberate breaks each failed exactly one test.
+- **Docs**: RFC-0009 ownership table, `PROJECT_STRUCTURE.md` (`state/print`, `actions/`).
+- **Not run locally**: e2e (CI); the Tauri window (print dialog, PDF export).
+- **Next**: P3c `faces`, P3d `importFlow`.
+
 ## Refactor P3a: first store (`shell`) + runes test setup (2026-09-19)
 
 First step of RFC-0009 P3. `+page.svelte` 4,055 → 4,004 lines; new `lib/state/shell.svelte.js`, 11 store tests + 2 setup guards (vitest 166 → 179).

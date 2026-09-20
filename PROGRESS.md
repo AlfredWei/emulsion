@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P4b: `selection` store, `selectionActions.js`, `collectionsActions.js` (2026-09-20)
+
+Second step of RFC-0009 P4. `+page.svelte` 3,371 → 3,137 lines; new `lib/state/selection.svelte.js`, `lib/actions/selectionActions.js` and `lib/actions/collectionsActions.js`; 45 new tests (vitest 256 → 301).
+
+- **`selection` store**: `selectedId`, `selectedIds`, and the derived `selectedImage`, `selectedImages`, `keywordTargetImageIds`, plus the Compare view's `compareSelectImage`/`compareCandidateImage` (they read selection *and* `library.filteredImages`/`compareCandidateId`, so they belong to the higher store). It takes its library as a constructor argument (`createSelectionStore(library)`), so tests build an isolated pair; the singleton is wired to the app's `library`.
+- **`selectionActions.js`** (9 functions): click / Shift-range / Cmd-toggle, grid stepping, select-all / deselect-all, `targetVersionIds`, and the four Compare navigation handlers. **`collectionsActions.js`** (3): add-to-collection picker, create-with-images, remove-from-collection.
+- **Recorded in RFC-0009**: RFC §4 listed the deselect/compare handlers under `libraryActions`; they are selection workflows (they write `selectedId(s)` and read the selection-derived compare pair), so they sit in `selectionActions`. `handleCreateCollectionWithImages` was missed by P4a's "touches only library" filter (it also calls `shell.notify`, which had been counted as "other state") and moved here.
+- **Stays in the page until P5**: `selectNextImage`/`selectPrevImage` (call `openDevelop`), `handleRemoveConfirmed` (also clears Develop state), `handleApplyPresetToSelection`/`handlePasteSettingsToSelection`, `currentExportItems`/`exportItems`. Until P4c: the face-detection handlers, `refreshCurrentImageFaces` and its `$effect`, merge handlers.
+- **Verified by comparison**: mapping names back, every function-body line is unchanged; the store's derived bodies are the old expressions with `this.library.` prefixes, and `compareCandidateImage` keeps reading `filteredImages` lazily at each use (a local alias would have changed when it is first tracked).
+- **Tests** (21 mutants: 18 killed, 3 equivalent survivors): the real survivor, `selectedImages.length > 0` vs `> 1` in `keywordTargetImageIds`, got a test (a one-image selection with a different anchor). The equivalent ones: `filteredImages.length > 1` vs `> 0` in `compareCandidateImage` (a one-image list wraps onto itself), `selectedIds.size > 1` vs `> 0` in `targetVersionIds` (one element either way), and dropping the `selectedId !== null` guard in Shift-click (`findIndex(null)` is -1, which falls through anyway).
+- **Not run locally**: e2e (CI); the Tauri window (grid click/range/toggle, arrow-key stepping, Compare view).
+- **Next**: P4c, moving the parked import/merge/face-detection workflows.
+
 ## Refactor P4a: `library` store and `actions/libraryActions.js` (2026-09-20)
 
 First step of RFC-0009 P4, split so each PR stays reviewable: P4a `library` store, P4b `selection` store, P4c the parked import/merge/face-detection workflows. `+page.svelte` 3,665 → 3,371 lines; new `lib/state/library.svelte.js` and `lib/actions/libraryActions.js`; 29 new tests (vitest 227 → 256).

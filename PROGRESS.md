@@ -2,6 +2,18 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P3d: `importFlow` store and `actions/backupActions.js` (2026-09-20)
+
+Last step of RFC-0009 P3 (`shell`, `print`, `faces`, `importFlow`). `+page.svelte` 3,681 → 3,665 lines; new `lib/state/importFlow.svelte.js` and `lib/actions/backupActions.js`; 9 new tests (vitest 218 → 227).
+
+- **`importFlow` store**: `importing`, the three phase progress values and `phase`, `supportedExtensions`, `isDraggingFiles`, the HDR/panorama merge flags and progress, and the close-time backup prompt (state plus the promise bridge, with a private resolver). **`backupActions.js`**: `handleBackupDone`/`handleBackupSkip`.
+- **Split by dependency, recorded in RFC-0009**: `runImport`, `handleImportFolder/Files/DropImport`, both merge handlers, `refresh`, thumbnail regeneration and startup polling stay in the page until P4 (they call `refresh()` and write `images` and the selection). Same rule as P3c.
+- **Cleanup the comparison surfaced**: removing a declaration leaves its JSDoc `@type` comment behind, and one such orphan silently re-attached itself to `runImport` and broke type-checking; and an earlier step's removal had left one script line with three leading spaces. Both fixed; the page now has no odd-indented script lines.
+- **Verified by comparison**: mapping the new names back, the only differing lines are the 13 declarations, the two prompt functions (now store methods), moved comments, shorthand expansions and import changes; the two handler bodies are unchanged. `npm run check` 0 errors, vitest 227 passed, `vite build` OK.
+- **Tests** (mutation-checked): the prompt bridge (pending until closed, settles once, re-showable, stray close) and the handlers with the API mocked, including the property that matters most: a failing settings save must never keep the prompt open, or app quit hangs. Deliberately closing only after a successful save fails that test by timeout. One survivor, dropping `#resolveBackupPrompt = null`, is an *equivalent* mutant (resolving a settled promise twice is a no-op), so no test can observe it.
+- **Not run locally**: e2e (CI); the Tauri window (close-time backup prompt, import progress bar).
+- **P3 is done.** Next: **P4**: `library` + `selection` stores, `libraryActions.js`/`collectionsActions.js`, then the import/merge/detection workflows parked above move alongside.
+
 ## Refactor P3c: `faces` store and `actions/faceActions.js` (2026-09-20)
 
 Third step of RFC-0009 P3. `+page.svelte` 3,873 → 3,740 lines; new `lib/state/faces.svelte.js` and `lib/actions/faceActions.js`; 20 new tests (vitest 198 → 218).

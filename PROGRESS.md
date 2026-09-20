@@ -2,6 +2,18 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P4a: `library` store and `actions/libraryActions.js` (2026-09-20)
+
+First step of RFC-0009 P4, split so each PR stays reviewable: P4a `library` store, P4b `selection` store, P4c the parked import/merge/face-detection workflows. `+page.svelte` 3,665 → 3,371 lines; new `lib/state/library.svelte.js` and `lib/actions/libraryActions.js`; 29 new tests (vitest 227 → 256).
+
+- **`library` store**: `images`, view mode/zoom, the four sources (collection, folder, last import, person) and their membership caches, `collections`, `allImageKeywords`, the ten filter fields, `compareCandidateId`, `confirmingRemoval`, the four collection-dialog flags; derived `folderEntries`, `lastImportBatchId`, `keywordIdsByImage`, `baseImages`, `filteredImages`, `cameraOptions`, `lensOptions`, `activeCollection`, `manualCollections`. The page's `libraryFilterInputs` getter object is gone: the derived pass `this` to the pure `libraryFilters.js` functions, whose input names are exactly the store's field names, so each derived still tracks the same fields lazily.
+- **`libraryActions.js`** (16 functions): source switching, membership fetches, `refresh`/`refreshCollections`, `handleResetFilters`, `patchLocal`, thumbnail-batch application, `prioritizeThumbnail`, collection create/delete.
+- **Deviation from RFC-0009 §3.3, recorded there**: `compareSelectImage`/`compareCandidateImage` (read selection) and `developFilmstripImages` (reads `developVersionId`) do *not* live in `library`: the DAG is selection → library, and develop → library, never the reverse. They stay in the page until their other input has a store.
+- **Verified by comparison**: mapping names back, every function-body line is unchanged; differing lines are declarations, the removed getter object, moved derived bodies, attribute shorthand expansion and imports. A stale JSDoc `@type` orphaned by the removal re-typed `selectedId` as `ImageSummary[]` (51 type errors) until removed; the comment scan now covers every removed declaration.
+- **Tests** (14 mutants, all killed): store derived behavior (each source, filters, smart-collection rules, last-import scope, folder grouping, camera/lens options from the base set) and the actions with IPC mocked (source exclusivity, membership fetched once and cached, Map replaced so reactivity fires, delete clears only the active collection, dialog closes before the IPC).
+- **Not run locally**: e2e (CI); the Tauri window (Library grid, filters, collections, People filter).
+- **Next**: P4b `selection` store (`selectedId`, `selectedIds`, derived, and the compare/selection-crossing actions).
+
 ## Refactor P3d: `importFlow` store and `actions/backupActions.js` (2026-09-20)
 
 Last step of RFC-0009 P3 (`shell`, `print`, `faces`, `importFlow`). `+page.svelte` 3,681 → 3,665 lines; new `lib/state/importFlow.svelte.js` and `lib/actions/backupActions.js`; 9 new tests (vitest 218 → 227).

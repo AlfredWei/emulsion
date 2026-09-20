@@ -30,16 +30,14 @@
   import { print } from "$lib/state/print.svelte.js";
   import { faces } from "$lib/state/faces.svelte.js";
   import { importFlow } from "$lib/state/importFlow.svelte.js";
+  import { library } from "$lib/state/library.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
-  import { selectBaseImages, applyLibraryFilters, cameraOptionsFor, lensOptionsFor } from "$lib/libraryFilters.js";
   import {
     importFolder,
     importFiles,
     getSupportedExtensions,
     backfillMissingThumbnails,
-    ensureThumbnail,
-    listImages,
     setRating,
     setFlag,
     setColorLabel,
@@ -50,15 +48,10 @@
     mergeHdrBracket,
     mergePanorama,
     listAllImageKeywords,
-    createCollection,
     createCollectionWithImages,
-    createSmartCollection,
     updateSmartCollectionRules,
-    deleteCollection,
     addImagesToCollection,
     removeImagesFromCollection,
-    listCollections,
-    listCollectionImageIds,
   } from "$lib/api/catalog.js";
   import {
     getEditStack,
@@ -144,10 +137,8 @@
   } from "$lib/api/develop.js";
   import { queueThumbnailRegeneration, flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
-  import { buildKeywordIdsByImage } from "$lib/collectionRules.js";
-  import { buildFolderEntries } from "$lib/libraryFolders.js";
   import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
-    import { detectFacesForImportBatch, detectFacesForImages, getFacesForImage, getImagesForPerson } from "$lib/api/faces.js";
+    import { detectFacesForImportBatch, detectFacesForImages, getFacesForImage } from "$lib/api/faces.js";
   import { handleChoosePrintCustomProfile, handlePrint, handleExportPdf } from "$lib/actions/printActions.js";
   import {
     refreshPeople,
@@ -158,9 +149,25 @@
     handleCancelFaceDetection,
   } from "$lib/actions/faceActions.js";
   import { handleBackupDone, handleBackupSkip } from "$lib/actions/backupActions.js";
+  import {
+    loadPersonMembership,
+    selectPerson,
+    selectAllPhotos,
+    selectLastImport,
+    selectFolder,
+    refreshCollections,
+    loadManualMembership,
+    handleResetFilters,
+    selectCollection,
+    refresh,
+    patchLocal,
+    handleBatchThumbnailsComplete,
+    prioritizeThumbnail,
+    handleCreateCollection,
+    handleCreateSmartCollection,
+    handleDeleteCollection,
+  } from "$lib/actions/libraryActions.js";
 
-  /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
-  let images = $state([]);
   // Multi-select (M2 Slice 3): `selectedIds` is the full selection,
   // `selectedId` stays as the anchor/primary -- the last plainly-clicked
   // image, which drives MetadataPanel, Shift-range endpoints, and any
@@ -170,235 +177,25 @@
   // used everywhere else in this file anyway.
   let selectedId = $state(/** @type {number | null} */ (null));
   let selectedIds = $state(/** @type {Set<number>} */ (new Set()));
-  let confirmingRemoval = $state(false);
-  let libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"));
-  let libraryZoomLevel = $state(1);
   let imageViewerRef = $state(/** @type {any} */ (null));
 
-
-  let compareCandidateId = $state(/** @type {number | null} */ (null));
-
-
-  // Collections (M2 Slice 5). `activeCollectionId === null` means "All
-  // Photos" (no filter). `manualMembership` caches a manual collection's
-  // image_id membership by collection id, fetched on click -- invalidated
-  // by whichever collection id was actually just mutated (add/remove-from-
-  // collection), never by `activeCollectionId`: those differ exactly when
-  // the toolbar adds a selection to a DIFFERENT collection than the one
-  // currently being viewed, and invalidating the wrong one would silently
-  // leave the mutated collection's cache stale.
-  let collections = $state(/** @type {import('$lib/api/catalog.js').CollectionSummary[]} */ ([]));
-  let activeCollectionId = $state(/** @type {number | null} */ (null));
-  let manualMembership = $state(/** @type {Map<number, Set<number>>} */ (new Map()));
-
-  // Folders / Last Import (M4 Library slice). Four library "sources" --
-  // All Photos, Last Import, a real folder, and a Person -- are mutually
-  // exclusive with each other and with a Collection, so only one of
-  // `activeCollectionId` / `activeFolderKey` / `showLastImportOnly` /
-  // `activePersonId` is ever "on" at a time; `baseImages` below checks
-  // them in that same order.
-  let activeFolderKey = $state(/** @type {string | null} */ (null));
-  let showLastImportOnly = $state(false);
-
-  // People rail filter (2026-09-18 user request): double-clicking a
-  // person in CatalogRail's People section scopes Library to just their
-  // photos -- the gap RFC-0005 §7 explicitly left open ("no replacement
-  // for browsing/filtering the whole catalog by named person"). Same
-  // fetch-on-demand-and-cache shape as `manualMembership` below for a
-  // manual collection: a person's photo set needs a real query
-  // (`get_images_for_person`, a `faces`/`person_id` join), it isn't
-  // already sitting on `ImageSummary`.
-  let activePersonId = $state(/** @type {number | null} */ (null));
-  let personMembership = $state(/** @type {Map<number, Set<number>>} */ (new Map()));
-
-  async function loadPersonMembership(/** @type {number} */ personId) {
-    const memberIds = await getImagesForPerson(personId);
-    personMembership = new Map(personMembership).set(personId, new Set(memberIds));
-  }
-
-  async function selectPerson(/** @type {number} */ personId) {
-    activeCollectionId = null;
-    activeFolderKey = null;
-    showLastImportOnly = false;
-    activePersonId = personId;
-    if (!personMembership.has(personId)) await loadPersonMembership(personId);
-  }
-
-  let folderEntries = $derived(buildFolderEntries(images));
-
-  /** The most recent import's batch id, or null before any tagged import
-   * has happened (a pre-existing catalog whose rows predate this column).
-   * `import_batch` is optional/nullable on ImageSummary, so this only
-   * considers rows that actually have one. */
-  let lastImportBatchId = $derived.by(() => {
-    let max = /** @type {number | null} */ (null);
-    for (const img of images) {
-      const batch = img.import_batch;
-      if (batch != null && (max === null || batch > max)) max = batch;
-    }
-    return max;
-  });
-
-  function selectAllPhotos() {
-    activeCollectionId = null;
-    activeFolderKey = null;
-    showLastImportOnly = false;
-    activePersonId = null;
-  }
-
-  function selectLastImport() {
-    activeCollectionId = null;
-    activeFolderKey = null;
-    showLastImportOnly = true;
-    activePersonId = null;
-  }
-
-  function selectFolder(/** @type {string} */ key) {
-    activeCollectionId = null;
-    activeFolderKey = key;
-    showLastImportOnly = false;
-    activePersonId = null;
-  }
-  let allImageKeywords = $state(/** @type {import('$lib/api/catalog.js').ImageKeywordAssignment[]} */ ([]));
-  let keywordIdsByImage = $derived(buildKeywordIdsByImage(allImageKeywords));
-
   // Presets (M3): global, catalog-wide, same "fetch once at startup, keep
-  // in sync locally" shape as `collections` above -- NOT re-fetched per
+  // in sync locally" shape as the library store's `collections` -- NOT re-fetched per
   // image the way history/snapshots are, since presets have no relation
   // to whichever photo happens to be open.
   let presets = $state(/** @type {import('$lib/api/develop.js').PresetEntry[]} */ ([]));
 
-  async function refreshCollections() {
-    collections = await listCollections();
-  }
 
   async function refreshPresets() {
     presets = await listPresets();
   }
 
-  async function loadManualMembership(/** @type {number} */ collectionId) {
-    const memberIds = await listCollectionImageIds(collectionId);
-    manualMembership = new Map(manualMembership).set(collectionId, new Set(memberIds));
-  }
-
-  // Library Filters
-  let searchQuery = $state("");
-  let flagFilter = $state(/** @type {"all" | "pick" | "unflagged" | "reject"} */ ("all"));
-  let minRating = $state(0);
-  let ratingOp = $state(/** @type {">=" | "="} */ (">="));
-  let colorLabelFilter = $state("all");
-  let fileTypeFilter = $state(/** @type {"all" | "raw" | "jpeg"} */ ("all"));
-  let cameraFilter = $state("all");
-  let lensFilter = $state("all");
-  let dateFrom = $state("");
-  let dateTo = $state("");
-
-  function handleResetFilters() {
-    searchQuery = "";
-    flagFilter = "all";
-    minRating = 0;
-    ratingOp = ">=";
-    colorLabelFilter = "all";
-    fileTypeFilter = "all";
-    cameraFilter = "all";
-    lensFilter = "all";
-    dateFrom = "";
-    dateTo = "";
-  }
-
-
-  // Getter objects, not copies: the derived below must track exactly the state the moved code
-  // reads, lazily and in the same order as before (see lib/libraryFilters.js's header).
-  const libraryFilterInputs = {
-    get activeCollectionId() {
-      return activeCollectionId;
-    },
-    get activeFolderKey() {
-      return activeFolderKey;
-    },
-    get activePersonId() {
-      return activePersonId;
-    },
-    get baseImages() {
-      return baseImages;
-    },
-    get cameraFilter() {
-      return cameraFilter;
-    },
-    get collections() {
-      return collections;
-    },
-    get colorLabelFilter() {
-      return colorLabelFilter;
-    },
-    get dateFrom() {
-      return dateFrom;
-    },
-    get dateTo() {
-      return dateTo;
-    },
-    get fileTypeFilter() {
-      return fileTypeFilter;
-    },
-    get flagFilter() {
-      return flagFilter;
-    },
-    get images() {
-      return images;
-    },
-    get keywordIdsByImage() {
-      return keywordIdsByImage;
-    },
-    get lastImportBatchId() {
-      return lastImportBatchId;
-    },
-    get lensFilter() {
-      return lensFilter;
-    },
-    get manualMembership() {
-      return manualMembership;
-    },
-    get minRating() {
-      return minRating;
-    },
-    get personMembership() {
-      return personMembership;
-    },
-    get ratingOp() {
-      return ratingOp;
-    },
-    get searchQuery() {
-      return searchQuery;
-    },
-    get showLastImportOnly() {
-      return showLastImportOnly;
-    },
-  };
-
-  let baseImages = $derived.by(() => selectBaseImages(libraryFilterInputs));
-
-  let cameraOptions = $derived(cameraOptionsFor(baseImages));
-  let lensOptions = $derived(lensOptionsFor(baseImages));
-
-  let filteredImages = $derived.by(() => applyLibraryFilters(libraryFilterInputs));
-
-  let activeCollection = $derived(collections.find((c) => c.id === activeCollectionId) ?? null);
 
   // The Filmstrip shows filtered images, falling back if active Develop photo is excluded
   let developFilmstripImages = $derived(
-    filteredImages.some((img) => img.version_id === developVersionId) ? filteredImages : images,
+    library.filteredImages.some((img) => img.version_id === developVersionId) ? library.filteredImages : library.images,
   );
 
-  async function selectCollection(/** @type {number | null} */ collectionId) {
-    activeCollectionId = collectionId;
-    activeFolderKey = null;
-    showLastImportOnly = false;
-    activePersonId = null;
-    if (collectionId !== null && !manualMembership.has(collectionId)) {
-      const collection = collections.find((c) => c.id === collectionId);
-      if (collection && !collection.is_smart) await loadManualMembership(collectionId);
-    }
-  }
 
   let developVersionId = $state(/** @type {number | null} */ (null));
   let developImagePath = $state("");
@@ -407,7 +204,7 @@
   // updates, and there's exactly one place (`openDevelop` below) that ever
   // needs to change which image is open anyway.
   let developImageContentHash = $derived(
-    images.find((img) => img.version_id === developVersionId)?.content_hash ?? null,
+    library.images.find((img) => img.version_id === developVersionId)?.content_hash ?? null,
   );
   /** @type {import('$lib/api/develop.js').EditStack} */
   let editStack = $state({ schema_version: 1, ops: [] });
@@ -588,7 +385,7 @@
     faces.scanProgress = { current: 0, total: imageIds.length };
     try {
       await detectFacesForImages(imageIds);
-      images = images.map((img) => (imageIds.includes(img.image_id) ? { ...img, faces_scanned: true } : img));
+      library.images = library.images.map((img) => (imageIds.includes(img.image_id) ? { ...img, faces_scanned: true } : img));
       await refreshCurrentImageFaces();
       await refreshPeople();
     } catch (/** @type {any} */ e) {
@@ -622,7 +419,7 @@
    * whatever `filteredImages` already reflects), same scope Library's
    * other bulk actions use. */
   function handleDetectFacesForFolder() {
-    const targets = filteredImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
+    const targets = library.filteredImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
     if (targets.length === 0) {
       shell.notify("Every photo in this view has already been scanned for faces.");
       return;
@@ -1131,8 +928,8 @@
   // What Export would act on right now: the open Develop image, or every
   // selected Library image (M2 Slice 3 batch export -- the frontend-only
   // follow-up M1 Slice 5's export_batch was explicitly built to accept).
-  let selectedImage = $derived(images.find((img) => img.version_id === selectedId) ?? null);
-  let selectedImages = $derived(images.filter((img) => selectedIds.has(img.version_id)));
+  let selectedImage = $derived(library.images.find((img) => img.version_id === selectedId) ?? null);
+  let selectedImages = $derived(library.images.filter((img) => selectedIds.has(img.version_id)));
 
   // People/Faces: reload the current photo's detected faces whenever the
   // single-image selection changes (image_id, not version_id -- faces are
@@ -1169,28 +966,28 @@
 
   let compareSelectImage = $derived.by(() => {
     if (selectedId !== null) {
-      const match = filteredImages.find((img) => img.version_id === selectedId);
+      const match = library.filteredImages.find((img) => img.version_id === selectedId);
       if (match) return match;
     }
-    return filteredImages[0] ?? null;
+    return library.filteredImages[0] ?? null;
   });
 
   let compareCandidateImage = $derived.by(() => {
-    if (compareCandidateId !== null) {
-      const match = filteredImages.find((img) => img.version_id === compareCandidateId);
+    if (library.compareCandidateId !== null) {
+      const match = library.filteredImages.find((img) => img.version_id === library.compareCandidateId);
       if (match) return match;
     }
     if (selectedIds.size >= 2) {
       const otherId = [...selectedIds].find((id) => id !== selectedId);
       if (otherId != null) {
-        const match = filteredImages.find((img) => img.version_id === otherId);
+        const match = library.filteredImages.find((img) => img.version_id === otherId);
         if (match) return match;
       }
     }
-    if (compareSelectImage && filteredImages.length > 1) {
-      const selIdx = filteredImages.findIndex((img) => img.version_id === compareSelectImage.version_id);
+    if (compareSelectImage && library.filteredImages.length > 1) {
+      const selIdx = library.filteredImages.findIndex((img) => img.version_id === compareSelectImage.version_id);
       if (selIdx >= 0) {
-        return filteredImages[(selIdx + 1) % filteredImages.length];
+        return library.filteredImages[(selIdx + 1) % library.filteredImages.length];
       }
     }
     return compareSelectImage;
@@ -1446,30 +1243,6 @@
   }
 
 
-  // Thumbnail refresh after a Develop edit -- entirely separate from
-  // pendingSave/pendingIptcSave on purpose. Chaining this onto the same
-  // promise flushEditStack's callers await would silently reintroduce the
-  // exact "app hangs unable to quit" class of bug M1 Slice 6 already fixed
-  // once for the edit-stack flush itself -- a slow/failed thumbnail regen
-  // must never be able to delay a save or block app quit. Never awaited by
-  // any caller. Only called from real "done editing this image for now"
-  // transitions (leaving Develop, exporting, closing) -- not from the bare
-  // Thumbnail batch update: coalesces multiple regeneration requests within
-  // a 150ms debounce window into a single atomic update via Promise.all, so
-  // all components consuming thumbnails (grid, filmstrip, metadata panel,
-  // histogram) update together rather than staggered.
-  function handleBatchThumbnailsComplete(/** @type {Map<number, string | null>} */ results) {
-    // Update all thumbnails in one pass: map over images array, apply paths
-    // for all version IDs that are in the results map, leave others unchanged.
-    images = images.map((img) => {
-      const newPath = results.get(img.version_id);
-      if (newPath !== undefined) {
-        return { ...img, thumbnail_path: newPath };
-      }
-      return img;
-    });
-  }
-
   // 250ms debounce inside flushEditStack + 150ms debounce in batch queue (two
   // layers) prevents rapid edits/slider drags from hammering the backend:
   // first layer settles pending edits, second layer coalesces multiple regen
@@ -1480,9 +1253,6 @@
     queueThumbnailRegeneration(versionId, handleBatchThumbnailsComplete);
   }
 
-  async function refresh() {
-    images = await listImages();
-  }
 
   // App-startup catch-up ONLY (see the onMount call below) -- lib.rs's
   // .setup() runs its own fire-and-forget, non-progress-reporting
@@ -1504,38 +1274,13 @@
       const maxAttempts = 10;
       const intervalMs = 1500;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        if (!images.some((img) => img.thumbnail_path === null)) return;
+        if (!library.images.some((img) => img.thumbnail_path === null)) return;
         await new Promise((resolve) => setTimeout(resolve, intervalMs));
         await refresh();
       }
     } finally {
       pollingThumbnailsOnStartup = false;
     }
-  }
-
-  /** "Jump the queue" for one image's thumbnail (import.rs's
-   * `ensure_thumbnail`): called wherever the user opens a specific photo
-   * to view it (Loupe, Develop) so that photo's own Library-grid
-   * thumbnail exists as soon as possible, regardless of how far behind it
-   * the background backfill pass (backfillMissingThumbnails, below) is --
-   * previously a photo near the end of a large just-imported folder could
-   * sit behind hundreds of others in that pass's strict FIFO order even
-   * after the user had already looked right at it. Only calls the backend
-   * at all when there's actually a gap to close (`thumbnail_path` is
-   * still null) -- the common case (already has one) stays a pure local
-   * lookup, no IPC round trip. Fire-and-forget: never blocks entering
-   * Loupe/Develop, which already render the real pixels via
-   * getGradedDevelopPreview independent of `thumbnail_path` -- this only
-   * fixes how long the GRID CELL (and filmstrip) keep showing a blank
-   * placeholder for a photo that's already been viewed. */
-  function prioritizeThumbnail(/** @type {number} */ versionId) {
-    const image = images.find((img) => img.version_id === versionId);
-    if (!image || image.thumbnail_path !== null) return;
-    ensureThumbnail(versionId)
-      .then((thumbnailPath) => {
-        if (thumbnailPath) patchLocal(versionId, { thumbnail_path: thumbnailPath });
-      })
-      .catch(() => {});
   }
 
 
@@ -1624,12 +1369,6 @@
     });
   }
 
-  // Optimistic local update (UX-DESIGN.md §5) so culling feels instant --
-  // the write still goes to the real catalog, this just avoids waiting on
-  // a round trip + full refetch before the UI reflects the change.
-  function patchLocal(/** @type {number} */ versionId, /** @type {Partial<import('$lib/api/catalog.js').ImageSummary>} */ patch) {
-    images = images.map((img) => (img.version_id === versionId ? { ...img, ...patch } : img));
-  }
 
   // Batch rate/flag/color-label (MILESTONES.md M2 scope, deferred from
   // Slice 3's multi-select work): Lightroom-style -- acting on a cell that
@@ -1673,22 +1412,22 @@
 
   // Keyboard navigation & selection helpers
   function selectNextImage(/** @type {boolean=} */ extend) {
-    if (filteredImages.length === 0) return;
+    if (library.filteredImages.length === 0) return;
     if (selectedId === null) {
-      const first = filteredImages[0];
+      const first = library.filteredImages[0];
       selectedId = first.version_id;
       selectedIds = new Set([first.version_id]);
       return;
     }
-    const idx = filteredImages.findIndex((img) => img.version_id === selectedId);
+    const idx = library.filteredImages.findIndex((img) => img.version_id === selectedId);
     if (idx === -1) {
-      const first = filteredImages[0];
+      const first = library.filteredImages[0];
       selectedId = first.version_id;
       selectedIds = new Set([first.version_id]);
       return;
     }
-    if (idx < filteredImages.length - 1) {
-      const nextImg = filteredImages[idx + 1];
+    if (idx < library.filteredImages.length - 1) {
+      const nextImg = library.filteredImages[idx + 1];
       if (extend) {
         const next = new Set(selectedIds);
         next.add(nextImg.version_id);
@@ -1705,22 +1444,22 @@
   }
 
   function selectPrevImage(/** @type {boolean=} */ extend) {
-    if (filteredImages.length === 0) return;
+    if (library.filteredImages.length === 0) return;
     if (selectedId === null) {
-      const last = filteredImages[filteredImages.length - 1];
+      const last = library.filteredImages[library.filteredImages.length - 1];
       selectedId = last.version_id;
       selectedIds = new Set([last.version_id]);
       return;
     }
-    const idx = filteredImages.findIndex((img) => img.version_id === selectedId);
+    const idx = library.filteredImages.findIndex((img) => img.version_id === selectedId);
     if (idx === -1) {
-      const first = filteredImages[0];
+      const first = library.filteredImages[0];
       selectedId = first.version_id;
       selectedIds = new Set([first.version_id]);
       return;
     }
     if (idx > 0) {
-      const prevImg = filteredImages[idx - 1];
+      const prevImg = library.filteredImages[idx - 1];
       if (extend) {
         const next = new Set(selectedIds);
         next.add(prevImg.version_id);
@@ -1737,21 +1476,21 @@
   }
 
   function selectGridStep(/** @type {number} */ step, /** @type {boolean=} */ extend) {
-    if (filteredImages.length === 0) return;
+    if (library.filteredImages.length === 0) return;
     if (selectedId === null) {
-      const first = filteredImages[0];
+      const first = library.filteredImages[0];
       selectedId = first.version_id;
       selectedIds = new Set([first.version_id]);
       return;
     }
-    const idx = filteredImages.findIndex((img) => img.version_id === selectedId);
+    const idx = library.filteredImages.findIndex((img) => img.version_id === selectedId);
     if (idx === -1) return;
-    const targetIdx = Math.max(0, Math.min(filteredImages.length - 1, idx + step));
-    const targetImg = filteredImages[targetIdx];
+    const targetIdx = Math.max(0, Math.min(library.filteredImages.length - 1, idx + step));
+    const targetImg = library.filteredImages[targetIdx];
     if (!targetImg) return;
     if (extend) {
       const [from, to] = idx <= targetIdx ? [idx, targetIdx] : [targetIdx, idx];
-      selectedIds = new Set(filteredImages.slice(from, to + 1).map((img) => img.version_id));
+      selectedIds = new Set(library.filteredImages.slice(from, to + 1).map((img) => img.version_id));
       selectedId = targetImg.version_id;
     } else {
       selectedId = targetImg.version_id;
@@ -1760,16 +1499,16 @@
   }
 
   function handleSelectAll() {
-    if (filteredImages.length === 0) return;
-    selectedIds = new Set(filteredImages.map((img) => img.version_id));
+    if (library.filteredImages.length === 0) return;
+    selectedIds = new Set(library.filteredImages.map((img) => img.version_id));
     if (selectedId === null || !selectedIds.has(selectedId)) {
-      selectedId = filteredImages[0].version_id;
+      selectedId = library.filteredImages[0].version_id;
     }
   }
 
   function handleDeselectAll() {
-    if (libraryViewMode !== "grid") {
-      libraryViewMode = "grid";
+    if (library.libraryViewMode !== "grid") {
+      library.libraryViewMode = "grid";
       return;
     }
     selectedIds = new Set();
@@ -1777,30 +1516,30 @@
   }
 
   function handleCompareNextCandidate() {
-    if (filteredImages.length === 0) return;
+    if (library.filteredImages.length === 0) return;
     const curCandidate = compareCandidateImage;
     const curSelect = compareSelectImage;
     const cIdx = curCandidate
-      ? filteredImages.findIndex((img) => img.version_id === curCandidate.version_id)
+      ? library.filteredImages.findIndex((img) => img.version_id === curCandidate.version_id)
       : 0;
-    const nextIdx = (cIdx + 1) % filteredImages.length;
-    const nextCand = filteredImages[nextIdx];
-    compareCandidateId = nextCand.version_id;
+    const nextIdx = (cIdx + 1) % library.filteredImages.length;
+    const nextCand = library.filteredImages[nextIdx];
+    library.compareCandidateId = nextCand.version_id;
     if (curSelect) {
       selectedIds = new Set([curSelect.version_id, nextCand.version_id]);
     }
   }
 
   function handleComparePrevCandidate() {
-    if (filteredImages.length === 0) return;
+    if (library.filteredImages.length === 0) return;
     const curCandidate = compareCandidateImage;
     const curSelect = compareSelectImage;
     const cIdx = curCandidate
-      ? filteredImages.findIndex((img) => img.version_id === curCandidate.version_id)
+      ? library.filteredImages.findIndex((img) => img.version_id === curCandidate.version_id)
       : 0;
-    const prevIdx = (cIdx - 1 + filteredImages.length) % filteredImages.length;
-    const prevCand = filteredImages[prevIdx];
-    compareCandidateId = prevCand.version_id;
+    const prevIdx = (cIdx - 1 + library.filteredImages.length) % library.filteredImages.length;
+    const prevCand = library.filteredImages[prevIdx];
+    library.compareCandidateId = prevCand.version_id;
     if (curSelect) {
       selectedIds = new Set([curSelect.version_id, prevCand.version_id]);
     }
@@ -1813,7 +1552,7 @@
     const oldSelId = curSelect.version_id;
     const oldCandId = curCand.version_id;
     selectedId = oldCandId;
-    compareCandidateId = oldSelId;
+    library.compareCandidateId = oldSelId;
     selectedIds = new Set([oldCandId, oldSelId]);
   }
 
@@ -1821,11 +1560,11 @@
     const curCand = compareCandidateImage;
     if (!curCand) return;
     selectedId = curCand.version_id;
-    const newSelIdx = filteredImages.findIndex((img) => img.version_id === curCand.version_id);
-    if (filteredImages.length > 1) {
-      const nextCandIdx = (newSelIdx + 1) % filteredImages.length;
-      compareCandidateId = filteredImages[nextCandIdx].version_id;
-      selectedIds = new Set([selectedId, compareCandidateId]);
+    const newSelIdx = library.filteredImages.findIndex((img) => img.version_id === curCand.version_id);
+    if (library.filteredImages.length > 1) {
+      const nextCandIdx = (newSelIdx + 1) % library.filteredImages.length;
+      library.compareCandidateId = library.filteredImages[nextCandIdx].version_id;
+      selectedIds = new Set([selectedId, library.compareCandidateId]);
     } else {
       selectedIds = new Set([selectedId]);
     }
@@ -1849,11 +1588,11 @@
   // affect this.
   function handleSelect(/** @type {number} */ versionId, /** @type {MouseEvent=} */ event) {
     if (event?.shiftKey && selectedId !== null) {
-      const anchorIndex = filteredImages.findIndex((img) => img.version_id === selectedId);
-      const clickedIndex = filteredImages.findIndex((img) => img.version_id === versionId);
+      const anchorIndex = library.filteredImages.findIndex((img) => img.version_id === selectedId);
+      const clickedIndex = library.filteredImages.findIndex((img) => img.version_id === versionId);
       if (anchorIndex !== -1 && clickedIndex !== -1) {
         const [from, to] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
-        selectedIds = new Set(filteredImages.slice(from, to + 1).map((img) => img.version_id));
+        selectedIds = new Set(library.filteredImages.slice(from, to + 1).map((img) => img.version_id));
         return; // anchor stays put, Lightroom/Finder-style
       }
       // Stale anchor (e.g. it was just removed, or is outside the current
@@ -1883,7 +1622,7 @@
   // in-flight pollUntilThumbnailsReady refresh() momentarily resurrect the
   // removed rows in the UI.
   async function handleRemoveConfirmed() {
-    confirmingRemoval = false;
+    library.confirmingRemoval = false;
     // Symmetry with the close handler: force any in-progress IPTC edit's
     // blur-save to fire before the rows it targets can disappear.
     /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
@@ -1897,7 +1636,7 @@
       return;
     }
     const removedVersionIds = new Set(selectedImages.map((img) => img.version_id));
-    images = images.filter((img) => !removedVersionIds.has(img.version_id));
+    library.images = library.images.filter((img) => !removedVersionIds.has(img.version_id));
     shell.notify(`Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from catalog`);
     selectedId = null;
     selectedIds = new Set();
@@ -1936,7 +1675,7 @@
     try {
       const resultImageId = await mergeHdrBracket(imageIds);
       await refresh();
-      const merged = images.find((img) => img.image_id === resultImageId);
+      const merged = library.images.find((img) => img.image_id === resultImageId);
       if (merged) {
         selectedId = merged.version_id;
         selectedIds = new Set([merged.version_id]);
@@ -1978,7 +1717,7 @@
     try {
       const resultImageId = await mergePanorama(imageIds);
       await refresh();
-      const merged = images.find((img) => img.image_id === resultImageId);
+      const merged = library.images.find((img) => img.image_id === resultImageId);
       if (merged) {
         selectedId = merged.version_id;
         selectedIds = new Set([merged.version_id]);
@@ -1992,39 +1731,6 @@
     }
   }
 
-  // Collections (M2 Slice 5). Rename/edit-existing-smart-collection-rules
-  // UI is deliberately deferred (matching this codebase's precedent for
-  // `add_image_with_metadata`/`add_edit_stack` -- a lower-level building
-  // block kept ready without a UI trigger yet): the rail's "+" only ever
-  // creates fresh collections; changing an existing one means delete and
-  // recreate for now.
-  let creatingCollection = $state(false);
-  let creatingSmartCollection = $state(false);
-  let creatingCollectionWithImages = $state(false);
-  let pendingAddToCollectionImageIds = $state(/** @type {number[]} */ ([]));
-  let manualCollections = $derived(collections.filter((c) => !c.is_smart));
-
-  async function handleCreateCollection(/** @type {string} */ name) {
-    creatingCollection = false;
-    await createCollection(name);
-    await refreshCollections();
-  }
-
-  async function handleCreateSmartCollection(
-    /** @type {string} */ name,
-    /** @type {import('$lib/api/catalog.js').CollectionRule[]} */ rules,
-  ) {
-    creatingSmartCollection = false;
-    await createSmartCollection(name, rules);
-    await refreshCollections();
-  }
-
-  async function handleDeleteCollection(/** @type {number} */ collectionId, /** @type {MouseEvent} */ event) {
-    event.stopPropagation(); // don't also trigger selectCollection
-    await deleteCollection(collectionId);
-    if (activeCollectionId === collectionId) activeCollectionId = null;
-    await refreshCollections();
-  }
 
   // "Add to Collection…" toolbar picker, from a multi-selection.
   async function handleAddToCollectionSelect(/** @type {string} */ value) {
@@ -2032,8 +1738,8 @@
     const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
     if (imageIds.length === 0) return;
     if (value === "__new__") {
-      pendingAddToCollectionImageIds = imageIds;
-      creatingCollectionWithImages = true;
+      library.pendingAddToCollectionImageIds = imageIds;
+      library.creatingCollectionWithImages = true;
       return;
     }
     const collectionId = Number(value);
@@ -2042,26 +1748,26 @@
     // by activeCollectionId -- those differ when adding to a DIFFERENT
     // collection than the one currently being viewed, and invalidating
     // the wrong one would silently leave the mutated one's cache stale.
-    if (manualMembership.has(collectionId)) await loadManualMembership(collectionId);
+    if (library.manualMembership.has(collectionId)) await loadManualMembership(collectionId);
     await refreshCollections();
     shell.notify(`Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to collection`);
   }
 
   async function handleCreateCollectionWithImages(/** @type {string} */ name) {
-    creatingCollectionWithImages = false;
-    const imageIds = pendingAddToCollectionImageIds;
-    pendingAddToCollectionImageIds = [];
+    library.creatingCollectionWithImages = false;
+    const imageIds = library.pendingAddToCollectionImageIds;
+    library.pendingAddToCollectionImageIds = [];
     await createCollectionWithImages(name, imageIds);
     await refreshCollections();
     shell.notify(`Added ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} to "${name}"`);
   }
 
   async function handleRemoveFromCollection() {
-    if (activeCollectionId === null) return;
+    if (library.activeCollectionId === null) return;
     const imageIds = [...new Set(selectedImages.map((img) => img.image_id))];
     if (imageIds.length === 0) return;
-    await removeImagesFromCollection(activeCollectionId, imageIds);
-    await loadManualMembership(activeCollectionId); // mutated === active here, still the right id
+    await removeImagesFromCollection(library.activeCollectionId, imageIds);
+    await loadManualMembership(library.activeCollectionId); // mutated === active here, still the right id
     await refreshCollections();
     const removedVersionIds = new Set(selectedImages.map((img) => img.version_id));
     selectedIds = new Set([...selectedIds].filter((id) => !removedVersionIds.has(id)));
@@ -2085,22 +1791,22 @@
       return confirmingDeletePresetId;
     },
     get confirmingRemoval() {
-      return confirmingRemoval;
+      return library.confirmingRemoval;
     },
     set confirmingRemoval(value) {
-      confirmingRemoval = value;
+      library.confirmingRemoval = value;
     },
     get creatingCollection() {
-      return creatingCollection;
+      return library.creatingCollection;
     },
     get creatingCollectionWithImages() {
-      return creatingCollectionWithImages;
+      return library.creatingCollectionWithImages;
     },
     get creatingPreset() {
       return creatingPreset;
     },
     get creatingSmartCollection() {
-      return creatingSmartCollection;
+      return library.creatingSmartCollection;
     },
     get creatingSnapshot() {
       return creatingSnapshot;
@@ -2109,7 +1815,7 @@
       return exportItems;
     },
     get filteredImages() {
-      return filteredImages;
+      return library.filteredImages;
     },
     handleColorLabelChange,
     handleCompareNextCandidate,
@@ -2128,10 +1834,10 @@
     handleToggleClippingOverlay,
     handleUndo,
     get libraryViewMode() {
-      return libraryViewMode;
+      return library.libraryViewMode;
     },
     set libraryViewMode(value) {
-      libraryViewMode = value;
+      library.libraryViewMode = value;
     },
     get maskOverlaysVisible() {
       return maskOverlaysVisible;
@@ -2207,14 +1913,14 @@
   }
 
   function handleCopyrightChange(/** @type {number} */ imageId, /** @type {string} */ copyright) {
-    images = images.map((img) => (img.image_id === imageId ? { ...img, copyright } : img));
+    library.images = library.images.map((img) => (img.image_id === imageId ? { ...img, copyright } : img));
     pendingIptcSave = setCopyright(imageId, copyright).finally(() => {
       pendingIptcSave = null;
     });
   }
 
   function handleContactChange(/** @type {number} */ imageId, /** @type {string} */ contact) {
-    images = images.map((img) => (img.image_id === imageId ? { ...img, contact } : img));
+    library.images = library.images.map((img) => (img.image_id === imageId ? { ...img, contact } : img));
     pendingIptcSave = setContact(imageId, contact).finally(() => {
       pendingIptcSave = null;
     });
@@ -2246,7 +1952,7 @@
     // persistTimer gate) -- worth closing on that precedent alone.
     await flushEditStack();
     regenerateThumbnailFor(previousVersionId);
-    const image = images.find((img) => img.version_id === versionId);
+    const image = library.images.find((img) => img.version_id === versionId);
     if (!image) return;
     prioritizeThumbnail(versionId);
     developVersionId = versionId;
@@ -2737,7 +2443,7 @@
     refresh().then(pollUntilThumbnailsReadyOnStartup);
     refreshCollections();
     refreshPresets();
-    listAllImageKeywords().then((assignments) => (allImageKeywords = assignments));
+    listAllImageKeywords().then((assignments) => (library.allImageKeywords = assignments));
 
     // M1 Slice 6 (crash-safety): flush a pending debounced edit before the
     // window actually closes, so quitting right after a slider drag can't
@@ -2952,10 +2658,10 @@
   <AppTitlebar
     activeModule={shell.activeModule}
     {currentExportItems}
-    {activeCollectionId}
-    {activeCollection}
+    activeCollectionId={library.activeCollectionId}
+    activeCollection={library.activeCollection}
     {selectedIds}
-    {manualCollections}
+    manualCollections={library.manualCollections}
     {applyingPreset}
     {presets}
     {copiedSettings}
@@ -2981,7 +2687,7 @@
     {handleImportFiles}
     {handleImportFolder}
     onToggleFaceRects={() => (faces.showFaceRects = !faces.showFaceRects)}
-    onRequestRemoval={() => (confirmingRemoval = true)}
+    onRequestRemoval={() => (library.confirmingRemoval = true)}
     onOpenSettings={() => (shell.settingsOpen = true)}
   />
 
@@ -2991,12 +2697,12 @@
     {copySettingsDialogOpen}
     confirmingFaceDetectionOnImport={faces.confirmingDetectionOnImport}
     pendingImportBatchSize={faces.pendingImportBatchSize}
-    {confirmingRemoval}
+    confirmingRemoval={library.confirmingRemoval}
     {selectedIds}
     {confirmingReset}
-    {creatingCollection}
-    {creatingCollectionWithImages}
-    {creatingSmartCollection}
+    creatingCollection={library.creatingCollection}
+    creatingCollectionWithImages={library.creatingCollectionWithImages}
+    creatingSmartCollection={library.creatingSmartCollection}
     {creatingSnapshot}
     {creatingPreset}
     {confirmingDeletePresetId}
@@ -3005,14 +2711,14 @@
     onCloseSettings={() => (shell.settingsOpen = false)}
     onCloseExport={() => (exportItems = null)}
     onCancelCopySettings={() => (copySettingsDialogOpen = false)}
-    onCancelRemoval={() => (confirmingRemoval = false)}
+    onCancelRemoval={() => (library.confirmingRemoval = false)}
     onCancelReset={() => (confirmingReset = false)}
-    onCancelCreateCollection={() => (creatingCollection = false)}
+    onCancelCreateCollection={() => (library.creatingCollection = false)}
     onCancelCreateCollectionWithImages={() => {
-      creatingCollectionWithImages = false;
-      pendingAddToCollectionImageIds = [];
+      library.creatingCollectionWithImages = false;
+      library.pendingAddToCollectionImageIds = [];
     }}
-    onCancelCreateSmartCollection={() => (creatingSmartCollection = false)}
+    onCancelCreateSmartCollection={() => (library.creatingSmartCollection = false)}
     onCancelCreateSnapshot={() => (creatingSnapshot = false)}
     onCancelCreatePreset={() => (creatingPreset = false)}
     onCancelDeletePreset={() => (confirmingDeletePresetId = null)}
@@ -3044,33 +2750,33 @@
 
   {#if shell.activeModule === "library"}
     <LibraryFilterBar
-      searchQuery={searchQuery}
-      flagFilter={flagFilter}
-      minRating={minRating}
-      ratingOp={ratingOp}
-      colorLabelFilter={colorLabelFilter}
-      fileTypeFilter={fileTypeFilter}
-      cameraFilter={cameraFilter}
-      lensFilter={lensFilter}
-      dateFrom={dateFrom}
-      dateTo={dateTo}
-      cameraOptions={cameraOptions}
-      lensOptions={lensOptions}
-      totalCount={baseImages.length}
-      matchedCount={filteredImages.length}
-      onSearchChange={(q) => (searchQuery = q)}
-      onFlagChange={(f) => (flagFilter = f)}
+      searchQuery={library.searchQuery}
+      flagFilter={library.flagFilter}
+      minRating={library.minRating}
+      ratingOp={library.ratingOp}
+      colorLabelFilter={library.colorLabelFilter}
+      fileTypeFilter={library.fileTypeFilter}
+      cameraFilter={library.cameraFilter}
+      lensFilter={library.lensFilter}
+      dateFrom={library.dateFrom}
+      dateTo={library.dateTo}
+      cameraOptions={library.cameraOptions}
+      lensOptions={library.lensOptions}
+      totalCount={library.baseImages.length}
+      matchedCount={library.filteredImages.length}
+      onSearchChange={(q) => (library.searchQuery = q)}
+      onFlagChange={(f) => (library.flagFilter = f)}
       onRatingChange={(r, op) => {
-        minRating = r;
-        ratingOp = op;
+        library.minRating = r;
+        library.ratingOp = op;
       }}
-      onColorLabelChange={(c) => (colorLabelFilter = c)}
-      onFileTypeChange={(t) => (fileTypeFilter = t)}
-      onCameraChange={(c) => (cameraFilter = c)}
-      onLensChange={(l) => (lensFilter = l)}
+      onColorLabelChange={(c) => (library.colorLabelFilter = c)}
+      onFileTypeChange={(t) => (library.fileTypeFilter = t)}
+      onCameraChange={(c) => (library.cameraFilter = c)}
+      onLensChange={(l) => (library.lensFilter = l)}
       onDateRangeChange={(from, to) => {
-        dateFrom = from;
-        dateTo = to;
+        library.dateFrom = from;
+        library.dateTo = to;
       }}
       onReset={handleResetFilters}
     />
@@ -3100,15 +2806,15 @@
       {/if}
 
       <CatalogRail
-        {images}
-        {activeCollectionId}
-        {activeFolderKey}
-        {showLastImportOnly}
-        {activePersonId}
-        {lastImportBatchId}
-        {folderEntries}
-        {collections}
-        {keywordIdsByImage}
+        images={library.images}
+        activeCollectionId={library.activeCollectionId}
+        activeFolderKey={library.activeFolderKey}
+        showLastImportOnly={library.showLastImportOnly}
+        activePersonId={library.activePersonId}
+        lastImportBatchId={library.lastImportBatchId}
+        folderEntries={library.folderEntries}
+        collections={library.collections}
+        keywordIdsByImage={library.keywordIdsByImage}
         people={faces.people}
         avatarUrls={faces.avatarSourceUrls}
         onSelectAllPhotos={selectAllPhotos}
@@ -3116,13 +2822,13 @@
         onSelectFolder={selectFolder}
         onSelectCollection={selectCollection}
         onDeleteCollection={handleDeleteCollection}
-        onCreateCollection={() => (creatingCollection = true)}
-        onCreateSmartCollection={() => (creatingSmartCollection = true)}
+        onCreateCollection={() => (library.creatingCollection = true)}
+        onCreateSmartCollection={() => (library.creatingSmartCollection = true)}
         onSelectPerson={selectPerson}
         onRenamePerson={handleRenamePerson}
       />
 
-      {#if images.length === 0}
+      {#if library.images.length === 0}
         <div class="empty">
           <p>No photos yet.</p>
           <div class="empty-actions">
@@ -3130,14 +2836,14 @@
             <button class="secondary" onclick={handleImportFiles} disabled={importFlow.importing}>Import files…</button>
           </div>
         </div>
-      {:else if filteredImages.length === 0}
+      {:else if library.filteredImages.length === 0}
         <div class="empty">
           <p>
-            {#if showLastImportOnly}
+            {#if library.showLastImportOnly}
               No photos in the last import.
-            {:else if activeFolderKey !== null}
+            {:else if library.activeFolderKey !== null}
               No photos in this folder.
-            {:else if activePersonId !== null}
+            {:else if library.activePersonId !== null}
               No photos of this person.
             {:else}
               No photos in this collection.
@@ -3146,56 +2852,56 @@
         </div>
       {:else}
         <div class="library-view-container">
-          {#if libraryViewMode === "grid"}
+          {#if library.libraryViewMode === "grid"}
             <LibraryGrid
-              images={filteredImages}
+              images={library.filteredImages}
               {selectedIds}
               onSelect={handleSelect}
               onOpen={(vid) => {
                 selectedId = vid;
                 selectedIds = new Set([vid]);
-                libraryViewMode = "loupe";
+                library.libraryViewMode = "loupe";
                 prioritizeThumbnail(vid);
               }}
               onRatingChange={handleRatingChange}
               onFlagChange={handleFlagChange}
               onColorLabelChange={handleColorLabelChange}
             />
-          {:else if libraryViewMode === "loupe" && (selectedImage || filteredImages[0])}
-            {@const currentImg = selectedImage ?? filteredImages[0]}
-            {@const curIdx = filteredImages.findIndex((img) => img.version_id === currentImg.version_id)}
+          {:else if library.libraryViewMode === "loupe" && (selectedImage || library.filteredImages[0])}
+            {@const currentImg = selectedImage ?? library.filteredImages[0]}
+            {@const curIdx = library.filteredImages.findIndex((img) => img.version_id === currentImg.version_id)}
             <LibraryImageViewer
               bind:this={imageViewerRef}
               image={currentImg}
               hasPrev={curIdx > 0}
-              hasNext={curIdx < filteredImages.length - 1}
+              hasNext={curIdx < library.filteredImages.length - 1}
               onPrev={() => selectPrevImage(false)}
               onNext={() => selectNextImage(false)}
               onRatingChange={(r) => handleRatingChange(currentImg.version_id, r)}
               onFlagChange={(f) => handleFlagChange(currentImg.version_id, f)}
               onColorLabelChange={(c) => handleColorLabelChange(currentImg.version_id, c)}
               onOpenDevelop={() => openDevelop(currentImg.version_id)}
-              zoomLevel={libraryZoomLevel}
-              onZoomChange={(z) => (libraryZoomLevel = z)}
+              zoomLevel={library.libraryZoomLevel}
+              onZoomChange={(z) => (library.libraryZoomLevel = z)}
               faces={currentImg.image_id === selectedImage?.image_id ? faces.currentImageFaces : []}
               showFaceRects={faces.showFaceRects}
               hoveredFaceId={faces.hoveredFaceId}
             />
-          {:else if libraryViewMode === "compare" && compareSelectImage && compareCandidateImage}
+          {:else if library.libraryViewMode === "compare" && compareSelectImage && compareCandidateImage}
             <LibraryCompareView
               selectImage={compareSelectImage}
               candidateImage={compareCandidateImage}
               onSwap={handleCompareSwap}
               onMakeSelect={handleCompareMakeSelect}
-              onNextCandidate={filteredImages.length > 1 ? handleCompareNextCandidate : undefined}
-              onPrevCandidate={filteredImages.length > 1 ? handleComparePrevCandidate : undefined}
+              onNextCandidate={library.filteredImages.length > 1 ? handleCompareNextCandidate : undefined}
+              onPrevCandidate={library.filteredImages.length > 1 ? handleComparePrevCandidate : undefined}
               onRatingChange={handleRatingChange}
               onFlagChange={handleFlagChange}
               onColorLabelChange={handleColorLabelChange}
             />
-          {:else if libraryViewMode === "survey"}
+          {:else if library.libraryViewMode === "survey"}
             <LibrarySurveyView
-              images={selectedImages.length > 0 ? selectedImages : filteredImages.slice(0, 4)}
+              images={selectedImages.length > 0 ? selectedImages : library.filteredImages.slice(0, 4)}
               primaryId={selectedId}
               onSetPrimary={(vid) => (selectedId = vid)}
               onDeselect={(vid) => {
@@ -3213,15 +2919,15 @@
 
           <!-- Library Bottom Toolbar -->
           <LibraryToolbar
-            viewMode={libraryViewMode}
+            viewMode={library.libraryViewMode}
             selectedCount={selectedIds.size}
-            totalCount={filteredImages.length}
-            zoomLevel={libraryZoomLevel}
-            onViewModeChange={(m) => (libraryViewMode = m)}
+            totalCount={library.filteredImages.length}
+            zoomLevel={library.libraryZoomLevel}
+            onViewModeChange={(m) => (library.libraryViewMode = m)}
             onRatingChange={(r) => handleRatingChange(null, r)}
             onFlagChange={(f) => handleFlagChange(null, f)}
             onColorLabelChange={(c) => handleColorLabelChange(null, c)}
-            onZoomChange={(z) => (libraryZoomLevel = z)}
+            onZoomChange={(z) => (library.libraryZoomLevel = z)}
             onZoomFit={() => imageViewerRef?.zoomToFit?.()}
             onZoom100={() => imageViewerRef?.zoomTo100?.()}
           />
@@ -3250,7 +2956,7 @@
         }}
         onGeoLocationApplied={(imageIds, lat, lon) => {
           const ids = new Set(imageIds);
-          images = images.map((img) => (ids.has(img.image_id) ? { ...img, latitude: lat, longitude: lon } : img));
+          library.images = library.images.map((img) => (ids.has(img.image_id) ? { ...img, latitude: lat, longitude: lon } : img));
           shell.notify(`Set location for ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"}`);
         }}
         faces={faces.currentImageFaces}
@@ -3535,7 +3241,7 @@
   {/if}
 
   {#if shell.activeModule === "library"}
-    <Filmstrip images={filteredImages} {selectedIds} onSelect={handleSelect} onOpen={openDevelop} />
+    <Filmstrip images={library.filteredImages} {selectedIds} onSelect={handleSelect} onOpen={openDevelop} />
   {:else if shell.activeModule === "develop"}
     <Filmstrip
       images={developFilmstripImages}

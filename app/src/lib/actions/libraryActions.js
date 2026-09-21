@@ -1,8 +1,8 @@
-// Library operations (RFC-0009 P4a, moved out of +page.svelte's script): everything that reads or
-// writes only the `library` store plus IPC -- switching the source (All Photos / Last Import /
-// folder / collection / person), refreshing the image list and collections, optimistic local
-// patches, thumbnail-batch application, and collection create/delete. Workflows that also touch
-// selection or Develop (`handleRemoveConfirmed`, compare navigation, …) move with P4b/P5.
+// Library operations (RFC-0009 P4a, P5b, moved out of +page.svelte's script): everything that reads or
+// writes the `library` store plus IPC -- switching the source (All Photos / Last Import / folder /
+// collection / person), refreshing the image list and collections, optimistic local patches,
+// thumbnail-batch application, collection create/delete, and removing photos from the catalog
+// (which also clears the selection and, if it was open, the Develop session).
 
 import { getImagesForPerson } from "$lib/api/faces.js";
 import { library } from "$lib/state/library.svelte.js";
@@ -14,7 +14,11 @@ import {
   createCollection,
   createSmartCollection,
   deleteCollection,
+  removeImages,
 } from "$lib/api/catalog.js";
+import { selection } from "$lib/state/selection.svelte.js";
+import { shell } from "$lib/state/shell.svelte.js";
+import { develop } from "$lib/state/develop.svelte.js";
 
 export async function loadPersonMembership(/** @type {number} */ personId) {
   const memberIds = await getImagesForPerson(personId);
@@ -169,4 +173,39 @@ export async function handleDeleteCollection(/** @type {number} */ collectionId,
   await deleteCollection(collectionId);
   if (library.activeCollectionId === collectionId) library.activeCollectionId = null;
   await refreshCollections();
+}
+
+// Non-destructive removal (M2 Slice 3): catalog rows + app-owned derived
+// files only -- the backend never touches source files. `await` the
+// command BEFORE filtering local state: the other order would let an
+// in-flight pollUntilThumbnailsReady refresh() momentarily resurrect the
+// removed rows in the UI.
+export async function handleRemoveConfirmed() {
+  library.confirmingRemoval = false;
+  // Symmetry with the close handler: force any in-progress IPTC edit's
+  // blur-save to fire before the rows it targets can disappear.
+  /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
+
+  const imageIds = [...new Set(selection.selectedImages.map((img) => img.image_id))];
+  if (imageIds.length === 0) return;
+  try {
+    await removeImages(imageIds);
+  } catch (/** @type {any} */ e) {
+    shell.notify(`Remove failed: ${e}`);
+    return;
+  }
+  const removedVersionIds = new Set(selection.selectedImages.map((img) => img.version_id));
+  library.images = library.images.filter((img) => !removedVersionIds.has(img.version_id));
+  shell.notify(`Removed ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"} from catalog`);
+  selection.selectedId = null;
+  selection.selectedIds = new Set();
+  // If the image open in Develop was just removed, clear that state too --
+  // otherwise the develop branch keeps rendering a deleted image, and a
+  // pending debounced edit-stack save would fire a pointless IPC call
+  // against the deleted version.
+  if (develop.versionId !== null && removedVersionIds.has(develop.versionId)) {
+    develop.cancelScheduledFlush();
+    develop.versionId = null;
+    develop.imagePath = "";
+  }
 }

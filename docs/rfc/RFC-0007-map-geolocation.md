@@ -108,3 +108,11 @@ Google's Geocoding/Maps APIs turned out to require a billing account with a card
 - **Attribution link.** Leaflet's attribution `<a>` would navigate the app window; a click handler routes it through `openExternalUrl` (`plugin-opener`'s `openUrl`, already granted by `opener:default`), falling back to `window.open` outside Tauri.
 - **No keyboard shortcut** for the map yet (adding one means a new entry in the rebinding table); toolbar only.
 - **Not done here:** slice 3 (pin-drop / drag-to-adjust, reverse geocoding), the map following the metadata panel's selection, and any offline tile cache (OSM's policy discourages bulk pre-fetching).
+
+**Slice 3a as built (2026-09-21): placing photos on the map, plus the `M` shortcut.** Slice 3 is split; reverse geocoding (3b) is not built yet.
+
+- **Placing lives in the map view, not a separate picker.** With photos selected, "Place N photos" enters a placing mode: a click drops a draggable pin, "Apply" saves it. If the first selected photo already has coordinates the pin starts there, so drag-to-adjust and place-from-scratch are the same flow. Targets are `selection.keywordTargetImageIds` (the whole selection, else the anchor), deduplicated.
+- **One write path, as §3.5 wanted:** Apply calls the existing `set_geo_location_batch` through `handleMapAssignLocation`; no new Rust command. Locally, `applyLocationLocally` (extracted from `LibraryModule`'s inline copy, now shared with the metadata panel's search-assign) updates every version of each photo, so pins and the panel refresh without refetching. Failure leaves the pin in place and reports in the status strip.
+- **`normalizeCoordinate`** wraps longitudes from Leaflet's repeated world back into +-180 and clamps latitude before saving, since the backend's `validate_coordinates` rejects out-of-range values and a pin dragged into a neighbouring copy of the world would otherwise fail.
+- **Shortcut:** `viewMap` (default `M`, rebindable, merged into stored shortcut sets like any new default) calls `showMapView`. No menu item yet: the native View menu is built in Rust (`lib.rs`), a separate change.
+- **Still open for 3b:** explicit per-photo reverse geocoding ("Look up place name"), which sends coordinates to the selected provider and needs a backend command, the privacy wording (§3.4), and UI for showing the result without persisting it.

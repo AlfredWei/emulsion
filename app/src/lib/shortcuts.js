@@ -15,6 +15,7 @@ export const DEFAULT_SHORTCUTS = {
   viewLoupe: "e",
   viewCompare: "c",
   viewSurvey: "n",
+  viewMap: "m",
   viewDevelop: "d",
   toggleView: " ",
 
@@ -60,6 +61,7 @@ export const SHORTCUT_DEFINITIONS = [
   { id: "viewLoupe", label: "Loupe / Single View", category: "View Modes", defaultKey: "e" },
   { id: "viewCompare", label: "Compare View", category: "View Modes", defaultKey: "c" },
   { id: "viewSurvey", label: "Survey View", category: "View Modes", defaultKey: "n" },
+  { id: "viewMap", label: "Map View", category: "View Modes", defaultKey: "m" },
   { id: "viewDevelop", label: "Develop Module", category: "View Modes", defaultKey: "d" },
   { id: "toggleView", label: "Toggle Grid / Loupe (or Fit Zoom)", category: "View Modes", defaultKey: "Space" },
 

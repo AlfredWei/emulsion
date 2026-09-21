@@ -114,3 +114,17 @@ export function clusterPoints(points, zoom, cellSize = 64) {
 export function clustersInBounds(clusters, bounds) {
   return clusters.filter((c) => c.lat >= bounds.south && c.lat <= bounds.north && c.lng >= bounds.west && c.lng <= bounds.east);
 }
+
+/**
+ * A coordinate the catalog will accept, from whatever the map produced. Dragging or clicking far to the
+ * left or right of the world gives longitudes beyond +-180 (Leaflet repeats the world), so longitude is
+ * wrapped back into range and latitude clamped; `null` for anything not finite.
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {{ lat: number, lng: number } | null}
+ */
+export function normalizeCoordinate(lat, lng) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const wrapped = lng >= -180 && lng <= 180 ? lng : ((((lng + 180) % 360) + 360) % 360) - 180;
+  return { lat: Math.max(-90, Math.min(90, lat)), lng: wrapped };
+}

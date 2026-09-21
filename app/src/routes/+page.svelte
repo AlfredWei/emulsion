@@ -34,6 +34,7 @@
     handleCreateCollection,
     handleCreateSmartCollection,
     handleRemoveConfirmed,
+    showMapView,
   } from "$lib/actions/libraryActions.js";
   import {
     selectGridStep,
@@ -201,6 +202,7 @@
       return masks.selectedMask;
     },
     selectGridStep,
+    showMapView,
     selectNextImage,
     selectPrevImage,
     get settingsOpen() {

@@ -16,6 +16,8 @@ import {
   deleteCollection,
   removeImages,
 } from "$lib/api/catalog.js";
+import { setGeoLocationBatch } from "$lib/api/map.js";
+import { normalizeCoordinate } from "$lib/mapClusters.js";
 import { selection } from "$lib/state/selection.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { develop } from "$lib/state/develop.svelte.js";
@@ -78,6 +80,31 @@ export function showMapView() {
 export function handleMapClusterSelect(/** @type {Iterable<number>} */ imageIds) {
   selectMapImages(imageIds);
   library.libraryViewMode = "grid";
+}
+
+/** Mirrors a just-saved location onto the loaded photos (every version of each `image_id`), so pins and the
+ * metadata panel update without refetching the list. */
+export function applyLocationLocally(/** @type {number[]} */ imageIds, /** @type {number} */ lat, /** @type {number} */ lon) {
+  const ids = new Set(imageIds);
+  library.images = library.images.map((img) => (ids.has(img.image_id) ? { ...img, latitude: lat, longitude: lon } : img));
+}
+
+/** Saves a location chosen on the map (a dropped or dragged pin) for the given photos. Longitudes beyond
+ * +-180 from a repeated world are wrapped first. Reports failure in the status strip.
+ * @returns {Promise<boolean>} whether it was saved */
+export async function handleMapAssignLocation(/** @type {number[]} */ imageIds, /** @type {number} */ lat, /** @type {number} */ lng) {
+  const place = normalizeCoordinate(lat, lng);
+  const ids = [...new Set(imageIds)];
+  if (!place || ids.length === 0) return false;
+  try {
+    await setGeoLocationBatch(ids, place.lat, place.lng);
+  } catch (/** @type {any} */ e) {
+    shell.notify(`Could not set location: ${e}`);
+    return false;
+  }
+  applyLocationLocally(ids, place.lat, place.lng);
+  shell.notify(`Set location for ${ids.length} photo${ids.length === 1 ? "" : "s"}`);
+  return true;
 }
 
 export async function refreshCollections() {

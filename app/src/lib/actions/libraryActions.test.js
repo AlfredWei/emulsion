@@ -12,7 +12,9 @@ const catalog = vi.hoisted(() => ({
 }));
 const faceApi = vi.hoisted(() => ({ getImagesForPerson: vi.fn() }));
 vi.mock("$lib/api/catalog.js", () => catalog);
+const mapApi = vi.hoisted(() => ({ setGeoLocationBatch: vi.fn() }));
 vi.mock("$lib/api/faces.js", () => faceApi);
+vi.mock("$lib/api/map.js", () => mapApi);
 
 import {
   loadPersonMembership,
@@ -35,6 +37,8 @@ import {
   selectMapImages,
   showMapView,
   handleMapClusterSelect,
+  handleMapAssignLocation,
+  applyLocationLocally,
 } from "./libraryActions.js";
 import { library } from "$lib/state/library.svelte.js";
 import { selection } from "$lib/state/selection.svelte.js";
@@ -59,7 +63,7 @@ beforeEach(() => {
   handleResetFilters();
   library.creatingCollection = false;
   library.creatingSmartCollection = false;
-  for (const fn of [...Object.values(catalog), ...Object.values(faceApi)]) fn.mockResolvedValue(undefined);
+  for (const fn of [...Object.values(catalog), ...Object.values(faceApi), ...Object.values(mapApi)]) fn.mockResolvedValue(undefined);
 });
 
 describe("source switching", () => {
@@ -121,6 +125,41 @@ describe("source switching", () => {
     expect(library.libraryViewMode).toBe("grid");
     expect(library.activeMapImageIds).toEqual(new Set([2, 3]));
     expect(sources()).toEqual([null, null, false, null]);
+  });
+
+  it("applyLocationLocally sets the location on every version of the listed photos only", () => {
+    library.images = [img(1), img(1, { version_id: 11 }), img(2)];
+    applyLocationLocally([1], 10, 20);
+    expect(library.images.map((i) => [i.latitude, i.longitude])).toEqual([[10, 20], [10, 20], [undefined, undefined]]);
+  });
+
+  it("handleMapAssignLocation saves once for the distinct photos, mirrors it locally and reports", async () => {
+    library.images = [img(1), img(2), img(3)];
+    mapApi.setGeoLocationBatch.mockResolvedValue(2);
+    expect(await handleMapAssignLocation([1, 2, 2], 48.5, 2.5)).toBe(true);
+    expect(mapApi.setGeoLocationBatch).toHaveBeenCalledWith([1, 2], 48.5, 2.5);
+    expect(library.images.map((i) => i.latitude)).toEqual([48.5, 48.5, undefined]);
+    expect(shell.statusMessage).toBe("Set location for 2 photos");
+  });
+
+  it("handleMapAssignLocation wraps a repeated-world longitude into range before saving", async () => {
+    library.images = [img(1)];
+    mapApi.setGeoLocationBatch.mockResolvedValue(1);
+    await handleMapAssignLocation([1], 10, 190);
+    expect(mapApi.setGeoLocationBatch).toHaveBeenCalledWith([1], 10, -170);
+    expect(library.images[0].longitude).toBe(-170);
+  });
+
+  it("handleMapAssignLocation changes nothing when the save fails, or with no photos or a bad coordinate", async () => {
+    library.images = [img(1)];
+    mapApi.setGeoLocationBatch.mockRejectedValue("db locked");
+    expect(await handleMapAssignLocation([1], 1, 2)).toBe(false);
+    expect(library.images[0].latitude).toBeUndefined();
+    expect(shell.statusMessage).toBe("Could not set location: db locked");
+    mapApi.setGeoLocationBatch.mockClear();
+    expect(await handleMapAssignLocation([], 1, 2)).toBe(false);
+    expect(await handleMapAssignLocation([1], NaN, 2)).toBe(false);
+    expect(mapApi.setGeoLocationBatch).not.toHaveBeenCalled();
   });
 
   it("every other source switch turns the map selection off", async () => {

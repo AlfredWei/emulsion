@@ -95,15 +95,17 @@ Face detection, embedding, and clustering all run **fully locally** — no cloud
 
 ## Map & geolocation (partly built)
 
-Part of [M5.5 in the roadmap](../PRD/MILESTONES.md). **Built:** searching for a place or address and applying it as the GPS location of the selected photo(s), in one action for a whole multi-selection. the **Map** view (below). **Not built yet:** dropping/dragging a pin on a map.
+Part of [M5.5 in the roadmap](../PRD/MILESTONES.md). **Built:** searching for a place or address and applying it as the GPS location of the selected photo(s), in one action for a whole multi-selection. the **Map** view (below). **Placing photos on the map** (below). **Not built yet:** looking up a place name for a photo's existing coordinates (reverse geocoding).
 
 **Choosing a search service (Settings → Map):** *OpenStreetMap* is the default and needs no setup or account; it's good with addresses and limited to about one search per second. *Google* is better at landmark and business names but needs your own API key — create one in Google Cloud Console and enable the Geocoding API (Google requires a billing account, though light personal use is within its free monthly allowance). The key stays in your local catalog and is never shown again in the app.
 
 **Using it:** select one or more photos, and in the metadata panel's Location section type a place name or address and press Search. Pick a result to apply its coordinates to every selected photo (the list says how many). Existing altitude is kept. The location is stored in your catalog and, if you tick EXIF + GPS, written into exported JPEGs. You can still type coordinates by hand, for one photo.
 
-**The Map view:** click **Map** in the Library toolbar. Every photo with a location in the current source (All Photos, a folder, a collection…) and passing the filter bar appears as a pin; nearby pins merge into a numbered cluster that splits as you zoom in. Click a pin or cluster to scope the grid to those photos: the rail shows a **Map selection** entry (click it, or All Photos, to clear it) and the view returns to Grid. Photos without a location are not on the map; a badge says how many were left out. Opening the map again shows the whole current source, not the last selection. There is no keyboard shortcut for it yet.
+**The Map view:** click **Map** in the Library toolbar. Every photo with a location in the current source (All Photos, a folder, a collection…) and passing the filter bar appears as a pin; nearby pins merge into a numbered cluster that splits as you zoom in. Click a pin or cluster to scope the grid to those photos: the rail shows a **Map selection** entry (click it, or All Photos, to clear it) and the view returns to Grid. Photos without a location are not on the map; a badge says how many were left out. Opening the map again shows the whole current source, not the last selection. `M` opens it from the keyboard (rebindable in Settings).
 
-**What leaves your computer:** the text you type into the search box (plus your key, if you chose Google), and only when you press Search; search results aren't saved, only the location you pick is. The Map view also downloads map tiles from OpenStreetMap's public server, only while the Map view is open; the requests reveal which part of the world you are looking at, never which photos you have or where they are. The map credits © OpenStreetMap contributors, as their tile policy requires; that link opens in your browser.
+**Placing photos on the map:** select photos in the Grid, open the Map view and press **Place N photos**. Click the map to drop a pin (drag it to adjust; if the first selected photo already has a location the pin starts there), then **Apply** to save that location for every selected photo, or **Cancel**. Applying writes to your catalog only, like the search-and-assign flow above, and overwrites any location those photos had.
+
+**What leaves your computer:** the text you type into the search box (plus your key, if you chose Google), and only when you press Search; search results aren't saved, only the location you pick is. The Map view also downloads map tiles from OpenStreetMap's public server, only while the Map view is open; the requests reveal which part of the world you are looking at, never which photos you have or where they are (a placed pin is saved locally and is not sent anywhere). The map credits © OpenStreetMap contributors, as their tile policy requires; that link opens in your browser.
 
 ## Settings
 
@@ -121,6 +123,7 @@ All rebindable in Settings → Shortcuts; these are the defaults.
 | `E` | Loupe / single view |
 | `C` | Compare view |
 | `N` | Survey view |
+| `M` | Map view |
 | `D` | Develop module |
 | `Space` | Toggle Grid/Loupe (or fit zoom) |
 | `0`–`5` | Set star rating (0 clears it) |

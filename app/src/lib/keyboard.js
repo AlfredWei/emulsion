@@ -36,6 +36,7 @@ import { OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
  * @property {(extend?: boolean) => void} selectNextImage
  * @property {(extend?: boolean) => void} selectPrevImage
  * @property {(step: number, extend?: boolean) => void} selectGridStep
+ * @property {() => void} showMapView
  * @property {(target: string) => Promise<void>} switchModule
  * @property {(versionId: number) => Promise<void>} openDevelop
  * @property {() => void} handleSelectAll
@@ -250,6 +251,11 @@ export function createKeyboardHandlers(ctx) {
     if (key === ctx.shortcuts.viewSurvey?.toLowerCase()) {
       e.preventDefault();
       ctx.libraryViewMode = "survey";
+      return;
+    }
+    if (key === ctx.shortcuts.viewMap?.toLowerCase()) {
+      e.preventDefault();
+      ctx.showMapView();
       return;
     }
     if (key === ctx.shortcuts.viewDevelop?.toLowerCase()) {

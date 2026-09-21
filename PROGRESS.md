@@ -2,6 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P6c: `exportFlow` store and `navigation.js` (2026-09-21)
+
+Last develop-side step of RFC-0009 P6, and the one that carries the ordering invariants. `+page.svelte` 1,423 → 1,217 lines; new `lib/state/exportFlow.svelte.js` and `lib/actions/navigation.js`; 41 new tests (vitest 539 → 580).
+
+- **`exportFlow` store** (`ExportFlowStore(shell, develop, selection)`): `items` (the Export dialog's list, `null` = closed) and derived `currentItems` (was the page's `currentExportItems`). It closes the "both move then" note on the `print` row of the RFC.
+- **`navigation.js`** (5): `openDevelop`, `switchModule`, `handleExportClick`, `selectNextImage`, `selectPrevImage`. Bodies are the page's, statement for statement (the comparison shows only import lines and the two `exportFlow.` renames differ).
+- **Invariants now under test**: I1 previous version captured before the reassignment and any await (quick-succession test: regenerations are for `null`, 10, 20); I2 the flush is awaited before the regeneration and nothing changes until it resolves (slow-flush test); I3 the lens profile is applied only if the same image is still open (stale-open test), skipped when identical, and persisted with an unlabeled flush; I6 Print's item snapshot is taken once on entry while the module is still `develop` (so leaving Develop for Print snapshots the open image, not the selection), ready URLs are cleared, and other modules leave Print's snapshot alone. Also pinned: the module switches to Develop before the lens lookup resolves, leaving Develop clears mask tool/selection only after the flush, People refreshes only on entry, and the two selection steppers' quirks (an anchor missing from the list resets to the first image in both directions; extending moves the anchor; no wrap; only steps that moved open Develop).
+- **Verified**: `npm run check` 0 errors, vitest 580 passed, `vite build` OK. 69 mutants on the navigation module and store; survivors: the `selectedId === null` first branch of `selectNextImage` (equivalent, the `idx === -1` fallback selects the same first image) the awaited-flush mutant in `openDevelop` and the prev-direction variants, each killed after a test was added or the match string corrected.
+- **Not run locally**: e2e (CI); the Tauri window (Develop open/close through the filmstrip and arrow keys, switching modules with a pending edit, Export from Develop and Library, entering Print).
+- **Next**: P7 (`appEvents.js`: the `onMount` body, Tauri listeners, drop handler, window-close flush, startup polling) and P8 (LibraryModule / DevelopModule / PrintModule components; e2e DOM-shape sensitivities apply there).
+
 ## Refactor P6b: mask, preset, soft-proof and history actions (2026-09-21)
 
 Second half of RFC-0009 P6: the workflows over the stores P6a created. `+page.svelte` 1,929 → 1,423 lines; new `lib/actions/maskActions.js`, `presetActions.js`, `softProofActions.js`, `historyActions.js`; 78 new tests (vitest 461 → 539).

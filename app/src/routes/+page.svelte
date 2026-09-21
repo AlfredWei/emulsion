@@ -1,7 +1,6 @@
 <script>
   import "$lib/styles/tokens.css";
-  import { open, save } from "@tauri-apps/plugin-dialog";
-    import { getCurrentWindow } from "@tauri-apps/api/window";
+      import { getCurrentWindow } from "@tauri-apps/api/window";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
@@ -43,43 +42,10 @@
   } from "$lib/api/catalog.js";
   import {
     getEditStack,
-    setEditStack,
     getHistory,
-    restoreHistoryEntry,
     getSnapshots,
-    restoreSnapshot,
-    previewEditStack,
-    presetEligibleOps,
-    applyPresetOps,
-    copySettingsOps,
-    createPreset,
-    listPresets,
-    deletePreset,
-    importPresetFile,
-    exportPresetFile,
-    regenerateThumbnail,
-    upsertOp,
-    resetEditStack,
-    addMask,
-    updateMask,
-    removeMask,
-    createLinearGradientMask,
-    createRadialGradientMask,
-    createBrushMask,
-    createLuminanceRangeMask,
-    createColorRangeMask,
-    createSpotMask,
-    createRedEyeMask,
-    upsertToneCurve,
-    buildToneCurveLut,
-    sampleCurveLut,
-    insertToneCurvePoint,
-    nearestHslBand,
-    upsertSplitToningZone,
-    rgbToHsl,
     setLensProfile,
     lookupLensProfile,
-    computeEyedropperWhiteBalance,
   } from "$lib/api/develop.js";
   import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
     import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -139,14 +105,13 @@
     pollUntilThumbnailsReadyOnStartup,
   } from "$lib/actions/importActions.js";
   import { handleRatingChange, handleFlagChange, handleColorLabelChange, handleCaptionChange, handleCopyrightChange, handleContactChange } from "$lib/actions/metadataActions.js";
-  import { handleAdjustmentChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropChange, handleCropAspectPreset, handleCropReset, handleAutoWhiteBalance, handleWbPresetChange, handleAutoTone, handleSourceDimensions, handleHistogramUpdate, handleToggleClippingOverlay, handleHoverPixel, handlePeekHistory, handlePeekSnapshot, handleCreateSnapshot, handleDeleteSnapshot } from "$lib/actions/developActions.js";
+  import { handleAdjustmentChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropChange, handleCropAspectPreset, handleCropReset, handleAutoWhiteBalance, handleWbPresetChange, handleAutoTone, handleSourceDimensions, handleHistogramUpdate, handleToggleClippingOverlay, handleHoverPixel, handlePeekHistory, handlePeekSnapshot, handleDeleteSnapshot } from "$lib/actions/developActions.js";
+  import { handleGpuFallback, handleResampleColorToggle, handleColorRangeResampled, isEyedropperActive, handleEyedropperToggle, handleMaskCreated, handleCreateLuminanceRangeMask, handleMaskUpdated, handleMaskDeleted, handleEyedropperSampled } from "$lib/actions/maskActions.js";
+  import { refreshPresets, handleCreateSnapshotConfirmed, handleSaveCurrentAsPresetRequest, handleCreatePresetConfirmed, handleApplyPreset, handleExportPreset, handleImportPresetRequest, handleDeletePresetRequest, handleDeletePresetConfirmed, handleApplyPresetToSelection, handleCopySettingsRequest, handleCopySettingsConfirmed, handlePasteSettings, handlePasteSettingsToSelection, handlePeekPreset } from "$lib/actions/presetActions.js";
+  import { handleChooseCustomProfile } from "$lib/actions/softProofActions.js";
+  import { restoreTo, handleUndo, handleRedo, handleRestoreSnapshot, handleResetEditStack } from "$lib/actions/historyActions.js";
 
   let imageViewerRef = $state(/** @type {any} */ (null));
-
-
-  async function refreshPresets() {
-    presets.list = await listPresets();
-  }
 
 
   // The Filmstrip shows filtered images, falling back if active Develop photo is excluded
@@ -154,26 +119,6 @@
     library.filteredImages.some((img) => img.version_id === develop.versionId) ? library.filteredImages : library.images,
   );
 
-
-  function handleGpuFallback(/** @type {boolean} */ active) {
-    develop.gpuFallbackActive = active;
-    // A mask/crop tool selected before GPU became unavailable would
-    // otherwise linger as "active" while its own panel/handles never
-    // render (MaskToolStrip's buttons are disabled going forward, but
-    // this clears whatever was already selected).
-    if (active) masks.activeTool = null;
-  }
-
-  /** Mirrors the existing single-file picker precedent (`handleImportPresetRequest`
-   * below), just with an ICC/ICM extension filter instead of JSON. Selecting a
-   * new custom profile also switches `softProof.target` to "custom" -- picking
-   * a file only to leave a different profile active would be confusing. */
-  async function handleChooseCustomProfile() {
-    const path = await open({ multiple: false, filters: [{ name: "ICC Profile", extensions: ["icc", "icm"] }] });
-    if (!path || Array.isArray(path)) return;
-    softProof.customProfilePath = path;
-    softProof.target = "custom";
-  }
 
   // Print module (M4, final scope item): ephemeral view state, same
   // "never persisted into the edit stack" treatment as Soft Proof's own
@@ -195,267 +140,6 @@
   develop.installCpuFallback();
   masks.install();
 
-  /** Toggle symmetry with MaskToolStrip's own onToolToggle: clicking the
-   * eyedropper again while already resampling cancels it, matching how
-   * clicking an active tool button a second time turns it off. */
-  function handleResampleColorToggle() {
-    if (masks.isResamplingColor) {
-      masks.activeTool = null;
-      masks.colorRangeResampleTarget = null;
-      return;
-    }
-    if (masks.selectedMaskId === null) return;
-    masks.activeTool = "color_range";
-    masks.colorRangeResampleTarget = masks.selectedMaskId;
-  }
-
-  /** Commit path for a re-sample click -- patches the EXISTING mask
-   * (unlike handleMaskCreated's color_range branch, which always adds a
-   * new one) and, unlike the generic handleMaskUpdated slider path, also
-   * exits resample mode afterward -- a re-sample is a one-shot action,
-   * matching real Lightroom's own "click to pick, done" model for this
-   * tool, not a mode you stay in. */
-  function handleColorRangeResampled(
-    /** @type {string} */ id,
-    /** @type {{r: number, g: number, b: number}} */ refColor,
-  ) {
-    develop.editStack = updateMask(develop.editStack, id, { refColor });
-    masks.colorRangeResampleTarget = null;
-    masks.activeTool = null;
-    develop.scheduleFlush("Adjust Color Range");
-  }
-
-  function isEyedropperActive(/** @type {typeof masks.eyedropperTarget} */ target) {
-    return masks.activeTool === "eyedropper" && masks.eyedropperTarget === target;
-  }
-
-  /** Toggle symmetry with handleResampleColorToggle above: clicking an
-   * active eyedropper button again cancels it. */
-  function handleEyedropperToggle(/** @type {typeof masks.eyedropperTarget} */ target) {
-    if (masks.activeTool === "eyedropper" && masks.eyedropperTarget === target) {
-      masks.activeTool = null;
-      masks.eyedropperTarget = null;
-      return;
-    }
-    masks.activeTool = "eyedropper";
-    masks.eyedropperTarget = target;
-  }
-
-  function handleMaskCreated(
-    /** @type {
-     *   | { kind: "linear_gradient", start: {x:number,y:number}, end: {x:number,y:number} }
-     *   | { kind: "radial_gradient", center: {x:number,y:number}, radiusX: number, radiusY: number }
-     *   | { kind: "brush", id: string }
-     *   | { kind: "color_range", refColor: {r:number,g:number,b:number} }
-     *   | { kind: "spot", id: string, initialDab: {x:number,y:number,radius:number} }
-     *   | { kind: "red_eye", center: {x:number,y:number}, radiusX: number, radiusY: number }
-     * } */ placement,
-  ) {
-    // Every kind gets its own explicit branch before the final
-    // createLinearGradientMask fallback (not appended after it) -- an
-    // untyped fallback assuming "unrecognized = linear" is a real bug
-    // class already shipped and fixed once elsewhere in this codebase
-    // (DevelopCanvas.svelte's mask-packing loop); a color-range placement
-    // has no `.start`/`.end` at all, so hitting this fallback by mistake
-    // would construct a broken linear mask and crash later.
-    const mask =
-      placement.kind === "radial_gradient"
-        ? createRadialGradientMask(placement.center, placement.radiusX, placement.radiusY)
-        : placement.kind === "brush"
-          ? createBrushMask(placement.id)
-          : placement.kind === "color_range"
-            ? createColorRangeMask(placement.refColor)
-            : placement.kind === "spot"
-              ? createSpotMask(placement.initialDab, placement.id)
-              : placement.kind === "red_eye"
-                ? createRedEyeMask(placement.center, placement.radiusX, placement.radiusY)
-                : createLinearGradientMask(placement.start, placement.end);
-    develop.editStack = addMask(develop.editStack, mask);
-    masks.selectedMaskId = mask.id;
-    // Real Lightroom drops back to selection after placing a gradient, but
-    // a brush stroke should keep the Brush tool active (painting is
-    // inherently multi-stroke -- see DevelopCanvas.svelte's brush-state
-    // doc comment) rather than force a re-click of the tool for every dab.
-    // Spot removal is now also a painted stroke (M4 Slice 2), so it stays
-    // active the same way; only color range and the gradients are one-shot
-    // placements that fall through the `!== "brush"` reset below.
-    if (placement.kind !== "brush" && placement.kind !== "spot") masks.activeTool = null;
-    const label =
-      placement.kind === "radial_gradient"
-        ? "Add Radial Gradient"
-        : placement.kind === "brush"
-          ? "Add Brush Mask"
-          : placement.kind === "color_range"
-            ? "Add Color Range Mask"
-            : placement.kind === "spot"
-              ? "Add Spot Removal"
-              : placement.kind === "red_eye"
-                ? "Add Red Eye Correction"
-                : "Add Linear Gradient";
-    develop.scheduleFlush(label);
-  }
-
-  // Luminance range has no geometry to place, so it doesn't go through
-  // handleMaskCreated's placement-dispatch shape at all -- MaskToolStrip's
-  // button calls this directly (real Lightroom's own behavior: this mask
-  // kind is created on tool-select, no canvas interaction needed).
-  function handleCreateLuminanceRangeMask() {
-    const mask = createLuminanceRangeMask();
-    develop.editStack = addMask(develop.editStack, mask);
-    masks.selectedMaskId = mask.id;
-    develop.scheduleFlush("Add Luminance Range Mask");
-  }
-
-  function handleMaskUpdated(/** @type {string} */ id, /** @type {Record<string, unknown>} */ patch) {
-    develop.editStack = updateMask(develop.editStack, id, patch);
-    develop.scheduleFlush("Edit Mask");
-  }
-
-  function handleMaskDeleted() {
-    if (masks.selectedMaskId === null) return;
-    develop.editStack = removeMask(develop.editStack, masks.selectedMaskId);
-    masks.selectedMaskId = null;
-    develop.flushEditStack("Delete Mask");
-  }
-
-
-  function handleResetEditStack() {
-    if (develop.versionId === null) return;
-    develop.editStack = resetEditStack(develop.editStack);
-    masks.selectedMaskId = null;
-    masks.activeTool = null;
-    presets.confirmingReset = false;
-    develop.flushEditStack("Reset");
-  }
-
-
-  function handleCreateSnapshotConfirmed(/** @type {string} */ name) {
-    presets.creatingSnapshot = false;
-    handleCreateSnapshot(name);
-  }
-
-
-  function handleSaveCurrentAsPresetRequest() {
-    presets.creatingPreset = true;
-  }
-
-  async function handleCreatePresetConfirmed(/** @type {string} */ name) {
-    presets.creatingPreset = false;
-    const preset = await createPreset(name, presetEligibleOps(develop.editStack));
-    presets.list = [...presets.list, preset];
-  }
-
-  /** Applying a preset to the currently open Develop image is an
-   * immediate, discrete action (like Reset/mask-delete), not a debounced
-   * slider drag -- flushes right away under its own label. */
-  async function handleApplyPreset(/** @type {number} */ presetId) {
-    develop.clearPreview();
-    if (develop.versionId === null) return;
-    const preset = presets.list.find((p) => p.id === presetId);
-    if (!preset) return;
-    const versionId = develop.versionId;
-    develop.editStack = applyPresetOps(develop.editStack, preset.edit_stack);
-    // Same immediate-regen pattern restoreTo/handleRestoreSnapshot already
-    // follow -- this is a jump-to-a-different-look commit, not a slider
-    // drag, so the Library grid thumbnail shouldn't have to wait for the
-    // "leaving Develop" checkpoint (switchModule/openDevelop) to catch up.
-    // Awaited first, same unawaited-dependent-IPC-calls hazard openDevelop's
-    // own flush/regen pair guards against (regenerateThumbnailFor re-reads
-    // the edit stack fresh from the catalog, so it must not race the write
-    // it's meant to reflect).
-    await develop.flushEditStack(`Apply Preset: ${preset.name}`);
-    regenerateThumbnailFor(versionId);
-  }
-
-  async function handleExportPreset(/** @type {number} */ presetId) {
-    const preset = presets.list.find((p) => p.id === presetId);
-    if (!preset) return;
-    const path = await save({
-      defaultPath: `${preset.name}.json`,
-      filters: [{ name: "Preset", extensions: ["json"] }],
-    });
-    if (!path) return; // user cancelled
-    try {
-      await exportPresetFile(preset.name, preset.edit_stack, path);
-      shell.notify(`Exported "${preset.name}"`);
-    } catch (/** @type {any} */ e) {
-      shell.notify(`Export preset failed: ${e}`);
-    }
-  }
-
-  async function handleImportPresetRequest() {
-    const path = await open({ multiple: false, filters: [{ name: "Preset", extensions: ["json"] }] });
-    if (!path || Array.isArray(path)) return;
-    try {
-      const raw = await importPresetFile(path);
-      // Defensive re-filter -- a hand-edited or foreign file could
-      // contain a crop/mask op that would otherwise sail straight
-      // through undetected (see importPresetFile's own doc comment).
-      const filtered = presetEligibleOps({ schema_version: raw.schema_version, ops: raw.ops });
-      const preset = await createPreset(raw.name, filtered);
-      presets.list = [...presets.list, preset];
-      shell.notify(`Imported "${raw.name}"`);
-    } catch (/** @type {any} */ e) {
-      shell.notify(`Import preset failed: ${e}`);
-    }
-  }
-
-  function handleDeletePresetRequest(/** @type {number} */ presetId) {
-    presets.confirmingDeletePresetId = presetId;
-  }
-
-  async function handleDeletePresetConfirmed() {
-    if (presets.confirmingDeletePresetId === null) return;
-    const presetId = presets.confirmingDeletePresetId;
-    presets.confirmingDeletePresetId = null;
-    await deletePreset(presetId);
-    presets.list = presets.list.filter((p) => p.id !== presetId);
-  }
-
-  /** Library batch-apply -- version_id-targeted (NOT image_id: virtual
-   * copies are separate versions with independent edit stacks, so
-   * image_id would silently under-apply whenever one is selected
-   * alongside its original). Each target is an independent getEditStack
-   * -> merge -> setEditStack -> regenerateThumbnail round trip, same
-   * non-atomic-across-the-batch shape rating/flag/color-label changes
-   * already use -- a partial failure here is no worse than a partial
-   * failure there. If the image currently open in Develop is among the
-   * targets, its in-memory editStack is explicitly re-synced afterward
-   * (see the comment below) so a later flush can't silently clobber the
-   * just-applied preset with the stale pre-apply stack. */
-  async function handleApplyPresetToSelection(/** @type {string} */ value) {
-    if (!value) return;
-    const preset = presets.list.find((p) => p.id === Number(value));
-    if (!preset) return;
-    const targets = [...selection.selectedIds];
-    if (targets.length === 0) return;
-    presets.applyingPreset = true;
-    try {
-      await Promise.all(
-        targets.map(async (versionId) => {
-          const current = await getEditStack(versionId);
-          const merged = applyPresetOps(current, preset.edit_stack);
-          await setEditStack(versionId, merged, `Apply Preset: ${preset.name}`);
-          const path = await regenerateThumbnail(versionId);
-          if (path) patchLocal(versionId, { thumbnail_path: path });
-        }),
-      );
-      // Re-sync: developVersionId's in-memory editStack was NOT touched
-      // by the loop above (it writes straight to the catalog), so if the
-      // image currently open in Develop was also a batch target, refetch
-      // it now -- otherwise a later flush (window close, switching
-      // images) would still hold the stale pre-apply stack and silently
-      // overwrite what this batch just wrote.
-      if (develop.versionId !== null && targets.includes(develop.versionId)) {
-        develop.editStack = await getEditStack(develop.versionId);
-      }
-      shell.notify(`Applied "${preset.name}" to ${targets.length} photo${targets.length === 1 ? "" : "s"}`);
-    } catch (/** @type {any} */ e) {
-      shell.notify(`Apply preset failed: ${e}`);
-    } finally {
-      presets.applyingPreset = false;
-    }
-  }
 
   // Copy/Paste Settings (M4.5): an unsaved, in-memory analog of Presets --
   // "Copy Settings" snapshots a filtered subset of the CURRENTLY OPEN
@@ -465,69 +149,6 @@
   // upsert-by-name merge Presets use, so it carries the identical
   // whole-op-replace limitation documented there. Deliberately reuses
   // this machinery rather than inventing a second merge strategy.
-
-
-  function handleCopySettingsRequest() {
-    if (develop.versionId === null) return;
-    presets.copySettingsDialogOpen = true;
-  }
-
-  function handleCopySettingsConfirmed(/** @type {string[]} */ groupIds) {
-    presets.copySettingsDialogOpen = false;
-    develop.copiedSettings = copySettingsOps(develop.editStack, groupIds);
-    shell.notify("Copied settings");
-  }
-
-  /** The Copy/Paste Settings buttons live at the bottom of DevelopPanel
-   * (Develop-only), so paste there only ever targets the image currently
-   * open in Develop -- an immediate, discrete action (like Apply
-   * Preset), flushed right away rather than going through the slider
-   * debounce. */
-  async function handlePasteSettings() {
-    if (!develop.copiedSettings || develop.versionId === null) return;
-    const versionId = develop.versionId;
-    develop.editStack = applyPresetOps(develop.editStack, develop.copiedSettings);
-    // Same immediate-regen reasoning (and awaited-first ordering) as
-    // handleApplyPreset's own comment.
-    await develop.flushEditStack("Paste Settings");
-    regenerateThumbnailFor(versionId);
-    shell.notify("Pasted settings");
-  }
-
-
-  /** M4.5 batch apply: applies the SAME in-memory clipboard Copy
-   * Settings filled (not a Preset) across every Library-selected image
-   * in one action. Mirrors handleApplyPresetToSelection's exact shape --
-   * frontend-orchestrated, non-atomic-across-the-batch getEditStack ->
-   * applyPresetOps merge -> setEditStack -> regenerateThumbnail per
-   * target, with the same re-sync-if-the-open-Develop-image-was-a-target
-   * guard -- rather than inventing a second batch pattern. */
-  async function handlePasteSettingsToSelection() {
-    if (!develop.copiedSettings) return;
-    const targets = [...selection.selectedIds];
-    if (targets.length === 0) return;
-    const settingsToApply = develop.copiedSettings;
-    presets.pastingSettingsToSelection = true;
-    try {
-      await Promise.all(
-        targets.map(async (versionId) => {
-          const current = await getEditStack(versionId);
-          const merged = applyPresetOps(current, settingsToApply);
-          await setEditStack(versionId, merged, "Paste Settings");
-          const path = await regenerateThumbnail(versionId);
-          if (path) patchLocal(versionId, { thumbnail_path: path });
-        }),
-      );
-      if (develop.versionId !== null && targets.includes(develop.versionId)) {
-        develop.editStack = await getEditStack(develop.versionId);
-      }
-      shell.notify(`Pasted settings to ${targets.length} photo${targets.length === 1 ? "" : "s"}`);
-    } catch (/** @type {any} */ e) {
-      shell.notify(`Paste settings failed: ${e}`);
-    } finally {
-      presets.pastingSettingsToSelection = false;
-    }
-  }
 
 
   // People/Faces: reload the current photo's detected faces whenever the
@@ -553,67 +174,6 @@
     return selection.selectedImage ? [{ path: selection.selectedImage.path, version_id: selection.selectedImage.version_id }] : [];
   });
   let exportItems = $state(/** @type {{ path: string, version_id: number }[] | null} */ (null));
-
-
-  function handlePeekPreset(/** @type {number} */ presetId) {
-    if (develop.imagePath === null) return;
-    const preset = presets.list.find((p) => p.id === presetId);
-    if (!preset) return;
-    const mergedStack = applyPresetOps(develop.editStack, preset.edit_stack);
-    const path = develop.imagePath;
-    const contentHash = develop.imageContentHash;
-    develop.schedulePreview(() => previewEditStack(path, contentHash, mergedStack));
-  }
-
-  /** Moves the live edit stack to `history[index]` -- undo, redo, and a
-   * History-panel row click are all this same call, just with a
-   * different `index`. See `history`/`historyIndex`'s own doc comment for
-   * why this needs no server-side cursor concept at all. */
-  async function restoreTo(/** @type {number} */ index) {
-    develop.clearPreview();
-    if (develop.versionId === null || index < 0 || index >= develop.history.length) return;
-    const versionId = develop.versionId;
-    const entryId = develop.history[index].id;
-    // A restore overwrites editStack wholesale -- cancel any debounced
-    // write still pending first, or it could fire afterward under a now-
-    // stale label and silently stomp the just-restored state.
-    develop.cancelScheduledFlush();
-    develop.discardPendingLabel();
-    develop.editStack = await restoreHistoryEntry(versionId, entryId);
-    develop.historyIndex = index;
-    masks.selectedMaskId = null;
-    masks.activeTool = null;
-    regenerateThumbnailFor(versionId);
-  }
-
-  function handleUndo() {
-    if (develop.canUndo) restoreTo(develop.historyIndex - 1);
-  }
-
-  function handleRedo() {
-    if (develop.canRedo) restoreTo(develop.historyIndex + 1);
-  }
-
-
-  /** Unlike restoreTo/restoreHistoryEntry, restoring a snapshot IS a new,
-   * undoable edit of its own (see Catalog::restore_snapshot's doc
-   * comment) -- the returned history list already includes its own
-   * "Restore Snapshot: {name}" row, so this jumps historyIndex straight
-   * to newest rather than searching for that row's position. */
-  async function handleRestoreSnapshot(/** @type {number} */ snapshotId) {
-    develop.clearPreview();
-    if (develop.versionId === null) return;
-    const versionId = develop.versionId;
-    develop.cancelScheduledFlush();
-    develop.discardPendingLabel();
-    const [stack, freshHistory] = await restoreSnapshot(versionId, snapshotId);
-    develop.editStack = stack;
-    develop.history = freshHistory;
-    develop.historyIndex = freshHistory.length - 1;
-    masks.selectedMaskId = null;
-    masks.activeTool = null;
-    regenerateThumbnailFor(versionId);
-  }
 
 
   // Keyboard navigation & selection helpers
@@ -909,72 +469,6 @@
       refreshPeople();
     }
     shell.activeModule = target;
-  }
-
-
-  // HSL band-jump eyedropper's transient navigation target -- NOT persisted
-  // edit-stack state, purely a "which band should the panel scroll to and
-  // highlight" signal, self-clearing after a fixed delay rather than on
-  // "the next unrelated interaction" (which would mean hooking an unbounded
-  // set of DOM listeners across the panel). Same fixed-timeout-reset-on-
-  // retrigger idiom as persistTimer's own debounce, just for UI feedback
-  // instead of persistence.
-
-  let hslBandHighlightTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
-
-  /** Commit path for all four eyedropper destinations -- see
-   * eyedropperTarget's own doc comment above for why one shared gesture
-   * routes here. One-shot: resets activeTool/eyedropperTarget immediately,
-   * matching handleColorRangeResampled's own "click to pick, done" model. */
-  function handleEyedropperSampled(/** @type {{r: number, g: number, b: number}} */ color) {
-    const target = masks.eyedropperTarget;
-    masks.activeTool = null;
-    masks.eyedropperTarget = null;
-    if (target === null) return;
-    const { h, s, l } = rgbToHsl(color.r, color.g, color.b);
-
-    if (target === "split_toning_shadows" || target === "split_toning_highlights") {
-      const zone = target === "split_toning_shadows" ? "shadows" : "highlights";
-      develop.editStack = upsertSplitToningZone(develop.editStack, zone, { hue: h, saturation: s * 100 });
-      develop.scheduleFlush("Split Toning");
-      return;
-    }
-    if (target === "hsl_band") {
-      // Navigation only -- deliberately no editStack write, no persist.
-      // HSL's own sliders are relative hue/sat/lum shifts, not an absolute
-      // color a sampled pixel could set; this just finds "which band".
-      develop.highlightedHslBand = nearestHslBand(h);
-      if (hslBandHighlightTimer) clearTimeout(hslBandHighlightTimer);
-      hslBandHighlightTimer = setTimeout(() => (develop.highlightedHslBand = null), 1500);
-      return;
-    }
-    if (target === "white_balance") {
-      const { temperature, tint } = computeEyedropperWhiteBalance(color);
-      develop.editStack = upsertOp(develop.editStack, "temperature", temperature);
-      develop.editStack = upsertOp(develop.editStack, "tint", tint);
-      develop.scheduleFlush("White Balance Eyedropper");
-      return;
-    }
-    if (target === "tone_curve_point") {
-      // x comes from the sampled pixel's own lightness. Note: like every
-      // eyedropper here, this samples the ORIGINAL SOURCE pixel, not the
-      // graded preview (see DevelopCanvas.svelte's sampleSourcePixel doc
-      // comment) -- for Tone Curve specifically this means the inserted
-      // point's x itself (not just a selectivity parameter, as for the
-      // other three destinations) can visibly diverge from "the tone the
-      // user thinks they clicked" on a heavily-graded image. A named,
-      // accepted limitation, not a bug.
-      //
-      // y is seeded at the curve's OWN current value at that x, so
-      // insertion alone never changes the curve's visible shape until the
-      // new point is dragged.
-      const y = sampleCurveLut(buildToneCurveLut(developView.toneCurvePoints), l);
-      const next = insertToneCurvePoint(developView.toneCurvePoints, l, y);
-      if (next !== developView.toneCurvePoints) {
-        develop.editStack = upsertToneCurve(develop.editStack, next);
-        develop.scheduleFlush("Tone Curve");
-      }
-    }
   }
 
 

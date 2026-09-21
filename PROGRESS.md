@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P6b: mask, preset, soft-proof and history actions (2026-09-21)
+
+Second half of RFC-0009 P6: the workflows over the stores P6a created. `+page.svelte` 1,929 → 1,423 lines; new `lib/actions/maskActions.js`, `presetActions.js`, `softProofActions.js`, `historyActions.js`; 78 new tests (vitest 461 → 539).
+
+- **`maskActions.js`** (10): `handleGpuFallback`, colour-range resample toggle/commit, eyedropper toggle/`isEyedropperActive`/`handleEyedropperSampled`, `handleMaskCreated`/`Updated`/`Deleted`, `handleCreateLuminanceRangeMask`. `hslBandHighlightTimer` is now a module-private variable next to its only user.
+- **`presetActions.js`** (15): `refreshPresets`, create/import/export/delete, `handleApplyPreset`, the two batch applies to the Library selection, copy/paste settings (open image and selection), `handlePeekPreset`, and the snapshot-name confirm.
+- **`historyActions.js`** (5): `restoreTo`, `handleUndo`/`Redo`, `handleRestoreSnapshot`, `handleResetEditStack`. **`softProofActions.js`** (1): `handleChooseCustomProfile`.
+- **Deviation, recorded in RFC-0009 §4/§6**: `handleResetEditStack` is in `historyActions.js`, not `presetActions.js` (it clears the mask tool and follows the restore pattern). `navigation.js` is split out as **P6c** (`openDevelop`, `switchModule`, `selectNext/PrevImage`, `handleExportClick`, `currentExportItems`/`exportItems`): it carries invariants I1-I3 and I6 and is best done alone.
+- **Verified by comparison**: with names unchanged, every non-comment line of the old page is in the page or one of the four modules; the only differences are imports (carried along) and `export`. One comment block for the HSL highlight timer had been left behind in the page and moved with its variable; two "above/below" references were re-pointed. `npm run check` 0 errors, vitest 539 passed, `vite build` OK.
+- **Tests** (about 175 mutants across the two rounds, every survivor either killed by a new test or equivalent): mask kind → op/label/tool-retention table and per-shape argument order, resample and eyedropper toggles (including "matching target but tool not active"), each eyedropper destination (zone, 1.5 s highlight and its restart, white balance, curve insertion and its rejection), history ordering (cancel timer and label before the restore, version captured before the await, index bounds, undo/redo disabled), snapshot restore adopting stack and history, reset; presets (eligible-ops filtering on create/import, flush-then-regenerate ordering with a slow flush, batch apply/paste per-version merge, thumbnail patch, in-flight flags, re-sync of the open image only when it was a target, plural messages, failure reports). Equivalent survivors: the `target === null` early return (falls through every branch), an empty-string guard (no preset has id 0), and the dead `imagePath === null` guard in `handlePeekPreset`.
+- **Not run locally**: e2e (CI); the Tauri window (mask tools and eyedropper, preset apply/import/export, copy/paste settings, undo/redo, snapshot restore, reset).
+- **Next**: P6c `navigation.js` (with `openDevelop`/`switchModule` ordering tests for I1-I3/I6), then P7 (`appEvents.js`) and P8 (module components).
+
 ## Refactor P6a: `masks`, `softProof`, `presets` stores and their effects (2026-09-21)
 
 First half of RFC-0009 P6: the three remaining develop-side state groups move out of the page, together with the four effects that belonged to them. `+page.svelte` 2,168 → 1,929 lines; new `lib/state/masks.svelte.js`, `softProof.svelte.js`, `presets.svelte.js`; 34 new tests (vitest 427 → 461).

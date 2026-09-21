@@ -123,7 +123,9 @@ src/
 │   │                        import-time detection prompt), importFlow.svelte.js (import/merge progress + the
 │   │                        close-time backup prompt), library.svelte.js (image list, sources,
 │   │                        filters, collections + their derived sets), selection.svelte.js (selected ids/anchor, selected images,
-│   │                        Compare pair); more land per RFC-0009 P5+.
+│   │                        Compare pair), develop.svelte.js (open image, live edit stack, history/snapshots, preview,
+│   │                        canvas readouts, edit-stack persistence), developView.svelte.js (per-adjustment derived
+│   │                        views of the edit stack); more land per RFC-0009 P5b+.
 │   │                        Tested via lib/state/*.test.js
 │   ├── actions/             Workflows that write more than one store (RFC-0009 §3.2): printActions.js
 │   │                        (print, export PDF, choose print profile), faceActions.js (people/face

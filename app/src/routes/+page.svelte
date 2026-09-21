@@ -1,8 +1,7 @@
 <script>
   import "$lib/styles/tokens.css";
   import { open, save } from "@tauri-apps/plugin-dialog";
-  import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+    import { getCurrentWindow } from "@tauri-apps/api/window";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
@@ -34,6 +33,9 @@
   import { selection } from "$lib/state/selection.svelte.js";
   import { develop } from "$lib/state/develop.svelte.js";
   import { developView } from "$lib/state/developView.svelte.js";
+  import { masks } from "$lib/state/masks.svelte.js";
+  import { softProof } from "$lib/state/softProof.svelte.js";
+  import { presets } from "$lib/state/presets.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import {
@@ -58,7 +60,6 @@
     regenerateThumbnail,
     upsertOp,
     resetEditStack,
-    listMasks,
     addMask,
     updateMask,
     removeMask,
@@ -79,7 +80,6 @@
     setLensProfile,
     lookupLensProfile,
     computeEyedropperWhiteBalance,
-    getSoftProofPreview,
   } from "$lib/api/develop.js";
   import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
     import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
@@ -143,15 +143,9 @@
 
   let imageViewerRef = $state(/** @type {any} */ (null));
 
-  // Presets (M3): global, catalog-wide, same "fetch once at startup, keep
-  // in sync locally" shape as the library store's `collections` -- NOT re-fetched per
-  // image the way history/snapshots are, since presets have no relation
-  // to whichever photo happens to be open.
-  let presets = $state(/** @type {import('$lib/api/develop.js').PresetEntry[]} */ ([]));
-
 
   async function refreshPresets() {
-    presets = await listPresets();
+    presets.list = await listPresets();
   }
 
 
@@ -161,105 +155,29 @@
   );
 
 
-  // M3 Slice 5: local adjustment masks. `activeTool` drives DevelopCanvas's
-  // hard-branched pointer routing (mask placement vs. pan/zoom);
-  // `selectedMaskId` drives which mask (if any) MaskEditorPanel shows.
-  // Both are pure view state, not persisted -- reset whenever Develop is
-  // left, matching the same reasoning DevelopCanvas's own zoomMode uses.
-  let masks = $derived(listMasks(develop.editStack));
-  let activeTool = $state(/** @type {string | null} */ (null));
-  let selectedMaskId = $state(/** @type {string | null} */ (null));
-  let selectedMask = $derived(masks.find((m) => m.id === selectedMaskId) ?? null);
-
-  // M3 Slice 7: brush TOOL options -- unlike a mask's own exposure/
-  // contrast/saturation (edited per-mask via MaskEditorPanel), these are
-  // baked into each dab at the moment it's painted (real Lightroom's own
-  // brush-options model: Size/Feather/Flow apply to whatever gets painted
-  // NEXT), so they live here as plain view state, not per-mask, and are
-  // never persisted or reset on module switch -- a user's preferred brush
-  // size should survive across strokes/masks within one session.
-  let brushSize = $state(0.05);
-  let brushHardness = $state(70);
-  let brushFlow = $state(1);
-  let eraseMode = $state(false);
-  // M4 Slice 2: spot removal's own brush-size TOOL option -- same "plain
-  // view state, never persisted, survives across strokes/masks within one
-  // session" treatment as brushSize above, kept separate (not shared with
-  // brushSize) since a user's preferred adjustment-brush size and preferred
-  // spot-removal size are independent preferences.
-  let spotBrushSize = $state(0.02);
-  // M4 Slice 2: hides every mask's overlay chrome (handles, pins, link
-  // lines, brush/spot cursors) so a user can review the actual graded
-  // result underneath without edit-tool UI in the way -- per explicit user
-  // request ("the UI pivot points will block user's review"). Distinct
-  // from `showMaskOverlay` below (that one only toggles the SELECTED
-  // mask's own soft colored highlight fill); this one is a global
-  // visibility switch for every mask's interactive chrome, toggleable via
-  // MaskToolStrip's eye-icon button or the H hotkey (handleGlobalKeydown).
-  let maskOverlaysVisible = $state(true);
-
-
-  // Mask UI polish: soft colored overlay for the SELECTED no-geometry mask
-  // (brush, luminance range), toggleable via a MaskEditorPanel checkbox or
-  // the "O" hotkey. Grouped with the brush TOOL options above, not with
-  // activeTool/selectedMaskId -- deliberately NEVER force-reset on
-  // openDevelop/switchModule, same "a user's preferred setting should
-  // survive across strokes/masks/images within one session" reasoning
-  // those already document. Defaults true: these mask kinds are otherwise
-  // invisible until a nonzero adjustment is set, a real discoverability
-  // gap this directly fixes.
-  let showMaskOverlay = $state(true);
-
-  // M4 Soft Proofing: ephemeral view state, never persisted into the edit
-  // stack -- same "plain view state, not saved via handleAdjustmentChange/
-  // scheduleFlush" treatment as maskOverlaysVisible/showOriginal above.
-  // `softProofPreviewUrl`/`softProofLoading` are populated by the debounced
-  // effect below and passed straight through to DevelopCanvas for display.
-  let softProofEnabled = $state(false);
-  let softProofTarget = $state(
-    /** @type {"srgb" | "adobe-rgb" | "prophoto-rgb" | "custom"} */ ("srgb"),
-  );
-  let softProofCustomProfilePath = $state(/** @type {string | null} */ (null));
-  let softProofIntent = $state(
-    /** @type {"perceptual" | "relative" | "saturation" | "absolute"} */ ("relative"),
-  );
-  let softProofGamutWarning = $state(false);
-  let softProofPreviewUrl = $state(/** @type {string | null} */ (null));
-  let softProofLoading = $state(false);
-  let softProofProfileLabel = $derived(
-    softProofTarget === "adobe-rgb"
-      ? "Adobe RGB"
-      : softProofTarget === "prophoto-rgb"
-        ? "ProPhoto RGB"
-        : softProofTarget === "custom"
-          ? (softProofCustomProfilePath?.split(/[\\/]/).pop() ?? "Custom Profile")
-          : "sRGB",
-  );
-
-
   function handleGpuFallback(/** @type {boolean} */ active) {
     develop.gpuFallbackActive = active;
     // A mask/crop tool selected before GPU became unavailable would
     // otherwise linger as "active" while its own panel/handles never
     // render (MaskToolStrip's buttons are disabled going forward, but
     // this clears whatever was already selected).
-    if (active) activeTool = null;
+    if (active) masks.activeTool = null;
   }
 
   /** Mirrors the existing single-file picker precedent (`handleImportPresetRequest`
    * below), just with an ICC/ICM extension filter instead of JSON. Selecting a
-   * new custom profile also switches `softProofTarget` to "custom" -- picking
+   * new custom profile also switches `softProof.target` to "custom" -- picking
    * a file only to leave a different profile active would be confusing. */
   async function handleChooseCustomProfile() {
     const path = await open({ multiple: false, filters: [{ name: "ICC Profile", extensions: ["icc", "icm"] }] });
     if (!path || Array.isArray(path)) return;
-    softProofCustomProfilePath = path;
-    softProofTarget = "custom";
+    softProof.customProfilePath = path;
+    softProof.target = "custom";
   }
 
   // Print module (M4, final scope item): ephemeral view state, same
   // "never persisted into the edit stack" treatment as Soft Proof's own
-  // state above -- nothing here is part of a photo's saved edits.
+  // state (softProof store) -- nothing here is part of a photo's saved edits.
   // `printItems` is a snapshot of Library's selection (or the open Develop
   // image) taken when entering Print (see switchModule), matching how
   // Develop snapshots its own open image while Library's grid is hidden.
@@ -271,131 +189,24 @@
   // full-resolution, color-managed payload.
 
 
-  // Debounced (same 250ms settle as scheduleFlush below, a separate timer
-  // for a separate purpose -- this refetches a PREVIEW, it never writes
-  // anything) fetch of the soft-proofed preview whenever proofing is on and
-  // anything it depends on changes: the edit stack (so proofing reflects
-  // the CURRENT graded look, not a stale one), which image is open, or the
-  // proof settings themselves. Off (or no image open) just clears the
-  // preview -- DevelopCanvas falls back to its own live WGSL render then.
-  let softProofTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
-  $effect(() => {
-    void develop.editStack;
-    const versionId = develop.versionId;
-    const enabled = softProofEnabled;
-    const target = softProofTarget;
-    const customPath = softProofCustomProfilePath;
-    const intent = softProofIntent;
-    const gamutWarning = softProofGamutWarning;
-
-    if (softProofTimer) clearTimeout(softProofTimer);
-
-    if (!enabled || versionId === null) {
-      softProofPreviewUrl = null;
-      softProofLoading = false;
-      return;
-    }
-
-    softProofTimer = setTimeout(() => {
-      softProofLoading = true;
-      getSoftProofPreview(versionId, {
-        target,
-        custom_profile_path: customPath,
-        intent,
-        gamut_warning: gamutWarning,
-      })
-        .then((preview) => {
-          softProofPreviewUrl = convertFileSrc(preview.path);
-        })
-        .catch(() => {
-          softProofPreviewUrl = null;
-        })
-        .finally(() => {
-          softProofLoading = false;
-        });
-    }, 250);
-
-    return () => {
-      if (softProofTimer) clearTimeout(softProofTimer);
-    };
-  });
-
-  // M5 Slice 1: GPU/CPU fallback preview -- same debounced-CPU-render shape
-  // as the soft-proof effect just above (250ms settle, re-fires on any
-  // `editStack` change), driven by `gpuFallbackActive` instead of a
-  // proofing toggle. `previewEditStack` (the same CPU pipeline M4.5's
-  // History/Preset hover-preview already uses) is called with the FULL
-  // current `editStack`, since this is the primary canvas content in
-  // fallback mode, not a peek -- unlike `schedulePreview`'s 120ms
-  // hover-tuned debounce, this matches `scheduleFlush`'s own 250ms
-  // "settled after a drag" window, since re-rendering CPU-side on every
-  // slider tick is exactly the cost GPU was chosen to avoid.
-  let gpuFallbackTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
-  $effect(() => {
-    void develop.editStack;
-    const path = develop.imagePath;
-    const contentHash = develop.imageContentHash;
-    const active = develop.gpuFallbackActive;
-    const stack = develop.editStack;
-
-    if (gpuFallbackTimer) clearTimeout(gpuFallbackTimer);
-
-    if (!active || path === null) {
-      develop.cpuFallbackPreviewUrl = null;
-      return;
-    }
-
-    gpuFallbackTimer = setTimeout(() => {
-      previewEditStack(path, contentHash, stack)
-        .then((preview) => {
-          develop.cpuFallbackPreviewUrl = convertFileSrc(preview.path);
-        })
-        .catch(() => {
-          develop.cpuFallbackPreviewUrl = null;
-        });
-    }, 250);
-
-    return () => {
-      if (gpuFallbackTimer) clearTimeout(gpuFallbackTimer);
-    };
-  });
-
-  // Color range's "change select color" action: re-uses the SAME
-  // click-to-sample canvas gesture that CREATES a color-range mask
-  // (activeTool === "color_range" in DevelopCanvas.svelte), but points it
-  // at an existing mask's `refColor` instead of creating a new mask.
-  // `colorRangeResampleTarget` is the mask id awaiting its next canvas
-  // click; kept separate from `selectedMaskId`/`activeTool` (rather than
-  // overloading either) since NEITHER of those two states alone can tell
-  // "the tool is active AND it's specifically in re-sample-into-an-
-  // existing-mask mode, targeting THIS mask" apart from "the tool is
-  // active to place a brand new mask."
-  let colorRangeResampleTarget = $state(/** @type {string | null} */ (null));
-  // Self-cleaning rather than patched into every place activeTool/
-  // selectedMaskId can change (tool-strip toggle, panel close, mask
-  // delete, module switch, selecting a different mask...): resample mode
-  // is only ever valid while the color-range tool is active AND its
-  // target is still the selected mask -- the instant either goes false,
-  // there is no correct target left to resample into.
-  $effect(() => {
-    if (colorRangeResampleTarget !== null && (activeTool !== "color_range" || selectedMaskId !== colorRangeResampleTarget)) {
-      colorRangeResampleTarget = null;
-    }
-  });
-  let isResamplingColor = $derived(colorRangeResampleTarget !== null && colorRangeResampleTarget === selectedMaskId);
+  // Store effects (RFC-0009 §3.5): registered here, once, at the point in component init where
+  // the inline effects used to be.
+  softProof.install();
+  develop.installCpuFallback();
+  masks.install();
 
   /** Toggle symmetry with MaskToolStrip's own onToolToggle: clicking the
    * eyedropper again while already resampling cancels it, matching how
    * clicking an active tool button a second time turns it off. */
   function handleResampleColorToggle() {
-    if (isResamplingColor) {
-      activeTool = null;
-      colorRangeResampleTarget = null;
+    if (masks.isResamplingColor) {
+      masks.activeTool = null;
+      masks.colorRangeResampleTarget = null;
       return;
     }
-    if (selectedMaskId === null) return;
-    activeTool = "color_range";
-    colorRangeResampleTarget = selectedMaskId;
+    if (masks.selectedMaskId === null) return;
+    masks.activeTool = "color_range";
+    masks.colorRangeResampleTarget = masks.selectedMaskId;
   }
 
   /** Commit path for a re-sample click -- patches the EXISTING mask
@@ -409,51 +220,25 @@
     /** @type {{r: number, g: number, b: number}} */ refColor,
   ) {
     develop.editStack = updateMask(develop.editStack, id, { refColor });
-    colorRangeResampleTarget = null;
-    activeTool = null;
+    masks.colorRangeResampleTarget = null;
+    masks.activeTool = null;
     develop.scheduleFlush("Adjust Color Range");
   }
 
-  // Eyedropper pickers (M3): Tone Curve point-insert, HSL band-identify,
-  // Split Toning zone-tint all share ONE click-to-sample canvas gesture
-  // (activeTool === "eyedropper" in DevelopCanvas.svelte), generalizing the
-  // color-range resample pattern just above. `eyedropperTarget` names WHICH
-  // of the four destinations is waiting for the next canvas click -- kept
-  // separate from `activeTool` for the same reason `colorRangeResampleTarget`
-  // is: `activeTool` alone can't distinguish "eyedropper active for Split
-  // Toning Shadows" from "for HSL band-identify." Deliberately NOT threaded
-  // into DevelopCanvas as a prop (unlike colorRangeResampleTarget): none of
-  // these four destinations change how DevelopCanvas itself samples or
-  // reports a click, only where +page.svelte routes the result afterward.
-  let eyedropperTarget = $state(
-    /** @type {"split_toning_shadows" | "split_toning_highlights" | "hsl_band" | "tone_curve_point" | "white_balance" | null} */ (
-      null
-    ),
-  );
-  // Self-cleaning, same reasoning as colorRangeResampleTarget's own effect
-  // above -- including the two blanket `activeTool = null` resets on image
-  // switch / module switch, which need no separate edit because this effect
-  // already reacts to either of them.
-  $effect(() => {
-    if (eyedropperTarget !== null && activeTool !== "eyedropper") {
-      eyedropperTarget = null;
-    }
-  });
-
-  function isEyedropperActive(/** @type {typeof eyedropperTarget} */ target) {
-    return activeTool === "eyedropper" && eyedropperTarget === target;
+  function isEyedropperActive(/** @type {typeof masks.eyedropperTarget} */ target) {
+    return masks.activeTool === "eyedropper" && masks.eyedropperTarget === target;
   }
 
   /** Toggle symmetry with handleResampleColorToggle above: clicking an
    * active eyedropper button again cancels it. */
-  function handleEyedropperToggle(/** @type {typeof eyedropperTarget} */ target) {
-    if (activeTool === "eyedropper" && eyedropperTarget === target) {
-      activeTool = null;
-      eyedropperTarget = null;
+  function handleEyedropperToggle(/** @type {typeof masks.eyedropperTarget} */ target) {
+    if (masks.activeTool === "eyedropper" && masks.eyedropperTarget === target) {
+      masks.activeTool = null;
+      masks.eyedropperTarget = null;
       return;
     }
-    activeTool = "eyedropper";
-    eyedropperTarget = target;
+    masks.activeTool = "eyedropper";
+    masks.eyedropperTarget = target;
   }
 
   function handleMaskCreated(
@@ -486,7 +271,7 @@
                 ? createRedEyeMask(placement.center, placement.radiusX, placement.radiusY)
                 : createLinearGradientMask(placement.start, placement.end);
     develop.editStack = addMask(develop.editStack, mask);
-    selectedMaskId = mask.id;
+    masks.selectedMaskId = mask.id;
     // Real Lightroom drops back to selection after placing a gradient, but
     // a brush stroke should keep the Brush tool active (painting is
     // inherently multi-stroke -- see DevelopCanvas.svelte's brush-state
@@ -494,7 +279,7 @@
     // Spot removal is now also a painted stroke (M4 Slice 2), so it stays
     // active the same way; only color range and the gradients are one-shot
     // placements that fall through the `!== "brush"` reset below.
-    if (placement.kind !== "brush" && placement.kind !== "spot") activeTool = null;
+    if (placement.kind !== "brush" && placement.kind !== "spot") masks.activeTool = null;
     const label =
       placement.kind === "radial_gradient"
         ? "Add Radial Gradient"
@@ -517,7 +302,7 @@
   function handleCreateLuminanceRangeMask() {
     const mask = createLuminanceRangeMask();
     develop.editStack = addMask(develop.editStack, mask);
-    selectedMaskId = mask.id;
+    masks.selectedMaskId = mask.id;
     develop.scheduleFlush("Add Luminance Range Mask");
   }
 
@@ -527,57 +312,37 @@
   }
 
   function handleMaskDeleted() {
-    if (selectedMaskId === null) return;
-    develop.editStack = removeMask(develop.editStack, selectedMaskId);
-    selectedMaskId = null;
+    if (masks.selectedMaskId === null) return;
+    develop.editStack = removeMask(develop.editStack, masks.selectedMaskId);
+    masks.selectedMaskId = null;
     develop.flushEditStack("Delete Mask");
   }
 
-  // Develop panel "Reset": reverts every adjustment AND mask on the current
-  // photo back to default in one shot, gated behind a confirmation (see
-  // confirmingReset/the ConfirmDialog below) since it's destructive and
-  // can't be undone. Same immediate-flush shape as handleMaskDeleted above
-  // -- a confirmed destructive action should persist right away, not risk
-  // being lost to the usual 250ms slider debounce.
-  let confirmingReset = $state(false);
 
   function handleResetEditStack() {
     if (develop.versionId === null) return;
     develop.editStack = resetEditStack(develop.editStack);
-    selectedMaskId = null;
-    activeTool = null;
-    confirmingReset = false;
+    masks.selectedMaskId = null;
+    masks.activeTool = null;
+    presets.confirmingReset = false;
     develop.flushEditStack("Reset");
   }
 
-  // History/Snapshots (M3): naming a new snapshot uses the same generic
-  // TextPromptDialog "New Collection" already uses -- no dedicated dialog
-  // needed for one text field.
-  let creatingSnapshot = $state(false);
 
   function handleCreateSnapshotConfirmed(/** @type {string} */ name) {
-    creatingSnapshot = false;
+    presets.creatingSnapshot = false;
     handleCreateSnapshot(name);
   }
 
-  // Presets (M3): same TextPromptDialog/ConfirmDialog reuse as Collections/
-  // Snapshots above -- no new dialog components needed.
-  let creatingPreset = $state(false);
-  let confirmingDeletePresetId = $state(/** @type {number | null} */ (null));
-  // Guards the Library "Apply Preset to Selection" dropdown while a batch
-  // apply is in flight -- narrow but real mitigation for the one residual
-  // race a design review flagged: double-clicking into Develop on one of
-  // the targeted images before its own invoke() in the batch has resolved.
-  let applyingPreset = $state(false);
 
   function handleSaveCurrentAsPresetRequest() {
-    creatingPreset = true;
+    presets.creatingPreset = true;
   }
 
   async function handleCreatePresetConfirmed(/** @type {string} */ name) {
-    creatingPreset = false;
+    presets.creatingPreset = false;
     const preset = await createPreset(name, presetEligibleOps(develop.editStack));
-    presets = [...presets, preset];
+    presets.list = [...presets.list, preset];
   }
 
   /** Applying a preset to the currently open Develop image is an
@@ -586,7 +351,7 @@
   async function handleApplyPreset(/** @type {number} */ presetId) {
     develop.clearPreview();
     if (develop.versionId === null) return;
-    const preset = presets.find((p) => p.id === presetId);
+    const preset = presets.list.find((p) => p.id === presetId);
     if (!preset) return;
     const versionId = develop.versionId;
     develop.editStack = applyPresetOps(develop.editStack, preset.edit_stack);
@@ -603,7 +368,7 @@
   }
 
   async function handleExportPreset(/** @type {number} */ presetId) {
-    const preset = presets.find((p) => p.id === presetId);
+    const preset = presets.list.find((p) => p.id === presetId);
     if (!preset) return;
     const path = await save({
       defaultPath: `${preset.name}.json`,
@@ -628,7 +393,7 @@
       // through undetected (see importPresetFile's own doc comment).
       const filtered = presetEligibleOps({ schema_version: raw.schema_version, ops: raw.ops });
       const preset = await createPreset(raw.name, filtered);
-      presets = [...presets, preset];
+      presets.list = [...presets.list, preset];
       shell.notify(`Imported "${raw.name}"`);
     } catch (/** @type {any} */ e) {
       shell.notify(`Import preset failed: ${e}`);
@@ -636,15 +401,15 @@
   }
 
   function handleDeletePresetRequest(/** @type {number} */ presetId) {
-    confirmingDeletePresetId = presetId;
+    presets.confirmingDeletePresetId = presetId;
   }
 
   async function handleDeletePresetConfirmed() {
-    if (confirmingDeletePresetId === null) return;
-    const presetId = confirmingDeletePresetId;
-    confirmingDeletePresetId = null;
+    if (presets.confirmingDeletePresetId === null) return;
+    const presetId = presets.confirmingDeletePresetId;
+    presets.confirmingDeletePresetId = null;
     await deletePreset(presetId);
-    presets = presets.filter((p) => p.id !== presetId);
+    presets.list = presets.list.filter((p) => p.id !== presetId);
   }
 
   /** Library batch-apply -- version_id-targeted (NOT image_id: virtual
@@ -660,11 +425,11 @@
    * just-applied preset with the stale pre-apply stack. */
   async function handleApplyPresetToSelection(/** @type {string} */ value) {
     if (!value) return;
-    const preset = presets.find((p) => p.id === Number(value));
+    const preset = presets.list.find((p) => p.id === Number(value));
     if (!preset) return;
     const targets = [...selection.selectedIds];
     if (targets.length === 0) return;
-    applyingPreset = true;
+    presets.applyingPreset = true;
     try {
       await Promise.all(
         targets.map(async (versionId) => {
@@ -688,7 +453,7 @@
     } catch (/** @type {any} */ e) {
       shell.notify(`Apply preset failed: ${e}`);
     } finally {
-      applyingPreset = false;
+      presets.applyingPreset = false;
     }
   }
 
@@ -701,15 +466,14 @@
   // whole-op-replace limitation documented there. Deliberately reuses
   // this machinery rather than inventing a second merge strategy.
 
-  let copySettingsDialogOpen = $state(false);
 
   function handleCopySettingsRequest() {
     if (develop.versionId === null) return;
-    copySettingsDialogOpen = true;
+    presets.copySettingsDialogOpen = true;
   }
 
   function handleCopySettingsConfirmed(/** @type {string[]} */ groupIds) {
-    copySettingsDialogOpen = false;
+    presets.copySettingsDialogOpen = false;
     develop.copiedSettings = copySettingsOps(develop.editStack, groupIds);
     shell.notify("Copied settings");
   }
@@ -730,9 +494,6 @@
     shell.notify("Pasted settings");
   }
 
-  // Guards "Paste Settings to Selection" while a batch paste is in
-  // flight, same narrow race-mitigation purpose as applyingPreset above.
-  let pastingSettingsToSelection = $state(false);
 
   /** M4.5 batch apply: applies the SAME in-memory clipboard Copy
    * Settings filled (not a Preset) across every Library-selected image
@@ -746,7 +507,7 @@
     const targets = [...selection.selectedIds];
     if (targets.length === 0) return;
     const settingsToApply = develop.copiedSettings;
-    pastingSettingsToSelection = true;
+    presets.pastingSettingsToSelection = true;
     try {
       await Promise.all(
         targets.map(async (versionId) => {
@@ -764,7 +525,7 @@
     } catch (/** @type {any} */ e) {
       shell.notify(`Paste settings failed: ${e}`);
     } finally {
-      pastingSettingsToSelection = false;
+      presets.pastingSettingsToSelection = false;
     }
   }
 
@@ -796,7 +557,7 @@
 
   function handlePeekPreset(/** @type {number} */ presetId) {
     if (develop.imagePath === null) return;
-    const preset = presets.find((p) => p.id === presetId);
+    const preset = presets.list.find((p) => p.id === presetId);
     if (!preset) return;
     const mergedStack = applyPresetOps(develop.editStack, preset.edit_stack);
     const path = develop.imagePath;
@@ -820,8 +581,8 @@
     develop.discardPendingLabel();
     develop.editStack = await restoreHistoryEntry(versionId, entryId);
     develop.historyIndex = index;
-    selectedMaskId = null;
-    activeTool = null;
+    masks.selectedMaskId = null;
+    masks.activeTool = null;
     regenerateThumbnailFor(versionId);
   }
 
@@ -849,8 +610,8 @@
     develop.editStack = stack;
     develop.history = freshHistory;
     develop.historyIndex = freshHistory.length - 1;
-    selectedMaskId = null;
-    activeTool = null;
+    masks.selectedMaskId = null;
+    masks.activeTool = null;
     regenerateThumbnailFor(versionId);
   }
 
@@ -934,7 +695,7 @@
       return importFlow.backupPromptOpen;
     },
     get confirmingDeletePresetId() {
-      return confirmingDeletePresetId;
+      return presets.confirmingDeletePresetId;
     },
     get confirmingRemoval() {
       return library.confirmingRemoval;
@@ -949,13 +710,13 @@
       return library.creatingCollectionWithImages;
     },
     get creatingPreset() {
-      return creatingPreset;
+      return presets.creatingPreset;
     },
     get creatingSmartCollection() {
       return library.creatingSmartCollection;
     },
     get creatingSnapshot() {
-      return creatingSnapshot;
+      return presets.creatingSnapshot;
     },
     get exportItems() {
       return exportItems;
@@ -986,10 +747,10 @@
       library.libraryViewMode = value;
     },
     get maskOverlaysVisible() {
-      return maskOverlaysVisible;
+      return masks.maskOverlaysVisible;
     },
     set maskOverlaysVisible(value) {
-      maskOverlaysVisible = value;
+      masks.maskOverlaysVisible = value;
     },
     openDevelop,
     get selectedId() {
@@ -1008,7 +769,7 @@
       return selection.selectedImage;
     },
     get selectedMask() {
-      return selectedMask;
+      return masks.selectedMask;
     },
     selectGridStep,
     selectNextImage,
@@ -1023,10 +784,10 @@
       return shell.shortcuts;
     },
     get showMaskOverlay() {
-      return showMaskOverlay;
+      return masks.showMaskOverlay;
     },
     set showMaskOverlay(value) {
-      showMaskOverlay = value;
+      masks.showMaskOverlay = value;
     },
     get showOriginal() {
       return develop.showOriginal;
@@ -1097,8 +858,8 @@
     develop.history = freshHistory;
     develop.historyIndex = freshHistory.length - 1;
     develop.snapshots = freshSnapshots;
-    activeTool = null;
-    selectedMaskId = null;
+    masks.activeTool = null;
+    masks.selectedMaskId = null;
     shell.activeModule = "develop";
 
     // Lens Corrections (M3): re-resolved fresh on every open, matching
@@ -1132,8 +893,8 @@
       // comment.
       await develop.flushEditStack();
       regenerateThumbnailFor(develop.versionId);
-      activeTool = null;
-      selectedMaskId = null;
+      masks.activeTool = null;
+      masks.selectedMaskId = null;
     }
     if (target === "print") {
       // Snapshot what Print will act on -- same source `currentExportItems`
@@ -1166,9 +927,9 @@
    * routes here. One-shot: resets activeTool/eyedropperTarget immediately,
    * matching handleColorRangeResampled's own "click to pick, done" model. */
   function handleEyedropperSampled(/** @type {{r: number, g: number, b: number}} */ color) {
-    const target = eyedropperTarget;
-    activeTool = null;
-    eyedropperTarget = null;
+    const target = masks.eyedropperTarget;
+    masks.activeTool = null;
+    masks.eyedropperTarget = null;
     if (target === null) return;
     const { h, s, l } = rgbToHsl(color.r, color.g, color.b);
 
@@ -1459,10 +1220,10 @@
     activeCollection={library.activeCollection}
     selectedIds={selection.selectedIds}
     manualCollections={library.manualCollections}
-    {applyingPreset}
-    {presets}
+    applyingPreset={presets.applyingPreset}
+    presets={presets.list}
     copiedSettings={develop.copiedSettings}
-    {pastingSettingsToSelection}
+    pastingSettingsToSelection={presets.pastingSettingsToSelection}
     mergingHdr={importFlow.mergingHdr}
     mergingPanorama={importFlow.mergingPanorama}
     detectingFaces={faces.detectingFaces}
@@ -1491,34 +1252,34 @@
   <AppDialogs
     settingsOpen={shell.settingsOpen}
     {exportItems}
-    {copySettingsDialogOpen}
+    copySettingsDialogOpen={presets.copySettingsDialogOpen}
     confirmingFaceDetectionOnImport={faces.confirmingDetectionOnImport}
     pendingImportBatchSize={faces.pendingImportBatchSize}
     confirmingRemoval={library.confirmingRemoval}
     selectedIds={selection.selectedIds}
-    {confirmingReset}
+    confirmingReset={presets.confirmingReset}
     creatingCollection={library.creatingCollection}
     creatingCollectionWithImages={library.creatingCollectionWithImages}
     creatingSmartCollection={library.creatingSmartCollection}
-    {creatingSnapshot}
-    {creatingPreset}
-    {confirmingDeletePresetId}
+    creatingSnapshot={presets.creatingSnapshot}
+    creatingPreset={presets.creatingPreset}
+    confirmingDeletePresetId={presets.confirmingDeletePresetId}
     backupPromptSettings={importFlow.backupPromptSettings}
     backupPromptOpen={importFlow.backupPromptOpen}
     onCloseSettings={() => (shell.settingsOpen = false)}
     onCloseExport={() => (exportItems = null)}
-    onCancelCopySettings={() => (copySettingsDialogOpen = false)}
+    onCancelCopySettings={() => (presets.copySettingsDialogOpen = false)}
     onCancelRemoval={() => (library.confirmingRemoval = false)}
-    onCancelReset={() => (confirmingReset = false)}
+    onCancelReset={() => (presets.confirmingReset = false)}
     onCancelCreateCollection={() => (library.creatingCollection = false)}
     onCancelCreateCollectionWithImages={() => {
       library.creatingCollectionWithImages = false;
       library.pendingAddToCollectionImageIds = [];
     }}
     onCancelCreateSmartCollection={() => (library.creatingSmartCollection = false)}
-    onCancelCreateSnapshot={() => (creatingSnapshot = false)}
-    onCancelCreatePreset={() => (creatingPreset = false)}
-    onCancelDeletePreset={() => (confirmingDeletePresetId = null)}
+    onCancelCreateSnapshot={() => (presets.creatingSnapshot = false)}
+    onCancelCreatePreset={() => (presets.creatingPreset = false)}
+    onCancelDeletePreset={() => (presets.confirmingDeletePresetId = null)}
     {handleCopySettingsConfirmed}
     handleFaceDetectionPromptConfirm={faces.confirmDetectionPrompt}
     handleFaceDetectionPromptCancel={faces.cancelDetectionPrompt}
@@ -1776,10 +1537,10 @@
         historyIndex={develop.historyIndex}
         snapshots={develop.snapshots}
         onJumpTo={restoreTo}
-        onCreateSnapshotRequest={() => (creatingSnapshot = true)}
+        onCreateSnapshotRequest={() => (presets.creatingSnapshot = true)}
         onRestoreSnapshot={handleRestoreSnapshot}
         onDeleteSnapshot={handleDeleteSnapshot}
-        {presets}
+        presets={presets.list}
         onApplyPreset={handleApplyPreset}
         onSaveCurrentAsPresetRequest={handleSaveCurrentAsPresetRequest}
         onExportPreset={handleExportPreset}
@@ -1813,23 +1574,23 @@
         shadows={developView.shadows}
         whites={developView.whites}
         blacks={developView.blacks}
-        {masks}
-        {activeTool}
-        {selectedMaskId}
-        {brushSize}
-        {brushHardness}
-        {brushFlow}
-        {eraseMode}
-        {showMaskOverlay}
-        {spotBrushSize}
-        {maskOverlaysVisible}
+        masks={masks.list}
+        activeTool={masks.activeTool}
+        selectedMaskId={masks.selectedMaskId}
+        brushSize={masks.brushSize}
+        brushHardness={masks.brushHardness}
+        brushFlow={masks.brushFlow}
+        eraseMode={masks.eraseMode}
+        showMaskOverlay={masks.showMaskOverlay}
+        spotBrushSize={masks.spotBrushSize}
+        maskOverlaysVisible={masks.maskOverlaysVisible}
         showOriginal={develop.showOriginal}
         spacePanning={develop.spacePanning}
-        onSpotBrushSizeChange={(v) => (spotBrushSize = v)}
+        onSpotBrushSizeChange={(v) => (masks.spotBrushSize = v)}
         onMaskCreated={handleMaskCreated}
         onMaskUpdated={handleMaskUpdated}
-        onMaskSelected={(id) => (selectedMaskId = id)}
-        colorRangeResampleId={colorRangeResampleTarget}
+        onMaskSelected={(id) => (masks.selectedMaskId = id)}
+        colorRangeResampleId={masks.colorRangeResampleTarget}
         onColorRangeResampled={handleColorRangeResampled}
         onEyedropperSampled={handleEyedropperSampled}
         toneCurvePoints={developView.toneCurvePoints}
@@ -1852,22 +1613,22 @@
         onHistogramUpdate={handleHistogramUpdate}
         showClippingOverlay={develop.showClippingOverlay}
         onHoverPixel={handleHoverPixel}
-        {softProofEnabled}
-        {softProofPreviewUrl}
-        {softProofLoading}
-        {softProofProfileLabel}
+        softProofEnabled={softProof.enabled}
+        softProofPreviewUrl={softProof.previewUrl}
+        softProofLoading={softProof.loading}
+        softProofProfileLabel={softProof.profileLabel}
         cpuFallbackPreviewUrl={develop.cpuFallbackPreviewUrl}
         onGpuFallback={handleGpuFallback}
       />
-      {#if selectedMask}
+      {#if masks.selectedMask}
         <MaskEditorPanel
-          mask={selectedMask}
-          onChange={(patch) => handleMaskUpdated(/** @type {string} */ (selectedMaskId), patch)}
+          mask={masks.selectedMask}
+          onChange={(patch) => handleMaskUpdated(/** @type {string} */ (masks.selectedMaskId), patch)}
           onDelete={handleMaskDeleted}
-          onClose={() => (selectedMaskId = null)}
-          {showMaskOverlay}
-          onShowOverlayChange={(v) => (showMaskOverlay = v)}
-          {isResamplingColor}
+          onClose={() => (masks.selectedMaskId = null)}
+          showMaskOverlay={masks.showMaskOverlay}
+          onShowOverlayChange={(v) => (masks.showMaskOverlay = v)}
+          isResamplingColor={masks.isResamplingColor}
           onResampleColor={handleResampleColorToggle}
         />
       {/if}
@@ -1918,7 +1679,7 @@
         {isEyedropperActive}
         onEyedropperToggle={handleEyedropperToggle}
         hasEdits={develop.editStack.ops.length > 0}
-        onResetRequest={() => (confirmingReset = true)}
+        onResetRequest={() => (presets.confirmingReset = true)}
         dehaze={developView.dehaze}
         onDehazeChange={(v) => handleAdjustmentChange("dehaze", v)}
         texture={developView.texture}
@@ -1939,15 +1700,15 @@
         onLumaNRChange={handleLumaNRChange}
         colorNR={developView.colorNR}
         onColorNRChange={handleColorNRChange}
-        {softProofEnabled}
-        {softProofTarget}
-        {softProofCustomProfilePath}
-        {softProofIntent}
-        {softProofGamutWarning}
-        onSoftProofEnabledChange={(v) => (softProofEnabled = v)}
-        onSoftProofTargetChange={(v) => (softProofTarget = /** @type {typeof softProofTarget} */ (v))}
-        onSoftProofIntentChange={(v) => (softProofIntent = /** @type {typeof softProofIntent} */ (v))}
-        onSoftProofGamutWarningChange={(v) => (softProofGamutWarning = v)}
+        softProofEnabled={softProof.enabled}
+        softProofTarget={softProof.target}
+        softProofCustomProfilePath={softProof.customProfilePath}
+        softProofIntent={softProof.intent}
+        softProofGamutWarning={softProof.gamutWarning}
+        onSoftProofEnabledChange={(v) => (softProof.enabled = v)}
+        onSoftProofTargetChange={(v) => (softProof.target = /** @type {typeof softProof.target} */ (v))}
+        onSoftProofIntentChange={(v) => (softProof.intent = /** @type {typeof softProof.intent} */ (v))}
+        onSoftProofGamutWarningChange={(v) => (softProof.gamutWarning = v)}
         onChooseCustomProfile={handleChooseCustomProfile}
         onCopySettingsRequest={handleCopySettingsRequest}
         canPasteSettings={develop.copiedSettings !== null}
@@ -1955,26 +1716,26 @@
       />
     </div>
     <MaskToolStrip
-      {activeTool}
-      {masks}
-      {selectedMaskId}
-      {brushSize}
-      {brushHardness}
-      {brushFlow}
-      {eraseMode}
-      {spotBrushSize}
-      {maskOverlaysVisible}
+      activeTool={masks.activeTool}
+      masks={masks.list}
+      selectedMaskId={masks.selectedMaskId}
+      brushSize={masks.brushSize}
+      brushHardness={masks.brushHardness}
+      brushFlow={masks.brushFlow}
+      eraseMode={masks.eraseMode}
+      spotBrushSize={masks.spotBrushSize}
+      maskOverlaysVisible={masks.maskOverlaysVisible}
       gpuUnavailable={develop.gpuFallbackActive}
-      onToolToggle={(tool) => (activeTool = activeTool === tool ? null : tool)}
-      onMaskSelect={(id) => (selectedMaskId = id)}
-      onBrushSizeChange={(v) => (brushSize = v)}
-      onBrushHardnessChange={(v) => (brushHardness = v)}
-      onBrushFlowChange={(v) => (brushFlow = v)}
-      onEraseToggle={() => (eraseMode = !eraseMode)}
-      onNewBrush={() => (selectedMaskId = null)}
-      onSpotBrushSizeChange={(v) => (spotBrushSize = v)}
-      onNewSpot={() => (selectedMaskId = null)}
-      onToggleMaskOverlaysVisible={() => (maskOverlaysVisible = !maskOverlaysVisible)}
+      onToolToggle={(tool) => (masks.activeTool = masks.activeTool === tool ? null : tool)}
+      onMaskSelect={(id) => (masks.selectedMaskId = id)}
+      onBrushSizeChange={(v) => (masks.brushSize = v)}
+      onBrushHardnessChange={(v) => (masks.brushHardness = v)}
+      onBrushFlowChange={(v) => (masks.brushFlow = v)}
+      onEraseToggle={() => (masks.eraseMode = !masks.eraseMode)}
+      onNewBrush={() => (masks.selectedMaskId = null)}
+      onSpotBrushSizeChange={(v) => (masks.spotBrushSize = v)}
+      onNewSpot={() => (masks.selectedMaskId = null)}
+      onToggleMaskOverlaysVisible={() => (masks.maskOverlaysVisible = !masks.maskOverlaysVisible)}
       onCreateLuminanceRange={handleCreateLuminanceRangeMask}
       crop={developView.crop}
       cropAspectLock={develop.cropAspectLock}

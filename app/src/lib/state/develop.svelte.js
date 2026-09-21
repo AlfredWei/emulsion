@@ -13,7 +13,7 @@
 // reset, open/close Develop (lib/actions, later steps).
 
 import { library } from "./library.svelte.js";
-import { setEditStack } from "$lib/api/develop.js";
+import { setEditStack, previewEditStack } from "$lib/api/develop.js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 export class DevelopStore {
@@ -166,8 +166,8 @@ export class DevelopStore {
   // device acquisition fails (or, symmetrically, flips back false if a
   // later image's acquisition succeeds) -- this component never probes
   // `navigator.gpu` itself. `cpuFallbackPreviewUrl` is populated by the
-  // debounced effect in +page.svelte, same "compute a static preview CPU-side and
-  // hand DevelopCanvas a URL" shape as `softProofPreviewUrl` above, just
+  // debounced effect in `installCpuFallback()`, same "compute a static preview CPU-side and
+  // hand DevelopCanvas a URL" shape as `softProof.previewUrl`, just
   // driven by GPU availability instead of a proofing toggle.
   gpuFallbackActive = $state(false);
   cpuFallbackPreviewUrl = $state(/** @type {string | null} */ (null));
@@ -335,6 +335,51 @@ export class DevelopStore {
         .catch(() => {});
     }, 120);
   };
+
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  #gpuFallbackTimer = null;
+
+  /** M5 Slice 1: GPU/CPU fallback preview -- same debounced-CPU-render shape
+   * as the soft-proof effect in softProof.install() (250ms settle, re-fires on any
+   * `editStack` change), driven by `gpuFallbackActive` instead of a
+   * proofing toggle. `previewEditStack` (the same CPU pipeline M4.5's
+   * History/Preset hover-preview already uses) is called with the FULL
+   * current `editStack`, since this is the primary canvas content in
+   * fallback mode, not a peek -- unlike `schedulePreview`'s 120ms
+   * hover-tuned debounce, this matches `scheduleFlush`'s own 250ms
+   * "settled after a drag" window, since re-rendering CPU-side on every
+   * slider tick is exactly the cost GPU was chosen to avoid.
+   * Call once, from a component's <script>. */
+  installCpuFallback() {
+    $effect(() => {
+      void this.editStack;
+      const path = this.imagePath;
+      const contentHash = this.imageContentHash;
+      const active = this.gpuFallbackActive;
+      const stack = this.editStack;
+
+      if (this.#gpuFallbackTimer) clearTimeout(this.#gpuFallbackTimer);
+
+      if (!active || path === null) {
+        this.cpuFallbackPreviewUrl = null;
+        return;
+      }
+
+      this.#gpuFallbackTimer = setTimeout(() => {
+        previewEditStack(path, contentHash, stack)
+          .then((preview) => {
+            this.cpuFallbackPreviewUrl = convertFileSrc(preview.path);
+          })
+          .catch(() => {
+            this.cpuFallbackPreviewUrl = null;
+          });
+      }, 250);
+
+      return () => {
+        if (this.#gpuFallbackTimer) clearTimeout(this.#gpuFallbackTimer);
+      };
+    });
+  }
 }
 
 export function createDevelopStore() {

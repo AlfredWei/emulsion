@@ -125,7 +125,9 @@ src/
 │   │                        filters, collections + their derived sets), selection.svelte.js (selected ids/anchor, selected images,
 │   │                        Compare pair), develop.svelte.js (open image, live edit stack, history/snapshots, preview,
 │   │                        canvas readouts, edit-stack persistence), developView.svelte.js (per-adjustment derived
-│   │                        views of the edit stack); more land per RFC-0009 P6+.
+│   │                        views of the edit stack), masks.svelte.js (mask tool/selection state, brush options, resample/eyedropper
+│   │                        targets; `install()` self-cleaning effects), softProof.svelte.js (proof settings + debounced
+│   │                        preview effect), presets.svelte.js (preset list + Develop dialog flags); more land per RFC-0009 P6b+.
 │   │                        Tested via lib/state/*.test.js
 │   ├── actions/             Workflows that write more than one store (RFC-0009 §3.2): printActions.js
 │   │                        (print, export PDF, choose print profile), faceActions.js (people/face

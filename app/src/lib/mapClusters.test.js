@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { geolocatedPoints, projectToPixels, boundsOfPoints, clusterPoints, MAX_MERCATOR_LAT } from "./mapClusters.js";
+import { geolocatedPoints, projectToPixels, boundsOfPoints, clusterPoints, clustersInBounds, MAX_MERCATOR_LAT } from "./mapClusters.js";
 
 const img = (/** @type {number} */ id, /** @type {any} */ lat, /** @type {any} */ lng, /** @type {number} */ version = id * 10) =>
   /** @type {any} */ ({ image_id: id, version_id: version, latitude: lat, longitude: lng });
@@ -134,5 +134,26 @@ describe("clusterPoints", () => {
       expect(Number.isFinite(c.lng)).toBe(true);
     }
     expect(clusters.reduce((n, c) => n + c.count, 0)).toBe(2);
+  });
+});
+
+describe("clustersInBounds", () => {
+  const cluster = (/** @type {number} */ lat, /** @type {number} */ lng) =>
+    /** @type {any} */ ({ lat, lng, count: 1, imageIds: [1], bounds: { south: lat, west: lng, north: lat, east: lng } });
+  const box = { south: 0, west: 0, north: 10, east: 20 };
+
+  it("keeps clusters inside the box and drops the rest, preserving order", () => {
+    const inside = [cluster(5, 5), cluster(9, 19)];
+    const outside = [cluster(-1, 5), cluster(11, 5), cluster(5, -1), cluster(5, 21)];
+    expect(clustersInBounds([inside[0], ...outside, inside[1]], box)).toEqual(inside);
+  });
+
+  it("includes clusters exactly on an edge", () => {
+    const edges = [cluster(0, 0), cluster(10, 20), cluster(0, 20), cluster(10, 0)];
+    expect(clustersInBounds(edges, box)).toEqual(edges);
+  });
+
+  it("returns an empty list for no clusters", () => {
+    expect(clustersInBounds([], box)).toEqual([]);
   });
 });

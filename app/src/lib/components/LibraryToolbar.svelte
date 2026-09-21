@@ -1,13 +1,13 @@
 <script>
   /**
-   * LibraryToolbar: Bottom toolbar providing view mode switching (Grid / Loupe / Compare / Survey),
+   * LibraryToolbar: Bottom toolbar providing view mode switching (Grid / Loupe / Compare / Survey / Map),
    * quick batch culling controls (Flag, Star, Color Label), zoom slider & selection summary.
    * @type {{
-   *   viewMode: "grid" | "loupe" | "compare" | "survey",
+   *   viewMode: "grid" | "loupe" | "compare" | "survey" | "map",
    *   selectedCount: number,
    *   totalCount: number,
    *   zoomLevel?: number,
-   *   onViewModeChange: (mode: "grid" | "loupe" | "compare" | "survey") => void,
+   *   onViewModeChange: (mode: "grid" | "loupe" | "compare" | "survey" | "map") => void,
    *   onRatingChange: (rating: number) => void,
    *   onFlagChange: (flag: string) => void,
    *   onColorLabelChange: (colorLabel: string) => void,
@@ -81,6 +81,16 @@
     >
       <span class="mode-icon">⧉</span>
       <span class="mode-text">Survey</span>
+    </button>
+    <button
+      type="button"
+      class="mode-btn"
+      class:active={viewMode === "map"}
+      title="Map View - photos with a location"
+      onclick={() => onViewModeChange("map")}
+    >
+      <span class="mode-icon">◎</span>
+      <span class="mode-text">Map</span>
     </button>
   </div>
 

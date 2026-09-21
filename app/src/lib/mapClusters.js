@@ -101,3 +101,16 @@ export function clusterPoints(points, zoom, cellSize = 64) {
     bounds: /** @type {MapBounds} */ (boundsOfPoints(c.points)),
   }));
 }
+
+/**
+ * The clusters that fall inside `bounds` (edges included), so the map only draws what is on screen. A
+ * cluster is kept by its own position, not its `bounds`; pad the viewport a little at the call site so
+ * a cluster just off the edge does not pop in late while panning. Longitude wrapping is not handled:
+ * `bounds.west <= bounds.east` is assumed.
+ * @param {readonly MapCluster[]} clusters
+ * @param {MapBounds} bounds
+ * @returns {MapCluster[]}
+ */
+export function clustersInBounds(clusters, bounds) {
+  return clusters.filter((c) => c.lat >= bounds.south && c.lat <= bounds.north && c.lng >= bounds.west && c.lng <= bounds.east);
+}

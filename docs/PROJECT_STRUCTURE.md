@@ -108,7 +108,7 @@ src/
 │   ├── components/          Svelte components. App shell: AppTitlebar, AppDialogs, StatusStrip; module
 │   │                        bodies picked by +page.svelte: LibraryModule, DevelopModule, PrintModule (prop-less, import the stores/actions they use; RFC-0009 P8). Library:
 │   │                        CatalogRail, LibraryGrid/GridCell, LibraryToolbar, LibraryFilterBar, LibraryImageViewer,
-│   │                        LibraryCompareView, LibrarySurveyView, LibraryHistogram, MetadataPanel. Develop:
+│   │                        LibraryCompareView, LibrarySurveyView, LibraryMapView (Leaflet; loaded on first open), LibraryHistogram, MetadataPanel. Develop:
 │   │                        DevelopCanvas (WebGPU), DevelopPanel, DevelopInfoBar, Filmstrip, Histogram,
 │   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel. Print: PrintPanel,
 │   │                        PrintLayoutView. Dialogs: SettingsDialog, ExportDialog, ConfirmDialog,
@@ -144,7 +144,7 @@ src/
 │   │                        historyActions.js (restore, undo/redo, snapshot restore, reset), softProofActions.js (custom
 │   │                        profile), navigation.js (openDevelop, switchModule, next/prev image, export click); more land per RFC-0009
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
-│   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering (M5.5)
+│   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering, viewport filter (M5.5)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)
 │   ├── appEvents.js         `installAppEvents({ handleMenuAction })`: startup refreshes, window-close flush + backup prompt,

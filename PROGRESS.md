@@ -2,6 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5.5 Slice 2b — the map view (2026-09-21)
+
+Second half of RFC-0007 §4 slice 2: the world map is now a Library view mode. Design notes are appended to the RFC (§7).
+
+- **`LibraryMapView.svelte`** (new; Leaflet 1.9.4 + `@types/leaflet`, imported dynamically on first open so no tile is fetched until the map is opened): OSM tiles, accent-coloured `divIcon` pins/clusters from `clusterPoints`, framed around the pins on first draw, re-clustered on zoom and when the pins change, and only the viewport (padded) drawn (`clustersInBounds`, added to `mapClusters.js`). Click a pin or cluster: `handleMapClusterSelect` → `selectMapImages` + Grid. "N without location" badge, a note when nothing has a location, an error note if Leaflet fails to load. OSM attribution opens in the system browser through the new `openExternalUrl` (`lib/api/system.js`).
+- **Wiring**: `libraryViewMode` gains `"map"` (keyboard/menu context typings too); a Map button in `LibraryToolbar`; toolbar's Map goes through `showMapView` (clears an earlier map selection so pins show the whole source); `CatalogRail` gets `activeMapImageIds` (a "Map selection N" entry that clears it, and "All Photos" no longer highlights while one is active); `LibraryModule` gets the "No photos in this map selection." empty state.
+- **Verified**: `npm run check` 0 errors, 0 warnings; vitest 635 passed (+6: `clustersInBounds`, `showMapView`, `handleMapClusterSelect`); `vite build` OK. In the browser (dev server, store seeded from the console because there is no Tauri backend): real OSM tiles load (12 tiles), attribution shows, 7 photos → pins 3/1/1/1 with "1 without location", clicking the 3-cluster gives Grid with 3 photos and the rail entry `Map selection 3` highlighted, clicking it restores all 7, an unmatched selection shows the empty-state text, reopening the map restores the pins, and zooming redraws only the viewport's pins. Only console errors: the missing Tauri `invoke` (as before outside the app).
+- **Not verified**: the map inside the Tauri webview (WKWebView/WebView2) and e2e (CI). Leaflet in a webview is well-trodden but it is the RFC's stated risk, so try Library → Map by hand in the built app before slice 3.
+- **User-facing**: USER_GUIDE gets the Map view section and the tile-download privacy wording; PROJECT_STRUCTURE lists the component.
+- **Next**: slice 3 (pin-drop / drag-to-adjust reusing the map surface, explicit per-photo reverse geocoding) and an optional map shortcut.
+
 ## M5.5 Slice 2a — map view groundwork: clustering and the map-selection source (2026-09-21)
 
 First half of [RFC-0007](docs/rfc/RFC-0007-map-geolocation.md) §4 slice 2 (the world-map Library view), split so the logic lands and is tested before any UI or dependency does. No user-visible change yet: nothing sets the new source until slice 2b adds the map.

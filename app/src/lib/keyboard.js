@@ -21,7 +21,7 @@ import { OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
  * @property {boolean} creatingSmartCollection
  * @property {boolean} creatingCollectionWithImages
  * @property {Record<string, string>} shortcuts
- * @property {"grid" | "loupe" | "compare" | "survey"} libraryViewMode
+ * @property {"grid" | "loupe" | "compare" | "survey" | "map"} libraryViewMode
  * @property {boolean} spacePanning
  * @property {{ op?: string } | null | undefined} selectedMask
  * @property {boolean} showMaskOverlay

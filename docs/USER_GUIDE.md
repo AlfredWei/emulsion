@@ -24,11 +24,11 @@ The left-hand rail (Library and People sections both use it) has four navigation
 - **Collections** — manual collections (drag photos in) and Smart Collections (rule-based, auto-updating), collapsible. Use the **+** / **⚡+** buttons to create one.
 - **People** — every person face detection has found, collapsible, hidden entirely until at least one exists. See [Faces & People](#faces--people) for what you can do here.
 
-Clicking a Folder or Collection scopes the grid to it; clicking **All Photos** clears any active scope.
+Clicking a Folder or Collection scopes the grid to it; clicking **All Photos** clears any active scope. A **Map selection** entry appears while a map pin or cluster is the scope.
 
 ## Library module
 
-Four view modes (toolbar or `G`/`E`/`C`/`N`):
+Five view modes (toolbar; `G`/`E`/`C`/`N` for the first four):
 
 | View | What it's for |
 |---|---|
@@ -36,6 +36,7 @@ Four view modes (toolbar or `G`/`E`/`C`/`N`):
 | **Loupe** | Single-image, full-resolution, interactive pan/zoom. Face rectangles (with the person's name) can be toggled on here. |
 | **Compare** | Synchronized side-by-side comparison with candidate navigation — for picking a winner between similar shots. |
 | **Survey** | A responsive multi-photo matrix for reviewing a larger set at once. |
+| **Map** | A world map of the photos that have a location — see [Map & geolocation](#map--geolocation-partly-built). |
 
 **Culling**: flags (Pick/Reject/Unflag), 1–5 star ratings, and 6 color labels — all click-driven from the per-cell badge row or fully keyboard-driven (see [Shortcuts](#keyboard-shortcuts)). Multi-select (click + Shift/Cmd, or "Select All") applies any of these to many photos at once, with a selection-count badge.
 
@@ -94,13 +95,15 @@ Face detection, embedding, and clustering all run **fully locally** — no cloud
 
 ## Map & geolocation (partly built)
 
-Part of [M5.5 in the roadmap](../PRD/MILESTONES.md). **Built:** searching for a place or address and applying it as the GPS location of the selected photo(s), in one action for a whole multi-selection. **Not built yet:** dropping/dragging a pin on a map, and the world map Library view.
+Part of [M5.5 in the roadmap](../PRD/MILESTONES.md). **Built:** searching for a place or address and applying it as the GPS location of the selected photo(s), in one action for a whole multi-selection. the **Map** view (below). **Not built yet:** dropping/dragging a pin on a map.
 
 **Choosing a search service (Settings → Map):** *OpenStreetMap* is the default and needs no setup or account; it's good with addresses and limited to about one search per second. *Google* is better at landmark and business names but needs your own API key — create one in Google Cloud Console and enable the Geocoding API (Google requires a billing account, though light personal use is within its free monthly allowance). The key stays in your local catalog and is never shown again in the app.
 
 **Using it:** select one or more photos, and in the metadata panel's Location section type a place name or address and press Search. Pick a result to apply its coordinates to every selected photo (the list says how many). Existing altitude is kept. The location is stored in your catalog and, if you tick EXIF + GPS, written into exported JPEGs. You can still type coordinates by hand, for one photo.
 
-**What leaves your computer:** only the text you type into the search box (plus your key, if you chose Google), and only when you press Search. Search results aren't saved; only the location you pick is.
+**The Map view:** click **Map** in the Library toolbar. Every photo with a location in the current source (All Photos, a folder, a collection…) and passing the filter bar appears as a pin; nearby pins merge into a numbered cluster that splits as you zoom in. Click a pin or cluster to scope the grid to those photos: the rail shows a **Map selection** entry (click it, or All Photos, to clear it) and the view returns to Grid. Photos without a location are not on the map; a badge says how many were left out. Opening the map again shows the whole current source, not the last selection. There is no keyboard shortcut for it yet.
+
+**What leaves your computer:** the text you type into the search box (plus your key, if you chose Google), and only when you press Search; search results aren't saved, only the location you pick is. The Map view also downloads map tiles from OpenStreetMap's public server, only while the Map view is open; the requests reveal which part of the world you are looking at, never which photos you have or where they are. The map credits © OpenStreetMap contributors, as their tile policy requires; that link opens in your browser.
 
 ## Settings
 

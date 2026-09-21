@@ -1,7 +1,7 @@
 <script>
   import LibraryFilterBar from "$lib/components/LibraryFilterBar.svelte";
   import { library } from "$lib/state/library.svelte.js";
-  import { handleResetFilters, selectAllPhotos, selectLastImport, selectFolder, selectCollection, handleDeleteCollection, selectPerson, prioritizeThumbnail, patchLocal } from "$lib/actions/libraryActions.js";
+  import { handleResetFilters, selectAllPhotos, selectLastImport, selectFolder, selectCollection, handleDeleteCollection, selectPerson, showMapView, handleMapClusterSelect, prioritizeThumbnail, patchLocal } from "$lib/actions/libraryActions.js";
   import { importFlow } from "$lib/state/importFlow.svelte.js";
   import CatalogRail from "$lib/components/CatalogRail.svelte";
   import { faces } from "$lib/state/faces.svelte.js";
@@ -15,6 +15,7 @@
   import { selectPrevImage, selectNextImage, openDevelop } from "$lib/actions/navigation.js";
   import LibraryCompareView from "$lib/components/LibraryCompareView.svelte";
   import LibrarySurveyView from "$lib/components/LibrarySurveyView.svelte";
+  import LibraryMapView from "$lib/components/LibraryMapView.svelte";
   import LibraryToolbar from "$lib/components/LibraryToolbar.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import { shell } from "$lib/state/shell.svelte.js";
@@ -84,6 +85,7 @@
     activeFolderKey={library.activeFolderKey}
     showLastImportOnly={library.showLastImportOnly}
     activePersonId={library.activePersonId}
+    activeMapImageIds={library.activeMapImageIds}
     lastImportBatchId={library.lastImportBatchId}
     folderEntries={library.folderEntries}
     collections={library.collections}
@@ -118,6 +120,8 @@
           No photos in this folder.
         {:else if library.activePersonId !== null}
           No photos of this person.
+        {:else if library.activeMapImageIds !== null}
+          No photos in this map selection.
         {:else}
           No photos in this collection.
         {/if}
@@ -188,6 +192,8 @@
           onFlagChange={handleFlagChange}
           onColorLabelChange={handleColorLabelChange}
         />
+      {:else if library.libraryViewMode === "map"}
+        <LibraryMapView images={library.filteredImages} onSelectCluster={handleMapClusterSelect} />
       {/if}
 
       <!-- Library Bottom Toolbar -->
@@ -196,7 +202,7 @@
         selectedCount={selection.selectedIds.size}
         totalCount={library.filteredImages.length}
         zoomLevel={library.libraryZoomLevel}
-        onViewModeChange={(m) => (library.libraryViewMode = m)}
+        onViewModeChange={(m) => (m === "map" ? showMapView() : (library.libraryViewMode = m))}
         onRatingChange={(r) => handleRatingChange(null, r)}
         onFlagChange={(f) => handleFlagChange(null, f)}
         onColorLabelChange={(c) => handleColorLabelChange(null, c)}

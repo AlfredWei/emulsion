@@ -20,7 +20,7 @@ export class LibraryStore {
   /** @type {import('$lib/api/catalog.js').ImageSummary[]} */
   images = $state([]);
   confirmingRemoval = $state(false);
-  libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"));
+  libraryViewMode = $state(/** @type {"grid" | "loupe" | "compare" | "survey" | "map"} */ ("grid"));
   libraryZoomLevel = $state(1);
 
   compareCandidateId = $state(/** @type {number | null} */ (null));

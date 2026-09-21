@@ -67,6 +67,19 @@ export function selectMapImages(/** @type {Iterable<number>} */ imageIds) {
   library.activeMapImageIds = new Set(imageIds);
 }
 
+/** Opens the world map. Drops any earlier map selection first so the pins show the whole current source
+ * (with its filters), not just what the last click narrowed it to. */
+export function showMapView() {
+  library.activeMapImageIds = null;
+  library.libraryViewMode = "map";
+}
+
+/** A pin or cluster was clicked: scope Library to its photos and show them in the grid. */
+export function handleMapClusterSelect(/** @type {Iterable<number>} */ imageIds) {
+  selectMapImages(imageIds);
+  library.libraryViewMode = "grid";
+}
+
 export async function refreshCollections() {
   library.collections = await listCollections();
 }

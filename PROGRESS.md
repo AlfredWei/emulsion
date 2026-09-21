@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Minimum window size (2026-09-21)
+
+The main window had no minimum, and the layout stops fitting below about 1,250 px wide: the title bar's action row (`flex: none` buttons) overflowed and clipped the right-hand buttons, and the Library filter bar started scrolling.
+
+- **Measured** in the browser (same app, Tauri bridge stubbed, 11 fake photos), all three modules: the title bar needs 1,277 px, the filter bar about 1,309 px, and a manual collection being active adds the Remove button (about 68 px more). Height is not fragile: the side panels scroll, so only the centre area shrinks (title bar 42 + filter bar 39 + filmstrip 74 px are fixed).
+- **Set** `minWidth: 1360`, `minHeight: 600` in `tauri.conf.json` and raised the default from 1280×800 to 1400×800 (the default has to be at least the minimum). At 1360×600 the probe found no overflow in Library or Print; at 1300 the filter bar scrolls 9 px, at 1240 the title bar clips.
+- **Known gap**: while face detection runs, the title bar swaps two buttons for a progress bar + label + Cancel, about 185 px wider, so at the minimum width it still clips during a scan. Fixing that means changing the title bar layout (compact progress, or letting the action row scroll), not the window size; not done here.
+- **Not run**: the native window (the minimum is enforced by Tauri; the numbers come from the browser).
+
 ## Refactor P4b: `selection` store, `selectionActions.js`, `collectionsActions.js` (2026-09-20)
 
 Second step of RFC-0009 P4. `+page.svelte` 3,371 → 3,137 lines; new `lib/state/selection.svelte.js`, `lib/actions/selectionActions.js` and `lib/actions/collectionsActions.js`; 45 new tests (vitest 256 → 301).

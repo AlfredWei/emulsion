@@ -33,6 +33,7 @@
    *   activeFolderKey: string | null,
    *   showLastImportOnly: boolean,
    *   activePersonId: number | null,
+   *   activeMapImageIds: Set<number> | null,
    *   lastImportBatchId: number | null,
    *   folderEntries: { key: string, count: number }[],
    *   collections: import('$lib/api/catalog.js').CollectionSummary[],
@@ -56,6 +57,7 @@
     activeFolderKey,
     showLastImportOnly,
     activePersonId,
+    activeMapImageIds,
     lastImportBatchId,
     folderEntries,
     collections,
@@ -146,7 +148,7 @@
   <button
     type="button"
     class="tree-item"
-    class:active={activeCollectionId === null && activeFolderKey === null && !showLastImportOnly && activePersonId === null}
+    class:active={activeCollectionId === null && activeFolderKey === null && !showLastImportOnly && activePersonId === null && activeMapImageIds === null}
     onclick={onSelectAllPhotos}
   >
     All Photos
@@ -156,6 +158,13 @@
     Last Import
     <span class="count">{lastImportBatchId === null ? 0 : images.filter((img) => img.import_batch === lastImportBatchId).length}</span>
   </button>
+
+  {#if activeMapImageIds !== null}
+    <button type="button" class="tree-item active" title="Map selection - click to clear" onclick={onSelectAllPhotos}>
+      Map selection
+      <span class="count">{new Set(images.filter((img) => activeMapImageIds.has(img.image_id)).map((img) => img.image_id)).size}</span>
+    </button>
+  {/if}
 
   {#if folderEntries.length > 0}
     <button type="button" class="section-header folders-label" onclick={() => toggleSection("folders")}>

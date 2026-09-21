@@ -33,6 +33,8 @@ import {
   handleDeleteCollection,
   handleRemoveConfirmed,
   selectMapImages,
+  showMapView,
+  handleMapClusterSelect,
 } from "./libraryActions.js";
 import { library } from "$lib/state/library.svelte.js";
 import { selection } from "$lib/state/selection.svelte.js";
@@ -48,6 +50,7 @@ const sources = () => [library.activeCollectionId, library.activeFolderKey, libr
 
 beforeEach(() => {
   vi.clearAllMocks();
+  library.libraryViewMode = "grid";
   library.images = [];
   library.collections = [];
   library.manualMembership = new Map();
@@ -93,6 +96,31 @@ describe("source switching", () => {
     expect(library.activeMapImageIds?.has(6)).toBe(false);
     selectMapImages(new Set());
     expect(library.activeMapImageIds).toEqual(new Set()); // empty is still "on"
+  });
+
+  it("showMapView opens the map and drops an earlier map selection so the pins show the whole source", () => {
+    selectMapImages([1]);
+    library.libraryViewMode = "grid";
+    showMapView();
+    expect(library.libraryViewMode).toBe("map");
+    expect(library.activeMapImageIds).toBeNull();
+  });
+
+  it("showMapView keeps the other sources and filters", () => {
+    library.activeFolderKey = "a/b";
+    library.minRating = 3;
+    showMapView();
+    expect(library.activeFolderKey).toBe("a/b");
+    expect(library.minRating).toBe(3);
+  });
+
+  it("handleMapClusterSelect scopes Library to the cluster's photos and returns to the grid", () => {
+    library.libraryViewMode = "map";
+    library.activeFolderKey = "a/b";
+    handleMapClusterSelect([2, 3]);
+    expect(library.libraryViewMode).toBe("grid");
+    expect(library.activeMapImageIds).toEqual(new Set([2, 3]));
+    expect(sources()).toEqual([null, null, false, null]);
   });
 
   it("every other source switch turns the map selection off", async () => {

@@ -7,7 +7,7 @@
  * @typedef {Object} MenuContext
  * @property {string} activeModule
  * @property {boolean} settingsOpen
- * @property {"grid" | "loupe" | "compare" | "survey"} libraryViewMode
+ * @property {"grid" | "loupe" | "compare" | "survey" | "map"} libraryViewMode
  * @property {boolean} showOriginal
  * @property {() => unknown} handleImportFolder
  * @property {() => Promise<void>} handleImportFiles

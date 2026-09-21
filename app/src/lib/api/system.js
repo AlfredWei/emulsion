@@ -7,7 +7,7 @@
 // (Finder on macOS, Explorer on Windows, the default file manager on
 // Linux) is used directly.
 
-import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
+import { revealItemInDir, openPath, openUrl } from "@tauri-apps/plugin-opener";
 
 /** Opens the OS file manager with `path` selected. @returns {Promise<void>} */
 export function revealInFileManager(/** @type {string} */ path) {
@@ -22,4 +22,16 @@ export function revealInFileManager(/** @type {string} */ path) {
  * @returns {Promise<void>} */
 export function openFolder(/** @type {string} */ path) {
   return openPath(path);
+}
+
+/** Opens an http(s) link in the default browser -- for links inside webview content (the map's
+ * attribution), which would otherwise navigate the app window itself away. `opener:default` already
+ * grants `allow-open-url` for web URLs. Outside Tauri (plain dev server) falls back to `window.open`.
+ * @returns {Promise<void>} */
+export async function openExternalUrl(/** @type {string} */ url) {
+  try {
+    await openUrl(url);
+  } catch {
+    window.open(url, "_blank", "noopener");
+  }
 }

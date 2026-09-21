@@ -1,6 +1,6 @@
 // Library operations (RFC-0009 P4a, P5b, moved out of +page.svelte's script): everything that reads or
 // writes the `library` store plus IPC -- switching the source (All Photos / Last Import / folder /
-// collection / person), refreshing the image list and collections, optimistic local patches,
+// collection / person / map selection), refreshing the image list and collections, optimistic local patches,
 // thumbnail-batch application, collection create/delete, and removing photos from the catalog
 // (which also clears the selection and, if it was open, the Develop session).
 
@@ -30,6 +30,7 @@ export async function selectPerson(/** @type {number} */ personId) {
   library.activeFolderKey = null;
   library.showLastImportOnly = false;
   library.activePersonId = personId;
+  library.activeMapImageIds = null;
   if (!library.personMembership.has(personId)) await loadPersonMembership(personId);
 }
 
@@ -38,6 +39,7 @@ export function selectAllPhotos() {
   library.activeFolderKey = null;
   library.showLastImportOnly = false;
   library.activePersonId = null;
+  library.activeMapImageIds = null;
 }
 
 export function selectLastImport() {
@@ -45,6 +47,7 @@ export function selectLastImport() {
   library.activeFolderKey = null;
   library.showLastImportOnly = true;
   library.activePersonId = null;
+  library.activeMapImageIds = null;
 }
 
 export function selectFolder(/** @type {string} */ key) {
@@ -52,6 +55,16 @@ export function selectFolder(/** @type {string} */ key) {
   library.activeFolderKey = key;
   library.showLastImportOnly = false;
   library.activePersonId = null;
+  library.activeMapImageIds = null;
+}
+
+/** Scopes Library to the photos of a clicked map pin or cluster (M5.5 map view). Takes `image_id`s. */
+export function selectMapImages(/** @type {Iterable<number>} */ imageIds) {
+  library.activeCollectionId = null;
+  library.activeFolderKey = null;
+  library.showLastImportOnly = false;
+  library.activePersonId = null;
+  library.activeMapImageIds = new Set(imageIds);
 }
 
 export async function refreshCollections() {
@@ -81,6 +94,7 @@ export async function selectCollection(/** @type {number | null} */ collectionId
   library.activeFolderKey = null;
   library.showLastImportOnly = false;
   library.activePersonId = null;
+  library.activeMapImageIds = null;
   if (collectionId !== null && !library.manualMembership.has(collectionId)) {
     const collection = library.collections.find((c) => c.id === collectionId);
     if (collection && !collection.is_smart) await loadManualMembership(collectionId);

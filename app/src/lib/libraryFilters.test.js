@@ -46,6 +46,7 @@ function baseInputs(images, over = {}) {
     activeFolderKey: null,
     activePersonId: null,
     personMembership: new Map(),
+    activeMapImageIds: null,
     activeCollectionId: null,
     collections: [],
     manualMembership: new Map(),
@@ -97,6 +98,17 @@ describe("selectBaseImages", () => {
     const withMembers = baseInputs(images, { activePersonId: 7, personMembership: new Map([[7, new Set([3])]]) });
     expect(ids(selectBaseImages(withMembers))).toEqual([3]);
     expect(selectBaseImages(baseInputs(images, { activePersonId: 7 }))).toEqual([]);
+  });
+
+  it("map scope keeps every version of the listed photos; an empty selection is empty, not everything", () => {
+    const withVersions = [...images, { ...images[0], version_id: 999 }];
+    expect(selectBaseImages(baseInputs(withVersions, { activeMapImageIds: new Set([1, 3]) })).map((i) => i.version_id)).toEqual([
+      images[0].version_id,
+      images[2].version_id,
+      999,
+    ]);
+    expect(selectBaseImages(baseInputs(images, { activeMapImageIds: new Set() }))).toEqual([]);
+    expect(ids(selectBaseImages(baseInputs(images, { activeMapImageIds: null })))).toEqual(ids(images));
   });
 
   it("manual collection scope uses membership; unfetched membership is empty", () => {

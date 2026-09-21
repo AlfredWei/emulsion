@@ -25,7 +25,7 @@ describe("LibraryStore", () => {
     expect(l.images).toEqual([]);
     expect(l.libraryViewMode).toBe("grid");
     expect(l.libraryZoomLevel).toBe(1);
-    expect([l.activeCollectionId, l.activeFolderKey, l.activePersonId, l.showLastImportOnly]).toEqual([null, null, null, false]);
+    expect([l.activeCollectionId, l.activeFolderKey, l.activePersonId, l.showLastImportOnly, l.activeMapImageIds]).toEqual([null, null, null, false, null]);
     expect([l.searchQuery, l.flagFilter, l.minRating, l.ratingOp]).toEqual(["", "all", 0, ">="]);
     expect([l.colorLabelFilter, l.fileTypeFilter, l.cameraFilter, l.lensFilter, l.dateFrom, l.dateTo]).toEqual(["all", "all", "all", "all", "", ""]);
     expect([l.confirmingRemoval, l.creatingCollection, l.creatingSmartCollection, l.creatingCollectionWithImages]).toEqual([false, false, false, false]);
@@ -88,6 +88,19 @@ describe("LibraryStore", () => {
       expect(l.filteredImages).toEqual([]); // membership not fetched yet
       l.manualMembership = new Map([[7, new Set([2])]]);
       expect(ids(l.filteredImages)).toEqual([2]);
+    });
+
+    it("scopes a map selection to the listed photos, and follows a change of the set", () => {
+      const l = createLibraryStore();
+      l.images = [img({ image_id: 1 }), img({ image_id: 2 }), img({ image_id: 3 })];
+      l.activeMapImageIds = new Set([1, 3]);
+      expect(ids(l.filteredImages)).toEqual([1, 3]);
+      l.activeMapImageIds = new Set([2]);
+      expect(ids(l.filteredImages)).toEqual([2]);
+      l.activeMapImageIds = new Set();
+      expect(l.filteredImages).toEqual([]);
+      l.activeMapImageIds = null;
+      expect(ids(l.filteredImages)).toEqual([1, 2, 3]);
     });
 
     it("scopes a person to their cached membership", () => {

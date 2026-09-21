@@ -37,12 +37,12 @@ export class LibraryStore {
   activeCollectionId = $state(/** @type {number | null} */ (null));
   manualMembership = $state(/** @type {Map<number, Set<number>>} */ (new Map()));
 
-  // Folders / Last Import (M4 Library slice). Four library "sources" --
-  // All Photos, Last Import, a real folder, and a Person -- are mutually
-  // exclusive with each other and with a Collection, so only one of
+  // Folders / Last Import (M4 Library slice). Five library "sources" --
+  // All Photos, Last Import, a real folder, a Person, and a Map selection --
+  // are mutually exclusive with each other and with a Collection, so only one of
   // `activeCollectionId` / `activeFolderKey` / `showLastImportOnly` /
-  // `activePersonId` is ever "on" at a time; `baseImages` below checks
-  // them in that same order.
+  // `activePersonId` / `activeMapImageIds` is ever "on" at a time; `baseImages`
+  // below checks them in that same order.
   activeFolderKey = $state(/** @type {string | null} */ (null));
   showLastImportOnly = $state(false);
 
@@ -56,6 +56,12 @@ export class LibraryStore {
   // already sitting on `ImageSummary`.
   activePersonId = $state(/** @type {number | null} */ (null));
   personMembership = $state(/** @type {Map<number, Set<number>>} */ (new Map()));
+
+  // Map selection (M5.5 map view, RFC-0007 §3.3): clicking a pin or cluster on the world map scopes Library to
+  // exactly those photos (`image_id`s, like a person's membership -- every version of a photo is included).
+  // Unlike a person or a manual collection there is nothing to fetch: the ids come straight from the map.
+  // `null` is "not active"; an empty set is a real (empty) selection, not the same thing.
+  activeMapImageIds = $state(/** @type {Set<number> | null} */ (null));
 
   allImageKeywords = $state(/** @type {import('$lib/api/catalog.js').ImageKeywordAssignment[]} */ ([]));
 

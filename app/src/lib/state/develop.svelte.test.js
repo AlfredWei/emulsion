@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { flushSync } from "svelte";
 
-const api = vi.hoisted(() => ({ setEditStack: vi.fn() }));
-vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), setEditStack: api.setEditStack }));
+const api = vi.hoisted(() => ({ setEditStack: vi.fn(), previewEditStack: vi.fn() }));
+vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), setEditStack: api.setEditStack, previewEditStack: api.previewEditStack }));
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (/** @type {string} */ p) => `asset://${p}` }));
 
 import { DevelopStore } from "./develop.svelte.js";
@@ -319,5 +320,96 @@ describe("hover preview", () => {
     develop.schedulePreview(() => Promise.reject(new Error("decode")));
     await vi.advanceTimersByTimeAsync(500);
     expect(develop.previewUrl).toBeNull();
+  });
+});
+
+describe("DevelopStore.installCpuFallback", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    api.previewEditStack.mockResolvedValue({ path: "/tmp/cpu.png" });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const installed = (/** @type {DevelopStore} */ develop) => {
+    const stop = $effect.root(() => develop.installCpuFallback());
+    flushSync();
+    return stop;
+  };
+
+  it("does nothing while the GPU works, and clears a stale fallback preview", async () => {
+    const { develop } = setup();
+    develop.cpuFallbackPreviewUrl = "stale";
+    const stop = installed(develop);
+    expect(develop.cpuFallbackPreviewUrl).toBeNull();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.previewEditStack).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("with the GPU unavailable, renders the full current stack CPU-side 250 ms after the last change", async () => {
+    const { develop } = setup();
+    develop.gpuFallbackActive = true;
+    const stop = installed(develop);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(api.previewEditStack).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.previewEditStack).toHaveBeenCalledTimes(1);
+    expect(api.previewEditStack).toHaveBeenCalledWith("/p/a.raw", null, develop.editStack);
+    expect(develop.cpuFallbackPreviewUrl).toBe("asset:///tmp/cpu.png");
+    stop();
+  });
+
+  it("passes the open image's content hash (smart-preview key) along", async () => {
+    const { library, develop } = setup();
+    library.images = [/** @type {any} */ ({ version_id: 10, content_hash: "h1" })];
+    develop.gpuFallbackActive = true;
+    const stop = installed(develop);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(api.previewEditStack).toHaveBeenCalledWith("/p/a.raw", "h1", develop.editStack);
+    stop();
+  });
+
+  it("a burst of edits renders once, with the latest stack", async () => {
+    const { develop } = setup();
+    develop.gpuFallbackActive = true;
+    const stop = installed(develop);
+    await vi.advanceTimersByTimeAsync(200);
+    develop.editStack = /** @type {any} */ (stackWith(2));
+    flushSync();
+    await vi.advanceTimersByTimeAsync(200);
+    develop.editStack = /** @type {any} */ (stackWith(3));
+    flushSync();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(api.previewEditStack).toHaveBeenCalledTimes(1);
+    expect(api.previewEditStack.mock.calls[0][2]).toEqual(stackWith(3));
+    stop();
+  });
+
+  it("a failed render clears the fallback URL", async () => {
+    const { develop } = setup();
+    develop.gpuFallbackActive = true;
+    develop.cpuFallbackPreviewUrl = "stale";
+    api.previewEditStack.mockRejectedValue(new Error("decode"));
+    const stop = installed(develop);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(develop.cpuFallbackPreviewUrl).toBeNull();
+    stop();
+  });
+
+  it("turning the fallback off cancels a pending render and clears the URL; stopping cancels too", async () => {
+    const { develop } = setup();
+    develop.gpuFallbackActive = true;
+    const stop = installed(develop);
+    await vi.advanceTimersByTimeAsync(100);
+    develop.gpuFallbackActive = false;
+    flushSync();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.previewEditStack).not.toHaveBeenCalled();
+    develop.gpuFallbackActive = true;
+    flushSync();
+    await vi.advanceTimersByTimeAsync(100);
+    stop();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.previewEditStack).not.toHaveBeenCalled();
   });
 });

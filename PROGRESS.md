@@ -2,6 +2,21 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P6a: `masks`, `softProof`, `presets` stores and their effects (2026-09-21)
+
+First half of RFC-0009 P6: the three remaining develop-side state groups move out of the page, together with the four effects that belonged to them. `+page.svelte` 2,168 → 1,929 lines; new `lib/state/masks.svelte.js`, `softProof.svelte.js`, `presets.svelte.js`; 34 new tests (vitest 427 → 461).
+
+- **`masks` store** (`MaskStore(develop)`): `activeTool`, `selectedMaskId`, the brush and spot options, both overlay switches, `colorRangeResampleTarget`, `eyedropperTarget`, and the derived `list` (was the page's `masks`), `selectedMask`, `isResamplingColor`. `masks.install()` registers the two self-cleaning effects (a resample or eyedropper target is only valid while its tool is active).
+- **`softProof` store** (`SoftProofStore(develop)`): the five settings, `previewUrl`, `loading`, derived `profileLabel`, the now-`#private` timer, and `install()` for the debounced preview effect.
+- **`presets` store**: the preset `list` and the seven dialog / in-flight flags (`creatingPreset`, `confirmingDeletePresetId`, `applyingPreset`, `creatingSnapshot`, `confirmingReset`, `copySettingsDialogOpen`, `pastingSettingsToSelection`). State only.
+- **`develop.installCpuFallback()`**: the GPU-fallback preview effect and its `#gpuFallbackTimer` moved into `DevelopStore` (RFC-0009 §3.5), so P5a's "stays in the page" note for that timer is now closed. `hslBandHighlightTimer` remains page-local: its only user is the eyedropper handler, which is an action and moves in P6b.
+- **Effect order**: the four inline effects are replaced by three calls (`softProof.install()`, `develop.installCpuFallback()`, `masks.install()`) at the spot of the first one, in the same relative order; effect bodies are the old ones with `this.` prefixes.
+- **Naming**: the page's `masks` and `presets` arrays are `masks.list` / `presets.list`, since the store singletons take those names.
+- **Verified by comparison**: every non-comment line of the old page is present in the new page or a store (only declarations, template shorthand `{x}` → `x={store.x}` and the moved imports differ). `npm run check` 0 errors, vitest 461 passed, `vite build` OK.
+- **Tests** (60 mutants, 5 survivors, all equivalent): `masks` (defaults, `list`/`selectedMask` following stack replacement, the `null === null` case of `isResamplingColor`, each self-cleaning condition individually, installed/stopped), `softProof` (label variants incl. Windows paths, 250 ms debounce with burst, refire on stack / image / setting change, off cancels, loading flag, failure, stop cancels), `installCpuFallback` (same set plus content-hash key), `presets` (defaults and isolation). Survivors: the redundant `clearTimeout` at the top of the two preview effects (the effect cleanup already clears it), the `void editStack` read that `const stack = editStack` repeats, and the dead `path === null` guard (`imagePath` is a string).
+- **Not run locally**: e2e (CI); the Tauri window (soft-proof toggle and target switch, mask tools, eyedropper and colour-range resample, GPU-fallback preview).
+- **Next**: P6b, the actions that use these stores: `maskActions.js` (mask create/delete/update, luminance range, resample and eyedropper routing, `handleGpuFallback`), `presetActions.js` (refresh/create/delete/apply/import/export, paste settings), `softProofActions.js` (custom profile), then `navigation.js` and `historyActions.js`.
+
 ## Refactor P5b: develop-only and metadata actions (2026-09-21)
 
 Second half of RFC-0009 P5. `+page.svelte` 2,611 → 2,168 lines; new `lib/actions/developActions.js` and `lib/actions/metadataActions.js`; `libraryActions.js` gains `handleRemoveConfirmed`; 63 new tests (vitest 364 → 427).

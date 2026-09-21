@@ -7,6 +7,8 @@ const api = vi.hoisted(() => ({
   createPerson: vi.fn(),
   setFaceExcluded: vi.fn(),
   cancelFaceDetection: vi.fn(),
+  getFacesForImage: vi.fn(),
+  detectFacesForImages: vi.fn(),
   getDevelopPreview: vi.fn(),
 }));
 vi.mock("$lib/api/faces.js", () => api);
@@ -20,8 +22,16 @@ import {
   handleCreatePersonAndTagFace,
   handleSetFaceExcluded,
   handleCancelFaceDetection,
+  refreshCurrentImageFaces,
+  runFaceDetection,
+  handleDetectFacesForSelected,
+  handleDetectFacesForSelection,
+  handleDetectFacesForFolder,
 } from "./faceActions.js";
 import { faces } from "$lib/state/faces.svelte.js";
+import { library } from "$lib/state/library.svelte.js";
+import { selection } from "$lib/state/selection.svelte.js";
+import { shell } from "$lib/state/shell.svelte.js";
 
 const person = (/** @type {number} */ id, /** @type {string | null} */ name, /** @type {string | null} */ cover) => ({
   id,
@@ -39,6 +49,14 @@ beforeEach(() => {
   faces.people = [];
   faces.currentImageFaces = [];
   faces.avatarSourceUrls = {};
+  faces.detectingFaces = false;
+  faces.detectionCancelable = false;
+  faces.scanProgress = null;
+  library.images = [];
+  library.searchQuery = "";
+  selection.selectedId = null;
+  selection.selectedIds = new Set();
+  shell.notify("");
   for (const fn of Object.values(api)) fn.mockResolvedValue(undefined);
   api.listPeople.mockResolvedValue([]); // the real call returns an array
 });
@@ -168,5 +186,125 @@ describe("handleCancelFaceDetection", () => {
     expect(() => handleCancelFaceDetection()).not.toThrow();
     await Promise.resolve();
     expect(api.cancelFaceDetection).toHaveBeenCalledTimes(1);
+  });
+});
+
+const photo = (/** @type {number} */ imageId, /** @type {boolean} */ scanned = false, /** @type {number} */ versionId = imageId * 10) =>
+  /** @type {any} */ ({ image_id: imageId, version_id: versionId, path: `/p/a/b/${imageId}.jpg`, faces_scanned: scanned });
+
+describe("refreshCurrentImageFaces", () => {
+  it("clears the faces when nothing is selected, without any IPC", async () => {
+    faces.currentImageFaces = [/** @type {any} */ (face(1, null))];
+    await refreshCurrentImageFaces();
+    expect(faces.currentImageFaces).toEqual([]);
+    expect(api.getFacesForImage).not.toHaveBeenCalled();
+  });
+
+  it("loads the faces of the selected photo by image id (not version id)", async () => {
+    library.images = [photo(4, false, 41)];
+    selection.selectedId = 41;
+    api.getFacesForImage.mockResolvedValue([face(7, null)]);
+    await refreshCurrentImageFaces();
+    expect(api.getFacesForImage).toHaveBeenCalledWith(4);
+    expect(faces.currentImageFaces).toEqual([face(7, null)]);
+  });
+});
+
+describe("runFaceDetection", () => {
+  it("is a no-op with no ids or while a run is already in flight", async () => {
+    await runFaceDetection([], true);
+    faces.detectingFaces = true;
+    await runFaceDetection([1], true);
+    expect(api.detectFacesForImages).not.toHaveBeenCalled();
+  });
+
+  it("sets progress and cancelability while running, then marks the photos scanned and refreshes people", async () => {
+    library.images = [photo(1), photo(2), photo(3)];
+    /** @type {any[]} */
+    const during = [];
+    api.detectFacesForImages.mockImplementation(async () => {
+      during.push([faces.detectingFaces, faces.detectionCancelable, faces.scanProgress]);
+    });
+    api.listPeople.mockResolvedValue([person(1, "A", null)]);
+    await runFaceDetection([1, 3], true);
+    expect(api.detectFacesForImages).toHaveBeenCalledWith([1, 3]);
+    expect(during).toEqual([[true, true, { current: 0, total: 2 }]]);
+    expect(library.images.map((i) => i.faces_scanned)).toEqual([true, false, true]);
+    expect(faces.people).toHaveLength(1);
+    expect([faces.detectingFaces, faces.detectionCancelable, faces.scanProgress]).toEqual([false, false, null]);
+  });
+
+  it("reports a failure and still clears the in-flight state, leaving photos unscanned", async () => {
+    library.images = [photo(1)];
+    api.detectFacesForImages.mockRejectedValue(new Error("model download failed"));
+    await runFaceDetection([1], false);
+    expect(shell.statusMessage).toBe("Face detection failed: Error: model download failed");
+    expect(library.images[0].faces_scanned).toBe(false);
+    expect([faces.detectingFaces, faces.detectionCancelable, faces.scanProgress]).toEqual([false, false, null]);
+  });
+});
+
+describe("manual detection entry points", () => {
+  it("per-photo: runs on the selected photo only, and does nothing without one", async () => {
+    handleDetectFacesForSelected();
+    expect(api.detectFacesForImages).not.toHaveBeenCalled();
+    library.images = [photo(1), photo(2, false, 21)];
+    selection.selectedId = 21;
+    handleDetectFacesForSelected();
+    expect(api.detectFacesForImages).toHaveBeenCalledWith([2]);
+    await vi.waitFor(() => expect(faces.detectingFaces).toBe(false));
+  });
+
+  it("per-photo is not cancelable; the batch and folder runs are", async () => {
+    library.images = [photo(1), photo(2)];
+    selection.selectedId = 10;
+    selection.selectedIds = new Set([10, 20]);
+    /** @type {boolean[]} */
+    const cancelable = [];
+    api.detectFacesForImages.mockImplementation(async () => {
+      cancelable.push(faces.detectionCancelable);
+    });
+    handleDetectFacesForSelected();
+    await vi.waitFor(() => expect(faces.detectingFaces).toBe(false));
+    library.images = [photo(1), photo(2)];
+    handleDetectFacesForSelection();
+    await vi.waitFor(() => expect(faces.detectingFaces).toBe(false));
+    library.images = [photo(1), photo(2)]; // the runs above marked them scanned
+    handleDetectFacesForFolder();
+    await vi.waitFor(() => expect(faces.detectingFaces).toBe(false));
+    expect(cancelable).toEqual([false, true, true]);
+  });
+
+  it("selection: skips already-scanned photos, de-scoped to the selection", async () => {
+    library.images = [photo(1, true), photo(2), photo(3), photo(4)];
+    selection.selectedId = 10;
+    selection.selectedIds = new Set([10, 20, 30]);
+    handleDetectFacesForSelection();
+    expect(api.detectFacesForImages).toHaveBeenCalledWith([2, 3]);
+    await vi.waitFor(() => expect(faces.detectingFaces).toBe(false));
+  });
+
+  it("selection: tells the user when everything selected was already scanned", () => {
+    library.images = [photo(1, true), photo(2, true)];
+    selection.selectedId = 10;
+    selection.selectedIds = new Set([10, 20]);
+    handleDetectFacesForSelection();
+    expect(api.detectFacesForImages).not.toHaveBeenCalled();
+    expect(shell.statusMessage).toBe("Every selected photo has already been scanned for faces.");
+  });
+
+  it("folder: uses whatever the current view shows (filtered), not the whole catalog", async () => {
+    library.images = [photo(1), photo(2), photo(3, true)];
+    library.searchQuery = "/2.jpg";
+    handleDetectFacesForFolder();
+    expect(api.detectFacesForImages).toHaveBeenCalledWith([2]);
+    await vi.waitFor(() => expect(faces.detectingFaces).toBe(false));
+  });
+
+  it("folder: tells the user when the view is fully scanned", () => {
+    library.images = [photo(1, true)];
+    handleDetectFacesForFolder();
+    expect(api.detectFacesForImages).not.toHaveBeenCalled();
+    expect(shell.statusMessage).toBe("Every photo in this view has already been scanned for faces.");
   });
 });

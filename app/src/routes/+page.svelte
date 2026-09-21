@@ -35,10 +35,6 @@
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import {
-    importFolder,
-    importFiles,
-    getSupportedExtensions,
-    backfillMissingThumbnails,
     setRating,
     setFlag,
     setColorLabel,
@@ -46,8 +42,6 @@
     setCopyright,
     setContact,
     removeImages,
-    mergeHdrBracket,
-    mergePanorama,
     listAllImageKeywords,
     updateSmartCollectionRules,
   } from "$lib/api/catalog.js";
@@ -133,10 +127,9 @@
     WB_PRESETS,
     getSoftProofPreview,
   } from "$lib/api/develop.js";
-  import { queueThumbnailRegeneration, flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
+  import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
   import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
-    import { detectFacesForImportBatch, detectFacesForImages, getFacesForImage } from "$lib/api/faces.js";
   import { handleChoosePrintCustomProfile, handlePrint, handleExportPdf } from "$lib/actions/printActions.js";
   import {
     refreshPeople,
@@ -145,6 +138,11 @@
     handleCreatePersonAndTagFace,
     handleSetFaceExcluded,
     handleCancelFaceDetection,
+    refreshCurrentImageFaces,
+    runFaceDetection,
+    handleDetectFacesForSelected,
+    handleDetectFacesForSelection,
+    handleDetectFacesForFolder,
   } from "$lib/actions/faceActions.js";
   import { handleBackupDone, handleBackupSkip } from "$lib/actions/backupActions.js";
   import {
@@ -180,6 +178,16 @@
     handleCreateCollectionWithImages,
     handleRemoveFromCollection,
   } from "$lib/actions/collectionsActions.js";
+  import {
+    runImport,
+    handleImportFolder,
+    handleImportFiles,
+    handleDropImport,
+    handleMergeHdrBracket,
+    handleMergePanorama,
+    regenerateThumbnailFor,
+    pollUntilThumbnailsReadyOnStartup,
+  } from "$lib/actions/importActions.js";
 
   let imageViewerRef = $state(/** @type {any} */ (null));
 
@@ -363,73 +371,6 @@
   // PrintLayoutView's <img> src in place of the live (lower-resolution)
   // layout preview, so the actual OS print dialog sees the real
   // full-resolution, color-managed payload.
-
-
-  /** Refetches the faces for whichever photo is currently selected --
-   * called on selection change (see the `$effect` below) and after any
-   * tag/rename/reassign/exclude/detect action touches the selected photo. */
-  async function refreshCurrentImageFaces() {
-    if (!selection.selectedImage) {
-      faces.currentImageFaces = [];
-      return;
-    }
-    faces.currentImageFaces = await getFacesForImage(selection.selectedImage.image_id);
-  }
-
-
-  /** Shared runner behind all three manual detection entry points --
-   * on-demand detection outside the import flow (People-tab UX fix,
-   * 2026-09-16, relocated into Library by the 2026-09-17 redesign).
-   * `cancelable` controls whether a Cancel affordance is shown; the tiny
-   * single-photo case passes `false` (nothing worth canceling). */
-  async function runFaceDetection(/** @type {number[]} */ imageIds, /** @type {boolean} */ cancelable) {
-    if (faces.detectingFaces || imageIds.length === 0) return;
-    faces.detectingFaces = true;
-    faces.detectionCancelable = cancelable;
-    faces.scanProgress = { current: 0, total: imageIds.length };
-    try {
-      await detectFacesForImages(imageIds);
-      library.images = library.images.map((img) => (imageIds.includes(img.image_id) ? { ...img, faces_scanned: true } : img));
-      await refreshCurrentImageFaces();
-      await refreshPeople();
-    } catch (/** @type {any} */ e) {
-      shell.notify(`Face detection failed: ${e}`);
-    } finally {
-      faces.detectingFaces = false;
-      faces.detectionCancelable = false;
-      faces.scanProgress = null;
-    }
-  }
-
-  /** MetadataPanel's per-photo "Face" button. */
-  function handleDetectFacesForSelected() {
-    if (!selection.selectedImage) return;
-    runFaceDetection([selection.selectedImage.image_id], false);
-  }
-
-  /** Library's multi-select batch action -- every selected photo not yet
-   * scanned (already-scanned photos are silently skipped, not re-run). */
-  function handleDetectFacesForSelection() {
-    const targets = selection.selectedImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
-    if (targets.length === 0) {
-      shell.notify("Every selected photo has already been scanned for faces.");
-      return;
-    }
-    runFaceDetection(targets, true);
-  }
-
-  /** "Detect Faces in Folder" -- every not-yet-scanned photo in the
-   * current CatalogRail scope (a folder, a collection, or "All Photos" --
-   * whatever `filteredImages` already reflects), same scope Library's
-   * other bulk actions use. */
-  function handleDetectFacesForFolder() {
-    const targets = library.filteredImages.filter((img) => !img.faces_scanned).map((img) => img.image_id);
-    if (targets.length === 0) {
-      shell.notify("Every photo in this view has already been scanned for faces.");
-      return;
-    }
-    runFaceDetection(targets, true);
-  }
 
 
   // Debounced (same 250ms settle as scheduleFlush below, a separate timer
@@ -954,11 +895,6 @@
   });
   let exportItems = $state(/** @type {{ path: string, version_id: number }[] | null} */ (null));
 
-  // Who a newly-typed keyword in MetadataPanel gets assigned to (M2 Slice
-  // 4): the whole current Library selection when there is one, else just
-  // the anchor image -- unconditional on "the acted-on cell is part of
-  // the selection" (unlike targetVersionIds below) since there's no
-  // per-cell click event here, just "apply to whatever's selected".
 
 
   // Persistence is debounced (not written on every slider tick) so a drag
@@ -1211,133 +1147,6 @@
   }
 
 
-  // 250ms debounce inside flushEditStack + 150ms debounce in batch queue (two
-  // layers) prevents rapid edits/slider drags from hammering the backend:
-  // first layer settles pending edits, second layer coalesces multiple regen
-  // requests into a single atomic update. The batch system ensures all
-  // components see thumbnails refresh together.
-  function regenerateThumbnailFor(/** @type {number | null} */ versionId) {
-    if (versionId === null) return;
-    queueThumbnailRegeneration(versionId, handleBatchThumbnailsComplete);
-  }
-
-
-  // App-startup catch-up ONLY (see the onMount call below) -- lib.rs's
-  // .setup() runs its own fire-and-forget, non-progress-reporting
-  // generate_missing_thumbnails pass once at launch, independent of
-  // anything this component drives. Calling backfillMissingThumbnails()
-  // here too would start a SECOND, fully redundant full-catalog scan
-  // racing the first (both would see the same "missing" candidates before
-  // either finishes writing), so this stays a plain bounded poll that
-  // just waits for .setup()'s own pass to catch up and re-refresh()es --
-  // no progress bar, since this isn't a user-initiated action. Bounded
-  // (not an open-ended interval) so a permanently-stuck thumbnail (a real
-  // decode failure) doesn't poll forever -- it just stops trying and
-  // leaves the placeholder, which is the correct outcome in that case.
-  let pollingThumbnailsOnStartup = false;
-  async function pollUntilThumbnailsReadyOnStartup() {
-    if (pollingThumbnailsOnStartup) return;
-    pollingThumbnailsOnStartup = true;
-    try {
-      const maxAttempts = 10;
-      const intervalMs = 1500;
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        if (!library.images.some((img) => img.thumbnail_path === null)) return;
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
-        await refresh();
-      }
-    } finally {
-      pollingThumbnailsOnStartup = false;
-    }
-  }
-
-
-  async function runImport(/** @type {() => Promise<import('$lib/api/catalog.js').ImportSummary | null>} */ doImport) {
-    importFlow.importing = true;
-    importFlow.catalogProgress = null;
-    importFlow.thumbnailProgress = null;
-    importFlow.faceDetectionProgress = null;
-    importFlow.phase = "cataloging";
-    shell.notify("");
-    try {
-      const summary = await doImport();
-      if (!summary) return; // user cancelled the dialog
-      shell.notify(`Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`);
-      await refresh();
-      // Cataloging (importProgress, tracked above) is only half of "import
-      // done" from the user's perspective -- a freshly-imported JPEG has
-      // no thumbnail yet at this point (see import.rs's own comment on
-      // why). Awaiting this (rather than the old fire-and-forget +
-      // untracked polling) means the progress bar stays up, with real
-      // per-image feedback, until the Library grid genuinely has nothing
-      // left to backfill (scoped to THIS import's own batch, not the
-      // whole catalog -- see backfillMissingThumbnails's own doc comment).
-      // importPhase switches the progress bar's label over to the
-      // thumbnail count -- importProgress itself is left as whatever it
-      // last was (100%), not cleared, so there's no momentary "0 / 0"
-      // flash between the two phases.
-      importFlow.phase = "thumbnails";
-      await backfillMissingThumbnails(summary.import_batch);
-      await refresh();
-      // Face detection (M5 Slice 6 follow-up; opt-in per the 2026-09-17
-      // Library-integration redesign -- see RFC-0005 §7): used to run
-      // silently and unconditionally, which surprised users who didn't
-      // want the one-time model download or the extra wait. Now a THIRD
-      // visible phase of the same progress bar, but only if the user says
-      // yes to `faces.promptDetectionOnImport`. Its own failure (e.g. no
-      // network for the one-time model download) is caught separately and
-      // does NOT fail the whole import -- cataloging + thumbnails already
-      // succeeded, and a photo whose detection pass fails this way can
-      // still be scanned later via the "Face"/"Detect Faces" actions.
-      if (summary.imported > 0 && (await faces.promptDetectionOnImport(summary.imported))) {
-        importFlow.phase = "faces";
-        try {
-          await detectFacesForImportBatch(summary.import_batch);
-          await refreshPeople();
-        } catch (/** @type {any} */ e) {
-          shell.notify(`${shell.statusMessage} (face detection failed: ${e})`);
-        }
-      }
-    } catch (/** @type {any} */ e) {
-      shell.notify(`Import failed: ${e}`);
-    } finally {
-      importFlow.importing = false;
-      importFlow.catalogProgress = null;
-      importFlow.thumbnailProgress = null;
-      importFlow.faceDetectionProgress = null;
-    }
-  }
-
-  function handleImportFolder() {
-    return runImport(async () => {
-      const dir = await open({ directory: true, multiple: false });
-      return dir ? importFolder(/** @type {string} */ (dir)) : null;
-    });
-  }
-
-
-  function handleDropImport(/** @type {string[]} */ paths) {
-    if (!paths || paths.length === 0) return;
-    return runImport(async () => {
-      return importFiles(paths);
-    });
-  }
-
-  async function handleImportFiles() {
-    // M2 Slice 1: a separate entry point from folder import -- Tauri's
-    // dialog plugin has independent `directory`/`multiple` flags, no mode
-    // that lets one native dialog pick either files or a folder.
-    if (!importFlow.supportedExtensions) importFlow.supportedExtensions = await getSupportedExtensions();
-    return runImport(async () => {
-      const paths = await open({
-        multiple: true,
-        filters: [{ name: "Photos", extensions: /** @type {string[]} */ (importFlow.supportedExtensions) }],
-      });
-      return paths ? importFiles(/** @type {string[]} */ (paths)) : null;
-    });
-  }
-
-
   async function handleRatingChange(/** @type {number | null | undefined} */ versionId, /** @type {number} */ rating) {
     const targets = targetVersionIds(versionId);
     if (targets.length === 0) return;
@@ -1464,81 +1273,6 @@
   }
 
 
-  /** Merges the current Library selection (2+ RAW photos, in whatever
-   * order `selectedImages` iterates -- see mergeHdrBracket's own doc
-   * comment for why `hdr_merge`'s alignment reference is chosen by EV,
-   * not by this order, so exact click order doesn't matter here) into
-   * one new image, added to the catalog as its own row. Same
-   * await-then-refresh-then-poll shape `runImport` already established
-   * for a freshly-imported image, since the merge result is cataloged
-   * exactly like a JPEG import (thumbnail filled in later by the same
-   * background pass). Deduped by image_id first, same reasoning as
-   * `handleRemoveConfirmed`'s own dedupe: a virtual copy's version_id is
-   * a distinct selection entry but not a distinct source photo. */
-  async function handleMergeHdrBracket() {
-    const imageIds = [...new Set(selection.selectedImages.map((img) => img.image_id))];
-    if (imageIds.length < 2) return;
-    importFlow.mergingHdr = true;
-    importFlow.hdrMergeProgress = null;
-    shell.notify("");
-    try {
-      const resultImageId = await mergeHdrBracket(imageIds);
-      await refresh();
-      const merged = library.images.find((img) => img.image_id === resultImageId);
-      if (merged) {
-        selection.selectedId = merged.version_id;
-        selection.selectedIds = new Set([merged.version_id]);
-        // A merge result isn't tagged with an import_batch (it's not from
-        // import_paths_with_progress), so backfillMissingThumbnails'
-        // batch-scoping doesn't apply here -- prioritizeThumbnail's
-        // single-image ensure_thumbnail path is the right tool for
-        // exactly one new image anyway, same as opening Loupe/Develop.
-        // Fire-and-forget, same as the old blind-poll helper this
-        // replaces -- doesn't block this function's own status/selection
-        // update on the merge result's thumbnail.
-        prioritizeThumbnail(merged.version_id);
-      }
-      shell.notify(`Merged ${imageIds.length} photos into one HDR image`);
-    } catch (/** @type {any} */ e) {
-      shell.notify(`HDR merge failed: ${e}`);
-    } finally {
-      importFlow.mergingHdr = false;
-      importFlow.hdrMergeProgress = null;
-    }
-  }
-
-  // Panorama merge (M5, RFC-0004). Same guard/status/refresh shape as
-  // handleMergeHdrBracket above -- the only real difference is no
-  // RAW-only client pre-check (any format works for a stitch) and the
-  // dedupe-by-image_id reasoning still applies unchanged.
-
-
-  /** Stitches the current Library selection (2+ photos, in whatever
-   * order the user selected them -- unlike HDR merge, that order DOES
-   * matter here: adjacent selections are assumed to overlap, see
-   * mergePanorama's own doc comment) into one new wide composite,
-   * cataloged exactly like an HDR merge result. */
-  async function handleMergePanorama() {
-    const imageIds = [...new Set(selection.selectedImages.map((img) => img.image_id))];
-    if (imageIds.length < 2) return;
-    importFlow.mergingPanorama = true;
-    shell.notify("");
-    try {
-      const resultImageId = await mergePanorama(imageIds);
-      await refresh();
-      const merged = library.images.find((img) => img.image_id === resultImageId);
-      if (merged) {
-        selection.selectedId = merged.version_id;
-        selection.selectedIds = new Set([merged.version_id]);
-        prioritizeThumbnail(merged.version_id);
-      }
-      shell.notify(`Stitched ${imageIds.length} photos into one panorama`);
-    } catch (/** @type {any} */ e) {
-      shell.notify(`Panorama merge failed: ${e}`);
-    } finally {
-      importFlow.mergingPanorama = false;
-    }
-  }
 
 
   // Everything the keyboard and menu handlers (lib/keyboard.js, lib/menuActions.js) read or

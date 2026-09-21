@@ -105,7 +105,8 @@ src/
 ├── lib/
 │   ├── api/                 Thin wrappers around invoke(): the only place that knows Tauri command names/shapes
 │   │                        (catalog, develop, export, faces, map, print, storage, backup, system)
-│   ├── components/          Svelte components. App shell: AppTitlebar, AppDialogs, StatusStrip. Library:
+│   ├── components/          Svelte components. App shell: AppTitlebar, AppDialogs, StatusStrip; module
+│   │                        bodies picked by +page.svelte: LibraryModule, DevelopModule, PrintModule (prop-less, import the stores/actions they use; RFC-0009 P8). Library:
 │   │                        CatalogRail, LibraryGrid/GridCell, LibraryToolbar, LibraryFilterBar, LibraryImageViewer,
 │   │                        LibraryCompareView, LibrarySurveyView, LibraryHistogram, MetadataPanel. Develop:
 │   │                        DevelopCanvas (WebGPU), DevelopPanel, DevelopInfoBar, Filmstrip, Histogram,

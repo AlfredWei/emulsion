@@ -32,6 +32,8 @@
   import { importFlow } from "$lib/state/importFlow.svelte.js";
   import { library } from "$lib/state/library.svelte.js";
   import { selection } from "$lib/state/selection.svelte.js";
+  import { develop } from "$lib/state/develop.svelte.js";
+  import { developView } from "$lib/state/developView.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import {
@@ -43,7 +45,6 @@
     setContact,
     removeImages,
     listAllImageKeywords,
-    updateSmartCollectionRules,
   } from "$lib/api/catalog.js";
   import {
     getEditStack,
@@ -66,7 +67,6 @@
     importPresetFile,
     exportPresetFile,
     regenerateThumbnail,
-    opValue,
     upsertOp,
     resetEditStack,
     listMasks,
@@ -80,47 +80,26 @@
     createColorRangeMask,
     createSpotMask,
     createRedEyeMask,
-    getToneCurvePoints,
     upsertToneCurve,
-    IDENTITY_TONE_CURVE,
     buildToneCurveLut,
     sampleCurveLut,
     insertToneCurvePoint,
-    getHslBands,
     upsertHslBand,
-    IDENTITY_HSL_BANDS,
     nearestHslBand,
-    getSplitToning,
     upsertSplitToningZone,
     upsertSplitToningBalance,
-    IDENTITY_SPLIT_TONING,
     rgbToHsl,
-    getVignette,
     upsertVignette,
-    IDENTITY_VIGNETTE,
-    getGrain,
     upsertGrain,
-    IDENTITY_GRAIN,
-    getSharpen,
     upsertSharpen,
-    IDENTITY_SHARPEN,
-    getLumaNr,
     upsertLumaNr,
-    IDENTITY_LUMA_NR,
-    getColorNr,
     upsertColorNr,
-    IDENTITY_COLOR_NR,
-    getCrop,
     upsertCrop,
     IDENTITY_CROP,
-    getLensCorrection,
     upsertLensCorrection,
     setLensProfile,
-    IDENTITY_LENS_CORRECTION,
     lookupLensProfile,
-    getPerspective,
     upsertPerspective,
-    IDENTITY_PERSPECTIVE,
     computeAutoWhiteBalance,
     computeEyedropperWhiteBalance,
     computeAutoTone,
@@ -128,7 +107,7 @@
     getSoftProofPreview,
   } from "$lib/api/develop.js";
   import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
-  import { largestCenteredCropForRatio, inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
+  import { inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
   import { handleChoosePrintCustomProfile, handlePrint, handleExportPdf } from "$lib/actions/printActions.js";
   import {
@@ -139,14 +118,12 @@
     handleSetFaceExcluded,
     handleCancelFaceDetection,
     refreshCurrentImageFaces,
-    runFaceDetection,
     handleDetectFacesForSelected,
     handleDetectFacesForSelection,
     handleDetectFacesForFolder,
   } from "$lib/actions/faceActions.js";
   import { handleBackupDone, handleBackupSkip } from "$lib/actions/backupActions.js";
   import {
-    loadPersonMembership,
     selectPerson,
     selectAllPhotos,
     selectLastImport,
@@ -179,7 +156,6 @@
     handleRemoveFromCollection,
   } from "$lib/actions/collectionsActions.js";
   import {
-    runImport,
     handleImportFolder,
     handleImportFiles,
     handleDropImport,
@@ -205,46 +181,16 @@
 
   // The Filmstrip shows filtered images, falling back if active Develop photo is excluded
   let developFilmstripImages = $derived(
-    library.filteredImages.some((img) => img.version_id === developVersionId) ? library.filteredImages : library.images,
+    library.filteredImages.some((img) => img.version_id === develop.versionId) ? library.filteredImages : library.images,
   );
 
-
-  let developVersionId = $state(/** @type {number | null} */ (null));
-  let developImagePath = $state("");
-  // M4 Smart Previews: derived, not a second $state var kept manually in
-  // sync with developImagePath -- stays correct automatically as `images`
-  // updates, and there's exactly one place (`openDevelop` below) that ever
-  // needs to change which image is open anyway.
-  let developImageContentHash = $derived(
-    library.images.find((img) => img.version_id === developVersionId)?.content_hash ?? null,
-  );
-  /** @type {import('$lib/api/develop.js').EditStack} */
-  let editStack = $state({ schema_version: 1, ops: [] });
-
-  // History/Undo/Snapshots (M3). `history` is the current version's full
-  // list (oldest first, matching Catalog::get_history's own ORDER BY id
-  // ASC); `historyIndex` is a plain array index into it -- NOT a value
-  // persisted anywhere -- representing "which entry does the live
-  // editStack currently match." -1 means "before the first history
-  // entry" (the version's untouched initial state, before any labeled
-  // edit has ever been recorded). Reset to "newest" on every real edit
-  // and whenever Develop (re)opens for an image; moved directly by
-  // undo/redo/History-panel-click via restoreTo. See flushEditStack's own
-  // doc comment for why no separate cursor concept needs to exist
-  // server-side.
-  let history = $state(/** @type {import('$lib/api/develop.js').HistoryEntry[]} */ ([]));
-  let historyIndex = $state(-1);
-  let snapshots = $state(/** @type {import('$lib/api/develop.js').SnapshotEntry[]} */ ([]));
-  let exposure = $derived(opValue(editStack, "exposure", 0));
-  let contrast = $derived(opValue(editStack, "contrast", 0));
-  let saturation = $derived(opValue(editStack, "saturation", 0));
 
   // M3 Slice 5: local adjustment masks. `activeTool` drives DevelopCanvas's
   // hard-branched pointer routing (mask placement vs. pan/zoom);
   // `selectedMaskId` drives which mask (if any) MaskEditorPanel shows.
   // Both are pure view state, not persisted -- reset whenever Develop is
   // left, matching the same reasoning DevelopCanvas's own zoomMode uses.
-  let masks = $derived(listMasks(editStack));
+  let masks = $derived(listMasks(develop.editStack));
   let activeTool = $state(/** @type {string | null} */ (null));
   let selectedMaskId = $state(/** @type {string | null} */ (null));
   let selectedMask = $derived(masks.find((m) => m.id === selectedMaskId) ?? null);
@@ -282,7 +228,7 @@
   // matching real Lightroom's own \ convention. Deliberately a toggle, not
   // a press-and-hold -- simpler and more reliable to implement correctly,
   // and matches Lightroom's own default behavior for this exact key.
-  let showOriginal = $state(false);
+
   // M4 Slice 3: holding Space temporarily overrides whatever tool is
   // active so the user can pan a zoomed-in view without switching tools --
   // real Photoshop/Lightroom convention. Set by handleGlobalKeydown/
@@ -291,7 +237,7 @@
   // while the key is physically down); also cleared on window blur so an
   // Alt-Tab away mid-hold can't leave this stuck true forever with no
   // keyup ever arriving to clear it.
-  let spacePanning = $state(false);
+
   // Mask UI polish: soft colored overlay for the SELECTED no-geometry mask
   // (brush, luminance range), toggleable via a MaskEditorPanel checkbox or
   // the "O" hotkey. Grouped with the brush TOOL options above, not with
@@ -329,18 +275,9 @@
           : "sRGB",
   );
 
-  // M5 Slice 1: GPU/CPU fallback. `gpuFallbackActive` is reported up by
-  // DevelopCanvas's own `onGpuFallback` callback the moment its WebGPU
-  // device acquisition fails (or, symmetrically, flips back false if a
-  // later image's acquisition succeeds) -- this component never probes
-  // `navigator.gpu` itself. `cpuFallbackPreviewUrl` is populated by the
-  // debounced effect below, same "compute a static preview CPU-side and
-  // hand DevelopCanvas a URL" shape as `softProofPreviewUrl` above, just
-  // driven by GPU availability instead of a proofing toggle.
-  let gpuFallbackActive = $state(false);
-  let cpuFallbackPreviewUrl = $state(/** @type {string | null} */ (null));
+
   function handleGpuFallback(/** @type {boolean} */ active) {
-    gpuFallbackActive = active;
+    develop.gpuFallbackActive = active;
     // A mask/crop tool selected before GPU became unavailable would
     // otherwise linger as "active" while its own panel/handles never
     // render (MaskToolStrip's buttons are disabled going forward, but
@@ -382,8 +319,8 @@
   // preview -- DevelopCanvas falls back to its own live WGSL render then.
   let softProofTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
   $effect(() => {
-    void editStack;
-    const versionId = developVersionId;
+    void develop.editStack;
+    const versionId = develop.versionId;
     const enabled = softProofEnabled;
     const target = softProofTarget;
     const customPath = softProofCustomProfilePath;
@@ -434,26 +371,26 @@
   // slider tick is exactly the cost GPU was chosen to avoid.
   let gpuFallbackTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
   $effect(() => {
-    void editStack;
-    const path = developImagePath;
-    const contentHash = developImageContentHash;
-    const active = gpuFallbackActive;
-    const stack = editStack;
+    void develop.editStack;
+    const path = develop.imagePath;
+    const contentHash = develop.imageContentHash;
+    const active = develop.gpuFallbackActive;
+    const stack = develop.editStack;
 
     if (gpuFallbackTimer) clearTimeout(gpuFallbackTimer);
 
     if (!active || path === null) {
-      cpuFallbackPreviewUrl = null;
+      develop.cpuFallbackPreviewUrl = null;
       return;
     }
 
     gpuFallbackTimer = setTimeout(() => {
       previewEditStack(path, contentHash, stack)
         .then((preview) => {
-          cpuFallbackPreviewUrl = convertFileSrc(preview.path);
+          develop.cpuFallbackPreviewUrl = convertFileSrc(preview.path);
         })
         .catch(() => {
-          cpuFallbackPreviewUrl = null;
+          develop.cpuFallbackPreviewUrl = null;
         });
     }, 250);
 
@@ -510,10 +447,10 @@
     /** @type {string} */ id,
     /** @type {{r: number, g: number, b: number}} */ refColor,
   ) {
-    editStack = updateMask(editStack, id, { refColor });
+    develop.editStack = updateMask(develop.editStack, id, { refColor });
     colorRangeResampleTarget = null;
     activeTool = null;
-    scheduleFlush("Adjust Color Range");
+    develop.scheduleFlush("Adjust Color Range");
   }
 
   // Eyedropper pickers (M3): Tone Curve point-insert, HSL band-identify,
@@ -587,7 +524,7 @@
               : placement.kind === "red_eye"
                 ? createRedEyeMask(placement.center, placement.radiusX, placement.radiusY)
                 : createLinearGradientMask(placement.start, placement.end);
-    editStack = addMask(editStack, mask);
+    develop.editStack = addMask(develop.editStack, mask);
     selectedMaskId = mask.id;
     // Real Lightroom drops back to selection after placing a gradient, but
     // a brush stroke should keep the Brush tool active (painting is
@@ -609,7 +546,7 @@
               : placement.kind === "red_eye"
                 ? "Add Red Eye Correction"
                 : "Add Linear Gradient";
-    scheduleFlush(label);
+    develop.scheduleFlush(label);
   }
 
   // Luminance range has no geometry to place, so it doesn't go through
@@ -618,21 +555,21 @@
   // kind is created on tool-select, no canvas interaction needed).
   function handleCreateLuminanceRangeMask() {
     const mask = createLuminanceRangeMask();
-    editStack = addMask(editStack, mask);
+    develop.editStack = addMask(develop.editStack, mask);
     selectedMaskId = mask.id;
-    scheduleFlush("Add Luminance Range Mask");
+    develop.scheduleFlush("Add Luminance Range Mask");
   }
 
   function handleMaskUpdated(/** @type {string} */ id, /** @type {Record<string, unknown>} */ patch) {
-    editStack = updateMask(editStack, id, patch);
-    scheduleFlush("Edit Mask");
+    develop.editStack = updateMask(develop.editStack, id, patch);
+    develop.scheduleFlush("Edit Mask");
   }
 
   function handleMaskDeleted() {
     if (selectedMaskId === null) return;
-    editStack = removeMask(editStack, selectedMaskId);
+    develop.editStack = removeMask(develop.editStack, selectedMaskId);
     selectedMaskId = null;
-    flushEditStack("Delete Mask");
+    develop.flushEditStack("Delete Mask");
   }
 
   // Develop panel "Reset": reverts every adjustment AND mask on the current
@@ -644,12 +581,12 @@
   let confirmingReset = $state(false);
 
   function handleResetEditStack() {
-    if (developVersionId === null) return;
-    editStack = resetEditStack(editStack);
+    if (develop.versionId === null) return;
+    develop.editStack = resetEditStack(develop.editStack);
     selectedMaskId = null;
     activeTool = null;
     confirmingReset = false;
-    flushEditStack("Reset");
+    develop.flushEditStack("Reset");
   }
 
   // History/Snapshots (M3): naming a new snapshot uses the same generic
@@ -678,7 +615,7 @@
 
   async function handleCreatePresetConfirmed(/** @type {string} */ name) {
     creatingPreset = false;
-    const preset = await createPreset(name, presetEligibleOps(editStack));
+    const preset = await createPreset(name, presetEligibleOps(develop.editStack));
     presets = [...presets, preset];
   }
 
@@ -686,12 +623,12 @@
    * immediate, discrete action (like Reset/mask-delete), not a debounced
    * slider drag -- flushes right away under its own label. */
   async function handleApplyPreset(/** @type {number} */ presetId) {
-    clearPreview();
-    if (developVersionId === null) return;
+    develop.clearPreview();
+    if (develop.versionId === null) return;
     const preset = presets.find((p) => p.id === presetId);
     if (!preset) return;
-    const versionId = developVersionId;
-    editStack = applyPresetOps(editStack, preset.edit_stack);
+    const versionId = develop.versionId;
+    develop.editStack = applyPresetOps(develop.editStack, preset.edit_stack);
     // Same immediate-regen pattern restoreTo/handleRestoreSnapshot already
     // follow -- this is a jump-to-a-different-look commit, not a slider
     // drag, so the Library grid thumbnail shouldn't have to wait for the
@@ -700,7 +637,7 @@
     // own flush/regen pair guards against (regenerateThumbnailFor re-reads
     // the edit stack fresh from the catalog, so it must not race the write
     // it's meant to reflect).
-    await flushEditStack(`Apply Preset: ${preset.name}`);
+    await develop.flushEditStack(`Apply Preset: ${preset.name}`);
     regenerateThumbnailFor(versionId);
   }
 
@@ -783,8 +720,8 @@
       // it now -- otherwise a later flush (window close, switching
       // images) would still hold the stale pre-apply stack and silently
       // overwrite what this batch just wrote.
-      if (developVersionId !== null && targets.includes(developVersionId)) {
-        editStack = await getEditStack(developVersionId);
+      if (develop.versionId !== null && targets.includes(develop.versionId)) {
+        develop.editStack = await getEditStack(develop.versionId);
       }
       shell.notify(`Applied "${preset.name}" to ${targets.length} photo${targets.length === 1 ? "" : "s"}`);
     } catch (/** @type {any} */ e) {
@@ -802,17 +739,17 @@
   // upsert-by-name merge Presets use, so it carries the identical
   // whole-op-replace limitation documented there. Deliberately reuses
   // this machinery rather than inventing a second merge strategy.
-  let copiedSettings = $state(/** @type {import('$lib/api/develop.js').EditStack | null} */ (null));
+
   let copySettingsDialogOpen = $state(false);
 
   function handleCopySettingsRequest() {
-    if (developVersionId === null) return;
+    if (develop.versionId === null) return;
     copySettingsDialogOpen = true;
   }
 
   function handleCopySettingsConfirmed(/** @type {string[]} */ groupIds) {
     copySettingsDialogOpen = false;
-    copiedSettings = copySettingsOps(editStack, groupIds);
+    develop.copiedSettings = copySettingsOps(develop.editStack, groupIds);
     shell.notify("Copied settings");
   }
 
@@ -822,12 +759,12 @@
    * Preset), flushed right away rather than going through the slider
    * debounce. */
   async function handlePasteSettings() {
-    if (!copiedSettings || developVersionId === null) return;
-    const versionId = developVersionId;
-    editStack = applyPresetOps(editStack, copiedSettings);
+    if (!develop.copiedSettings || develop.versionId === null) return;
+    const versionId = develop.versionId;
+    develop.editStack = applyPresetOps(develop.editStack, develop.copiedSettings);
     // Same immediate-regen reasoning (and awaited-first ordering) as
     // handleApplyPreset's own comment.
-    await flushEditStack("Paste Settings");
+    await develop.flushEditStack("Paste Settings");
     regenerateThumbnailFor(versionId);
     shell.notify("Pasted settings");
   }
@@ -844,10 +781,10 @@
    * target, with the same re-sync-if-the-open-Develop-image-was-a-target
    * guard -- rather than inventing a second batch pattern. */
   async function handlePasteSettingsToSelection() {
-    if (!copiedSettings) return;
+    if (!develop.copiedSettings) return;
     const targets = [...selection.selectedIds];
     if (targets.length === 0) return;
-    const settingsToApply = copiedSettings;
+    const settingsToApply = develop.copiedSettings;
     pastingSettingsToSelection = true;
     try {
       await Promise.all(
@@ -859,8 +796,8 @@
           if (path) patchLocal(versionId, { thumbnail_path: path });
         }),
       );
-      if (developVersionId !== null && targets.includes(developVersionId)) {
-        editStack = await getEditStack(developVersionId);
+      if (develop.versionId !== null && targets.includes(develop.versionId)) {
+        develop.editStack = await getEditStack(develop.versionId);
       }
       shell.notify(`Pasted settings to ${targets.length} photo${targets.length === 1 ? "" : "s"}`);
     } catch (/** @type {any} */ e) {
@@ -885,8 +822,8 @@
   // selected Library image (M2 Slice 3 batch export -- the frontend-only
   // follow-up M1 Slice 5's export_batch was explicitly built to accept).
   let currentExportItems = $derived.by(() => {
-    if (shell.activeModule === "develop" && developVersionId !== null) {
-      return [{ path: developImagePath, version_id: developVersionId }];
+    if (shell.activeModule === "develop" && develop.versionId !== null) {
+      return [{ path: develop.imagePath, version_id: develop.versionId }];
     }
     if (selection.selectedImages.length > 0) {
       return selection.selectedImages.map((img) => ({ path: img.path, version_id: img.version_id }));
@@ -896,182 +833,31 @@
   let exportItems = $state(/** @type {{ path: string, version_id: number }[] | null} */ (null));
 
 
-
-  // Persistence is debounced (not written on every slider tick) so a drag
-  // doesn't flood the catalog with writes -- flushed immediately whenever
-  // navigation could otherwise lose the pending change (UX-DESIGN.md §5's
-  // "coalesced/debounced slider events" rule, applied to catalog writes
-  // rather than the WebGPU frame loop).
-  let persistTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
-  // The label for whatever edit is currently sitting behind persistTimer's
-  // debounce -- set by scheduleFlush, consumed (and cleared) by the next
-  // flushEditStack call, whichever call site triggers it (the timer
-  // itself, or an early explicit flush like openDevelop's). Kept as a
-  // module-level variable rather than a flushEditStack parameter so every
-  // existing `await flushEditStack()` call site (switchModule, openDevelop,
-  // Export, window-close) keeps working unchanged: it always means "flush
-  // whatever's actually pending, under whatever label it was scheduled
-  // with -- or nothing, if nothing is pending."
-  let pendingLabel = /** @type {string | null} */ (null);
-  // Tracks an in-flight (already-fired, not-yet-resolved) save separately
-  // from the debounce timer -- a flush can be triggered again (e.g. by the
-  // close handler below) while a previous flush's write is still in
-  // flight, and callers need to be able to wait for *that* too, not just
-  // "is a timer currently pending".
-  let pendingSave = /** @type {Promise<void> | null} */ (null);
-
-  // M2 Slice 2: same shape as pendingSave above, but for the IPTC fields'
-  // save-on-blur writes -- tracked separately since it's a different
-  // in-flight write than the Develop edit stack's, and the close handler
-  // below needs to wait on whichever (or both) are actually pending.
-  let pendingIptcSave = /** @type {Promise<void> | null} */ (null);
-
-  // M1 Slice 6: this used to NOT return setEditStack's promise, so every
-  // `await flushEditStack()` call site (switchModule, openDevelop, Export)
-  // resolved on the next microtask regardless of whether the write had
-  // actually reached Rust/SQLite yet -- silently fire-and-forget. Fixed to
-  // return the real promise; this is the fix the window-close flush below
-  // actually depends on to mean anything.
-  //
-  // Reset-button slice: the write itself used to be gated on
-  // `persistTimer !== null` -- correct for every slider-driven caller
-  // (handleAdjustmentChange etc. always set persistTimer right before a
-  // later flush), but a REAL bug for handleMaskDeleted and
-  // handleResetEditStack below, which mutate `editStack` directly and call
-  // this expecting an immediate write: since neither ever sets
-  // persistTimer first, the old gate silently skipped the write entirely.
-  // Verified empirically (a mask deletion's own persist was being silently
-  // dropped -- the mask would incorrectly reappear after a full quit and
-  // reopen, since the catalog was never actually updated). Fixed by always
-  // writing whenever a develop image is open, regardless of whether a
-  // timer happened to be pending -- harmless when nothing changed (an
-  // idempotent re-write of the same stack), correct when something did.
-  // History/Undo/Snapshots (M3): `label` is the human-readable name for
-  // whatever edit is being flushed IMMEDIATELY (mask delete, Reset --
-  // callers that never go through scheduleFlush's debounce at all).
-  // Everything else (the setTimeout(flushEditStack, 250) debounce settle,
-  // and every "flush whatever's pending before doing X" call site below)
-  // omits it, falling back to `pendingLabel` -- whatever scheduleFlush
-  // last recorded, or null if nothing is actually pending, in which case
-  // this is the same harmless idempotent no-op-content rewrite it always
-  // was. Only a truthy label ever moves `historyIndex` -- a no-op flush
-  // must never disturb the undo cursor.
-  function flushEditStack(/** @type {string=} */ label) {
-    if (persistTimer !== null) {
-      clearTimeout(persistTimer);
-      persistTimer = null;
-    }
-    const effectiveLabel = label ?? pendingLabel;
-    pendingLabel = null;
-    if (developVersionId !== null) {
-      const versionId = developVersionId;
-      const stack = editStack;
-      pendingSave = setEditStack(versionId, stack, effectiveLabel ?? undefined)
-        .then((freshHistory) => {
-          history = freshHistory;
-          if (effectiveLabel) historyIndex = freshHistory.length - 1;
-        })
-        .finally(() => {
-          pendingSave = null;
-        });
-    }
-    return pendingSave ?? Promise.resolve();
-  }
-
-  /** Schedules a debounced, LABELED flush -- the replacement for every
-   * former `if (persistTimer) clearTimeout(persistTimer); persistTimer =
-   * setTimeout(flushEditStack, 250);` call site. Records `label` for
-   * flushEditStack to pick up whenever it actually fires (the debounce
-   * settling, or an earlier explicit flush elsewhere pre-empting it). */
-  function scheduleFlush(/** @type {string} */ label) {
-    pendingLabel = label;
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flushEditStack, 250);
-  }
-
-  // Undo is disabled at historyIndex 0 (the version's oldest-ever labeled
-  // edit) -- there's no history row representing "before the first edit"
-  // to restore TO (edit_history only ever gains a row once a real edit
-  // happens; the version's original untouched state is never itself
-  // stored as one). A named, accepted scope cut, not a bug: the very
-  // first edit ever made to a photo simply can't be undone via Ctrl+Z,
-  // matching this session's "mid-drag undo guard" precedent of a
-  // documented limitation over unrequested complexity (a synthetic
-  // "Import" seed row, which real Lightroom itself uses for exactly this
-  // reason -- deliberately out of scope here).
-  let canUndo = $derived(historyIndex > 0);
-  let canRedo = $derived(historyIndex < history.length - 1);
-
-  // History/Snapshot/Preset hover-preview (M4.5): a small rendered
-  // thumbnail in the rail's own preview box, NOT a swap of the live
-  // `editStack` -- an earlier version of this feature did swap `editStack`
-  // (reusing DevelopCanvas's existing reactive WebGPU render for free),
-  // but that meant every hover drove the full interactive canvas pipeline,
-  // the same cost as a real edit, just to preview one. This instead
-  // reuses the existing CPU-rendered "graded" preview tier
-  // (`preview_cache::ensure_graded_preview_for_hash`, the same one
-  // Library's Loupe view already uses) at draft resolution, cached by
-  // content hash + stack hash -- cheap after the first hover of any given
-  // entry, and never touches the main canvas at all. `previewToken`
-  // invalidates a still-in-flight render once the user has moved to a
-  // different row (or left) before it resolves; debounced so quickly
-  // scanning across rows doesn't fire one render per row passed over.
-  let previewUrl = $state(/** @type {string | null} */ (null));
-  let previewToken = 0;
-  let previewDebounceTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
-
-  /** mouseleave handler, AND the first thing every real commit path
-   * (restoreTo, handleRestoreSnapshot, handleApplyPreset) calls -- a click
-   * can land before a stray mouseleave fires, and the stale preview
-   * thumbnail should disappear the instant the click actually commits,
-   * not linger until the pointer happens to leave. */
-  function clearPreview() {
-    previewToken++;
-    if (previewDebounceTimer !== null) {
-      clearTimeout(previewDebounceTimer);
-      previewDebounceTimer = null;
-    }
-    previewUrl = null;
-  }
-
-  function schedulePreview(/** @type {() => Promise<import('$lib/api/develop.js').DevelopPreviewInfo>} */ fetchPreview) {
-    if (developImagePath === null) return;
-    const token = ++previewToken;
-    if (previewDebounceTimer !== null) clearTimeout(previewDebounceTimer);
-    previewDebounceTimer = setTimeout(() => {
-      fetchPreview()
-        .then((info) => {
-          if (token === previewToken) previewUrl = convertFileSrc(info.path);
-        })
-        .catch(() => {});
-    }, 120);
-  }
-
   function handlePeekHistory(/** @type {number} */ index) {
-    if (developVersionId === null || developImagePath === null || index < 0 || index >= history.length) return;
-    const versionId = developVersionId;
-    const entryId = history[index].id;
-    const path = developImagePath;
-    const contentHash = developImageContentHash;
-    schedulePreview(() => previewHistoryEntry(versionId, entryId, path, contentHash));
+    if (develop.versionId === null || develop.imagePath === null || index < 0 || index >= develop.history.length) return;
+    const versionId = develop.versionId;
+    const entryId = develop.history[index].id;
+    const path = develop.imagePath;
+    const contentHash = develop.imageContentHash;
+    develop.schedulePreview(() => previewHistoryEntry(versionId, entryId, path, contentHash));
   }
 
   function handlePeekSnapshot(/** @type {number} */ snapshotId) {
-    if (developVersionId === null || developImagePath === null) return;
-    const versionId = developVersionId;
-    const path = developImagePath;
-    const contentHash = developImageContentHash;
-    schedulePreview(() => previewSnapshot(versionId, snapshotId, path, contentHash));
+    if (develop.versionId === null || develop.imagePath === null) return;
+    const versionId = develop.versionId;
+    const path = develop.imagePath;
+    const contentHash = develop.imageContentHash;
+    develop.schedulePreview(() => previewSnapshot(versionId, snapshotId, path, contentHash));
   }
 
   function handlePeekPreset(/** @type {number} */ presetId) {
-    if (developImagePath === null) return;
+    if (develop.imagePath === null) return;
     const preset = presets.find((p) => p.id === presetId);
     if (!preset) return;
-    const mergedStack = applyPresetOps(editStack, preset.edit_stack);
-    const path = developImagePath;
-    const contentHash = developImageContentHash;
-    schedulePreview(() => previewEditStack(path, contentHash, mergedStack));
+    const mergedStack = applyPresetOps(develop.editStack, preset.edit_stack);
+    const path = develop.imagePath;
+    const contentHash = develop.imageContentHash;
+    develop.schedulePreview(() => previewEditStack(path, contentHash, mergedStack));
   }
 
   /** Moves the live edit stack to `history[index]` -- undo, redo, and a
@@ -1079,42 +865,39 @@
    * different `index`. See `history`/`historyIndex`'s own doc comment for
    * why this needs no server-side cursor concept at all. */
   async function restoreTo(/** @type {number} */ index) {
-    clearPreview();
-    if (developVersionId === null || index < 0 || index >= history.length) return;
-    const versionId = developVersionId;
-    const entryId = history[index].id;
+    develop.clearPreview();
+    if (develop.versionId === null || index < 0 || index >= develop.history.length) return;
+    const versionId = develop.versionId;
+    const entryId = develop.history[index].id;
     // A restore overwrites editStack wholesale -- cancel any debounced
     // write still pending first, or it could fire afterward under a now-
     // stale label and silently stomp the just-restored state.
-    if (persistTimer !== null) {
-      clearTimeout(persistTimer);
-      persistTimer = null;
-    }
-    pendingLabel = null;
-    editStack = await restoreHistoryEntry(versionId, entryId);
-    historyIndex = index;
+    develop.cancelScheduledFlush();
+    develop.discardPendingLabel();
+    develop.editStack = await restoreHistoryEntry(versionId, entryId);
+    develop.historyIndex = index;
     selectedMaskId = null;
     activeTool = null;
     regenerateThumbnailFor(versionId);
   }
 
   function handleUndo() {
-    if (canUndo) restoreTo(historyIndex - 1);
+    if (develop.canUndo) restoreTo(develop.historyIndex - 1);
   }
 
   function handleRedo() {
-    if (canRedo) restoreTo(historyIndex + 1);
+    if (develop.canRedo) restoreTo(develop.historyIndex + 1);
   }
 
   /** Creates a named save point from whatever's CURRENTLY on screen --
    * flushes any pending debounced edit first so the snapshot never misses
    * the last slider tick. */
   async function handleCreateSnapshot(/** @type {string} */ name) {
-    if (developVersionId === null) return;
-    await flushEditStack();
-    const versionId = developVersionId;
+    if (develop.versionId === null) return;
+    await develop.flushEditStack();
+    const versionId = develop.versionId;
     const snapshot = await addSnapshot(versionId, name);
-    snapshots = [...snapshots, snapshot];
+    develop.snapshots = [...develop.snapshots, snapshot];
   }
 
   /** Unlike restoreTo/restoreHistoryEntry, restoring a snapshot IS a new,
@@ -1123,27 +906,24 @@
    * "Restore Snapshot: {name}" row, so this jumps historyIndex straight
    * to newest rather than searching for that row's position. */
   async function handleRestoreSnapshot(/** @type {number} */ snapshotId) {
-    clearPreview();
-    if (developVersionId === null) return;
-    const versionId = developVersionId;
-    if (persistTimer !== null) {
-      clearTimeout(persistTimer);
-      persistTimer = null;
-    }
-    pendingLabel = null;
+    develop.clearPreview();
+    if (develop.versionId === null) return;
+    const versionId = develop.versionId;
+    develop.cancelScheduledFlush();
+    develop.discardPendingLabel();
     const [stack, freshHistory] = await restoreSnapshot(versionId, snapshotId);
-    editStack = stack;
-    history = freshHistory;
-    historyIndex = freshHistory.length - 1;
+    develop.editStack = stack;
+    develop.history = freshHistory;
+    develop.historyIndex = freshHistory.length - 1;
     selectedMaskId = null;
     activeTool = null;
     regenerateThumbnailFor(versionId);
   }
 
   async function handleDeleteSnapshot(/** @type {number} */ snapshotId) {
-    if (developVersionId === null) return;
-    await deleteSnapshot(developVersionId, snapshotId);
-    snapshots = snapshots.filter((s) => s.id !== snapshotId);
+    if (develop.versionId === null) return;
+    await deleteSnapshot(develop.versionId, snapshotId);
+    develop.snapshots = develop.snapshots.filter((s) => s.id !== snapshotId);
   }
 
 
@@ -1262,17 +1042,12 @@
     // otherwise the develop branch keeps rendering a deleted image, and a
     // pending debounced edit-stack save would fire a pointless IPC call
     // against the deleted version.
-    if (developVersionId !== null && removedVersionIds.has(developVersionId)) {
-      if (persistTimer !== null) {
-        clearTimeout(persistTimer);
-        persistTimer = null;
-      }
-      developVersionId = null;
-      developImagePath = "";
+    if (develop.versionId !== null && removedVersionIds.has(develop.versionId)) {
+      develop.cancelScheduledFlush();
+      develop.versionId = null;
+      develop.imagePath = "";
     }
   }
-
-
 
 
   // Everything the keyboard and menu handlers (lib/keyboard.js, lib/menuActions.js) read or
@@ -1383,16 +1158,16 @@
       showMaskOverlay = value;
     },
     get showOriginal() {
-      return showOriginal;
+      return develop.showOriginal;
     },
     set showOriginal(value) {
-      showOriginal = value;
+      develop.showOriginal = value;
     },
     get spacePanning() {
-      return spacePanning;
+      return develop.spacePanning;
     },
     set spacePanning(value) {
-      spacePanning = value;
+      develop.spacePanning = value;
     },
     switchModule,
   };
@@ -1407,23 +1182,17 @@
   // does for the Develop edit stack.
   function handleCaptionChange(/** @type {number} */ versionId, /** @type {string} */ caption) {
     patchLocal(versionId, { caption });
-    pendingIptcSave = setCaption(versionId, caption).finally(() => {
-      pendingIptcSave = null;
-    });
+    develop.trackIptcSave(setCaption(versionId, caption));
   }
 
   function handleCopyrightChange(/** @type {number} */ imageId, /** @type {string} */ copyright) {
     library.images = library.images.map((img) => (img.image_id === imageId ? { ...img, copyright } : img));
-    pendingIptcSave = setCopyright(imageId, copyright).finally(() => {
-      pendingIptcSave = null;
-    });
+    develop.trackIptcSave(setCopyright(imageId, copyright));
   }
 
   function handleContactChange(/** @type {number} */ imageId, /** @type {string} */ contact) {
     library.images = library.images.map((img) => (img.image_id === imageId ? { ...img, contact } : img));
-    pendingIptcSave = setContact(imageId, contact).finally(() => {
-      pendingIptcSave = null;
-    });
+    develop.trackIptcSave(setContact(imageId, contact));
   }
 
   async function openDevelop(/** @type {number} */ versionId) {
@@ -1433,7 +1202,7 @@
     // through several images in quick succession (each flush/regen closes
     // over the id it actually applies to, not whatever developVersionId
     // happens to be by the time the async work runs).
-    const previousVersionId = developVersionId;
+    const previousVersionId = develop.versionId;
     // Awaited -- regenerate_thumbnail's own Rust command re-reads the edit
     // stack fresh from the catalog rather than trusting a client-supplied
     // one (see lib.rs's own doc comment on that command), which means it
@@ -1450,20 +1219,20 @@
     // "unawaited dependent write" bug this project already found and
     // fixed once this session (flushEditStack's own now-removed
     // persistTimer gate) -- worth closing on that precedent alone.
-    await flushEditStack();
+    await develop.flushEditStack();
     regenerateThumbnailFor(previousVersionId);
     const image = library.images.find((img) => img.version_id === versionId);
     if (!image) return;
     prioritizeThumbnail(versionId);
-    developVersionId = versionId;
-    developImagePath = image.path;
+    develop.versionId = versionId;
+    develop.imagePath = image.path;
     // Cleared, not left stale, on every open -- the new image's own real
     // histogram arrives shortly via DevelopCanvas's own GPU readback, but
     // showing the PREVIOUS image's histogram in the meantime would be
     // actively misleading, not just momentarily stale.
-    histogramData = null;
-    hoverPixel = null;
-    showClippingOverlay = false;
+    develop.histogramData = null;
+    develop.hoverPixel = null;
+    develop.showClippingOverlay = false;
     // History/Snapshots (M3): re-fetched fresh on every open, not carried
     // over from whatever the previous image's panel showed -- switching
     // images via the filmstrip must never leave a stale History/Snapshots
@@ -1473,10 +1242,10 @@
       getHistory(versionId),
       getSnapshots(versionId),
     ]);
-    editStack = stack;
-    history = freshHistory;
-    historyIndex = freshHistory.length - 1;
-    snapshots = freshSnapshots;
+    develop.editStack = stack;
+    develop.history = freshHistory;
+    develop.historyIndex = freshHistory.length - 1;
+    develop.snapshots = freshSnapshots;
     activeTool = null;
     selectedMaskId = null;
     shell.activeModule = "develop";
@@ -1499,9 +1268,9 @@
       focalLength: image.focal_length,
       aperture: image.aperture,
     });
-    if (developVersionId === versionId && JSON.stringify(profile) !== JSON.stringify(lensCorrection.profile)) {
-      editStack = setLensProfile(editStack, profile);
-      flushEditStack();
+    if (develop.versionId === versionId && JSON.stringify(profile) !== JSON.stringify(developView.lensCorrection.profile)) {
+      develop.editStack = setLensProfile(develop.editStack, profile);
+      develop.flushEditStack();
     }
   }
 
@@ -1510,8 +1279,8 @@
       // Awaited -- same unawaited-dependent-IPC-calls hazard openDevelop's
       // own flush/regen pair guards against, see that function's own doc
       // comment.
-      await flushEditStack();
-      regenerateThumbnailFor(developVersionId);
+      await develop.flushEditStack();
+      regenerateThumbnailFor(develop.versionId);
       activeTool = null;
       selectedMaskId = null;
     }
@@ -1550,57 +1319,51 @@
   });
 
   function handleAdjustmentChange(/** @type {string} */ opName, /** @type {number} */ value) {
-    editStack = upsertOp(editStack, opName, value);
-    scheduleFlush(ADJUSTMENT_LABELS[opName] ?? opName);
+    develop.editStack = upsertOp(develop.editStack, opName, value);
+    develop.scheduleFlush(ADJUSTMENT_LABELS[opName] ?? opName);
   }
 
-  let temperature = $derived(opValue(editStack, "temperature", 0));
-  let tint = $derived(opValue(editStack, "tint", 0));
-  let highlights = $derived(opValue(editStack, "highlights", 0));
-  let shadows = $derived(opValue(editStack, "shadows", 0));
-  let whites = $derived(opValue(editStack, "whites", 0));
-  let blacks = $derived(opValue(editStack, "blacks", 0));
 
   // Tone Curve (M3): a global-only adjustment (applied after exposure/
   // contrast/saturation, before any mask -- see develop_engine.rs/
   // DevelopCanvas.svelte's shared ordering comment), but its payload is a
   // structured `points` array, not upsertOp's single scalar -- same
   // reason masks needed their own dedicated handler shape.
-  let toneCurvePoints = $derived(getToneCurvePoints(editStack, IDENTITY_TONE_CURVE));
+
 
   function handleToneCurveChange(/** @type {readonly {x: number, y: number}[]} */ points) {
-    editStack = upsertToneCurve(editStack, points);
-    scheduleFlush("Tone Curve");
+    develop.editStack = upsertToneCurve(develop.editStack, points);
+    develop.scheduleFlush("Tone Curve");
   }
 
   // HSL / Color Mixer (M3): same global-only, structured-payload shape as
   // Tone Curve above -- band-keyed, not upsertOp's single scalar.
-  let hslBands = $derived(getHslBands(editStack, IDENTITY_HSL_BANDS));
+
 
   function handleHslBandChange(
     /** @type {string} */ bandName,
     /** @type {Partial<{hue: number, saturation: number, luminance: number}>} */ patch,
   ) {
-    editStack = upsertHslBand(editStack, bandName, patch);
-    scheduleFlush("HSL / Color Mixer");
+    develop.editStack = upsertHslBand(develop.editStack, bandName, patch);
+    develop.scheduleFlush("HSL / Color Mixer");
   }
 
   // Split Toning (M3): same global-only shape as Tone Curve/HSL above, but
   // nested per-zone -- a per-zone UI control patches just that zone's
   // hue/saturation, leaving the other zone and balance untouched.
-  let splitToning = $derived(getSplitToning(editStack, IDENTITY_SPLIT_TONING));
+
 
   function handleSplitToningZoneChange(
     /** @type {"shadows" | "highlights"} */ zone,
     /** @type {Partial<{hue: number, saturation: number}>} */ patch,
   ) {
-    editStack = upsertSplitToningZone(editStack, zone, patch);
-    scheduleFlush("Split Toning");
+    develop.editStack = upsertSplitToningZone(develop.editStack, zone, patch);
+    develop.scheduleFlush("Split Toning");
   }
 
   function handleSplitToningBalanceChange(/** @type {number} */ balance) {
-    editStack = upsertSplitToningBalance(editStack, balance);
-    scheduleFlush("Split Toning");
+    develop.editStack = upsertSplitToningBalance(develop.editStack, balance);
+    develop.scheduleFlush("Split Toning");
   }
 
   // Dehaze (M3): a single global scalar op (dark-channel-prior haze
@@ -1608,24 +1371,23 @@
   // reuses opValue/upsertOp/handleAdjustmentChange directly rather than a
   // dedicated getter/handler pair, since there's nothing structured about
   // its payload the generic single-scalar op model doesn't already cover.
-  let dehaze = $derived(opValue(editStack, "dehaze", 0));
+
 
   // Texture & Clarity (M3): same generic single-scalar op model as Dehaze
   // above -- -100..100, no dedicated getter/handler pair needed.
-  let texture = $derived(opValue(editStack, "texture", 0));
-  let clarity = $derived(opValue(editStack, "clarity", 0));
+
 
   // Vignette (M3): a structured 3-field payload (amount/midpoint/feather)
   // -- same getSplitToning/upsertX shape Split Toning already established
   // for a global-only, non-single-scalar op, not the generic opValue
   // model Texture/Clarity/Dehaze use.
-  let vignette = $derived(getVignette(editStack, IDENTITY_VIGNETTE));
+
 
   function handleVignetteChange(
     /** @type {Partial<{amount: number, midpoint: number, feather: number}>} */ patch,
   ) {
-    editStack = upsertVignette(editStack, patch);
-    scheduleFlush("Vignette");
+    develop.editStack = upsertVignette(develop.editStack, patch);
+    develop.scheduleFlush("Vignette");
   }
 
   // Lens Corrections (M3): same structured, own-getter/handler shape as
@@ -1633,70 +1395,68 @@
   // called from openDevelop) -- see develop.js's own doc comment on
   // `setLensProfile` for why that's not a user-facing "change" at all,
   // and doesn't go through this handler or scheduleFlush's history label.
-  let lensCorrection = $derived(getLensCorrection(editStack, IDENTITY_LENS_CORRECTION));
+
 
   function handleLensCorrectionChange(
     /** @type {Partial<{profile_enabled: boolean, distortion_amount: number, vignette_amount: number, ca_amount: number, manual_distortion: number, manual_ca: number}>} */ patch,
   ) {
-    editStack = upsertLensCorrection(editStack, patch);
-    scheduleFlush("Lens Corrections");
+    develop.editStack = upsertLensCorrection(develop.editStack, patch);
+    develop.scheduleFlush("Lens Corrections");
   }
 
   // Perspective Correction (M4): same structured, own-getter/handler shape
   // as Lens Corrections/Vignette above.
-  let perspective = $derived(getPerspective(editStack, IDENTITY_PERSPECTIVE));
+
 
   function handlePerspectiveChange(
     /** @type {Partial<{vertical: number, horizontal: number, rotate: number, aspect: number, scale: number}>} */ patch,
   ) {
-    editStack = upsertPerspective(editStack, patch);
-    scheduleFlush("Perspective");
+    develop.editStack = upsertPerspective(develop.editStack, patch);
+    develop.scheduleFlush("Perspective");
   }
 
   // Grain (M3): same structured, own-getter/handler shape as Vignette
   // above.
-  let grain = $derived(getGrain(editStack, IDENTITY_GRAIN));
+
 
   function handleGrainChange(
     /** @type {Partial<{amount: number, size: number, roughness: number}>} */ patch,
   ) {
-    editStack = upsertGrain(editStack, patch);
-    scheduleFlush("Grain");
+    develop.editStack = upsertGrain(develop.editStack, patch);
+    develop.scheduleFlush("Grain");
   }
 
   // Sharpening / Noise Reduction (M3): same structured, own-getter/
   // handler shape as Vignette/Grain above -- three independent ops.
-  let sharpen = $derived(getSharpen(editStack, IDENTITY_SHARPEN));
+
 
   function handleSharpenChange(
     /** @type {Partial<{amount: number, radius: number, detail: number, masking: number}>} */ patch,
   ) {
-    editStack = upsertSharpen(editStack, patch);
-    scheduleFlush("Sharpening");
+    develop.editStack = upsertSharpen(develop.editStack, patch);
+    develop.scheduleFlush("Sharpening");
   }
 
-  let lumaNR = $derived(getLumaNr(editStack, IDENTITY_LUMA_NR));
 
   function handleLumaNRChange(
     /** @type {Partial<{amount: number, detail: number, contrast: number}>} */ patch,
   ) {
-    editStack = upsertLumaNr(editStack, patch);
-    scheduleFlush("Luminance Noise Reduction");
+    develop.editStack = upsertLumaNr(develop.editStack, patch);
+    develop.scheduleFlush("Luminance Noise Reduction");
   }
 
-  let colorNR = $derived(getColorNr(editStack, IDENTITY_COLOR_NR));
 
   function handleColorNRChange(
     /** @type {Partial<{amount: number, detail: number}>} */ patch,
   ) {
-    editStack = upsertColorNr(editStack, patch);
-    scheduleFlush("Color Noise Reduction");
+    develop.editStack = upsertColorNr(develop.editStack, patch);
+    develop.scheduleFlush("Color Noise Reduction");
   }
 
   // Crop & Straighten (M3): same structured, own-getter/handler shape as
   // every other multi-field op above -- see develop_engine.rs's own
   // `apply_crop` doc comment for why this one has no WGSL/uniform twin.
-  let crop = $derived(getCrop(editStack, IDENTITY_CROP));
+
 
   /** Ordinary field patches (drag/resize handles) pass through unchanged.
    * An ANGLE-only patch (the straighten slider, see `onCropAngleChange`
@@ -1710,9 +1470,9 @@
     /** @type {Partial<{x: number, y: number, width: number, height: number, angle: number}>} */ patch,
   ) {
     let next = patch;
-    if (typeof patch.angle === "number" && patch.angle !== crop.angle && crop.width > 0 && crop.height > 0) {
-      const pixelRatio = sourceWidth > 0 && sourceHeight > 0 ? (crop.width * sourceWidth) / (crop.height * sourceHeight) : null;
-      const inscribed = pixelRatio ? inscribedCropForAngle(pixelRatio, sourceWidth, sourceHeight, patch.angle) : null;
+    if (typeof patch.angle === "number" && patch.angle !== developView.crop.angle && developView.crop.width > 0 && developView.crop.height > 0) {
+      const pixelRatio = develop.sourceWidth > 0 && develop.sourceHeight > 0 ? (developView.crop.width * develop.sourceWidth) / (developView.crop.height * develop.sourceHeight) : null;
+      const inscribed = pixelRatio ? inscribedCropForAngle(pixelRatio, develop.sourceWidth, develop.sourceHeight, patch.angle) : null;
       if (inscribed) next = { ...inscribed, angle: patch.angle };
     }
     // Last-resort guard against ever committing a rect that exposes the
@@ -1722,38 +1482,18 @@
     // handleCropChange, e.g. a future one that doesn't go through that
     // drag code at all). Falls back to the full merged rect against
     // `crop`, since `next` may be a partial patch.
-    const merged = { x: crop.x, y: crop.y, width: crop.width, height: crop.height, angle: crop.angle, ...next };
-    if (sourceWidth > 0 && sourceHeight > 0 && !cropRectFitsRotatedBounds(merged, sourceWidth, sourceHeight, merged.angle)) {
+    const merged = { x: developView.crop.x, y: developView.crop.y, width: developView.crop.width, height: developView.crop.height, angle: developView.crop.angle, ...next };
+    if (develop.sourceWidth > 0 && develop.sourceHeight > 0 && !cropRectFitsRotatedBounds(merged, develop.sourceWidth, develop.sourceHeight, merged.angle)) {
       return;
     }
-    editStack = upsertCrop(editStack, next);
-    scheduleFlush("Crop");
+    develop.editStack = upsertCrop(develop.editStack, next);
+    develop.scheduleFlush("Crop");
   }
 
-  // Aspect-ratio lock: UI-only, NOT persisted to the edit stack (real
-  // Lightroom's own crop ratio lock is a tool-state preference, not part
-  // of the photo's own edit history) -- shared between DevelopCanvas.svelte
-  // (corner-handle drag math) and MaskToolStrip.svelte (the preset
-  // buttons' own active-state display), so it has to live here, their
-  // nearest common ancestor.
-  let cropAspectLock = $state(/** @type {number | null} */ (null));
 
-  // The crop rect (crop.x/y/width/height) lives in NORMALIZED space --
-  // fractions of the source image's own width/height, which are generally
-  // NOT equal. A preset ratio like 1 (1:1) or 16/9 describes a PIXEL
-  // aspect ratio, so it has to be corrected by the image's own native
-  // aspect ratio before it's usable as a normalized width:height target --
-  // otherwise "1:1" only looks square in normalized space, which is a
-  // real square only when the source image itself happens to be square.
-  // DevelopCanvas.svelte already tracks the decoded bitmap's pixel
-  // dimensions (it needs them for the committed-crop CSS preview's own
-  // `aspect-ratio` style); it reports them up here via onSourceDimensions
-  // since this preset math needs them too.
-  let sourceWidth = $state(0);
-  let sourceHeight = $state(0);
   function handleSourceDimensions(/** @type {number} */ width, /** @type {number} */ height) {
-    sourceWidth = width;
-    sourceHeight = height;
+    develop.sourceWidth = width;
+    develop.sourceHeight = height;
   }
 
   // Develop histogram: fed live from DevelopCanvas's own GPU readback
@@ -1762,26 +1502,26 @@
   // actual graded pixel values (masks, curves, every spatial op) aren't
   // reproducible from JS-side state alone; DevelopCanvas is the only
   // place that ever sees the real rendered output.
-  let histogramData = $state(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array} | null} */ (null));
+
   function handleHistogramUpdate(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array}} */ data) {
-    histogramData = data;
+    develop.histogramData = data;
   }
 
   // Histogram clipping-overlay toggle: purely a display preference (not
   // part of the edit stack), reset on openDevelop like histogramData
   // itself since it's meaningless outside a Develop session.
-  let showClippingOverlay = $state(false);
+
   function handleToggleClippingOverlay() {
-    showClippingOverlay = !showClippingOverlay;
+    develop.showClippingOverlay = !develop.showClippingOverlay;
   }
 
   // Histogram "value under cursor" readout, fed live from DevelopCanvas's
   // own pointer handling (see reportHoverPixel there) -- same
   // GPU-readback-can't-be-reproduced-from-JS-state reasoning as
   // histogramData above.
-  let hoverPixel = $state(/** @type {{r: number, g: number, b: number} | null} */ (null));
+
   function handleHoverPixel(/** @type {{r: number, g: number, b: number} | null} */ rgb) {
-    hoverPixel = rgb;
+    develop.hoverPixel = rgb;
   }
 
   /** Reshapes the crop rect to the given PIXEL aspect ratio: the largest
@@ -1796,15 +1536,15 @@
    * clicking the same preset twice in a row is always a no-op. `null`
    * just unlocks without reshaping anything ("Free"). */
   function handleCropAspectPreset(/** @type {number | null} */ ratio) {
-    cropAspectLock = ratio;
+    develop.cropAspectLock = ratio;
     if (ratio === null) return;
-    const next = inscribedCropForAngle(ratio, sourceWidth, sourceHeight, crop.angle);
+    const next = inscribedCropForAngle(ratio, develop.sourceWidth, develop.sourceHeight, developView.crop.angle);
     if (!next) return;
-    handleCropChange({ ...next, angle: crop.angle });
+    handleCropChange({ ...next, angle: developView.crop.angle });
   }
 
   function handleCropReset() {
-    cropAspectLock = null;
+    develop.cropAspectLock = null;
     handleCropChange(IDENTITY_CROP);
   }
 
@@ -1815,7 +1555,7 @@
   // set of DOM listeners across the panel). Same fixed-timeout-reset-on-
   // retrigger idiom as persistTimer's own debounce, just for UI feedback
   // instead of persistence.
-  let highlightedHslBand = $state(/** @type {string | null} */ (null));
+
   let hslBandHighlightTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
 
   /** Commit path for all four eyedropper destinations -- see
@@ -1831,24 +1571,24 @@
 
     if (target === "split_toning_shadows" || target === "split_toning_highlights") {
       const zone = target === "split_toning_shadows" ? "shadows" : "highlights";
-      editStack = upsertSplitToningZone(editStack, zone, { hue: h, saturation: s * 100 });
-      scheduleFlush("Split Toning");
+      develop.editStack = upsertSplitToningZone(develop.editStack, zone, { hue: h, saturation: s * 100 });
+      develop.scheduleFlush("Split Toning");
       return;
     }
     if (target === "hsl_band") {
       // Navigation only -- deliberately no editStack write, no persist.
       // HSL's own sliders are relative hue/sat/lum shifts, not an absolute
       // color a sampled pixel could set; this just finds "which band".
-      highlightedHslBand = nearestHslBand(h);
+      develop.highlightedHslBand = nearestHslBand(h);
       if (hslBandHighlightTimer) clearTimeout(hslBandHighlightTimer);
-      hslBandHighlightTimer = setTimeout(() => (highlightedHslBand = null), 1500);
+      hslBandHighlightTimer = setTimeout(() => (develop.highlightedHslBand = null), 1500);
       return;
     }
     if (target === "white_balance") {
       const { temperature, tint } = computeEyedropperWhiteBalance(color);
-      editStack = upsertOp(editStack, "temperature", temperature);
-      editStack = upsertOp(editStack, "tint", tint);
-      scheduleFlush("White Balance Eyedropper");
+      develop.editStack = upsertOp(develop.editStack, "temperature", temperature);
+      develop.editStack = upsertOp(develop.editStack, "tint", tint);
+      develop.scheduleFlush("White Balance Eyedropper");
       return;
     }
     if (target === "tone_curve_point") {
@@ -1864,36 +1604,36 @@
       // y is seeded at the curve's OWN current value at that x, so
       // insertion alone never changes the curve's visible shape until the
       // new point is dragged.
-      const y = sampleCurveLut(buildToneCurveLut(toneCurvePoints), l);
-      const next = insertToneCurvePoint(toneCurvePoints, l, y);
-      if (next !== toneCurvePoints) {
-        editStack = upsertToneCurve(editStack, next);
-        scheduleFlush("Tone Curve");
+      const y = sampleCurveLut(buildToneCurveLut(developView.toneCurvePoints), l);
+      const next = insertToneCurvePoint(developView.toneCurvePoints, l, y);
+      if (next !== developView.toneCurvePoints) {
+        develop.editStack = upsertToneCurve(develop.editStack, next);
+        develop.scheduleFlush("Tone Curve");
       }
     }
   }
 
   function handleAutoWhiteBalance() {
     let avgRgb = { r: 0.5, g: 0.5, b: 0.5 };
-    if (histogramData) {
+    if (develop.histogramData) {
       let rSum = 0,
         gSum = 0,
         bSum = 0,
         count = 0;
       for (let i = 0; i < 256; i++) {
-        rSum += histogramData.r[i] * (i / 255);
-        gSum += histogramData.g[i] * (i / 255);
-        bSum += histogramData.b[i] * (i / 255);
-        count += histogramData.r[i];
+        rSum += develop.histogramData.r[i] * (i / 255);
+        gSum += develop.histogramData.g[i] * (i / 255);
+        bSum += develop.histogramData.b[i] * (i / 255);
+        count += develop.histogramData.r[i];
       }
       if (count > 0) {
         avgRgb = { r: rSum / count, g: gSum / count, b: bSum / count };
       }
     }
     const { temperature, tint } = computeAutoWhiteBalance(avgRgb);
-    editStack = upsertOp(editStack, "temperature", temperature);
-    editStack = upsertOp(editStack, "tint", tint);
-    scheduleFlush("Auto White Balance");
+    develop.editStack = upsertOp(develop.editStack, "temperature", temperature);
+    develop.editStack = upsertOp(develop.editStack, "tint", tint);
+    develop.scheduleFlush("Auto White Balance");
   }
 
   function handleWbPresetChange(/** @type {string} */ presetKey) {
@@ -1903,21 +1643,21 @@
     }
     const preset = WB_PRESETS[/** @type {keyof typeof WB_PRESETS} */ (presetKey)];
     if (!preset) return;
-    editStack = upsertOp(editStack, "temperature", preset.temperature);
-    editStack = upsertOp(editStack, "tint", preset.tint);
-    scheduleFlush(`WB Profile: ${preset.name}`);
+    develop.editStack = upsertOp(develop.editStack, "temperature", preset.temperature);
+    develop.editStack = upsertOp(develop.editStack, "tint", preset.tint);
+    develop.scheduleFlush(`WB Profile: ${preset.name}`);
   }
 
   function handleAutoTone() {
-    if (!histogramData) return;
-    const tone = computeAutoTone(histogramData);
-    editStack = upsertOp(editStack, "exposure", tone.exposure);
-    editStack = upsertOp(editStack, "contrast", tone.contrast);
-    editStack = upsertOp(editStack, "highlights", tone.highlights);
-    editStack = upsertOp(editStack, "shadows", tone.shadows);
-    editStack = upsertOp(editStack, "whites", tone.whites);
-    editStack = upsertOp(editStack, "blacks", tone.blacks);
-    scheduleFlush("Auto Tone");
+    if (!develop.histogramData) return;
+    const tone = computeAutoTone(develop.histogramData);
+    develop.editStack = upsertOp(develop.editStack, "exposure", tone.exposure);
+    develop.editStack = upsertOp(develop.editStack, "contrast", tone.contrast);
+    develop.editStack = upsertOp(develop.editStack, "highlights", tone.highlights);
+    develop.editStack = upsertOp(develop.editStack, "shadows", tone.shadows);
+    develop.editStack = upsertOp(develop.editStack, "whites", tone.whites);
+    develop.editStack = upsertOp(develop.editStack, "blacks", tone.blacks);
+    develop.scheduleFlush("Auto Tone");
   }
 
   async function handleExportClick() {
@@ -1927,8 +1667,8 @@
     // unawaited-dependent-IPC-calls hazard openDevelop's own flush/regen
     // pair guards against, see that function's own doc comment.
     if (shell.activeModule === "develop") {
-      await flushEditStack();
-      regenerateThumbnailFor(developVersionId);
+      await develop.flushEditStack();
+      regenerateThumbnailFor(develop.versionId);
     }
     // null stays the "closed" sentinel -- never open with an empty list.
     exportItems = currentExportItems.length > 0 ? currentExportItems : null;
@@ -1982,7 +1722,7 @@
         // lost, the same class of bug fixed for the Develop edit stack.
         /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
 
-        const editPending = persistTimer !== null || pendingSave !== null || pendingIptcSave !== null;
+        const editPending = develop.hasPendingWork;
         let backupSettings = /** @type {import('$lib/api/backup.js').BackupSettings | null} */ (null);
         try {
           backupSettings = await getBackupSettings();
@@ -1995,8 +1735,8 @@
         if (!editPending && !backupDue) return;
         event.preventDefault();
 
-        const wasEditPending = persistTimer !== null || pendingSave !== null;
-        await Promise.all([flushEditStack(), pendingIptcSave ?? Promise.resolve()]);
+        const wasEditPending = develop.hasPendingEdit;
+        await develop.flushPending();
         // Fire-and-forget, deliberately NOT awaited: a thumbnail regen
         // abandoned by a force-quit mid-encode is a stale-until-next-flush
         // grid thumbnail, strictly lower stakes than the lost-edit bug M1
@@ -2006,7 +1746,7 @@
         // batch queue to ensure pending regens start immediately, but don't
         // wait for them to complete.
         if (wasEditPending) {
-          regenerateThumbnailFor(developVersionId);
+          regenerateThumbnailFor(develop.versionId);
           flushThumbnailBatch(handleBatchThumbnailsComplete);
         }
 
@@ -2152,7 +1892,7 @@
 
 </script>
 
-<svelte:window onkeydown={handleGlobalKeydown} onkeyup={handleGlobalKeyup} onblur={() => (spacePanning = false)} />
+<svelte:window onkeydown={handleGlobalKeydown} onkeyup={handleGlobalKeyup} onblur={() => (develop.spacePanning = false)} />
 
 <div class="app">
   <AppTitlebar
@@ -2164,7 +1904,7 @@
     manualCollections={library.manualCollections}
     {applyingPreset}
     {presets}
-    {copiedSettings}
+    copiedSettings={develop.copiedSettings}
     {pastingSettingsToSelection}
     mergingHdr={importFlow.mergingHdr}
     mergingPanorama={importFlow.mergingPanorama}
@@ -2472,12 +2212,12 @@
         onSetFaceExcluded={handleSetFaceExcluded}
       />
     </div>
-  {:else if shell.activeModule === "develop" && developImagePath}
+  {:else if shell.activeModule === "develop" && develop.imagePath}
     <div class="develop-body">
       <HistoryPanel
-        {history}
-        {historyIndex}
-        {snapshots}
+        history={develop.history}
+        historyIndex={develop.historyIndex}
+        snapshots={develop.snapshots}
         onJumpTo={restoreTo}
         onCreateSnapshotRequest={() => (creatingSnapshot = true)}
         onRestoreSnapshot={handleRestoreSnapshot}
@@ -2491,8 +2231,8 @@
         onPeekHistory={handlePeekHistory}
         onPeekSnapshot={handlePeekSnapshot}
         onPeekPreset={handlePeekPreset}
-        onPeekEnd={clearPreview}
-        {previewUrl}
+        onPeekEnd={develop.clearPreview}
+        previewUrl={develop.previewUrl}
         width={shell.panelWidths.history}
       />
       <div
@@ -2505,17 +2245,17 @@
         onpointerup={shell.handlePanelResizePointerUp}
       ></div>
       <DevelopCanvas
-        imagePath={developImagePath}
-        imageContentHash={developImageContentHash}
-        {exposure}
-        {contrast}
-        {saturation}
-        {temperature}
-        {tint}
-        {highlights}
-        {shadows}
-        {whites}
-        {blacks}
+        imagePath={develop.imagePath}
+        imageContentHash={develop.imageContentHash}
+        exposure={developView.exposure}
+        contrast={developView.contrast}
+        saturation={developView.saturation}
+        temperature={developView.temperature}
+        tint={developView.tint}
+        highlights={developView.highlights}
+        shadows={developView.shadows}
+        whites={developView.whites}
+        blacks={developView.blacks}
         {masks}
         {activeTool}
         {selectedMaskId}
@@ -2526,8 +2266,8 @@
         {showMaskOverlay}
         {spotBrushSize}
         {maskOverlaysVisible}
-        {showOriginal}
-        {spacePanning}
+        showOriginal={develop.showOriginal}
+        spacePanning={develop.spacePanning}
         onSpotBrushSizeChange={(v) => (spotBrushSize = v)}
         onMaskCreated={handleMaskCreated}
         onMaskUpdated={handleMaskUpdated}
@@ -2535,31 +2275,31 @@
         colorRangeResampleId={colorRangeResampleTarget}
         onColorRangeResampled={handleColorRangeResampled}
         onEyedropperSampled={handleEyedropperSampled}
-        {toneCurvePoints}
-        {hslBands}
-        {splitToning}
-        {dehaze}
-        {texture}
-        {clarity}
-        {vignette}
-        {lensCorrection}
-        {perspective}
-        {grain}
-        {sharpen}
-        {lumaNR}
-        {colorNR}
-        {crop}
+        toneCurvePoints={developView.toneCurvePoints}
+        hslBands={developView.hslBands}
+        splitToning={developView.splitToning}
+        dehaze={developView.dehaze}
+        texture={developView.texture}
+        clarity={developView.clarity}
+        vignette={developView.vignette}
+        lensCorrection={developView.lensCorrection}
+        perspective={developView.perspective}
+        grain={developView.grain}
+        sharpen={developView.sharpen}
+        lumaNR={developView.lumaNR}
+        colorNR={developView.colorNR}
+        crop={developView.crop}
         onCropChange={handleCropChange}
-        {cropAspectLock}
+        cropAspectLock={develop.cropAspectLock}
         onSourceDimensions={handleSourceDimensions}
         onHistogramUpdate={handleHistogramUpdate}
-        {showClippingOverlay}
+        showClippingOverlay={develop.showClippingOverlay}
         onHoverPixel={handleHoverPixel}
         {softProofEnabled}
         {softProofPreviewUrl}
         {softProofLoading}
         {softProofProfileLabel}
-        {cpuFallbackPreviewUrl}
+        cpuFallbackPreviewUrl={develop.cpuFallbackPreviewUrl}
         onGpuFallback={handleGpuFallback}
       />
       {#if selectedMask}
@@ -2585,19 +2325,19 @@
       ></div>
       <DevelopPanel
         width={shell.panelWidths.develop}
-        {histogramData}
-        {showClippingOverlay}
+        histogramData={develop.histogramData}
+        showClippingOverlay={develop.showClippingOverlay}
         onToggleClippingOverlay={handleToggleClippingOverlay}
-        {hoverPixel}
-        {exposure}
-        {contrast}
-        {saturation}
-        {temperature}
-        {tint}
-        {highlights}
-        {shadows}
-        {whites}
-        {blacks}
+        hoverPixel={develop.hoverPixel}
+        exposure={developView.exposure}
+        contrast={developView.contrast}
+        saturation={developView.saturation}
+        temperature={developView.temperature}
+        tint={developView.tint}
+        highlights={developView.highlights}
+        shadows={developView.shadows}
+        whites={developView.whites}
+        blacks={developView.blacks}
         onExposureChange={(v) => handleAdjustmentChange("exposure", v)}
         onContrastChange={(v) => handleAdjustmentChange("contrast", v)}
         onSaturationChange={(v) => handleAdjustmentChange("saturation", v)}
@@ -2610,37 +2350,37 @@
         onAutoWhiteBalance={handleAutoWhiteBalance}
         onAutoTone={handleAutoTone}
         onWbPresetChange={handleWbPresetChange}
-        {toneCurvePoints}
+        toneCurvePoints={developView.toneCurvePoints}
         onToneCurveChange={handleToneCurveChange}
-        {hslBands}
+        hslBands={developView.hslBands}
         onHslBandChange={handleHslBandChange}
-        {splitToning}
+        splitToning={developView.splitToning}
         onSplitToningZoneChange={handleSplitToningZoneChange}
         onSplitToningBalanceChange={handleSplitToningBalanceChange}
-        {highlightedHslBand}
+        highlightedHslBand={develop.highlightedHslBand}
         {isEyedropperActive}
         onEyedropperToggle={handleEyedropperToggle}
-        hasEdits={editStack.ops.length > 0}
+        hasEdits={develop.editStack.ops.length > 0}
         onResetRequest={() => (confirmingReset = true)}
-        {dehaze}
+        dehaze={developView.dehaze}
         onDehazeChange={(v) => handleAdjustmentChange("dehaze", v)}
-        {texture}
+        texture={developView.texture}
         onTextureChange={(v) => handleAdjustmentChange("texture", v)}
-        {clarity}
+        clarity={developView.clarity}
         onClarityChange={(v) => handleAdjustmentChange("clarity", v)}
-        {vignette}
+        vignette={developView.vignette}
         onVignetteChange={handleVignetteChange}
-        {lensCorrection}
+        lensCorrection={developView.lensCorrection}
         onLensCorrectionChange={handleLensCorrectionChange}
-        {perspective}
+        perspective={developView.perspective}
         onPerspectiveChange={handlePerspectiveChange}
-        {grain}
+        grain={developView.grain}
         onGrainChange={handleGrainChange}
-        {sharpen}
+        sharpen={developView.sharpen}
         onSharpenChange={handleSharpenChange}
-        {lumaNR}
+        lumaNR={developView.lumaNR}
         onLumaNRChange={handleLumaNRChange}
-        {colorNR}
+        colorNR={developView.colorNR}
         onColorNRChange={handleColorNRChange}
         {softProofEnabled}
         {softProofTarget}
@@ -2653,7 +2393,7 @@
         onSoftProofGamutWarningChange={(v) => (softProofGamutWarning = v)}
         onChooseCustomProfile={handleChooseCustomProfile}
         onCopySettingsRequest={handleCopySettingsRequest}
-        canPasteSettings={copiedSettings !== null}
+        canPasteSettings={develop.copiedSettings !== null}
         onPasteSettingsRequest={handlePasteSettings}
       />
     </div>
@@ -2667,7 +2407,7 @@
       {eraseMode}
       {spotBrushSize}
       {maskOverlaysVisible}
-      gpuUnavailable={gpuFallbackActive}
+      gpuUnavailable={develop.gpuFallbackActive}
       onToolToggle={(tool) => (activeTool = activeTool === tool ? null : tool)}
       onMaskSelect={(id) => (selectedMaskId = id)}
       onBrushSizeChange={(v) => (brushSize = v)}
@@ -2679,8 +2419,8 @@
       onNewSpot={() => (selectedMaskId = null)}
       onToggleMaskOverlaysVisible={() => (maskOverlaysVisible = !maskOverlaysVisible)}
       onCreateLuminanceRange={handleCreateLuminanceRangeMask}
-      {crop}
-      {cropAspectLock}
+      crop={developView.crop}
+      cropAspectLock={develop.cropAspectLock}
       onCropAspectPreset={handleCropAspectPreset}
       onCropAngleChange={(v) => handleCropChange({ angle: v })}
       onCropReset={handleCropReset}
@@ -2736,8 +2476,8 @@
     <div class="placeholder">Double-click a photo in Library to open it here.</div>
   {/if}
 
-  {#if shell.activeModule === "develop" && developImagePath}
-    <DevelopInfoBar imagePath={developImagePath} />
+  {#if shell.activeModule === "develop" && develop.imagePath}
+    <DevelopInfoBar imagePath={develop.imagePath} />
   {/if}
 
   {#if shell.activeModule === "library"}
@@ -2745,7 +2485,7 @@
   {:else if shell.activeModule === "develop"}
     <Filmstrip
       images={developFilmstripImages}
-      selectedIds={new Set(developVersionId !== null ? [developVersionId] : [])}
+      selectedIds={new Set(develop.versionId !== null ? [develop.versionId] : [])}
       onSelect={openDevelop}
       onOpen={openDevelop}
     />

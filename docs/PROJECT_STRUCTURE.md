@@ -145,6 +145,8 @@ src/
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)
+│   ├── appEvents.js         `installAppEvents({ handleMenuAction })`: startup refreshes, window-close flush + backup prompt,
+│   │                        Tauri listeners (drag-drop, menu, progress streams); called from the page's onMount (RFC-0009 P7)
 │   ├── collectionRules.js, libraryFolders.js, railSections.js, panelLayout.js, shortcuts.js,
 │   │   thumbnailBatchQueue.js, gpuFallback.js   Pure UI logic extracted from the page/components
 │   └── styles/tokens.css     Dark-theme design tokens, ported from the reviewed mockup

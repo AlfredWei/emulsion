@@ -32,6 +32,7 @@ import {
   handleCreateSmartCollection,
   handleDeleteCollection,
   handleRemoveConfirmed,
+  selectMapImages,
 } from "./libraryActions.js";
 import { library } from "$lib/state/library.svelte.js";
 import { selection } from "$lib/state/selection.svelte.js";
@@ -77,6 +78,48 @@ describe("source switching", () => {
     library.activeCollectionId = 1;
     selectFolder("a/b");
     expect(sources()).toEqual([null, "a/b", false, null]);
+  });
+
+  it("selectMapImages turns on the map selection (a copy of the ids) and clears every other source", () => {
+    library.activeCollectionId = 1;
+    library.activeFolderKey = "x/y";
+    library.showLastImportOnly = true;
+    library.activePersonId = 3;
+    const ids = [4, 5, 5];
+    selectMapImages(ids);
+    expect(sources()).toEqual([null, null, false, null]);
+    expect(library.activeMapImageIds).toEqual(new Set([4, 5]));
+    ids.push(6);
+    expect(library.activeMapImageIds?.has(6)).toBe(false);
+    selectMapImages(new Set());
+    expect(library.activeMapImageIds).toEqual(new Set()); // empty is still "on"
+  });
+
+  it("every other source switch turns the map selection off", async () => {
+    faceApi.getImagesForPerson.mockResolvedValue([1]);
+    library.collections = [col(1)];
+    catalog.listCollectionImageIds.mockResolvedValue([1]);
+    /** @type {[string, () => unknown][]} */
+    const switches = [
+      ["all photos", () => selectAllPhotos()],
+      ["last import", () => selectLastImport()],
+      ["folder", () => selectFolder("a/b")],
+      ["person", () => selectPerson(4)],
+      ["collection", () => selectCollection(1)],
+    ];
+    for (const [name, run] of switches) {
+      selectMapImages([1]);
+      await run();
+      expect(library.activeMapImageIds, name).toBeNull();
+    }
+  });
+
+  it("with a map selection active, filteredImages is exactly those photos", () => {
+    library.images = [img(1), img(2), img(3)];
+    selectMapImages([2]);
+    expect(library.filteredImages.map((i) => i.image_id)).toEqual([2]);
+    selectAllPhotos();
+    expect(library.filteredImages).toHaveLength(3);
   });
 
   it("selectPerson switches to the person and fetches their membership once", async () => {

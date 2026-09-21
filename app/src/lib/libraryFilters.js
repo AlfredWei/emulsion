@@ -20,6 +20,7 @@ import { folderKeyForPath } from "$lib/libraryFolders.js";
  * @property {string | null} activeFolderKey
  * @property {number | null} activePersonId
  * @property {Map<number, Set<number>>} personMembership
+ * @property {Set<number> | null} activeMapImageIds
  * @property {number | null} activeCollectionId
  * @property {CollectionSummary[]} collections
  * @property {Map<number, Set<number>>} manualMembership
@@ -57,6 +58,10 @@ export function selectBaseImages(inputs) {
     const memberIds = inputs.personMembership.get(inputs.activePersonId);
     if (!memberIds) return []; // membership not fetched yet
     return inputs.images.filter((img) => memberIds.has(img.image_id));
+  }
+  if (inputs.activeMapImageIds !== null) {
+    const mapIds = inputs.activeMapImageIds;
+    return inputs.images.filter((img) => mapIds.has(img.image_id));
   }
   if (inputs.activeCollectionId === null) return inputs.images;
   const collection = inputs.collections.find((c) => c.id === inputs.activeCollectionId);

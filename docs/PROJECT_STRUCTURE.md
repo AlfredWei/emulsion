@@ -137,7 +137,10 @@ src/
 │   │                        importActions.js (import/merge runners, thumbnail regeneration + startup poll; faceActions.js
 │   │                        also holds the face-detection runners), developActions.js (adjustment/crop/WB/tone handlers,
 │   │                        readout setters, peeks, snapshots), metadataActions.js (rating/flag/label, IPTC saves);
-│   │                        libraryActions.js also holds handleRemoveConfirmed; more land per RFC-0009
+│   │                        libraryActions.js also holds handleRemoveConfirmed; maskActions.js (mask create/update/delete, resample,
+│   │                        eyedropper, GPU fallback), presetActions.js (preset list, apply/import/export, copy/paste settings),
+│   │                        historyActions.js (restore, undo/redo, snapshot restore, reset), softProofActions.js (custom
+│   │                        profile); more land per RFC-0009
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)

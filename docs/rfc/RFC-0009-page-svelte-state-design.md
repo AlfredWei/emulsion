@@ -134,7 +134,10 @@ The 27 multi-domain writers found by the parser, by destination:
 | `actions/navigation.js` | `openDevelop`, `switchModule` |
 | `actions/libraryActions.js` | `handleDeselectAll`, `handleCompareNext/Prev/Swap/MakeSelect`, `handleRemoveConfirmed`, `handleRemoveFromCollection`, `handleCopyrightChange`, `handleContactChange` |
 | `actions/collectionsActions.js` | `handleAddToCollectionSelect`, `handleCreateCollectionWithImages` |
-| `actions/presetActions.js` | `handleResetEditStack`, `handleImportPresetRequest`, `handleApplyPresetToSelection`, `handleCopySettingsConfirmed`, `handlePasteSettings`, `handlePasteSettingsToSelection` |
+| `actions/presetActions.js` | `handleImportPresetRequest`, `handleApplyPresetToSelection`, `handleCopySettingsConfirmed`, `handlePasteSettings`, `handlePasteSettingsToSelection` (**as built (P6b):** plus the rest of the preset/copy-paste handlers, `refreshPresets` and `handlePeekPreset`) |
+| `actions/historyActions.js` | **as built (P6b):** `restoreTo`, `handleUndo`/`Redo`, `handleRestoreSnapshot`, `handleResetEditStack` (reset moved here from `presetActions`: it clears the mask tool and regenerates like the restores) |
+| `actions/maskActions.js` | **as built (P6b):** `handleMaskCreated`/`Updated`/`Deleted`, `handleCreateLuminanceRangeMask`, colour-range resample toggle/commit, eyedropper toggle/sampled (+ private `hslBandHighlightTimer`), `handleGpuFallback` |
+| `actions/softProofActions.js` | **as built (P6b):** `handleChooseCustomProfile` |
 | `actions/printActions.js` | `handlePrint`, `handleExportPdf` |
 | `importFlow` module functions | `runImport`, `handleMergeHdrBracket`, `handleMergePanorama` |
 | `faces` module function | `runFaceDetection` |
@@ -163,7 +166,7 @@ RFC-0008 ordered P3 (`print`, `faces`, `presets`, `softProof`, `masks`) before P
 | **P4** | `library` (incl. collection-dialog flags) + `selection` stores, `libraryActions.js`, `collectionsActions.js` | medium — 40+ readers of `images`/`selectedId` |
 | **P5** | `develop` (edit stack, history, persistence I1–I5), `developView`, `actions/navigation.js` | **high — do alone** |
 |  | *As split when it was reached:* **P5a** `develop` + `developView` stores, persistence methods and their tests (merged as one PR); **P5b** the develop-only actions (adjustment handlers, crop/white-balance/tone helpers, snapshot create/delete, canvas readout setters); `navigation.js`, `historyActions.js` (restore/undo/redo write the mask selection) and the preset/snapshot-restore workflows wait for the `masks` store, so they land **after P6**, not in P5. The dependency is real: `openDevelop`/`switchModule`/`restoreTo` write `activeTool`/`selectedMaskId`, which are page-local until `masks` exists, and an action module cannot reach a page-local `let`. | |
-| **P6** | `masks`, `softProof`, `presets` (+`presetActions.js`), with their `install()` effects | medium |
+| **P6** | `masks`, `softProof`, `presets` (+`presetActions.js`), with their `install()` effects | medium. *As split:* **P6a** the three stores + effects (merged); **P6b** `maskActions`, `presetActions`, `softProofActions`, `historyActions`. `navigation.js` (`openDevelop`, `switchModule`, next/prev image, export click) is the remaining develop-side step, **P6c**. |
 | **P7** | `appEvents.js` (the `onMount` body) | medium — window-close flush |
 | **P8** | `LibraryModule`, `DevelopModule`, `PrintModule` components; scoped CSS moves with markup | high — e2e DOM shape |
 

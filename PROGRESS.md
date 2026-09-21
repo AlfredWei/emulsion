@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P4c: import, merge, thumbnail and face-detection workflows (2026-09-21)
+
+Last step of RFC-0009 P4. The workflows parked in P3 move now that `library` and `selection` exist. `+page.svelte` 3,137 → 2,871 lines; new `lib/actions/importActions.js`; `faceActions.js` grows; 35 new tests (vitest 301 → 336).
+
+- **`importActions.js`** (8 functions + the private polling flag): `runImport`, `handleImportFolder`/`Files`/`DropImport`, `handleMergeHdrBracket`, `handleMergePanorama`, `regenerateThumbnailFor`, `pollUntilThumbnailsReadyOnStartup` (with `pollingThumbnailsOnStartup`, now module-private: nothing else read it).
+- **`faceActions.js`** (+5): `refreshCurrentImageFaces`, `runFaceDetection`, `handleDetectFacesForSelected`/`Selection`/`Folder`.
+- **Deviation from RFC-0009 §3.5, recorded there**: the "refresh faces on selection" `$effect` stays in the page (5 lines). The RFC planned `faces.install()`, but a store may not import the action it would call (stores never import actions), and a `$effect` cannot live in a plain `.js` action module. It moves with the component split (P7/P8).
+- **Tool change**: the extraction tool now moves top-level `let` variables along with functions (needed for the polling flag).
+- **Verified by comparison**: moved function bodies are unchanged; the only differences are imports, the `export` keyword, and two comments that said "below" (now "in +page.svelte"). Orphaned comments from P4b (a copy of the keyword-target comment) and the panorama-merge comment were tidied. `npm run check` 0 errors, vitest 336 passed, `vite build` OK.
+- **Tests** (25 mutants, all killed): the import runner (phase order, both refreshes, prompt yes/no, detection failure appended to the status rather than failing the import, always leaving `importing` false), the three entry points, HDR/panorama merge (distinct-photo guard, selects the result, failure resets the flag), regeneration, the startup poll (fake timers: 1.5 s interval, 10-attempt cap, re-entrancy guard), and the detection runners.
+- **Not run locally**: e2e (CI); the Tauri window (import dialog and progress bar, merges, face detection, startup thumbnail fill).
+- **P4 is done.** Next: **P5**: the `develop` store (edit stack, history, persistence with invariants I1-I5), `developView`, and `actions/navigation.js` (`openDevelop`, `switchModule`, and the `selectNext/PrevImage`, `handleRemoveConfirmed`, `currentExportItems` that wait on them).
+
 ## Minimum window size (2026-09-21)
 
 The main window had no minimum, and the layout stops fitting below about 1,250 px wide: the title bar's action row (`flex: none` buttons) overflowed and clipped the right-hand buttons, and the Library filter bar started scrolling.

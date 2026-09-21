@@ -125,7 +125,7 @@ src/
 │   │                        filters, collections + their derived sets), selection.svelte.js (selected ids/anchor, selected images,
 │   │                        Compare pair), develop.svelte.js (open image, live edit stack, history/snapshots, preview,
 │   │                        canvas readouts, edit-stack persistence), developView.svelte.js (per-adjustment derived
-│   │                        views of the edit stack); more land per RFC-0009 P5b+.
+│   │                        views of the edit stack); more land per RFC-0009 P6+.
 │   │                        Tested via lib/state/*.test.js
 │   ├── actions/             Workflows that write more than one store (RFC-0009 §3.2): printActions.js
 │   │                        (print, export PDF, choose print profile), faceActions.js (people/face
@@ -133,7 +133,9 @@ src/
 │   │                        collection refresh, thumbnail patches, collection create/delete), selectionActions.js (click/range/
 │   │                        step/select-all, Compare navigation), collectionsActions.js (add to / remove from collection),
 │   │                        importActions.js (import/merge runners, thumbnail regeneration + startup poll; faceActions.js
-│   │                        also holds the face-detection runners); more land per RFC-0009
+│   │                        also holds the face-detection runners), developActions.js (adjustment/crop/WB/tone handlers,
+│   │                        readout setters, peeks, snapshots), metadataActions.js (rating/flag/label, IPTC saves);
+│   │                        libraryActions.js also holds handleRemoveConfirmed; more land per RFC-0009
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)

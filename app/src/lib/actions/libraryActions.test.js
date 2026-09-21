@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const catalog = vi.hoisted(() => ({
   listCollections: vi.fn(),
@@ -8,6 +8,7 @@ const catalog = vi.hoisted(() => ({
   createCollection: vi.fn(),
   createSmartCollection: vi.fn(),
   deleteCollection: vi.fn(),
+  removeImages: vi.fn(),
 }));
 const faceApi = vi.hoisted(() => ({ getImagesForPerson: vi.fn() }));
 vi.mock("$lib/api/catalog.js", () => catalog);
@@ -30,8 +31,12 @@ import {
   handleCreateCollection,
   handleCreateSmartCollection,
   handleDeleteCollection,
+  handleRemoveConfirmed,
 } from "./libraryActions.js";
 import { library } from "$lib/state/library.svelte.js";
+import { selection } from "$lib/state/selection.svelte.js";
+import { develop } from "$lib/state/develop.svelte.js";
+import { shell } from "$lib/state/shell.svelte.js";
 
 const img = (/** @type {number} */ id, /** @type {object} */ over = {}) =>
   /** @type {any} */ ({ image_id: id, version_id: id * 10, path: `/p/a/b/${id}.jpg`, thumbnail_path: null, rating: 0, ...over });
@@ -245,5 +250,82 @@ describe("collections", () => {
     library.activeCollectionId = 6;
     await handleDeleteCollection(5, event);
     expect(library.activeCollectionId).toBe(6);
+  });
+});
+
+describe("handleRemoveConfirmed", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.stubGlobal("document", { activeElement: null });
+    // Two virtual copies of image 1 (versions 10, 11) and a separate image 2.
+    library.images = [img(1), img(1, { version_id: 11 }), img(2), img(3)];
+    library.confirmingRemoval = true;
+    selection.selectedId = 10;
+    selection.selectedIds = new Set([10, 11, 20]);
+    develop.versionId = null;
+    develop.imagePath = "";
+    shell.notify("");
+    catalog.removeImages.mockResolvedValue(undefined);
+  });
+
+  it("closes the dialog, removes each source photo once, drops every selected version and clears the selection", async () => {
+    await handleRemoveConfirmed();
+    expect(library.confirmingRemoval).toBe(false);
+    expect(catalog.removeImages).toHaveBeenCalledWith([1, 2]); // deduped by image_id
+    expect(library.images.map((i) => i.version_id)).toEqual([30]);
+    expect(selection.selectedId).toBeNull();
+    expect(selection.selectedIds.size).toBe(0);
+    expect(shell.statusMessage).toBe("Removed 2 photos from catalog");
+  });
+
+  it("singular wording for one photo", async () => {
+    selection.selectedIds = new Set([20]);
+    await handleRemoveConfirmed();
+    expect(shell.statusMessage).toBe("Removed 1 photo from catalog");
+  });
+
+  it("does nothing beyond closing the dialog when nothing is selected", async () => {
+    selection.selectedIds = new Set();
+    await handleRemoveConfirmed();
+    expect(library.confirmingRemoval).toBe(false);
+    expect(catalog.removeImages).not.toHaveBeenCalled();
+    expect(library.images).toHaveLength(4);
+  });
+
+  it("on an IPC failure reports it and leaves library and selection alone", async () => {
+    catalog.removeImages.mockRejectedValue("disk full");
+    await handleRemoveConfirmed();
+    expect(shell.statusMessage).toBe("Remove failed: disk full");
+    expect(library.images).toHaveLength(4);
+    expect(selection.selectedIds.size).toBe(3);
+  });
+
+  it("clears the Develop session, and cancels its pending save, when the open version was removed", async () => {
+    const cancel = vi.spyOn(develop, "cancelScheduledFlush");
+    develop.versionId = 11;
+    develop.imagePath = "/p/a/b/1.jpg";
+    await handleRemoveConfirmed();
+    expect(cancel).toHaveBeenCalled();
+    expect(develop.versionId).toBeNull();
+    expect(develop.imagePath).toBe("");
+    cancel.mockRestore();
+  });
+
+  it("leaves the Develop session alone when the open version was not removed", async () => {
+    const cancel = vi.spyOn(develop, "cancelScheduledFlush");
+    develop.versionId = 30;
+    develop.imagePath = "/p/a/b/3.jpg";
+    await handleRemoveConfirmed();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(develop.versionId).toBe(30);
+    expect(develop.imagePath).toBe("/p/a/b/3.jpg");
+    cancel.mockRestore();
+  });
+
+  it("blurs the focused element first so a pending IPTC blur-save fires before the rows vanish", async () => {
+    const blur = vi.fn();
+    vi.stubGlobal("document", { activeElement: { blur } });
+    await handleRemoveConfirmed();
+    expect(blur).toHaveBeenCalledTimes(1);
   });
 });

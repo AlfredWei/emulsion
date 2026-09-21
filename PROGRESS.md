@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P5b: develop-only and metadata actions (2026-09-21)
+
+Second half of RFC-0009 P5. `+page.svelte` 2,611 → 2,168 lines; new `lib/actions/developActions.js` and `lib/actions/metadataActions.js`; `libraryActions.js` gains `handleRemoveConfirmed`; 63 new tests (vitest 364 → 427).
+
+- **`developActions.js`** (27 functions): the per-adjustment handlers (`handleAdjustmentChange` with its private label table, tone curve, HSL, split toning, vignette, lens, perspective, grain, sharpen, luma/color NR), crop (`handleCropChange` with the angle re-fit and blank-corner guard, aspect preset, reset), auto white balance, WB presets, auto tone, the canvas readout setters, the history/snapshot hover peeks, and snapshot create/delete. Each is the exact body the page had, with `develop.*`/`developView.*` in place of the old locals.
+- **`metadataActions.js`** (6): rating, flag, color label (optimistic patch, then IPC, on the whole selection or the acted-on cell) and the IPTC caption/copyright/contact saves (tracked through `develop.trackIptcSave`).
+- **`handleRemoveConfirmed`** goes to `libraryActions.js` rather than `navigation.js` as RFC-0009 first said: it only writes library, selection, shell and develop, all of which exist now.
+- **Naming deviation, recorded in RFC-0009**: `developActions.js` instead of the planned `developAdjustments.js`, since it holds more than adjustment transforms.
+- **Verified by comparison**: with names mapped back, nothing from the old page is missing from the new files (line-multiset check); duplicate/orphan comments left behind were deleted after confirming the copies in the store files. `npm run check` 0 errors, vitest 427 passed, `vite build` OK.
+- **Tests** (70 mutants, 6 survivors, all equivalent): labels per handler, upsert-not-append, crop angle re-fit / degenerate crop / guard / aspect preset at an angle, auto WB and auto tone against the real helpers with unbalanced histograms, presets, peek arguments and guards, snapshot ordering (flush before add) and failure behavior, target selection and optimistic patching for rating/flag/label, IPTC tracking with `flushPending`, and `handleRemoveConfirmed` (dedupe by image, IPC failure, Develop session cleared only for the removed version, blur first). Survivors: scale-invariant `i/255`, `r` vs `g` count (channel totals are equal in real histograms), an aspect-preset `angle` that `handleCropChange` already ignores when unchanged, a source-height guard equivalent for height 0, and two guards that are no-ops for an empty/`null` set.
+- **Not run locally**: e2e (CI); the Tauri window (Develop sliders, crop, auto tone/WB, snapshots, rating/flag shortcuts, removing photos).
+- **Next**: P6 (`masks`, `softProof`, `presets` stores with their `install…()` effects, `presetActions.js`, `maskActions.js`), then `navigation.js` and `historyActions.js`.
+
 ## Refactor P5a: `develop` and `developView` stores (2026-09-21)
 
 The first half of RFC-0009 P5, the riskiest step ("do alone"). `+page.svelte` 2,871 → 2,611 lines; new `lib/state/develop.svelte.js` and `lib/state/developView.svelte.js`; 28 new tests (vitest 336 → 364).

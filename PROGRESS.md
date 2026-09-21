@@ -2,6 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Refactor P7: `appEvents.js`, the page's `onMount` body (2026-09-21)
+
+The whole `onMount` body (startup refreshes, window-close flush, Tauri listeners) moves out of the page. `+page.svelte` 1,217 → 992 lines; new `lib/appEvents.js`; 27 new tests (vitest 580 → 607).
+
+- **`installAppEvents({ handleMenuAction })`** returns the cleanup function. The page keeps `onMount(() => installAppEvents({ handleMenuAction }))`, so the returned cleanup is registered exactly as before. The body is the old text dedented by two spaces; the line comparison shows only imports and that one `onMount` line differ. The one thing it needs from the component is the native-menu handler, which is built over the page's keyboard/menu context.
+- **Contents**: startup (`refresh().then(pollUntilThumbnailsReadyOnStartup)`, collections, presets, keyword assignments); the window-close handler (force-close Settings, blur the focused field so an IPTC edit saves, pending-work check, backup-settings fetch that never blocks a quit, `preventDefault`, `flushPending`, fire-and-forget thumbnail regeneration plus batch-queue flush only when an edit was pending, the backup prompt, `destroy`); drag-and-drop; the `shortcuts-updated` window event; `menu-action`; and the five progress streams.
+- **Tests** (55 mutants, all killed after two additions): the close handler's ordering (prevent first; flush awaited; regeneration only for a pending *edit*, read before the flush clears it; prompt after the flush; destroy awaited), the not-due and unreadable-settings quiet paths, the drop overlay only in Library, empty drops, each progress event into its own field only, each listener's event name and unlisten in cleanup, cleanup before registration finishes, and the outside-Tauri `try/catch` fallbacks.
+- **Verified**: `npm run check` 0 errors, vitest 607 passed, `vite build` OK.
+- **Not run locally**: e2e (CI); the Tauri window (quit with a pending edit and with a backup due, drag-drop import, native menu, progress bars during import/merge/face detection).
+- **Next**: P8, the module components (LibraryModule / DevelopModule / PrintModule), the last step of RFC-0009. The page is 992 lines: the script is 274 (about 110 of them imports, then the keyboard/menu handler context, the face effect and the store installs) and the rest is template; e2e DOM-shape sensitivities apply.
+
 ## Refactor P6c: `exportFlow` store and `navigation.js` (2026-09-21)
 
 Last develop-side step of RFC-0009 P6, and the one that carries the ordering invariants. `+page.svelte` 1,423 → 1,217 lines; new `lib/state/exportFlow.svelte.js` and `lib/actions/navigation.js`; 41 new tests (vitest 539 → 580).

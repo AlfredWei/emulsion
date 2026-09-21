@@ -35,23 +35,16 @@
   import { masks } from "$lib/state/masks.svelte.js";
   import { softProof } from "$lib/state/softProof.svelte.js";
   import { presets } from "$lib/state/presets.svelte.js";
+  import { exportFlow } from "$lib/state/exportFlow.svelte.js";
   import { createKeyboardHandlers } from "$lib/keyboard.js";
   import { createMenuHandler } from "$lib/menuActions.js";
   import {
     listAllImageKeywords,
   } from "$lib/api/catalog.js";
-  import {
-    getEditStack,
-    getHistory,
-    getSnapshots,
-    setLensProfile,
-    lookupLensProfile,
-  } from "$lib/api/develop.js";
-  import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
+    import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
     import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
   import { handleChoosePrintCustomProfile, handlePrint, handleExportPdf } from "$lib/actions/printActions.js";
   import {
-    refreshPeople,
     handleRenamePerson,
     handleReassignFace,
     handleCreatePersonAndTagFace,
@@ -110,6 +103,7 @@
   import { refreshPresets, handleCreateSnapshotConfirmed, handleSaveCurrentAsPresetRequest, handleCreatePresetConfirmed, handleApplyPreset, handleExportPreset, handleImportPresetRequest, handleDeletePresetRequest, handleDeletePresetConfirmed, handleApplyPresetToSelection, handleCopySettingsRequest, handleCopySettingsConfirmed, handlePasteSettings, handlePasteSettingsToSelection, handlePeekPreset } from "$lib/actions/presetActions.js";
   import { handleChooseCustomProfile } from "$lib/actions/softProofActions.js";
   import { restoreTo, handleUndo, handleRedo, handleRestoreSnapshot, handleResetEditStack } from "$lib/actions/historyActions.js";
+  import { selectNextImage, selectPrevImage, openDevelop, switchModule, handleExportClick } from "$lib/actions/navigation.js";
 
   let imageViewerRef = $state(/** @type {any} */ (null));
 
@@ -161,86 +155,6 @@
     refreshCurrentImageFaces();
   });
 
-  // What Export would act on right now: the open Develop image, or every
-  // selected Library image (M2 Slice 3 batch export -- the frontend-only
-  // follow-up M1 Slice 5's export_batch was explicitly built to accept).
-  let currentExportItems = $derived.by(() => {
-    if (shell.activeModule === "develop" && develop.versionId !== null) {
-      return [{ path: develop.imagePath, version_id: develop.versionId }];
-    }
-    if (selection.selectedImages.length > 0) {
-      return selection.selectedImages.map((img) => ({ path: img.path, version_id: img.version_id }));
-    }
-    return selection.selectedImage ? [{ path: selection.selectedImage.path, version_id: selection.selectedImage.version_id }] : [];
-  });
-  let exportItems = $state(/** @type {{ path: string, version_id: number }[] | null} */ (null));
-
-
-  // Keyboard navigation & selection helpers
-  function selectNextImage(/** @type {boolean=} */ extend) {
-    if (library.filteredImages.length === 0) return;
-    if (selection.selectedId === null) {
-      const first = library.filteredImages[0];
-      selection.selectedId = first.version_id;
-      selection.selectedIds = new Set([first.version_id]);
-      return;
-    }
-    const idx = library.filteredImages.findIndex((img) => img.version_id === selection.selectedId);
-    if (idx === -1) {
-      const first = library.filteredImages[0];
-      selection.selectedId = first.version_id;
-      selection.selectedIds = new Set([first.version_id]);
-      return;
-    }
-    if (idx < library.filteredImages.length - 1) {
-      const nextImg = library.filteredImages[idx + 1];
-      if (extend) {
-        const next = new Set(selection.selectedIds);
-        next.add(nextImg.version_id);
-        selection.selectedIds = next;
-        selection.selectedId = nextImg.version_id;
-      } else {
-        selection.selectedId = nextImg.version_id;
-        selection.selectedIds = new Set([nextImg.version_id]);
-      }
-      if (shell.activeModule === "develop") {
-        openDevelop(nextImg.version_id);
-      }
-    }
-  }
-
-  function selectPrevImage(/** @type {boolean=} */ extend) {
-    if (library.filteredImages.length === 0) return;
-    if (selection.selectedId === null) {
-      const last = library.filteredImages[library.filteredImages.length - 1];
-      selection.selectedId = last.version_id;
-      selection.selectedIds = new Set([last.version_id]);
-      return;
-    }
-    const idx = library.filteredImages.findIndex((img) => img.version_id === selection.selectedId);
-    if (idx === -1) {
-      const first = library.filteredImages[0];
-      selection.selectedId = first.version_id;
-      selection.selectedIds = new Set([first.version_id]);
-      return;
-    }
-    if (idx > 0) {
-      const prevImg = library.filteredImages[idx - 1];
-      if (extend) {
-        const next = new Set(selection.selectedIds);
-        next.add(prevImg.version_id);
-        selection.selectedIds = next;
-        selection.selectedId = prevImg.version_id;
-      } else {
-        selection.selectedId = prevImg.version_id;
-        selection.selectedIds = new Set([prevImg.version_id]);
-      }
-      if (shell.activeModule === "develop") {
-        openDevelop(prevImg.version_id);
-      }
-    }
-  }
-
 
   // Everything the keyboard and menu handlers (lib/keyboard.js, lib/menuActions.js) read or
   // write. State goes through live getters/setters -- never copied values -- so the handlers
@@ -279,7 +193,7 @@
       return presets.creatingSnapshot;
     },
     get exportItems() {
-      return exportItems;
+      return exportFlow.items;
     },
     get filteredImages() {
       return library.filteredImages;
@@ -365,126 +279,6 @@
   };
   const { handleGlobalKeydown, handleGlobalKeyup } = createKeyboardHandlers(handlerContext);
   const handleMenuAction = createMenuHandler(handlerContext);
-
-
-  async function openDevelop(/** @type {number} */ versionId) {
-    // Captured before developVersionId is reassigned below -- the same
-    // capture-before-reassignment shape flushEditStack itself already
-    // uses, which is what keeps this race-free even if the user clicks
-    // through several images in quick succession (each flush/regen closes
-    // over the id it actually applies to, not whatever developVersionId
-    // happens to be by the time the async work runs).
-    const previousVersionId = develop.versionId;
-    // Awaited -- regenerate_thumbnail's own Rust command re-reads the edit
-    // stack fresh from the catalog rather than trusting a client-supplied
-    // one (see lib.rs's own doc comment on that command), which means it
-    // could race flushEditStack's own catalog write if the two IPC calls
-    // were fired back-to-back without awaiting: neither Tauri's own
-    // command dispatch nor the underlying SQLite write is guaranteed to
-    // land before the very next command's own read starts. A real,
-    // code-verified hazard (two dependent IPC calls previously fired
-    // without awaiting the first) -- not independently confirmed as a
-    // reproduced user-visible symptom (an attempt to reproduce one was
-    // confounded by reusing identical edit-stack values across test runs,
-    // which produces an identical, correctly-unchanged content-addressed
-    // thumbnail path regardless of ordering), but the same class of
-    // "unawaited dependent write" bug this project already found and
-    // fixed once this session (flushEditStack's own now-removed
-    // persistTimer gate) -- worth closing on that precedent alone.
-    await develop.flushEditStack();
-    regenerateThumbnailFor(previousVersionId);
-    const image = library.images.find((img) => img.version_id === versionId);
-    if (!image) return;
-    prioritizeThumbnail(versionId);
-    develop.versionId = versionId;
-    develop.imagePath = image.path;
-    // Cleared, not left stale, on every open -- the new image's own real
-    // histogram arrives shortly via DevelopCanvas's own GPU readback, but
-    // showing the PREVIOUS image's histogram in the meantime would be
-    // actively misleading, not just momentarily stale.
-    develop.histogramData = null;
-    develop.hoverPixel = null;
-    develop.showClippingOverlay = false;
-    // History/Snapshots (M3): re-fetched fresh on every open, not carried
-    // over from whatever the previous image's panel showed -- switching
-    // images via the filmstrip must never leave a stale History/Snapshots
-    // list on screen for a different photo.
-    const [stack, freshHistory, freshSnapshots] = await Promise.all([
-      getEditStack(versionId),
-      getHistory(versionId),
-      getSnapshots(versionId),
-    ]);
-    develop.editStack = stack;
-    develop.history = freshHistory;
-    develop.historyIndex = freshHistory.length - 1;
-    develop.snapshots = freshSnapshots;
-    masks.activeTool = null;
-    masks.selectedMaskId = null;
-    shell.activeModule = "develop";
-
-    // Lens Corrections (M3): re-resolved fresh on every open, matching
-    // History/Snapshots' own "never carry over the previous photo's data"
-    // discipline above -- this photo's own EXIF, not whatever the last
-    // photo's profile happened to be. A no-op (same value already baked,
-    // or no match either time) skips the write entirely rather than
-    // idempotently re-flushing on every single open. NOT run through
-    // scheduleFlush/a history label -- this is resolved equipment data,
-    // not a user-facing edit (see develop.js's own doc comment on
-    // `setLensProfile`); `flushEditStack()` with no label is the same
-    // silent, unlabeled persist its own doc comment already documents for
-    // exactly this "idempotent no-op-content rewrite" case.
-    const profile = await lookupLensProfile({
-      cameraMake: image.camera_make,
-      cameraModel: image.camera_model,
-      lensModel: image.lens_model,
-      focalLength: image.focal_length,
-      aperture: image.aperture,
-    });
-    if (develop.versionId === versionId && JSON.stringify(profile) !== JSON.stringify(developView.lensCorrection.profile)) {
-      develop.editStack = setLensProfile(develop.editStack, profile);
-      develop.flushEditStack();
-    }
-  }
-
-  async function switchModule(/** @type {string} */ target) {
-    if (shell.activeModule === "develop" && target !== "develop") {
-      // Awaited -- same unawaited-dependent-IPC-calls hazard openDevelop's
-      // own flush/regen pair guards against, see that function's own doc
-      // comment.
-      await develop.flushEditStack();
-      regenerateThumbnailFor(develop.versionId);
-      masks.activeTool = null;
-      masks.selectedMaskId = null;
-    }
-    if (target === "print") {
-      // Snapshot what Print will act on -- same source `currentExportItems`
-      // already derives (open Develop image, else Library's selection) --
-      // taken once on entry so the print job doesn't silently change out
-      // from under the user if they alter Library's selection afterward
-      // (Library's own grid is hidden while inside Print, same as Develop).
-      print.items = currentExportItems;
-      print.readyUrls = {};
-    }
-    if (target === "people") {
-      refreshPeople();
-    }
-    shell.activeModule = target;
-  }
-
-
-  async function handleExportClick() {
-    // If a slider was just dragged, the debounced save may not have
-    // landed yet -- flush it first so Export reads the value currently
-    // on screen, not the last-persisted one. Awaited for the same
-    // unawaited-dependent-IPC-calls hazard openDevelop's own flush/regen
-    // pair guards against, see that function's own doc comment.
-    if (shell.activeModule === "develop") {
-      await develop.flushEditStack();
-      regenerateThumbnailFor(develop.versionId);
-    }
-    // null stays the "closed" sentinel -- never open with an empty list.
-    exportItems = currentExportItems.length > 0 ? currentExportItems : null;
-  }
 
 
   onMount(() => {
@@ -709,7 +503,7 @@
 <div class="app">
   <AppTitlebar
     activeModule={shell.activeModule}
-    {currentExportItems}
+    currentExportItems={exportFlow.currentItems}
     activeCollectionId={library.activeCollectionId}
     activeCollection={library.activeCollection}
     selectedIds={selection.selectedIds}
@@ -745,7 +539,7 @@
 
   <AppDialogs
     settingsOpen={shell.settingsOpen}
-    {exportItems}
+    exportItems={exportFlow.items}
     copySettingsDialogOpen={presets.copySettingsDialogOpen}
     confirmingFaceDetectionOnImport={faces.confirmingDetectionOnImport}
     pendingImportBatchSize={faces.pendingImportBatchSize}
@@ -761,7 +555,7 @@
     backupPromptSettings={importFlow.backupPromptSettings}
     backupPromptOpen={importFlow.backupPromptOpen}
     onCloseSettings={() => (shell.settingsOpen = false)}
-    onCloseExport={() => (exportItems = null)}
+    onCloseExport={() => (exportFlow.items = null)}
     onCancelCopySettings={() => (presets.copySettingsDialogOpen = false)}
     onCancelRemoval={() => (library.confirmingRemoval = false)}
     onCancelReset={() => (presets.confirmingReset = false)}

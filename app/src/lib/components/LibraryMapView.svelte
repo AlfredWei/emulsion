@@ -3,6 +3,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { geolocatedPoints, clusterPoints, boundsOfPoints, clustersInBounds } from "$lib/mapClusters.js";
   import { openExternalUrl } from "$lib/api/system.js";
+  import { IMAGE_IDS_DRAG_MIME } from "$lib/dragTransfer.js";
 
   /**
    * LibraryMapView: the world map of the photos that have GPS coordinates (M5.5, RFC-0007 §3.3). Pins are
@@ -138,13 +139,11 @@
     }
   }
 
-  const DRAG_MIME = "application/x-emulsion-image-ids";
-
   /** @param {DataTransfer | null} dt */
   function draggedImageIds(dt) {
     if (!dt) return [];
     try {
-      const ids = JSON.parse(dt.getData(DRAG_MIME) || "[]");
+      const ids = JSON.parse(dt.getData(IMAGE_IDS_DRAG_MIME) || "[]");
       return Array.isArray(ids) ? ids.filter((id) => typeof id === "number") : [];
     } catch {
       return [];
@@ -156,7 +155,7 @@
     // LibraryModule's own "drop files to import" overlay (a dragover/drop pair one level up, on
     // `.library-body`) from also lighting up underneath. A real OS file drag never has this MIME, so
     // it's left alone here and still bubbles up to that import handling.
-    if (!event.dataTransfer?.types.includes(DRAG_MIME)) return;
+    if (!event.dataTransfer?.types.includes(IMAGE_IDS_DRAG_MIME)) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";

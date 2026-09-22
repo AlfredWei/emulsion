@@ -145,6 +145,7 @@ src/
 │   │                        profile), navigation.js (openDevelop, switchModule, next/prev image, export click); more land per RFC-0009
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering, viewport filter (M5.5)
+│   ├── dragTransfer.js      One shared MIME (`IMAGE_IDS_DRAG_MIME`) for dragging photos by `image_id` within the app (Filmstrip -> LibraryMapView, M5.5)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)
 │   ├── appEvents.js         `installAppEvents({ handleMenuAction })`: startup refreshes, window-close flush + backup prompt,

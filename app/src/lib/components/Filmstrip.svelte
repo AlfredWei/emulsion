@@ -1,5 +1,6 @@
 <script>
   import { convertFileSrc } from "@tauri-apps/api/core";
+  import { IMAGE_IDS_DRAG_MIME } from "$lib/dragTransfer.js";
 
   /**
    * Persistent filmstrip, shared between Library and Develop
@@ -30,11 +31,6 @@
    */
   let { images, selectedIds, onSelect, onOpen } = $props();
 
-  /** MIME `LibraryMapView`'s drop handler looks for; a plain-text fallback is set too so dropping a
-   * filmstrip photo somewhere else (an OS window, a text field) shows something sensible instead of
-   * nothing. */
-  const DRAG_MIME = "application/x-emulsion-image-ids";
-
   /** @param {DragEvent} event @param {import('$lib/api/catalog.js').ImageSummary} image */
   function handleDragStart(event, image) {
     const ids =
@@ -43,7 +39,9 @@
         : [image.image_id];
     const dt = event.dataTransfer;
     if (!dt) return;
-    dt.setData(DRAG_MIME, JSON.stringify(ids));
+    dt.setData(IMAGE_IDS_DRAG_MIME, JSON.stringify(ids));
+    // Plain-text fallback so dropping a filmstrip photo somewhere else (an OS window, a text field)
+    // shows something sensible instead of nothing.
     dt.setData("text/plain", `${ids.length} photo${ids.length === 1 ? "" : "s"}`);
     dt.effectAllowed = "copy";
   }

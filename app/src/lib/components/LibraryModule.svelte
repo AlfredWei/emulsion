@@ -19,7 +19,6 @@
   import LibraryToolbar from "$lib/components/LibraryToolbar.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import { shell } from "$lib/state/shell.svelte.js";
-  import { IMAGE_IDS_DRAG_MIME } from "$lib/dragTransfer.js";
 
   let imageViewerRef = $state(/** @type {any} */ (null));
 </script>
@@ -61,19 +60,11 @@
   aria-label="Library view"
   class:drag-over={importFlow.isDraggingFiles}
   ondragover={(e) => {
-    // An internal photo drag (M5.5 map view: a Filmstrip cell bound for LibraryMapView) is not a file
-    // import -- ignored here so it never shows this overlay, regardless of which part of the library
-    // body the pointer crosses on its way to the map. Without this check, isDraggingFiles could flip
-    // true from a dragover anywhere else in this body before the pointer ever reaches the map, and
-    // nothing along that path would flip it back, leaving this overlay covering the map for the rest
-    // of the drag even though the map's own drop handling was still working underneath.
-    if (e.dataTransfer?.types.includes(IMAGE_IDS_DRAG_MIME)) return;
     e.preventDefault();
     importFlow.isDraggingFiles = true;
   }}
   ondragleave={() => (importFlow.isDraggingFiles = false)}
   ondrop={(e) => {
-    if (e.dataTransfer?.types.includes(IMAGE_IDS_DRAG_MIME)) return;
     e.preventDefault();
     importFlow.isDraggingFiles = false;
   }}

@@ -3,7 +3,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { geolocatedPoints, clusterPoints, boundsOfPoints, clustersInBounds } from "$lib/mapClusters.js";
   import { openExternalUrl } from "$lib/api/system.js";
-  import { IMAGE_IDS_DRAG_MIME } from "$lib/dragTransfer.js";
+  import { shell } from "$lib/state/shell.svelte.js";
 
   /**
    * LibraryMapView: the world map of the photos that have GPS coordinates (M5.5, RFC-0007 §3.3). Pins are
@@ -22,12 +22,18 @@
    * at a glance at any zoom -- the same shape at every scale, since `clusterPoints` itself is what changes
    * per zoom, not this rendering.
    *
-   * Placing (RFC-0007 slice 3) is drag-and-drop only: the Filmstrip -- the one photo strip still visible
-   * while the map is the active Library view (Grid, otherwise the natural drag source, is not, since the two
-   * are mutually exclusive Library view modes) -- makes its cells draggable; dragging one over the map shows a
-   * preview pin exactly under the pointer, at the point that photo's location would become, and dropping it
-   * calls `onAssignLocation` for that point immediately. There's no separate confirm step: dropping is
-   * confirming, the same as dragging a file onto a folder.
+   * Placing (RFC-0007 slice 3) is drag-and-drop, driven by `shell.photoDrag` rather than native HTML5
+   * drag-and-drop -- see that store's own doc comment for why (Tauri's window-level drag-drop
+   * interception, needed for real OS file imports, stops the browser's native `dragstart`/`dragover`/
+   * `drop` DOM events from firing for a drag that never leaves the page). The Filmstrip -- the one
+   * photo strip still visible while the map is the active Library view (Grid, otherwise the natural
+   * drag source, is not, since the two are mutually exclusive Library view modes) -- sets
+   * `shell.photoDrag` as its cells are pointer-dragged; this view reacts to it, doing its own
+   * hit-testing against `container`'s rect on every update, showing a preview pin exactly under the
+   * pointer at the point that photo's location would become while hovering, and committing that point
+   * via `onAssignLocation` the instant the drag ends (`shell.photoDrag` back to `null`) if the last
+   * update said the pointer was over us. There's no separate confirm step: letting go is confirming,
+   * the same as dragging a file onto a folder.
    * @type {{
    *   images: import('$lib/api/catalog.js').ImageSummary[],
    *   onSelectCluster: (imageIds: number[]) => void,
@@ -139,53 +145,10 @@
     }
   }
 
-  /** @param {DataTransfer | null} dt */
-  function draggedImageIds(dt) {
-    if (!dt) return [];
-    try {
-      const ids = JSON.parse(dt.getData(IMAGE_IDS_DRAG_MIME) || "[]");
-      return Array.isArray(ids) ? ids.filter((id) => typeof id === "number") : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function handleDragOver(/** @type {DragEvent} */ event) {
-    // Only claims drags carrying our own MIME (Filmstrip cells); stopping propagation keeps
-    // LibraryModule's own "drop files to import" overlay (a dragover/drop pair one level up, on
-    // `.library-body`) from also lighting up underneath. A real OS file drag never has this MIME, so
-    // it's left alone here and still bubbles up to that import handling.
-    if (!event.dataTransfer?.types.includes(IMAGE_IDS_DRAG_MIME)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-    dragOver = true;
-    if (container) {
-      const rect = container.getBoundingClientRect();
-      dragPreview = { x: event.clientX - rect.left, y: event.clientY - rect.top };
-    }
-  }
-
-  function handleDragLeave(/** @type {DragEvent} */ event) {
-    // Leaflet's own panes are children of .map-view and fire their own dragleave as the pointer
-    // crosses them; only clear the highlight once the pointer has actually left the whole map.
-    const to = /** @type {Node | null} */ (event.relatedTarget);
-    if (event.currentTarget instanceof HTMLElement && to && event.currentTarget.contains(to)) return;
-    dragOver = false;
-    dragPreview = null;
-  }
-
-  async function handleDrop(/** @type {DragEvent} */ event) {
-    const ids = draggedImageIds(event.dataTransfer);
-    dragOver = false;
-    dragPreview = null;
-    if (ids.length === 0 || !map || !leaflet || !container) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const rect = container.getBoundingClientRect();
-    const at = map.containerPointToLatLng(leaflet.point(event.clientX - rect.left, event.clientY - rect.top));
-    await onAssignLocation(ids, at.lat, at.lng);
-  }
+  /** Set while the pointer is over us during a live drag, holding what a drop right now would save --
+   * consumed the instant `shell.photoDrag` goes back to `null` (see the effect below), so the drop
+   * itself never has to recompute anything a hover update didn't already have. */
+  let pendingDrop = /** @type {{ imageIds: number[], lat: number, lng: number } | null} */ (null);
 
   function frameAllPins() {
     if (!map || !leaflet || framed) return;
@@ -241,6 +204,41 @@
     recluster();
   });
 
+  // Mirrors shell.photoDrag (a Filmstrip pointer-drag; not native HTML5 drag-and-drop) into this
+  // view's own hover state, doing its own hit-testing against `container`'s rect on every pointer
+  // update -- the same shape a native dragover/dragleave/drop trio would have had. When the drag ends
+  // (photoDrag back to `null`) and the last update said the pointer was over us, that's the drop:
+  // commit the point it already computed, via `onAssignLocation`, fire-and-forget like every other
+  // action callback in this view (it reports success/failure itself, through `shell.notify`).
+  $effect(() => {
+    const drag = shell.photoDrag;
+    if (!drag) {
+      dragOver = false;
+      dragPreview = null;
+      if (pendingDrop) {
+        const { imageIds, lat, lng } = pendingDrop;
+        pendingDrop = null;
+        onAssignLocation(imageIds, lat, lng);
+      }
+      return;
+    }
+    if (!container || !map || !leaflet) return;
+    const rect = container.getBoundingClientRect();
+    const { x, y } = drag.pointer;
+    if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) {
+      dragOver = false;
+      dragPreview = null;
+      pendingDrop = null;
+      return;
+    }
+    const px = x - rect.left;
+    const py = y - rect.top;
+    dragOver = true;
+    dragPreview = { x: px, y: py };
+    const at = map.containerPointToLatLng(leaflet.point(px, py));
+    pendingDrop = { imageIds: drag.imageIds, lat: at.lat, lng: at.lng };
+  });
+
   /** The attribution link would navigate the app window; send it to the system browser instead. */
   function handleAttributionClick(/** @type {MouseEvent} */ event) {
     const link = /** @type {HTMLElement} */ (event.target).closest?.("a[href^='http']");
@@ -250,15 +248,7 @@
   }
 </script>
 
-<div
-  class="map-view"
-  class:drag-over={dragOver}
-  role="application"
-  aria-label="Photo map"
-  ondragover={handleDragOver}
-  ondragleave={handleDragLeave}
-  ondrop={handleDrop}
->
+<div class="map-view" class:drag-over={dragOver} role="application" aria-label="Photo map">
   <div class="map-canvas" bind:this={container}></div>
   {#if dragOver && dragPreview}
     <div class="drop-preview" style="left:{dragPreview.x}px; top:{dragPreview.y}px;"></div>

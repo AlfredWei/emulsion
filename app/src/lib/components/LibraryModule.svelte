@@ -195,7 +195,6 @@
       {:else if library.libraryViewMode === "map"}
         <LibraryMapView
           images={library.filteredImages}
-          selectedImageIds={selection.keywordTargetImageIds}
           onSelectCluster={handleMapClusterSelect}
           onAssignLocation={handleMapAssignLocation}
           onNeedThumbnail={prioritizeThumbnail}

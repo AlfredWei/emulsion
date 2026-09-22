@@ -14,6 +14,13 @@
    * matches the reviewed mockup's own explicit simplification for
    * filmstrip cells specifically (distinct from GridCell.svelte, which
    * keeps its badge row for the main grid).
+   *
+   * Cells are also drag sources (M5.5 map view, RFC-0007): this is the one photo strip still visible
+   * while the Map is Library's active view (Grid isn't, so it can't be the source), so dropping a
+   * filmstrip photo onto a map point is how "drag a photo onto the map" is reachable at all --
+   * `LibraryMapView` is the only current drop target. Dragging a cell that's part of the current
+   * multi-selection carries the whole selection (by `image_id`, de-duplicating virtual copies of the
+   * same photo); dragging any other cell carries just that one photo, selected or not.
    * @type {{
    *   images: import('$lib/api/catalog.js').ImageSummary[],
    *   selectedIds: Set<number>,
@@ -22,6 +29,24 @@
    * }}
    */
   let { images, selectedIds, onSelect, onOpen } = $props();
+
+  /** MIME `LibraryMapView`'s drop handler looks for; a plain-text fallback is set too so dropping a
+   * filmstrip photo somewhere else (an OS window, a text field) shows something sensible instead of
+   * nothing. */
+  const DRAG_MIME = "application/x-emulsion-image-ids";
+
+  /** @param {DragEvent} event @param {import('$lib/api/catalog.js').ImageSummary} image */
+  function handleDragStart(event, image) {
+    const ids =
+      selectedIds.has(image.version_id) && selectedIds.size > 1
+        ? [...new Set(images.filter((img) => selectedIds.has(img.version_id)).map((img) => img.image_id))]
+        : [image.image_id];
+    const dt = event.dataTransfer;
+    if (!dt) return;
+    dt.setData(DRAG_MIME, JSON.stringify(ids));
+    dt.setData("text/plain", `${ids.length} photo${ids.length === 1 ? "" : "s"}`);
+    dt.effectAllowed = "copy";
+  }
 </script>
 
 <div class="filmstrip">
@@ -32,6 +57,8 @@
       class:selected={selectedIds.has(image.version_id)}
       role="button"
       tabindex="0"
+      draggable="true"
+      ondragstart={(e) => handleDragStart(e, image)}
       onclick={(e) => onSelect(image.version_id, e)}
       ondblclick={() => onOpen(image.version_id)}
       onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onSelect(image.version_id)}

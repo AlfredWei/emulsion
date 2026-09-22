@@ -1,5 +1,6 @@
 <script>
   import { onMount } from "svelte";
+  import { convertFileSrc } from "@tauri-apps/api/core";
   import { geolocatedPoints, clusterPoints, boundsOfPoints, clustersInBounds } from "$lib/mapClusters.js";
   import { openExternalUrl } from "$lib/api/system.js";
 
@@ -16,14 +17,19 @@
    * requested until the person actually opens the map (RFC-0007 §7: the only network access in the app, and
    * only for map tiles). Tiles come from OpenStreetMap's public server; the attribution is required by its
    * tile usage policy.
+   * A pin shows a thumbnail once one is available -- the same lazy `ensureThumbnail` fetch Grid/Loupe/Filmstrip
+   * use, requested here for whichever photo represents a drawn pin/cluster (`onNeedThumbnail`, at most once per
+   * photo per time the map is open). Until then, or for a photo Grid never had reason to generate a thumbnail
+   * for, the pin falls back to the plain dot/count it always had.
    * @type {{
    *   images: import('$lib/api/catalog.js').ImageSummary[],
    *   selectedImageIds: number[],
    *   onSelectCluster: (imageIds: number[]) => void,
    *   onAssignLocation: (imageIds: number[], lat: number, lng: number) => Promise<boolean>,
+   *   onNeedThumbnail?: (versionId: number) => void,
    * }}
    */
-  let { images, selectedImageIds, onSelectCluster, onAssignLocation } = $props();
+  let { images, selectedImageIds, onSelectCluster, onAssignLocation, onNeedThumbnail } = $props();
 
   const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
   const COPYRIGHT_URL = "https://www.openstreetmap.org/copyright";
@@ -52,14 +58,32 @@
   let targetIds = $derived([...new Set(selectedImageIds)]);
   let points = $derived(geolocatedPoints(images));
   let hiddenCount = $derived(new Set(images.map((i) => i.image_id)).size - points.length);
+  /** First-seen `ImageSummary` per `image_id` -- same de-duplication `geolocatedPoints` uses, so a
+   * cluster's `imageIds[0]` (also first-seen) looks up the same photo its point came from. */
+  let imagesById = $derived.by(() => {
+    /** @type {Map<number, import('$lib/api/catalog.js').ImageSummary>} */
+    const map = new Map();
+    for (const img of images) if (!map.has(img.image_id)) map.set(img.image_id, img);
+    return map;
+  });
 
   /** @type {ReturnType<typeof clusterPoints>} */
   let clusters = [];
+  /** Photos whose thumbnail has already been requested this time the map is open, so panning back
+   * and forth over the same pins doesn't re-fire `ensureThumbnail` for one still being generated. */
+  const requestedThumbnails = /** @type {Set<number>} */ (new Set());
 
   function recluster() {
     if (!map) return;
     clusters = clusterPoints(points, map.getZoom());
     draw();
+  }
+
+  /** @param {import('$lib/api/catalog.js').ImageSummary} rep */
+  function requestThumbnail(rep) {
+    if (requestedThumbnails.has(rep.image_id)) return;
+    requestedThumbnails.add(rep.image_id);
+    onNeedThumbnail?.(rep.version_id);
   }
 
   function draw() {
@@ -69,12 +93,15 @@
     markers.clearLayers();
     for (const c of clustersInBounds(clusters, { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() })) {
       const single = c.count === 1;
+      const rep = imagesById.get(c.imageIds[0]);
+      const thumbUrl = rep?.thumbnail_path ? convertFileSrc(rep.thumbnail_path) : null;
+      if (rep && !thumbUrl) requestThumbnail(rep);
+      const size = thumbUrl ? (single ? 26 : 34) : single ? 14 : 30;
+      const html = thumbUrl
+        ? `<div class="map-pin photo${single ? "" : " cluster"}" style="background-image:url(&quot;${thumbUrl.replace(/"/g, "&quot;")}&quot;)">${single ? "" : `<span class="map-pin-count">${c.count}</span>`}</div>`
+        : `<div class="map-pin${single ? " single" : ""}">${single ? "" : c.count}</div>`;
       const marker = L.marker([c.lat, c.lng], {
-        icon: L.divIcon({
-          className: "",
-          html: `<div class="map-pin${single ? " single" : ""}">${single ? "" : c.count}</div>`,
-          iconSize: single ? [14, 14] : [30, 30],
-        }),
+        icon: L.divIcon({ className: "", html, iconSize: [size, size] }),
         title: single ? "1 photo" : `${c.count} photos`,
         keyboard: true,
       });
@@ -290,6 +317,7 @@
   }
   /* Markers are created by Leaflet outside this component's markup, so they need :global. */
   .map-view :global(.map-pin) {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -312,6 +340,30 @@
   }
   .map-view :global(.map-pin.single) {
     border-width: 2px;
+  }
+  /* A pin with a loaded thumbnail: the photo fills the circle instead of the plain dot/count. */
+  .map-view :global(.map-pin.photo) {
+    background-color: var(--bg-panel-raised);
+    background-size: cover;
+    background-position: center;
+  }
+  .map-view :global(.map-pin-count) {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    border: 1.5px solid #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   }
   .map-view :global(.leaflet-container) {
     font-family: inherit;

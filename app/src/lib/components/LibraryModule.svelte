@@ -198,6 +198,7 @@
           selectedImageIds={selection.keywordTargetImageIds}
           onSelectCluster={handleMapClusterSelect}
           onAssignLocation={handleMapAssignLocation}
+          onNeedThumbnail={prioritizeThumbnail}
         />
       {/if}
 

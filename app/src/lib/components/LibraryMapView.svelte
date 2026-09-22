@@ -8,16 +8,22 @@
    * grouped into clusters by `mapClusters.js`; clicking one hands its photos' `image_id`s to `onSelectCluster`,
    * which scopes Library to them and shows the grid.
    *
+   * Placing (RFC-0007 slice 3): with photos selected, "Place N photos" lets you click the map to drop a
+   * draggable pin and Apply to save that location for the whole selection. When the first selected photo
+   * already has a location the pin starts there, so this doubles as drag-to-adjust.
+   *
    * Leaflet and its stylesheet are imported when this view first mounts -- never at app start -- so no tile is
    * requested until the person actually opens the map (RFC-0007 §7: the only network access in the app, and
    * only for map tiles). Tiles come from OpenStreetMap's public server; the attribution is required by its
    * tile usage policy.
    * @type {{
    *   images: import('$lib/api/catalog.js').ImageSummary[],
+   *   selectedImageIds: number[],
    *   onSelectCluster: (imageIds: number[]) => void,
+   *   onAssignLocation: (imageIds: number[], lat: number, lng: number) => Promise<boolean>,
    * }}
    */
-  let { images, onSelectCluster } = $props();
+  let { images, selectedImageIds, onSelectCluster, onAssignLocation } = $props();
 
   const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
   const COPYRIGHT_URL = "https://www.openstreetmap.org/copyright";
@@ -36,6 +42,14 @@
   /** Set once the map has been framed around the pins, so later image changes do not yank the view. */
   let framed = false;
 
+  let placing = $state(false);
+  let saving = $state(false);
+  /** The dropped pin's position while placing; `null` until the first click (or a starting location). */
+  let draft = $state(/** @type {{ lat: number, lng: number } | null} */ (null));
+  /** @type {import('leaflet').Marker | null} */
+  let draftMarker = null;
+
+  let targetIds = $derived([...new Set(selectedImageIds)]);
   let points = $derived(geolocatedPoints(images));
   let hiddenCount = $derived(new Set(images.map((i) => i.image_id)).size - points.length);
 
@@ -69,6 +83,54 @@
     }
   }
 
+  function setDraft(/** @type {number} */ lat, /** @type {number} */ lng) {
+    if (!map || !leaflet) return;
+    const L = leaflet;
+    draft = { lat, lng };
+    if (draftMarker) {
+      draftMarker.setLatLng([lat, lng]);
+      return;
+    }
+    draftMarker = L.marker([lat, lng], {
+      draggable: true,
+      zIndexOffset: 1000,
+      icon: L.divIcon({ className: "", html: '<div class="map-pin draft"></div>', iconSize: [22, 22] }),
+    }).addTo(map);
+    draftMarker.on("dragend", () => {
+      const at = draftMarker?.getLatLng();
+      if (at) draft = { lat: at.lat, lng: at.lng };
+    });
+  }
+
+  function clearDraft() {
+    draftMarker?.remove();
+    draftMarker = null;
+    draft = null;
+  }
+
+  function startPlacing() {
+    if (targetIds.length === 0) return;
+    placing = true;
+    // Start from the first selected photo's own location, so the pin can be nudged instead of re-placed.
+    const first = images.find((img) => img.image_id === targetIds[0]);
+    if (first && typeof first.latitude === "number" && typeof first.longitude === "number") setDraft(first.latitude, first.longitude);
+  }
+
+  function stopPlacing() {
+    placing = false;
+    clearDraft();
+  }
+
+  async function applyPlacement() {
+    if (!draft || saving) return;
+    saving = true;
+    try {
+      if (await onAssignLocation(targetIds, draft.lat, draft.lng)) stopPlacing();
+    } finally {
+      saving = false;
+    }
+  }
+
   function frameAllPins() {
     if (!map || !leaflet || framed) return;
     const box = boundsOfPoints(points);
@@ -95,6 +157,9 @@
         map.attributionControl.setPrefix(false);
         L.tileLayer(TILE_URL, { maxZoom: 19, attribution: `© <a href="${COPYRIGHT_URL}">OpenStreetMap</a> contributors` }).addTo(map);
         markers = L.layerGroup().addTo(map);
+        map.on("click", (/** @type {import('leaflet').LeafletMouseEvent} */ e) => {
+          if (placing) setDraft(e.latlng.lat, e.latlng.lng);
+        });
         map.setView([20, 0], 2);
         container.addEventListener("click", handleAttributionClick);
         map.on("zoomend", recluster);
@@ -107,6 +172,7 @@
     })();
     return () => {
       disposed = true;
+      draftMarker = null;
       container?.removeEventListener("click", handleAttributionClick);
       map?.remove();
       map = null;
@@ -134,6 +200,25 @@
 
 <div class="map-view" role="application" aria-label="Photo map">
   <div class="map-canvas" bind:this={container}></div>
+  {#if ready && !loadError}
+    <div class="place-bar">
+      {#if !placing}
+        <button type="button" disabled={targetIds.length === 0} onclick={startPlacing} title="Set the location of the selected photos by clicking the map">
+          {targetIds.length === 0 ? "Select photos to place them" : `Place ${targetIds.length} photo${targetIds.length === 1 ? "" : "s"}`}
+        </button>
+      {:else}
+        <span class="place-hint">
+          {#if draft}
+            {draft.lat.toFixed(5)}, {draft.lng.toFixed(5)} · drag to adjust
+          {:else}
+            Click the map to drop a pin for {targetIds.length} photo{targetIds.length === 1 ? "" : "s"}
+          {/if}
+        </span>
+        <button type="button" class="primary" disabled={!draft || saving} onclick={applyPlacement}>{saving ? "Saving…" : "Apply"}</button>
+        <button type="button" disabled={saving} onclick={stopPlacing}>Cancel</button>
+      {/if}
+    </div>
+  {/if}
   {#if loadError}
     <div class="map-note">The map could not be loaded.</div>
   {:else if ready && points.length === 0}
@@ -165,6 +250,31 @@
     font-size: 12px;
     pointer-events: none;
   }
+  .place-bar {
+    position: absolute;
+    z-index: 1000;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .place-bar button {
+    font-size: 12px;
+    padding: 4px 10px;
+  }
+  .place-bar button.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
   .map-note {
     top: 50%;
     left: 50%;
@@ -194,6 +304,11 @@
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
+  }
+  .map-view :global(.map-pin.draft) {
+    background: #fff;
+    border-color: var(--accent);
+    cursor: grab;
   }
   .map-view :global(.map-pin.single) {
     border-width: 2px;

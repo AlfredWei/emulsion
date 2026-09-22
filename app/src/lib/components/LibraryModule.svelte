@@ -1,7 +1,7 @@
 <script>
   import LibraryFilterBar from "$lib/components/LibraryFilterBar.svelte";
   import { library } from "$lib/state/library.svelte.js";
-  import { handleResetFilters, selectAllPhotos, selectLastImport, selectFolder, selectCollection, handleDeleteCollection, selectPerson, showMapView, handleMapClusterSelect, prioritizeThumbnail, patchLocal } from "$lib/actions/libraryActions.js";
+  import { handleResetFilters, selectAllPhotos, selectLastImport, selectFolder, selectCollection, handleDeleteCollection, selectPerson, showMapView, handleMapClusterSelect, handleMapAssignLocation, applyLocationLocally, prioritizeThumbnail, patchLocal } from "$lib/actions/libraryActions.js";
   import { importFlow } from "$lib/state/importFlow.svelte.js";
   import CatalogRail from "$lib/components/CatalogRail.svelte";
   import { faces } from "$lib/state/faces.svelte.js";
@@ -193,7 +193,12 @@
           onColorLabelChange={handleColorLabelChange}
         />
       {:else if library.libraryViewMode === "map"}
-        <LibraryMapView images={library.filteredImages} onSelectCluster={handleMapClusterSelect} />
+        <LibraryMapView
+          images={library.filteredImages}
+          selectedImageIds={selection.keywordTargetImageIds}
+          onSelectCluster={handleMapClusterSelect}
+          onAssignLocation={handleMapAssignLocation}
+        />
       {/if}
 
       <!-- Library Bottom Toolbar -->
@@ -234,8 +239,7 @@
       }
     }}
     onGeoLocationApplied={(imageIds, lat, lon) => {
-      const ids = new Set(imageIds);
-      library.images = library.images.map((img) => (ids.has(img.image_id) ? { ...img, latitude: lat, longitude: lon } : img));
+      applyLocationLocally(imageIds, lat, lon);
       shell.notify(`Set location for ${imageIds.length} photo${imageIds.length === 1 ? "" : "s"}`);
     }}
     faces={faces.currentImageFaces}

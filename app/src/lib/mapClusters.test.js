@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { geolocatedPoints, projectToPixels, boundsOfPoints, clusterPoints, clustersInBounds, MAX_MERCATOR_LAT } from "./mapClusters.js";
+import { geolocatedPoints, projectToPixels, boundsOfPoints, clusterPoints, clustersInBounds, normalizeCoordinate, MAX_MERCATOR_LAT } from "./mapClusters.js";
 
 const img = (/** @type {number} */ id, /** @type {any} */ lat, /** @type {any} */ lng, /** @type {number} */ version = id * 10) =>
   /** @type {any} */ ({ image_id: id, version_id: version, latitude: lat, longitude: lng });
@@ -155,5 +155,27 @@ describe("clustersInBounds", () => {
 
   it("returns an empty list for no clusters", () => {
     expect(clustersInBounds([], box)).toEqual([]);
+  });
+});
+
+describe("normalizeCoordinate", () => {
+  it("leaves valid coordinates alone, including the +-180 and +-90 extremes", () => {
+    expect(normalizeCoordinate(48.85, 2.35)).toEqual({ lat: 48.85, lng: 2.35 });
+    expect(normalizeCoordinate(-90, 180)).toEqual({ lat: -90, lng: 180 });
+    expect(normalizeCoordinate(90, -180)).toEqual({ lat: 90, lng: -180 });
+  });
+
+  it("wraps longitude from a repeated world back into range", () => {
+    expect(normalizeCoordinate(0, 190)?.lng).toBe(-170);
+    expect(normalizeCoordinate(0, -190)?.lng).toBe(170);
+    expect(normalizeCoordinate(0, 540 + 10)?.lng).toBe(-170);
+    expect(normalizeCoordinate(0, -360 - 30)?.lng).toBe(-30);
+  });
+
+  it("clamps latitude and rejects non-finite input", () => {
+    expect(normalizeCoordinate(95, 0)?.lat).toBe(90);
+    expect(normalizeCoordinate(-95, 0)?.lat).toBe(-90);
+    expect(normalizeCoordinate(NaN, 0)).toBeNull();
+    expect(normalizeCoordinate(0, Infinity)).toBeNull();
   });
 });

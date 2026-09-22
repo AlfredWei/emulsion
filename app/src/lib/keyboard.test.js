@@ -34,7 +34,7 @@ function makeCtx(over = {}) {
     creatingSmartCollection: false,
     creatingCollectionWithImages: false,
     shortcuts: { ...DEFAULT_SHORTCUTS },
-    libraryViewMode: /** @type {"grid" | "loupe" | "compare" | "survey"} */ ("grid"),
+    libraryViewMode: /** @type {"grid" | "loupe" | "compare" | "survey" | "map"} */ ("grid"),
     spacePanning: false,
     selectedMask: /** @type {{ op?: string } | null} */ (null),
     showMaskOverlay: false,
@@ -49,6 +49,7 @@ function makeCtx(over = {}) {
     selectNextImage: vi.fn(),
     selectPrevImage: vi.fn(),
     selectGridStep: vi.fn(),
+    showMapView: vi.fn(),
     switchModule: vi.fn(async () => {}),
     openDevelop: vi.fn(async () => {}),
     handleSelectAll: vi.fn(),
@@ -231,6 +232,23 @@ describe("library module", () => {
     expect(ctx.selectedId).toBe(11);
     expect([...ctx.selectedIds]).toEqual([11]);
     expect(ctx.libraryViewMode).toBe("loupe");
+  });
+
+  it("M opens the map through showMapView, and a rebound key follows the binding", () => {
+    const ctx = makeCtx();
+    const { press } = setup(ctx);
+    const e = press("m");
+    expect(ctx.showMapView).toHaveBeenCalledTimes(1);
+    expect(e.preventDefault).toHaveBeenCalled();
+    press("M"); // caps lock / shifted letter is treated the same as the other view keys
+    expect(ctx.showMapView).toHaveBeenCalledTimes(2);
+
+    const rebound = makeCtx({ shortcuts: { ...DEFAULT_SHORTCUTS, viewMap: "k" } });
+    const r = setup(rebound);
+    r.press("m");
+    expect(rebound.showMapView).not.toHaveBeenCalled();
+    r.press("k");
+    expect(rebound.showMapView).toHaveBeenCalledTimes(1);
   });
 
   it("Loupe on an empty view does nothing; Enter behaves like E", () => {

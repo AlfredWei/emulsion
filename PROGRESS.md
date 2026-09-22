@@ -2,6 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5.5 Slice 3a — place photos on the map, and the `M` shortcut (2026-09-21)
+
+Slice 3 of RFC-0007 is split; this is the pin-drop half (notes appended to the RFC, §7). Reverse geocoding is 3b.
+
+- **Placing**: in the Map view, with photos selected, "Place N photos" → click to drop a draggable pin (starts at the first selected photo's own location when it has one, so it doubles as drag-to-adjust) → Apply / Cancel. Saves through the existing `set_geo_location_batch`; no backend change.
+- **`libraryActions`**: `handleMapAssignLocation` (dedupes ids, normalizes the coordinate, saves, mirrors locally, notifies; a failed save changes nothing and reports), `applyLocationLocally` (extracted from `LibraryModule`, now also used by the metadata panel's search-assign). **`mapClusters.normalizeCoordinate`** wraps longitude/clamps latitude for pins dragged into a repeated world.
+- **`M` shortcut**: new `viewMap` binding (rebindable; stored shortcut sets pick up the default) → `showMapView` via the keyboard context; USER_GUIDE key table updated. Not added: a native View-menu item (Rust `lib.rs`).
+- **Verified**: `npm run check` 0 errors/0 warnings; vitest 643 passed (+8: `normalizeCoordinate`, the two actions, the shortcut incl. rebinding); `vite build` OK; 9 hand-made mutants all killed. Browser (dev server, Tauri `invoke` stubbed to record calls): `M` opens the map; Place → click drops a pin → drag moves it (hint shows the coordinates) → Apply sent `set_geo_location_batch([2,3], 48.8469, 2.3580)`, both photos got the location, pins became 1 + 2, status "Set location for 2 photos".
+- **Not verified**: the Tauri window (webview drag/click behaviour), e2e (CI).
+- **Next**: 3b reverse geocoding ("Look up place name", explicit per action, coordinates go to the selected provider), and a View-menu entry for the map.
+
 ## M5.5 Slice 2b — the map view (2026-09-21)
 
 Second half of RFC-0007 §4 slice 2: the world map is now a Library view mode. Design notes are appended to the RFC (§7).

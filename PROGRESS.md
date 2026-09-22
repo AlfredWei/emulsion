@@ -2,6 +2,17 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5.5 Slice 3b — reverse geocoding, closing RFC-0007 (2026-09-21)
+
+The last scope item from RFC-0007 §3.4/§5: "Look up place name" for a photo's *existing* coordinates. Design notes appended to the RFC (§7). M5.5 is complete.
+
+- **Backend**: new `reverse_geocode` Tauri command → `geocode::reverse(provider, lat, lng, key)`. Google's reverse response has the same shape as a forward search, so `parse_google_response` is reused; Nominatim's `/reverse` returns one object, so a small `parse_osm_reverse_response` reads `display_name` (`None`/absent = nothing nearby, not an error). Both providers share the existing one-request-per-second Nominatim throttle, pulled out of `search` into `throttle_nominatim` rather than copied. 5 new Rust tests (parsing, the "nothing nearby" case, the missing-key guard); 20 geocode tests total, all passing.
+- **Frontend**: `reverseGeocode(lat, lng)` in `lib/api/map.js`; a "Look up place name" button next to a photo's coordinates in `MetadataPanel` (loading/error states, result shown inline and cleared whenever the photo, its coordinates, or the selection change, so a stale label never looks current).
+- **Privacy**: this is the one action in the app that sends catalog data (the photo's own coordinates) off-device, and only on that explicit click — never automatically, matching §3.4's amended wording. USER_GUIDE's Map & geolocation section is no longer "partly built": renamed, its exit-criteria line updated, and the privacy paragraph now names this exception.
+- **Verified**: `cargo test` 20/20 in `geocode.rs` (well within the wider Rust suite); `npm run check` 0 errors/0 warnings; vitest still 643 (no frontend logic worth a unit test here — `reverseGeocode` is a thin `invoke` passthrough like its siblings, and `MetadataPanel` has never had a component test in this project; verified in the browser instead); `vite build` OK. Browser (dev server, Tauri `invoke` stubbed): clicking "Look up place name" sent exactly `{latitude, longitude}` (no other photo/catalog data) and showed "Taipei 101, Xinyi District, Taipei, Taiwan" inline; switching to a different photo cleared it before any click; a rejected call showed the error text inline.
+- **Not verified**: the Tauri window, e2e (CI), and Google's reverse endpoint against a real key (only Nominatim's shape and the parser were exercised live in the browser; Google's parser is covered by its own recorded-JSON unit tests, same as forward search).
+- **RFC-0007 is closed**: all three slices (search & assign, map view, pin-drop + reverse geocode) are built.
+
 ## M5.5 Slice 3a — place photos on the map, and the `M` shortcut (2026-09-21)
 
 Slice 3 of RFC-0007 is split; this is the pin-drop half (notes appended to the RFC, §7). Reverse geocoding is 3b.

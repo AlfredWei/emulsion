@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 const GOOGLE_ENDPOINT: &str = "https://maps.googleapis.com/maps/api/geocode/json";
 const NOMINATIM_ENDPOINT: &str = "https://nominatim.openstreetmap.org/search";
+const NOMINATIM_REVERSE_ENDPOINT: &str = "https://nominatim.openstreetmap.org/reverse";
 const MAX_CANDIDATES: usize = 5;
 // Nominatim's usage policy: an identifying User-Agent and at most one
 // request per second.
@@ -144,6 +145,20 @@ pub fn parse_osm_response(body: &str) -> Result<Vec<GeocodeCandidate>, GeocodeEr
         .collect())
 }
 
+#[derive(Deserialize)]
+struct OsmReverseResponse {
+    #[serde(default)]
+    display_name: Option<String>,
+}
+
+/// Nominatim's reverse endpoint returns one object, not a list, and `{"error": "..."}` with no
+/// `display_name` for a point with nothing nearby -- `None`, the same "not an error" shape as an
+/// empty forward-search list.
+pub fn parse_osm_reverse_response(body: &str) -> Result<Option<String>, GeocodeError> {
+    let response: OsmReverseResponse = serde_json::from_str(body).map_err(|_| GeocodeError::BadResponse)?;
+    Ok(response.display_name)
+}
+
 static LAST_NOMINATIM_SLOT: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// How long a request arriving at `now` must wait so consecutive requests
@@ -185,6 +200,14 @@ async fn fetch(request: reqwest::RequestBuilder) -> Result<String, GeocodeError>
         .map_err(|e| GeocodeError::Network(e.without_url().to_string()))
 }
 
+/// Blocks until this call's turn under Nominatim's one-request-per-second policy.
+async fn throttle_nominatim() {
+    let wait = claim_nominatim_slot();
+    if !wait.is_zero() {
+        let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(wait)).await;
+    }
+}
+
 pub async fn search(
     provider: Provider,
     query: &str,
@@ -201,10 +224,7 @@ pub async fn search(
             parse_google_response(&body)
         }
         Provider::Osm => {
-            let wait = claim_nominatim_slot();
-            if !wait.is_zero() {
-                let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(wait)).await;
-            }
+            throttle_nominatim().await;
             let body = fetch(client()?.get(NOMINATIM_ENDPOINT).query(&[
                 ("q", query),
                 ("format", "jsonv2"),
@@ -212,6 +232,38 @@ pub async fn search(
             ]))
             .await?;
             parse_osm_response(&body)
+        }
+    }
+}
+
+/// Reverse geocoding (RFC-0007 §3.4, slice 3b): looks up a place name for a photo's *existing*
+/// coordinates. Unlike `search`, this sends catalog data (the coordinates) off-device, so the
+/// caller must only call it for a coordinate the user explicitly asked to look up -- never
+/// automatically. `Ok(None)` means the provider had nothing nearby, not an error.
+pub async fn reverse(
+    provider: Provider,
+    latitude: f64,
+    longitude: f64,
+    google_api_key: Option<&str>,
+) -> Result<Option<String>, GeocodeError> {
+    match provider {
+        Provider::Google => {
+            let key = google_api_key.filter(|k| !k.is_empty()).ok_or(GeocodeError::NoApiKey)?;
+            let latlng = format!("{latitude},{longitude}");
+            let body = fetch(client()?.get(GOOGLE_ENDPOINT).query(&[("latlng", latlng.as_str()), ("key", key)])).await?;
+            // Google's reverse response has the same {status, results[].formatted_address/geometry}
+            // shape as a forward search, so the same parser applies; the closest result is the label.
+            Ok(parse_google_response(&body)?.into_iter().next().map(|c| c.label))
+        }
+        Provider::Osm => {
+            throttle_nominatim().await;
+            let body = fetch(client()?.get(NOMINATIM_REVERSE_ENDPOINT).query(&[
+                ("lat", latitude.to_string()),
+                ("lon", longitude.to_string()),
+                ("format", "jsonv2".to_string()),
+            ]))
+            .await?;
+            parse_osm_reverse_response(&body)
         }
     }
 }
@@ -350,6 +402,31 @@ mod tests {
         assert_eq!(wait_for_slot(Some(t0), t0 + Duration::from_millis(300), gap), Duration::from_millis(800));
         // Long enough ago: no wait.
         assert_eq!(wait_for_slot(Some(t0), t0 + Duration::from_secs(5), gap), Duration::ZERO);
+    }
+
+    #[test]
+    fn parses_a_nominatim_reverse_result() {
+        let body = r#"{"place_id": 1, "lat": "25.03", "lon": "121.56", "display_name": "Taipei 101, Xinyi District, Taipei, Taiwan"}"#;
+        assert_eq!(
+            parse_osm_reverse_response(body).unwrap(),
+            Some("Taipei 101, Xinyi District, Taipei, Taiwan".to_string())
+        );
+    }
+
+    #[test]
+    fn nominatim_reverse_with_nothing_nearby_is_none_not_an_error() {
+        assert_eq!(parse_osm_reverse_response(r#"{"error":"Unable to geocode"}"#).unwrap(), None);
+    }
+
+    #[test]
+    fn nominatim_reverse_garbage_body_is_a_clean_error() {
+        assert!(matches!(parse_osm_reverse_response("<html>502</html>"), Err(GeocodeError::BadResponse)));
+    }
+
+    #[tokio::test]
+    async fn reverse_requires_a_google_key_before_any_network_call() {
+        assert!(matches!(reverse(Provider::Google, 25.0, 121.5, None).await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(reverse(Provider::Google, 25.0, 121.5, Some("")).await, Err(GeocodeError::NoApiKey)));
     }
 
     #[test]

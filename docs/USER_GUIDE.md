@@ -13,7 +13,7 @@ Launch the app (`make dev` in development, or the built app once packaged). You'
 - Duplicate files (by content, not just filename) are detected and skipped automatically.
 - A "Detect faces?" prompt appears after import — face detection runs as a visible third phase of the import progress bar if you say yes (see [Faces & People](#faces--people)).
 
-The catalog (a single SQLite file) and your originals stay on your own disk — nothing is uploaded anywhere, ever, except the one narrow exception noted under [Map & geolocation](#map--geolocation-partly-built).
+The catalog (a single SQLite file) and your originals stay on your own disk — nothing is uploaded anywhere, ever, except the narrow exceptions noted under [Map & geolocation](#map--geolocation).
 
 ## The Library rail
 
@@ -36,13 +36,13 @@ Five view modes (toolbar; `G`/`E`/`C`/`N` for the first four):
 | **Loupe** | Single-image, full-resolution, interactive pan/zoom. Face rectangles (with the person's name) can be toggled on here. |
 | **Compare** | Synchronized side-by-side comparison with candidate navigation — for picking a winner between similar shots. |
 | **Survey** | A responsive multi-photo matrix for reviewing a larger set at once. |
-| **Map** | A world map of the photos that have a location — see [Map & geolocation](#map--geolocation-partly-built). |
+| **Map** | A world map of the photos that have a location — see [Map & geolocation](#map--geolocation). |
 
 **Culling**: flags (Pick/Reject/Unflag), 1–5 star ratings, and 6 color labels — all click-driven from the per-cell badge row or fully keyboard-driven (see [Shortcuts](#keyboard-shortcuts)). Multi-select (click + Shift/Cmd, or "Select All") applies any of these to many photos at once, with a selection-count badge.
 
 **Filtering**: the filter bar combines flag, star rating (`>=` or `=`), color label, file type (RAW/JPEG), camera, lens, date-taken range, and a free-text search (filename, camera, lens) — all combinable at once, scoped to whatever the rail currently has selected.
 
-**Organizing**: hierarchical keywording, manual collections, rule-based Smart Collections, virtual copies and stacking (grouping burst shots or edit variants without duplicating files), and a full EXIF (read-only) + IPTC (editable: caption, copyright, contact) metadata panel. GPS coordinates from EXIF are shown and manually editable — see [Map & geolocation](#map--geolocation-partly-built) for place search and what's not built yet.
+**Organizing**: hierarchical keywording, manual collections, rule-based Smart Collections, virtual copies and stacking (grouping burst shots or edit variants without duplicating files), and a full EXIF (read-only) + IPTC (editable: caption, copyright, contact) metadata panel. GPS coordinates from EXIF are shown and manually editable — see [Map & geolocation](#map--geolocation) for place search, the map, and what leaves your computer.
 
 **Other actions**: drag-and-drop import, "Reveal in File Manager," non-destructive "Remove from Catalog" (never touches the file on disk), batch export, and one-click batch HDR merge / panorama merge for a multi-selected bracket or shot sequence.
 
@@ -93,19 +93,21 @@ Face detection, embedding, and clustering all run **fully locally** — no cloud
   - **Double-click** anywhere else on their row to filter the Library grid to just their photos.
 - There's currently no way to merge two people who turn out to be the same person, or to browse people across the whole catalog independent of the currently-scoped folder/collection — known gaps, not oversights (see [PROGRESS.md](../PROGRESS.md) and RFC-0005 §7 for the full accounting).
 
-## Map & geolocation (partly built)
+## Map & geolocation
 
-Part of [M5.5 in the roadmap](../PRD/MILESTONES.md). **Built:** searching for a place or address and applying it as the GPS location of the selected photo(s), in one action for a whole multi-selection. the **Map** view (below). **Placing photos on the map** (below). **Not built yet:** looking up a place name for a photo's existing coordinates (reverse geocoding).
+Part of [M5.5 in the roadmap](../PRD/MILESTONES.md). **Built:** searching for a place or address and applying it as the GPS location of the selected photo(s), in one action for a whole multi-selection; the **Map** view and placing photos on it; and looking up a place name for a photo's existing coordinates (below). **Not built yet:** nothing — M5.5 is complete.
 
 **Choosing a search service (Settings → Map):** *OpenStreetMap* is the default and needs no setup or account; it's good with addresses and limited to about one search per second. *Google* is better at landmark and business names but needs your own API key — create one in Google Cloud Console and enable the Geocoding API (Google requires a billing account, though light personal use is within its free monthly allowance). The key stays in your local catalog and is never shown again in the app.
 
 **Using it:** select one or more photos, and in the metadata panel's Location section type a place name or address and press Search. Pick a result to apply its coordinates to every selected photo (the list says how many). Existing altitude is kept. The location is stored in your catalog and, if you tick EXIF + GPS, written into exported JPEGs. You can still type coordinates by hand, for one photo.
 
-**The Map view:** click **Map** in the Library toolbar. Every photo with a location in the current source (All Photos, a folder, a collection…) and passing the filter bar appears as a pin; nearby pins merge into a numbered cluster that splits as you zoom in. Click a pin or cluster to scope the grid to those photos: the rail shows a **Map selection** entry (click it, or All Photos, to clear it) and the view returns to Grid. Photos without a location are not on the map; a badge says how many were left out. Opening the map again shows the whole current source, not the last selection. `M` opens it from the keyboard (rebindable in Settings).
+**The Map view:** click **Map** in the Library toolbar. Every photo with a location in the current source (All Photos, a folder, a collection…) and passing the filter bar appears as a pin, showing a thumbnail of that photo once one exists (generated on the spot if it doesn't yet, the same as opening it in Grid would); nearby pins merge into a cluster shown as a small fanned stack of up to three of its own photos, with its count badged in the corner, that splits apart as you zoom in. Click a pin or cluster to scope the grid to those photos: the rail shows a **Map selection** entry (click it, or All Photos, to clear it) and the view returns to Grid. Photos without a location are not on the map; a badge says how many were left out. Opening the map again shows the whole current source, not the last selection. `M` opens it from the keyboard (rebindable in Settings).
 
-**Placing photos on the map:** select photos in the Grid, open the Map view and press **Place N photos**. Click the map to drop a pin (drag it to adjust; if the first selected photo already has a location the pin starts there), then **Apply** to save that location for every selected photo, or **Cancel**. Applying writes to your catalog only, like the search-and-assign flow above, and overwrites any location those photos had.
+**Placing photos on the map:** drag a photo from the filmstrip (still visible under the Map view) onto a point on the map — or, if it's part of your current selection, drag any selected photo to bring the whole selection. A pin follows your pointer while you drag, showing exactly where it will land; letting go there saves that location immediately, for every photo you dragged. Applying writes to your catalog only, like the search-and-assign flow above, and overwrites any location those photos already had.
 
-**What leaves your computer:** the text you type into the search box (plus your key, if you chose Google), and only when you press Search; search results aren't saved, only the location you pick is. The Map view also downloads map tiles from OpenStreetMap's public server, only while the Map view is open; the requests reveal which part of the world you are looking at, never which photos you have or where they are (a placed pin is saved locally and is not sent anywhere). The map credits © OpenStreetMap contributors, as their tile policy requires; that link opens in your browser.
+**Looking up a place name for a photo's coordinates:** select a single photo that already has a location and press **Look up place name** next to its coordinates in the metadata panel. This is the one action in the app that sends catalog data — that photo's own coordinates — to the search service; it only happens when you press the button, never automatically. The result is shown, not saved; press it again for another try.
+
+**What leaves your computer:** the text you type into the search box (plus your key, if you chose Google), and only when you press Search; search results aren't saved, only the location you pick is. The Map view also downloads map tiles from OpenStreetMap's public server, only while the Map view is open; the requests reveal which part of the world you are looking at, never which photos you have or where they are (a placed pin is saved locally and is not sent anywhere). **Look up place name** is the exception described above: it sends the one photo's coordinates, only on request. The map credits © OpenStreetMap contributors, as their tile policy requires; that link opens in your browser.
 
 ## Settings
 

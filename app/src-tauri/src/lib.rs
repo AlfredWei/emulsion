@@ -1526,6 +1526,22 @@ struct MapSettings {
     has_google_key: bool,
 }
 
+/// Reverse geocoding (RFC-0007 §3.4, slice 3b): looks up a place name for coordinates the caller
+/// already has -- unlike `geocode_search`, this sends those coordinates to the provider, so it must
+/// only ever be called for a lookup the user explicitly asked for on that photo, never automatically.
+#[tauri::command]
+async fn reverse_geocode(state: State<'_, AppState>, latitude: f64, longitude: f64) -> Result<Option<String>, String> {
+    geocode::validate_coordinates(latitude, longitude)?;
+    let (provider, api_key) = {
+        let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+        let provider = geocode::Provider::from_setting(
+            catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref(),
+        );
+        (provider, catalog.get_maps_api_key().map_err(|e| e.to_string())?)
+    };
+    geocode::reverse(provider, latitude, longitude, api_key.as_deref()).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn set_geo_location_batch(
     state: State<'_, AppState>,
@@ -2051,6 +2067,7 @@ pub fn run() {
             regenerate_thumbnail,
             export_images,
             geocode_search,
+            reverse_geocode,
             set_geo_location_batch,
             get_map_settings,
             set_geocode_provider,

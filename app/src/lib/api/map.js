@@ -17,6 +17,17 @@ export function geocodeSearch(/** @type {string} */ query) {
 }
 
 /**
+ * Looks up a place name for coordinates the caller already has (RFC-0007 §3.4, slice 3b).
+ * Unlike `geocodeSearch`, this sends those coordinates to the selected provider -- call it only
+ * for a lookup the person explicitly asked for on that photo, never automatically. `null` means
+ * the provider had nothing nearby; the result is shown, not persisted.
+ * @returns {Promise<string | null>}
+ */
+export function reverseGeocode(/** @type {number} */ latitude, /** @type {number} */ longitude) {
+  return invoke("reverse_geocode", { latitude, longitude });
+}
+
+/**
  * Applies one location to every listed image in a single transaction;
  * altitude is left as-is. Resolves to how many images were updated.
  * @returns {Promise<number>}

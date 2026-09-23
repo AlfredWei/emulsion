@@ -7,7 +7,7 @@
     listKeywords,
     setGeoLocation,
   } from "$lib/api/catalog.js";
-  import { geocodeSearch, setGeoLocationBatch, getMapSettings } from "$lib/api/map.js";
+  import { geocodeSearch, setGeoLocationBatch, getMapSettings, reverseGeocode } from "$lib/api/map.js";
   import { revealInFileManager } from "$lib/api/system.js";
   import LibraryHistogram from "$lib/components/LibraryHistogram.svelte";
 
@@ -130,6 +130,14 @@
   let lonInput = $state("");
   let altInput = $state("");
 
+  // Reverse geocoding (RFC-0007 §3.4, slice 3b): "Look up place name" sends this photo's own
+  // coordinates to the selected provider, only when clicked -- never automatically. The result is
+  // shown here, not written anywhere, and is cleared whenever the selection or the coordinates
+  // change so a stale label can never look like it still describes the current location.
+  let reverseLookup = $state(/** @type {string | null} */ (null));
+  let reverseLoading = $state(false);
+  let reverseError = $state("");
+
   $effect(() => {
     if (image) {
       latInput = image.latitude != null ? image.latitude.toString() : "";
@@ -137,7 +145,24 @@
       altInput = image.altitude != null ? image.altitude.toString() : "";
       editingGps = false;
     }
+    reverseLookup = null;
+    reverseError = "";
   });
+
+  async function handleReverseLookup() {
+    if (!image || image.latitude == null || image.longitude == null || reverseLoading) return;
+    reverseLoading = true;
+    reverseError = "";
+    reverseLookup = null;
+    try {
+      const label = await reverseGeocode(image.latitude, image.longitude);
+      reverseLookup = label ?? "No place name found for these coordinates.";
+    } catch (/** @type {any} */ e) {
+      reverseError = String(e);
+    } finally {
+      reverseLoading = false;
+    }
+  }
 
   let hasGps = $derived(image?.latitude != null && image?.longitude != null);
   let gpsCoordsDisplay = $derived.by(() => {
@@ -632,7 +657,15 @@
         <a class="map-link" href={mapUrl} target="_blank" rel="noreferrer">
           🗺 View on OpenStreetMap ↗
         </a>
+        <button class="action-link-btn" type="button" onclick={handleReverseLookup} disabled={reverseLoading}>
+          {reverseLoading ? "Looking up…" : "Look up place name"}
+        </button>
       </div>
+      {#if reverseError}
+        <div class="place-msg place-error">{reverseError}</div>
+      {:else if reverseLookup !== null}
+        <div class="place-msg" title={reverseLookup}>{reverseLookup}</div>
+      {/if}
     {:else}
       <div class="empty-hint-row">No GPS data</div>
     {/if}
@@ -1227,6 +1260,10 @@
   }
   .gps-action-row {
     padding: 3px 4px 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
   }
   .map-link {
     font-size: 10.5px;

@@ -195,6 +195,127 @@ fn texture_and_clarity_amount_zero_is_exact_passthrough_through_edit_stack() {
     assert_eq!(*image.get_pixel(0, 0), image::Rgb([242, 242, 242]));
 }
 
+/// RFC-0010 §3's constant-input identity, hand-derived: on a flat field
+/// `var_p = corr_p - mean_p^2 = 0` everywhere (a box mean of a constant is
+/// that same constant, exactly), so `a = 0/(0+eps) = 0` and
+/// `b = mean_p - 0*mean_p = mean_p = p`; then `mean_a = 0`, `mean_b = p`,
+/// giving `q = 0*p + p = p` exactly. A flat image must come back
+/// unchanged regardless of radius or `eps`.
+#[test]
+fn guided_filter_self_on_constant_input_is_exact_identity() {
+    let buf = vec![0.42f32; 25];
+    let result = guided_filter_self(&buf, 5, 5, 2, CLARITY_GUIDED_EPS);
+    for v in result {
+        assert!((v - 0.42).abs() < 1e-6, "{v}");
+    }
+}
+
+/// RFC-0010 §3's other named limit, corrected during implementation (an
+/// earlier draft of both the RFC and this test wrongly claimed `eps ->
+/// infinity` reduces to `separable_mean_filter`'s own output -- it
+/// doesn't: `a -> 0` and `b -> mean_p` pointwise, but `mean_b` then
+/// box-filters `b` AGAIN, so the true limit is a DOUBLE box mean
+/// (`boxfilter(boxfilter(p))`), not a single one; the failing version of
+/// this test caught the bug). The real, useful limit is the opposite
+/// direction: as `eps -> 0` (with `var_p > 0` at every pixel, i.e. no
+/// perfectly flat local window anywhere -- true here since every value in
+/// `buf` is distinct, so even a clamped boundary window is never all one
+/// value), `a -> 1` and `b -> 0` pointwise, hence `mean_a -> 1` and
+/// `mean_b -> 0`, giving `q -> 1*p + 0 = p` -- an exact identity, no
+/// smoothing at all, the filter backing off completely once it has no
+/// regularization telling it a region is "flat."
+#[test]
+fn guided_filter_self_at_a_very_small_eps_is_an_exact_identity() {
+    let buf = [5.0f32, 3.0, 8.0, 1.0, 9.0, 2.0, 7.0];
+    let guided = guided_filter_self(&buf, 7, 1, 2, 1e-8);
+    for (g, p) in guided.iter().zip(buf.iter()) {
+        assert!((g - p).abs() < 1e-3, "guided {g}, original {p}");
+    }
+}
+
+/// The actual halo-reduction claim this RFC exists for, checked directly
+/// at the `guided_filter_self` vs. `separable_mean_filter` level rather
+/// than only through the higher-level `apply_clarity`/`apply_local_contrast`
+/// (isolating the primitive itself, at Clarity's own working radius/eps):
+/// a sharp step edge (a hard cut from 0.2 to 0.8, like a dark silhouette
+/// against a bright sky), radius 24 so the window at a point just past the
+/// edge still reaches deep into the low plateau -- exactly the setup that
+/// produces Clarity's classic halo under a plain box mean. At every point
+/// checked just inside the high plateau, the guided filter's blurred value
+/// must land closer to the true, unblurred plateau value (0.8) than the
+/// plain box mean's does.
+#[test]
+fn guided_filter_self_overshoots_less_than_the_box_mean_near_a_step_edge() {
+    let width = 61;
+    let mut buf = vec![0.2f32; width];
+    for v in buf.iter_mut().skip(30) {
+        *v = 0.8;
+    }
+    let guided = guided_filter_self(&buf, width, 1, 24, CLARITY_GUIDED_EPS);
+    let boxed = separable_mean_filter(&buf, width, 1, 24);
+    for x in 31..40 {
+        let guided_err = (guided[x] - 0.8f32).abs();
+        let boxed_err = (boxed[x] - 0.8f32).abs();
+        assert!(
+            guided_err < boxed_err,
+            "at x={x}: guided error {guided_err} not smaller than box-mean error {boxed_err}"
+        );
+    }
+}
+
+/// Same passthrough contract as `apply_local_contrast_amount_zero_is_exact_passthrough`,
+/// for the new Clarity-only `apply_clarity`.
+#[test]
+fn apply_clarity_amount_zero_is_exact_passthrough() {
+    let mut graded = vec![[0.0, 0.0, 0.0], [0.3, 0.3, 0.3], [0.9, 0.9, 0.9]];
+    let before = graded.clone();
+    apply_clarity(&mut graded, 3, 1, 0.0);
+    assert_eq!(graded, before);
+}
+
+/// Same uniform-field contract as `apply_local_contrast_uniform_field_is_unaffected_by_any_amount`
+/// -- relies on `guided_filter_self`'s own constant-input identity (tested
+/// directly above) rather than re-deriving it, so a 3x3 image against
+/// `CLARITY_RADIUS=24` (radius far larger than the image) exercises the
+/// identity under heavy edge-clamping too.
+#[test]
+fn apply_clarity_uniform_field_is_unaffected_by_any_amount() {
+    let mut graded = vec![[0.47, 0.31, 0.16]; 9];
+    apply_clarity(&mut graded, 3, 3, 100.0);
+    apply_clarity(&mut graded, 3, 3, -100.0);
+    for rgb in &graded {
+        assert!((rgb[0] - 0.47).abs() < 1e-4, "{rgb:?}");
+        assert!((rgb[1] - 0.31).abs() < 1e-4, "{rgb:?}");
+        assert!((rgb[2] - 0.16).abs() < 1e-4, "{rgb:?}");
+    }
+}
+
+/// End-to-end confirmation, at the `apply_clarity`/`apply_local_contrast`
+/// level (not just the lower-level `guided_filter_self` test above), that
+/// switching Clarity to the guided filter is a real, visible improvement:
+/// same step-edge image as the primitive-level test, same expectation,
+/// but exercised through the actual op functions `apply_edit_stack` calls.
+#[test]
+fn apply_clarity_creates_less_overshoot_than_the_old_box_mean_version_at_a_real_edge() {
+    let width = 61;
+    let mut low_graded = vec![[0.2f32, 0.2, 0.2]; width];
+    for rgb in low_graded.iter_mut().skip(30) {
+        *rgb = [0.8, 0.8, 0.8];
+    }
+    let mut guided = low_graded.clone();
+    let mut boxed = low_graded.clone();
+    apply_clarity(&mut guided, width, 1, 100.0);
+    apply_local_contrast(&mut boxed, width, 1, CLARITY_RADIUS, 100.0);
+    for x in 31..40 {
+        let guided_err = (guided[x][0] - 0.8f32).abs();
+        let boxed_err = (boxed[x][0] - 0.8f32).abs();
+        assert!(
+            guided_err < boxed_err,
+            "at x={x}: guided error {guided_err} not smaller than box-mean error {boxed_err}"
+        );
+    }
+}
+
 /// Hand-derived: a 3x3 luma buffer with a single bright spot at the
 /// center-right neighbor. At (1,1): xm=0,xp=2 -> gx = luma[1,2] -
 /// luma[1,0] = 1.0 - 0.0 = 1.0; ym=0,yp=2 -> gy = luma[2,1] -

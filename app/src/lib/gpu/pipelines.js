@@ -146,10 +146,71 @@ export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} *
     fragment: { module, entryPoint: "fs_texture_v", targets: [{ format: "rgba16float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.clarityHPipeline = gpu.device.createRenderPipeline({
+  // Clarity (RFC-0010): 10 new pipelines replacing the old fs_clarity_h/v
+  // pair -- see dehazeLocalContrast.js's own doc comment for the full
+  // guided-filter pass list. Every new intermediate (mean_p, corr_p, a, b,
+  // mean_a, mean_b) is single-channel, same "r32float" convention as every
+  // other scalar intermediate in this file; fs_clarity_v (final) is
+  // unchanged in name/target -- it still writes the finished rgb+delta to
+  // gradedTex.
+  gpu.clarityMeanpHPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_clarity_h", targets: [{ format: "r32float" }] },
+    fragment: { module, entryPoint: "fs_clarity_meanp_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityMeanpVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_meanp_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityCorrpHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_corrp_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityCorrpVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_corrp_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityAPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_a", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityBPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_b", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityMeanaHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_meana_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityMeanaVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_meana_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityMeanbHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_meanb_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.clarityMeanbVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_clarity_meanb_v", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
   gpu.clarityVPipeline = gpu.device.createRenderPipeline({

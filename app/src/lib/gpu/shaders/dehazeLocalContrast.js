@@ -86,8 +86,35 @@ export const dehazeLocalContrast = `    // Dehaze (M3): dark-channel-prior haze 
       return vec4<f32>(rgb + vec3<f32>(delta, delta, delta), 1.0);
     }
 
+    // Clarity (RFC-0010): self-guided image filter (He, Sun, Tang, ECCV
+    // 2010/TPAMI 2013) replacing the plain box mean Texture above still
+    // uses -- see develop_engine.rs's own guided_filter_self/apply_clarity
+    // doc comments for the full derivation and both named boundary
+    // identities; this is a direct WGSL port, pass-for-pass.
+    // CLARITY_GUIDED_EPS matches the Rust twin exactly. Six new persistent
+    // single-channel intermediates (mean_p, corr_p, a, b, mean_a, mean_b),
+    // each its own binding since more than one is read simultaneously by a
+    // later pass (unlike lcRgbInput/lcBlurInput's rebinding trick, which
+    // only ever needs ONE actual texture live at a time). Every box-filter
+    // pass below still routes its own H-pass output through the shared
+    // lcBlurInput rebinding (binding 14) for its V pass, same convention
+    // as fs_texture_h/v and every Dehaze H/V pair.
+    const CLARITY_GUIDED_EPS: f32 = 0.01;
+
+    @group(0) @binding(29) var clarityMeanPFinal: texture_2d<f32>;
+    @group(0) @binding(30) var clarityCorrPFinal: texture_2d<f32>;
+    @group(0) @binding(31) var clarityAFinal: texture_2d<f32>;
+    @group(0) @binding(32) var clarityBFinal: texture_2d<f32>;
+    @group(0) @binding(33) var clarityMeanAFinal: texture_2d<f32>;
+    @group(0) @binding(34) var clarityMeanBFinal: texture_2d<f32>;
+
+    // mean_p: a plain box mean of luma at CLARITY_RADIUS -- identical
+    // shape to fs_texture_h/v above (same radius, same lcRgbInput), just a
+    // separate pipeline that stops at the plain mean instead of folding in
+    // a delta-apply step, since the guided filter needs mean_p itself as
+    // an input to later passes, not yet a finished adjustment.
     @fragment
-    fn fs_clarity_h(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_clarity_meanp_h(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       let dims = vec2<i32>(textureDimensions(lcRgbInput));
       var sum = 0.0;
@@ -99,19 +126,8 @@ export const dehazeLocalContrast = `    // Dehaze (M3): dark-channel-prior haze 
       return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
     }
 
-    // Vertical pass, completing Clarity's blur + apply -- same shape as
-    // fs_texture_v, but this pass's render target (set on the JS side, not
-    // a WGSL binding) is gradedTex ITSELF: Clarity is the last of the two
-    // local-contrast ops, so its output overwrites gradedTex in place
-    // rather than needing a third "final graded" texture. Every downstream
-    // consumer of gradedTex (fs_atm_reduce's first pass, fs_min_channel,
-    // fs_final) already reads it AFTER this point in pass order, so they
-    // transparently see Texture+Clarity already baked in -- sound because
-    // WebGPU passes within one command encoder execute strictly in
-    // recorded order, the same guarantee gradedTex already relies on today
-    // (written once by fs_grade, read three times later in the frame).
     @fragment
-    fn fs_clarity_v(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_clarity_meanp_v(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       let dims = vec2<i32>(textureDimensions(lcBlurInput));
       var sum = 0.0;
@@ -120,11 +136,135 @@ export const dehazeLocalContrast = `    // Dehaze (M3): dark-channel-prior haze 
         sum = sum + textureLoad(lcBlurInput, vec2<i32>(coord.x, sy), 0).r;
       }
       let window = f32(2 * CLARITY_RADIUS + 1);
-      let blurred = sum / window;
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
 
+    // corr_p: box mean of luma^2 at the same radius -- same H/V shape,
+    // squares each tap before accumulating instead of taking it plain.
+    @fragment
+    fn fs_clarity_corrp_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(lcRgbInput));
+      var sum = 0.0;
+      for (var dx = -CLARITY_RADIUS; dx <= CLARITY_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        let l = luma(textureLoad(lcRgbInput, vec2<i32>(sx, coord.y), 0).rgb);
+        sum = sum + l * l;
+      }
+      let window = f32(2 * CLARITY_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_clarity_corrp_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(lcBlurInput));
+      var sum = 0.0;
+      for (var dy = -CLARITY_RADIUS; dy <= CLARITY_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(lcBlurInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * CLARITY_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // a = var_p / (var_p + eps), var_p = corr_p - mean_p^2 -- a single
+    // per-pixel pass, no window loop. Split from b below into its own
+    // pass only because this module's own convention is one render target
+    // per pass (every other pass here already follows it) -- the Rust
+    // twin computes both in one per-pixel loop iteration, no GPU pass
+    // boundary to worry about there.
+    @fragment
+    fn fs_clarity_a(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let meanP = textureLoad(clarityMeanPFinal, coord, 0).r;
+      let corrP = textureLoad(clarityCorrPFinal, coord, 0).r;
+      let varP = corrP - meanP * meanP;
+      let a = varP / (varP + CLARITY_GUIDED_EPS);
+      return vec4<f32>(a, 0.0, 0.0, 1.0);
+    }
+
+    // b = mean_p * (1 - a) -- reads mean_p again plus this pixel's own
+    // just-written a.
+    @fragment
+    fn fs_clarity_b(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let meanP = textureLoad(clarityMeanPFinal, coord, 0).r;
+      let a = textureLoad(clarityAFinal, coord, 0).r;
+      return vec4<f32>(meanP * (1.0 - a), 0.0, 0.0, 1.0);
+    }
+
+    // mean_a / mean_b: box mean of a and b respectively -- same H/V shape
+    // as mean_p/corr_p above, over these new single-channel inputs
+    // instead of luma.
+    @fragment
+    fn fs_clarity_meana_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(clarityAFinal));
+      var sum = 0.0;
+      for (var dx = -CLARITY_RADIUS; dx <= CLARITY_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(clarityAFinal, vec2<i32>(sx, coord.y), 0).r;
+      }
+      let window = f32(2 * CLARITY_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_clarity_meana_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(lcBlurInput));
+      var sum = 0.0;
+      for (var dy = -CLARITY_RADIUS; dy <= CLARITY_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(lcBlurInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * CLARITY_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_clarity_meanb_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(clarityBFinal));
+      var sum = 0.0;
+      for (var dx = -CLARITY_RADIUS; dx <= CLARITY_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(clarityBFinal, vec2<i32>(sx, coord.y), 0).r;
+      }
+      let window = f32(2 * CLARITY_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_clarity_meanb_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(lcBlurInput));
+      var sum = 0.0;
+      for (var dy = -CLARITY_RADIUS; dy <= CLARITY_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(lcBlurInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * CLARITY_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // Final: q = mean_a*luma + mean_b (the guided-filter output replacing
+    // the old plain "blurred"), delta = (luma - q)*clarity_amount, written
+    // to gradedTex -- same additive-delta shape and same final render
+    // target as before (Clarity is still the last of the two
+    // local-contrast ops, overwriting gradedTex in place; see this
+    // binding's own doc comment above for why every downstream consumer
+    // already reads gradedTex strictly after this point in pass order).
+    @fragment
+    fn fs_clarity_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
       let rgb = textureLoad(lcRgbInput, coord, 0).rgb;
       let l = luma(rgb);
-      let delta = (l - blurred) * (adj.clarity_amount / 100.0);
+      let meanA = textureLoad(clarityMeanAFinal, coord, 0).r;
+      let meanB = textureLoad(clarityMeanBFinal, coord, 0).r;
+      let q = meanA * l + meanB;
+      let delta = (l - q) * (adj.clarity_amount / 100.0);
       return vec4<f32>(rgb + vec3<f32>(delta, delta, delta), 1.0);
     }
 

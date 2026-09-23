@@ -10,7 +10,7 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
   // defensive guard against an unexpected call order, and because
   // TypeScript's null-narrowing from a caller's own guard doesn't carry
   // across a function boundary.
-  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.meanHPipeline || !gpu.meanVPipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityHPipeline || !gpu.clarityVPipeline || !gpu.sharpenHPipeline || !gpu.sharpenVPipeline || !gpu.lumaNRHPipeline || !gpu.lumaNRVPipeline || !gpu.colorNRHPipeline || !gpu.colorNRVPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
+  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.meanHPipeline || !gpu.meanVPipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpVPipeline || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpVPipeline || !gpu.clarityAPipeline || !gpu.clarityBPipeline || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbVPipeline || !gpu.clarityVPipeline || !gpu.sharpenHPipeline || !gpu.sharpenVPipeline || !gpu.lumaNRHPipeline || !gpu.lumaNRVPipeline || !gpu.colorNRHPipeline || !gpu.colorNRVPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
 
   // GPU texture-dimension safety: a genuinely native-resolution decode
   // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -175,6 +175,47 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
   });
   gpu.clarityBlurScratchTex?.destroy();
   gpu.clarityBlurScratchTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  // Clarity's guided filter (RFC-0010): six new persistent single-channel
+  // intermediates -- see dehazeLocalContrast.js's own doc comment for why
+  // each needs its own texture rather than reusing clarityBlurScratchTex's
+  // rebinding trick (more than one is read simultaneously by a later
+  // pass). Same lifecycle as every intermediate above.
+  gpu.clarityMeanPTex?.destroy();
+  gpu.clarityMeanPTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.clarityCorrPTex?.destroy();
+  gpu.clarityCorrPTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.clarityATex?.destroy();
+  gpu.clarityATex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.clarityBTex?.destroy();
+  gpu.clarityBTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.clarityMeanATex?.destroy();
+  gpu.clarityMeanATex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.clarityMeanBTex?.destroy();
+  gpu.clarityMeanBTex = gpu.device.createTexture({
     size: [bitmap.width, bitmap.height],
     format: "r32float",
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
@@ -351,15 +392,71 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
       { binding: 2, resource: { buffer: gpu.uniformBuffer } },
     ],
   });
-  gpu.clarityHBindGroup = gpuDevice.createBindGroup({
-    layout: gpu.clarityHPipeline.getBindGroupLayout(0),
+  // Clarity's guided filter (RFC-0010): 10 bind groups replacing the old
+  // clarityHBindGroup/clarityVBindGroup pair. Every mean_p/corr_p/a/b/
+  // mean_a/mean_b pass reads textureAdjustedTex (binding 13) or the
+  // shared H-scratch clarityBlurScratchTex (binding 14) exactly like
+  // Texture's own bind groups above -- see dehazeLocalContrast.js's own
+  // doc comment for why each of clarityMeanPTex/clarityCorrPTex/
+  // clarityATex/clarityBTex/clarityMeanATex/clarityMeanBTex gets its own
+  // fixed binding (29-34) instead of reusing the rebinding trick. Each
+  // bind group's entries are exactly what that entry point's own WGSL
+  // body references -- `layout: "auto"` infers a layout per entry point,
+  // so a binding this specific pass doesn't read must not be listed here
+  // (same discipline every other bind group in this file already
+  // follows).
+  gpu.clarityMeanpHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityMeanpHPipeline.getBindGroupLayout(0),
     entries: [{ binding: 13, resource: gpu.textureAdjustedTex.createView() }],
+  });
+  gpu.clarityMeanpVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityMeanpVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 14, resource: gpu.clarityBlurScratchTex.createView() }],
+  });
+  gpu.clarityCorrpHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityCorrpHPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 13, resource: gpu.textureAdjustedTex.createView() }],
+  });
+  gpu.clarityCorrpVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityCorrpVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 14, resource: gpu.clarityBlurScratchTex.createView() }],
+  });
+  gpu.clarityABindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityAPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 29, resource: gpu.clarityMeanPTex.createView() },
+      { binding: 30, resource: gpu.clarityCorrPTex.createView() },
+    ],
+  });
+  gpu.clarityBBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityBPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 29, resource: gpu.clarityMeanPTex.createView() },
+      { binding: 31, resource: gpu.clarityATex.createView() },
+    ],
+  });
+  gpu.clarityMeanaHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityMeanaHPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 31, resource: gpu.clarityATex.createView() }],
+  });
+  gpu.clarityMeanaVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityMeanaVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 14, resource: gpu.clarityBlurScratchTex.createView() }],
+  });
+  gpu.clarityMeanbHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityMeanbHPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 32, resource: gpu.clarityBTex.createView() }],
+  });
+  gpu.clarityMeanbVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.clarityMeanbVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 14, resource: gpu.clarityBlurScratchTex.createView() }],
   });
   gpu.clarityVBindGroup = gpuDevice.createBindGroup({
     layout: gpu.clarityVPipeline.getBindGroupLayout(0),
     entries: [
       { binding: 13, resource: gpu.textureAdjustedTex.createView() },
-      { binding: 14, resource: gpu.clarityBlurScratchTex.createView() },
+      { binding: 33, resource: gpu.clarityMeanATex.createView() },
+      { binding: 34, resource: gpu.clarityMeanBTex.createView() },
       { binding: 2, resource: { buffer: gpu.uniformBuffer } },
     ],
   });

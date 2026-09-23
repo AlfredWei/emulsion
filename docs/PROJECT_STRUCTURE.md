@@ -33,7 +33,10 @@ docs/
 │   ├── RFC-0002 … RFC-0007                          Per-feature designs: develop GPU/CPU fallback, HDR merge, panorama,
 │   │                                                 face detection, export-plugin hook, map & geolocation
 │   ├── RFC-0008-large-file-refactor.md              Plan for splitting the >1,000-line source files (living status in PROGRESS.md)
-│   └── RFC-0009-page-svelte-state-design.md         State/module design for splitting `+page.svelte`
+│   ├── RFC-0009-page-svelte-state-design.md         State/module design for splitting `+page.svelte`
+│   └── RFC-0010-clarity-guided-filter.md            M5.6's first effect: Clarity's box-mean blur -> a self-guided
+│                                                     image filter, scoped to one effect (each later M5.6 finding
+│                                                     that needs one gets its own RFC, see its own §0)
 ├── adr/                                           One decision per file: context, decision, consequences,
 │   ├── ADR-0001-application-shell.md               alternatives considered — several have dated "M0/M1
 │   ├── ADR-0002-frontend-ui-stack.md                spike finding" sections added after reality corrected

@@ -268,26 +268,60 @@ pub(super) fn color_nr_delta(orig: [f32; 3], blurred: [f32; 3], n: &ColorNr) -> 
 /// own constants made) -- absolute pixel counts, NOT scaled to image
 /// resolution, the same named/deferred limitation Dehaze's own radii
 /// accepted: `TEXTURE_RADIUS=6` (fine detail, small window so it doesn't
-/// touch big tonal transitions), `CLARITY_RADIUS=24` (coarse "midtone
-/// contrast", the classic halo-prone Clarity look at high amounts -- a
-/// plain box-mean blur stands in for a true edge-aware filter here, same
-/// named limitation as Dehaze's own transmission refinement).
+/// touch big tonal transitions -- still a plain box-mean blur; at this
+/// radius there is much less low-frequency tonal structure for it to leak
+/// across, so it hasn't earned the same fix Clarity gets below),
+/// `CLARITY_RADIUS=24` (coarse "midtone contrast").
 pub(super) const TEXTURE_RADIUS: i32 = 6;
 
 pub(super) const CLARITY_RADIUS: i32 = 24;
 
-/// Applies one local-contrast pass (Texture or Clarity, selected by
-/// `radius`) to `graded` in place -- see the doc comment above for the
-/// additive-delta formula and why it was chosen over a luma-ratio rescale.
-/// `amount` is expected in -100..100; callers skip this entirely at
-/// `amount == 0.0` (exact passthrough, no wasted blur pass), same
-/// discipline `apply_edit_stack` already applies to Dehaze.
+/// RFC-0010's `eps`: the variance scale, in normalized `[0,1]` luma units,
+/// at which `guided_filter_self` treats a region as "edge" (leave it alone)
+/// vs. "flat" (blend it like a plain box mean). `(0.1)^2` is He, Sun, Tang's
+/// own worked example for this exact application (their ECCV 2010 paper's
+/// §5.4 "detail enhancement," a self-guided base/detail split at a
+/// comparable radius) -- a real published starting point, not a guessed
+/// constant, though tunable against this module's own halo-reduction tests
+/// if a different working point proves better in practice.
+pub(super) const CLARITY_GUIDED_EPS: f32 = 0.01;
+
+/// Applies Texture's local-contrast pass to `graded` in place -- see the
+/// doc comment above for the additive-delta formula and why it was chosen
+/// over a luma-ratio rescale. `amount` is expected in -100..100; callers
+/// skip this entirely at `amount == 0.0` (exact passthrough, no wasted
+/// blur pass), same discipline `apply_edit_stack` already applies to
+/// Dehaze. Still the plain box-mean blur -- see `TEXTURE_RADIUS`'s own doc
+/// comment for why Texture didn't get Clarity's guided-filter fix here.
 pub(super) fn apply_local_contrast(graded: &mut [[f32; 3]], width: usize, height: usize, radius: i32, amount: f32) {
     let luma: Vec<f32> = graded
         .iter()
         .map(|c| c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722)
         .collect();
     let blurred = separable_mean_filter(&luma, width, height, radius);
+    let factor = amount / 100.0;
+    for (i, rgb) in graded.iter_mut().enumerate() {
+        let delta = (luma[i] - blurred[i]) * factor;
+        for c in rgb.iter_mut() {
+            *c += delta;
+        }
+    }
+}
+
+/// Applies Clarity's local-contrast pass to `graded` in place (RFC-0010) --
+/// same additive-delta formula and reasoning as `apply_local_contrast`
+/// above, but `blurred` comes from `guided_filter_self` instead of a plain
+/// box mean, so Clarity backs off near real edges instead of haloing them.
+/// A separate function, not a branch inside `apply_local_contrast`, so
+/// Texture's own code path and cost are provably unaffected by this change
+/// (see this module's own tests). `amount` is expected in -100..100;
+/// callers skip this entirely at `amount == 0.0`, same discipline as above.
+pub(super) fn apply_clarity(graded: &mut [[f32; 3]], width: usize, height: usize, amount: f32) {
+    let luma: Vec<f32> = graded
+        .iter()
+        .map(|c| c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722)
+        .collect();
+    let blurred = guided_filter_self(&luma, width, height, CLARITY_RADIUS, CLARITY_GUIDED_EPS);
     let factor = amount / 100.0;
     for (i, rgb) in graded.iter_mut().enumerate() {
         let delta = (luma[i] - blurred[i]) * factor;
@@ -443,4 +477,41 @@ pub(super) fn separable_mean_filter(buf: &[f32], width: usize, height: usize, ra
         }
     }
     v_pass
+}
+
+/// Self-guided image filter (RFC-0010; He, Sun, Tang, "Guided Image
+/// Filtering," ECCV 2010 / IEEE TPAMI 2013 -- the guidance image and the
+/// input being filtered are the same signal, the special case the RFC
+/// derives). An edge-aware generalization of `separable_mean_filter`
+/// above: on a flat region (`var_p` near zero) it reduces to that same
+/// plain box mean; near a real edge (`var_p` large relative to `eps`) it
+/// backs off toward the original, unblurred value instead of blending
+/// across the edge the way a plain box mean does. Formally, `eps -> 0`
+/// (given no perfectly flat local window anywhere) degrades this exactly
+/// to the identity (no smoothing at all) -- see RFC-0010 §3 and this
+/// module's own tests for both that limit and the constant-input
+/// identity. (An earlier draft claimed the opposite limit, `eps ->
+/// infinity`, degrades to a single `separable_mean_filter` pass -- a real
+/// bug a failing test caught: it actually degrades to a DOUBLE box mean,
+/// `mean_b` box-filtering an already-box-filtered `b`. See RFC-0010 §3's
+/// own correction.)
+///
+/// Four `separable_mean_filter` calls (`mean_p`, `corr_p`, `mean_a`,
+/// `mean_b`) plus two cheap per-pixel passes (the `a`/`b` compose, then
+/// the final `q` compose) -- no new windowed-reduction primitive, reuses
+/// the existing O(1)-per-pixel sliding-window filter throughout.
+pub(super) fn guided_filter_self(buf: &[f32], width: usize, height: usize, radius: i32, eps: f32) -> Vec<f32> {
+    let mean_p = separable_mean_filter(buf, width, height, radius);
+    let sq: Vec<f32> = buf.iter().map(|v| v * v).collect();
+    let corr_p = separable_mean_filter(&sq, width, height, radius);
+    let mut a = vec![0.0f32; buf.len()];
+    let mut b = vec![0.0f32; buf.len()];
+    for i in 0..buf.len() {
+        let var_p = corr_p[i] - mean_p[i] * mean_p[i];
+        a[i] = var_p / (var_p + eps);
+        b[i] = mean_p[i] - a[i] * mean_p[i];
+    }
+    let mean_a = separable_mean_filter(&a, width, height, radius);
+    let mean_b = separable_mean_filter(&b, width, height, radius);
+    (0..buf.len()).map(|i| mean_a[i] * buf[i] + mean_b[i]).collect()
 }

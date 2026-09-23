@@ -52,9 +52,9 @@ q      = mean_a * p + mean_b
 
 Why this fixes the halo: `a` is a per-pixel edge indicator computed from local variance. In a flat region, `var_p ≈ 0`, so `a ≈ 0` and `q ≈ mean_p` — a plain local average, same as today's box blur. Near a strong edge, `var_p` is large relative to `eps`, so `a ≈ 1` and `q ≈ p` — the filter backs off and returns something close to the original pixel, rather than blending across the edge the way an unweighted box mean does. `eps` is the only new knob, and it's exactly the thing a plain box mean has no equivalent of at all: it sets the variance scale at which the filter treats a region as "edge" vs. "flat."
 
-Two boundary sanity checks worth stating up front (both become unit tests in §5):
+Two boundary sanity checks worth stating up front (both become unit tests in §6 — the first implementation pass, corrected below, caught a real error in the second one):
 - **Constant input**: `var_p = 0` everywhere → `a = 0`, `b = mean_p = p` → `q = p`. A flat image is returned unchanged (matches a box mean's own trivial behavior on a constant input).
-- **`eps → ∞`**: `a → 0` everywhere regardless of `var_p` → `q → mean_p` — the filter degrades exactly to the current plain box mean. This is the formal sense in which the new filter is a strict generalization, not an unrelated replacement: today's behavior is `eps = ∞`'s special case.
+- **`eps → 0`** (given `var_p > 0` at every pixel, i.e. no perfectly flat local window anywhere): `a → 1`, `b → 0` pointwise, hence `mean_a → 1`, `mean_b → 0`, giving `q → 1·p + 0 = p` — an exact identity, no smoothing at all, once there's no regularization telling the filter a region is "flat." **Correction**: an earlier draft of this RFC additionally claimed the opposite limit, `eps → ∞`, degrades exactly to `separable_mean_filter`'s own output. That's wrong, and a failing unit test caught it during implementation: `a → 0` and `b → mean_p` pointwise as claimed, but `mean_b` then box-filters `b` a *second* time, so the true `eps → ∞` limit is `boxfilter(boxfilter(p))` — a double box mean, not a single one. Dropped as a claim; the `eps → 0` identity above is the one boundary condition this RFC relies on, and it's the more directly useful one for a unit test besides.
 
 ## 4. Design — CPU (Rust)
 

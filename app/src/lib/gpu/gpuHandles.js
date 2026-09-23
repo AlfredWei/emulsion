@@ -60,7 +60,16 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPURenderPipeline | null} meanVPipeline
  * @property {GPURenderPipeline | null} textureHPipeline
  * @property {GPURenderPipeline | null} textureVPipeline
- * @property {GPURenderPipeline | null} clarityHPipeline
+ * @property {GPURenderPipeline | null} clarityMeanpHPipeline
+ * @property {GPURenderPipeline | null} clarityMeanpVPipeline
+ * @property {GPURenderPipeline | null} clarityCorrpHPipeline
+ * @property {GPURenderPipeline | null} clarityCorrpVPipeline
+ * @property {GPURenderPipeline | null} clarityAPipeline
+ * @property {GPURenderPipeline | null} clarityBPipeline
+ * @property {GPURenderPipeline | null} clarityMeanaHPipeline
+ * @property {GPURenderPipeline | null} clarityMeanaVPipeline
+ * @property {GPURenderPipeline | null} clarityMeanbHPipeline
+ * @property {GPURenderPipeline | null} clarityMeanbVPipeline
  * @property {GPURenderPipeline | null} clarityVPipeline
  * @property {GPURenderPipeline | null} sharpenHPipeline
  * @property {GPURenderPipeline | null} sharpenVPipeline
@@ -80,6 +89,12 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUTexture | null} textureBlurScratchTex
  * @property {GPUTexture | null} textureAdjustedTex
  * @property {GPUTexture | null} clarityBlurScratchTex
+ * @property {GPUTexture | null} clarityMeanPTex
+ * @property {GPUTexture | null} clarityCorrPTex
+ * @property {GPUTexture | null} clarityATex
+ * @property {GPUTexture | null} clarityBTex
+ * @property {GPUTexture | null} clarityMeanATex
+ * @property {GPUTexture | null} clarityMeanBTex
  * @property {GPUTexture | null} sharpenBlurHTex
  * @property {GPUTexture | null} sharpenBlurTex
  * @property {GPUTexture | null} lumaNRBlurHTex
@@ -96,7 +111,16 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUBindGroup | null} meanVBindGroup
  * @property {GPUBindGroup | null} textureHBindGroup
  * @property {GPUBindGroup | null} textureVBindGroup
- * @property {GPUBindGroup | null} clarityHBindGroup
+ * @property {GPUBindGroup | null} clarityMeanpHBindGroup
+ * @property {GPUBindGroup | null} clarityMeanpVBindGroup
+ * @property {GPUBindGroup | null} clarityCorrpHBindGroup
+ * @property {GPUBindGroup | null} clarityCorrpVBindGroup
+ * @property {GPUBindGroup | null} clarityABindGroup
+ * @property {GPUBindGroup | null} clarityBBindGroup
+ * @property {GPUBindGroup | null} clarityMeanaHBindGroup
+ * @property {GPUBindGroup | null} clarityMeanaVBindGroup
+ * @property {GPUBindGroup | null} clarityMeanbHBindGroup
+ * @property {GPUBindGroup | null} clarityMeanbVBindGroup
  * @property {GPUBindGroup | null} clarityVBindGroup
  * @property {GPUBindGroup | null} sharpenHBindGroup
  * @property {GPUBindGroup | null} sharpenVBindGroup
@@ -284,7 +308,16 @@ export function createGpuHandles() {
     meanVPipeline: null,
     textureHPipeline: null,
     textureVPipeline: null,
-    clarityHPipeline: null,
+    clarityMeanpHPipeline: null,
+    clarityMeanpVPipeline: null,
+    clarityCorrpHPipeline: null,
+    clarityCorrpVPipeline: null,
+    clarityAPipeline: null,
+    clarityBPipeline: null,
+    clarityMeanaHPipeline: null,
+    clarityMeanaVPipeline: null,
+    clarityMeanbHPipeline: null,
+    clarityMeanbVPipeline: null,
     clarityVPipeline: null,
     sharpenHPipeline: null,
     sharpenVPipeline: null,
@@ -325,6 +358,12 @@ export function createGpuHandles() {
     textureBlurScratchTex: null,
     textureAdjustedTex: null,
     clarityBlurScratchTex: null,
+    clarityMeanPTex: null,
+    clarityCorrPTex: null,
+    clarityATex: null,
+    clarityBTex: null,
+    clarityMeanATex: null,
+    clarityMeanBTex: null,
     // Sharpening / Noise Reduction (M3): same one-texture-per-stage
     // convention as Texture/Clarity above -- an H-output scratch texture
     // and a final (post-V-pass) result texture per op, all read directly
@@ -347,7 +386,16 @@ export function createGpuHandles() {
     meanVBindGroup: null,
     textureHBindGroup: null,
     textureVBindGroup: null,
-    clarityHBindGroup: null,
+    clarityMeanpHBindGroup: null,
+    clarityMeanpVBindGroup: null,
+    clarityCorrpHBindGroup: null,
+    clarityCorrpVBindGroup: null,
+    clarityABindGroup: null,
+    clarityBBindGroup: null,
+    clarityMeanaHBindGroup: null,
+    clarityMeanaVBindGroup: null,
+    clarityMeanbHBindGroup: null,
+    clarityMeanbVBindGroup: null,
     clarityVBindGroup: null,
     sharpenHBindGroup: null,
     sharpenVBindGroup: null,

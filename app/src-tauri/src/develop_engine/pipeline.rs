@@ -91,12 +91,14 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     // passthrough, see apply_local_contrast's own doc comment), applied
     // sequentially so Clarity's blur sees Texture's already-adjusted
     // luminance -- matches Lightroom's own slider order and the GPU
-    // side's pass order.
+    // side's pass order. Clarity uses its own guided-filter-based
+    // `apply_clarity` (RFC-0010), not `apply_local_contrast` -- see that
+    // function's own doc comment.
     if texture_amount != 0.0 {
         apply_local_contrast(&mut graded, w, h, TEXTURE_RADIUS, texture_amount);
     }
     if clarity_amount != 0.0 {
-        apply_local_contrast(&mut graded, w, h, CLARITY_RADIUS, clarity_amount);
+        apply_clarity(&mut graded, w, h, clarity_amount);
     }
 
     // Sharpening / Noise Reduction blur sources: computed from `graded` at

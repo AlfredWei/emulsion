@@ -179,7 +179,7 @@ export function syncMaskRasterization(/** @type {import('./gpuHandles.js').GpuHa
 }
 
 export function writeAdjustmentsAndRender(/** @type {import('./gpuHandles.js').GpuHandles} */ gpu, /** @type {import('./gpuHandles.js').RenderInputs} */ inputs) {
-  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.bindGroup || !gpu.preMaskPipeline || !gpu.preMaskBindGroup || !gpu.preMaskTex || !gpu.lensCorrectPipeline || !gpu.lensCorrectBindGroup || !gpu.lensCorrectedTex || !gpu.perspectivePipeline || !gpu.perspectiveBindGroup || !gpu.perspectiveCorrectedTex || !gpu.gradePipeline || !gpu.gradeBindGroup || !gpu.atmReducePipeline || gpu.atmReduceBindGroups.length === 0 || !gpu.minChannelPipeline || !gpu.minChannelBindGroup || !gpu.minHPipeline || !gpu.minHBindGroup || !gpu.minVPipeline || !gpu.minVBindGroup || !gpu.meanHPipeline || !gpu.meanHBindGroup || !gpu.meanVPipeline || !gpu.meanVBindGroup || !gpu.textureHPipeline || !gpu.textureHBindGroup || !gpu.textureVPipeline || !gpu.textureVBindGroup || !gpu.clarityHPipeline || !gpu.clarityHBindGroup || !gpu.clarityVPipeline || !gpu.clarityVBindGroup || !gpu.sharpenHPipeline || !gpu.sharpenHBindGroup || !gpu.sharpenVPipeline || !gpu.sharpenVBindGroup || !gpu.lumaNRHPipeline || !gpu.lumaNRHBindGroup || !gpu.lumaNRVPipeline || !gpu.lumaNRVBindGroup || !gpu.colorNRHPipeline || !gpu.colorNRHBindGroup || !gpu.colorNRVPipeline || !gpu.colorNRVBindGroup || !gpu.gradedTex || !gpu.minChannelTex || !gpu.darkChannelHTex || !gpu.tRawTex || !gpu.transmissionHTex || !gpu.transmissionTex || !gpu.textureBlurScratchTex || !gpu.textureAdjustedTex || !gpu.clarityBlurScratchTex || !gpu.sharpenBlurHTex || !gpu.sharpenBlurTex || !gpu.lumaNRBlurHTex || !gpu.lumaNRBlurTex || !gpu.colorNRBlurHTex || !gpu.colorNRBlurTex || gpu.atmLightChain.length === 0 || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
+  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.bindGroup || !gpu.preMaskPipeline || !gpu.preMaskBindGroup || !gpu.preMaskTex || !gpu.lensCorrectPipeline || !gpu.lensCorrectBindGroup || !gpu.lensCorrectedTex || !gpu.perspectivePipeline || !gpu.perspectiveBindGroup || !gpu.perspectiveCorrectedTex || !gpu.gradePipeline || !gpu.gradeBindGroup || !gpu.atmReducePipeline || gpu.atmReduceBindGroups.length === 0 || !gpu.minChannelPipeline || !gpu.minChannelBindGroup || !gpu.minHPipeline || !gpu.minHBindGroup || !gpu.minVPipeline || !gpu.minVBindGroup || !gpu.meanHPipeline || !gpu.meanHBindGroup || !gpu.meanVPipeline || !gpu.meanVBindGroup || !gpu.textureHPipeline || !gpu.textureHBindGroup || !gpu.textureVPipeline || !gpu.textureVBindGroup || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpHBindGroup || !gpu.clarityMeanpVPipeline || !gpu.clarityMeanpVBindGroup || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpHBindGroup || !gpu.clarityCorrpVPipeline || !gpu.clarityCorrpVBindGroup || !gpu.clarityAPipeline || !gpu.clarityABindGroup || !gpu.clarityBPipeline || !gpu.clarityBBindGroup || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaHBindGroup || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanaVBindGroup || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbHBindGroup || !gpu.clarityMeanbVPipeline || !gpu.clarityMeanbVBindGroup || !gpu.clarityVPipeline || !gpu.clarityVBindGroup || !gpu.sharpenHPipeline || !gpu.sharpenHBindGroup || !gpu.sharpenVPipeline || !gpu.sharpenVBindGroup || !gpu.lumaNRHPipeline || !gpu.lumaNRHBindGroup || !gpu.lumaNRVPipeline || !gpu.lumaNRVBindGroup || !gpu.colorNRHPipeline || !gpu.colorNRHBindGroup || !gpu.colorNRVPipeline || !gpu.colorNRVBindGroup || !gpu.gradedTex || !gpu.minChannelTex || !gpu.darkChannelHTex || !gpu.tRawTex || !gpu.transmissionHTex || !gpu.transmissionTex || !gpu.textureBlurScratchTex || !gpu.textureAdjustedTex || !gpu.clarityBlurScratchTex || !gpu.clarityMeanPTex || !gpu.clarityCorrPTex || !gpu.clarityATex || !gpu.clarityBTex || !gpu.clarityMeanATex || !gpu.clarityMeanBTex || !gpu.sharpenBlurHTex || !gpu.sharpenBlurTex || !gpu.lumaNRBlurHTex || !gpu.lumaNRBlurTex || !gpu.colorNRBlurHTex || !gpu.colorNRBlurTex || gpu.atmLightChain.length === 0 || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
 
   // M4 Slice 2: before/after preview -- skips the ENTIRE global-grade +
   // local-mask pipeline below (not just the mask loop) and draws the raw
@@ -406,7 +406,27 @@ export function writeAdjustmentsAndRender(/** @type {import('./gpuHandles.js').G
     runFullscreenPass(encoder, gpu.gradePipeline, gpu.gradeBindGroup, gpu.gradedTex.createView());
     runFullscreenPass(encoder, gpu.textureHPipeline, gpu.textureHBindGroup, gpu.textureBlurScratchTex.createView());
     runFullscreenPass(encoder, gpu.textureVPipeline, gpu.textureVBindGroup, gpu.textureAdjustedTex.createView());
-    runFullscreenPass(encoder, gpu.clarityHPipeline, gpu.clarityHBindGroup, gpu.clarityBlurScratchTex.createView());
+    // Clarity's guided filter (RFC-0010): 10 passes replacing the old
+    // clarityHPipeline/clarityVPipeline pair -- mean_p, corr_p, a, b,
+    // mean_a, mean_b, each in the order its own inputs become available
+    // (see dehazeLocalContrast.js's own doc comment for the full
+    // derivation this pass list implements). clarityBlurScratchTex is
+    // reused as the shared H-scratch for all four box-filter pairs here
+    // (mean_p, corr_p, mean_a, mean_b), the same rebinding trick
+    // Texture's own H/V pair and every Dehaze H/V pair already use --
+    // each H-pass's output is fully consumed by its own V-pass before the
+    // next H-pass overwrites it, so strict sequential order (guaranteed
+    // within one command encoder) is all the safety this needs.
+    runFullscreenPass(encoder, gpu.clarityMeanpHPipeline, gpu.clarityMeanpHBindGroup, gpu.clarityBlurScratchTex.createView());
+    runFullscreenPass(encoder, gpu.clarityMeanpVPipeline, gpu.clarityMeanpVBindGroup, gpu.clarityMeanPTex.createView());
+    runFullscreenPass(encoder, gpu.clarityCorrpHPipeline, gpu.clarityCorrpHBindGroup, gpu.clarityBlurScratchTex.createView());
+    runFullscreenPass(encoder, gpu.clarityCorrpVPipeline, gpu.clarityCorrpVBindGroup, gpu.clarityCorrPTex.createView());
+    runFullscreenPass(encoder, gpu.clarityAPipeline, gpu.clarityABindGroup, gpu.clarityATex.createView());
+    runFullscreenPass(encoder, gpu.clarityBPipeline, gpu.clarityBBindGroup, gpu.clarityBTex.createView());
+    runFullscreenPass(encoder, gpu.clarityMeanaHPipeline, gpu.clarityMeanaHBindGroup, gpu.clarityBlurScratchTex.createView());
+    runFullscreenPass(encoder, gpu.clarityMeanaVPipeline, gpu.clarityMeanaVBindGroup, gpu.clarityMeanATex.createView());
+    runFullscreenPass(encoder, gpu.clarityMeanbHPipeline, gpu.clarityMeanbHBindGroup, gpu.clarityBlurScratchTex.createView());
+    runFullscreenPass(encoder, gpu.clarityMeanbVPipeline, gpu.clarityMeanbVBindGroup, gpu.clarityMeanBTex.createView());
     // Overwrites gradedTex in place -- see fs_clarity_v's own doc
     // comment for why this is sound (sequential pass execution within
     // one command encoder) and why no third "final graded" texture is

@@ -6,7 +6,11 @@ describe("assembled WGSL source", () => {
     const entryPoints = [
       "vs_main", "fs_original", "fs_grade", "fs_lens_correct", "fs_perspective",
       "fs_sharpen_h", "fs_sharpen_v", "fs_lumaNR_h", "fs_lumaNR_v", "fs_colorNR_h", "fs_colorNR_v",
-      "fs_texture_h", "fs_texture_v", "fs_clarity_h", "fs_clarity_v", "fs_atm_reduce",
+      "fs_texture_h", "fs_texture_v",
+      "fs_clarity_meanp_h", "fs_clarity_meanp_v", "fs_clarity_corrp_h", "fs_clarity_corrp_v",
+      "fs_clarity_a", "fs_clarity_b", "fs_clarity_meana_h", "fs_clarity_meana_v",
+      "fs_clarity_meanb_h", "fs_clarity_meanb_v", "fs_clarity_v",
+      "fs_atm_reduce",
       "fs_min_channel", "fs_min_h", "fs_min_v", "fs_mean_h", "fs_mean_v", "fs_premask", "fs_mask",
     ];
     for (const name of entryPoints) {

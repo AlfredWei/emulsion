@@ -40,8 +40,11 @@ docs/
 │   ├── RFC-0011-dehaze-guided-refinement.md         M5.6's second effect: Dehaze's transmission-map refinement ->
 │   │                                                 the general (two-signal) guided filter, corrects RFC-0010's
 │   │                                                 own framing of the two as directly reusable
-│   └── RFC-0012-luma-nr-guided-filter.md            M5.6's third effect: Luminance NR's box-mean blur -> the same
-│                                                     self-guided filter as Clarity, tuned for the denoising regime
+│   ├── RFC-0012-luma-nr-guided-filter.md            M5.6's third effect: Luminance NR's box-mean blur -> the same
+│   │                                                 self-guided filter as Clarity, tuned for the denoising regime
+│   └── RFC-0013-panel-visibility-and-reset.md       Per-panel eye-icon visibility toggle + reset for all 12
+│                                                     op-bearing Develop panels, persisted (affects export) --
+│                                                     unrelated to the M5.6 track above
 ├── adr/                                           One decision per file: context, decision, consequences,
 │   ├── ADR-0001-application-shell.md               alternatives considered — several have dated "M0/M1
 │   ├── ADR-0002-frontend-ui-stack.md                spike finding" sections added after reality corrected

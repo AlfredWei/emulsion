@@ -314,16 +314,74 @@ export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} *
     fragment: { module, entryPoint: "fs_sharpen_v", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.lumaNRHPipeline = gpu.device.createRenderPipeline({
+  // Luma NR (RFC-0012): 11 new pipelines replacing the old fs_lumaNR_h/v
+  // pair -- see detailFilters.js's own doc comment for the full
+  // guided-filter pass list (same self-guided shape as Clarity above, at
+  // Luma NR's own radius/eps).
+  gpu.lumaNRMeanpHPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_lumaNR_h", targets: [{ format: "r32float" }] },
+    fragment: { module, entryPoint: "fs_lumaNR_meanp_h", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.lumaNRVPipeline = gpu.device.createRenderPipeline({
+  gpu.lumaNRMeanpVPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_lumaNR_v", targets: [{ format: "r32float" }] },
+    fragment: { module, entryPoint: "fs_lumaNR_meanp_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRCorrpHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_corrp_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRCorrpVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_corrp_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRAPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_a", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRBPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_b", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRMeanaHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_meana_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRMeanaVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_meana_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRMeanbHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_meanb_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRMeanbVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_meanb_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.lumaNRFinalPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_lumaNR_final", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
   gpu.colorNRHPipeline = gpu.device.createRenderPipeline({

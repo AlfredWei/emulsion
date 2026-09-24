@@ -11,7 +11,12 @@ describe("assembled WGSL source", () => {
       "fs_clarity_a", "fs_clarity_b", "fs_clarity_meana_h", "fs_clarity_meana_v",
       "fs_clarity_meanb_h", "fs_clarity_meanb_v", "fs_clarity_v",
       "fs_atm_reduce",
-      "fs_min_channel", "fs_min_h", "fs_min_v", "fs_mean_h", "fs_mean_v", "fs_premask", "fs_mask",
+      "fs_min_channel", "fs_min_h", "fs_min_v",
+      "fs_dehaze_meanguide_h", "fs_dehaze_meanguide_v", "fs_dehaze_meanp_h", "fs_dehaze_meanp_v",
+      "fs_dehaze_corrguide_h", "fs_dehaze_corrguide_v", "fs_dehaze_corrguidep_h", "fs_dehaze_corrguidep_v",
+      "fs_dehaze_a", "fs_dehaze_b", "fs_dehaze_meana_h", "fs_dehaze_meana_v",
+      "fs_dehaze_meanb_h", "fs_dehaze_meanb_v", "fs_dehaze_refine",
+      "fs_premask", "fs_mask",
     ];
     for (const name of entryPoints) {
       expect(WGSL, name).toContain(`fn ${name}(`);

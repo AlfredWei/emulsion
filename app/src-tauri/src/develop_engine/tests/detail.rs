@@ -263,6 +263,116 @@ fn guided_filter_self_overshoots_less_than_the_box_mean_near_a_step_edge() {
     }
 }
 
+/// RFC-0011's cross-check between the general two-signal `guided_filter`
+/// and the self-guided specialization: when `guide == p` (the same signal
+/// passed for both), the general algorithm's `corr_guide`/`corr_guide_p`
+/// collapse to the identical quantity `guided_filter_self` already calls
+/// `corr_p`, and `mean_guide`/`mean_p` do too -- so the two functions must
+/// agree numerically on the same input, even though they're built from a
+/// different number of `separable_mean_filter` calls (six vs. four) to get
+/// there. A real formula mismatch in either implementation would show up
+/// here as a divergence.
+#[test]
+fn guided_filter_matches_guided_filter_self_when_guide_equals_p() {
+    let buf = [5.0f32, 3.0, 8.0, 1.0, 9.0, 2.0, 7.0];
+    let general = guided_filter(&buf, &buf, 7, 1, 2, CLARITY_GUIDED_EPS);
+    let specialized = guided_filter_self(&buf, 7, 1, 2, CLARITY_GUIDED_EPS);
+    for (g, s) in general.iter().zip(specialized.iter()) {
+        assert!((g - s).abs() < 1e-4, "general {g}, specialized {s}");
+    }
+}
+
+/// RFC-0011 §6: when `p` is constant, `guided_filter` must return that same
+/// constant everywhere regardless of what `guide` looks like -- hand-
+/// derived: `mean_p = p0` everywhere (box mean of a constant), so
+/// `corr_guide_p = boxfilter(guide * p0) = p0 * mean_guide` exactly
+/// (linearity), making `cov_guide_p = corr_guide_p - mean_guide*mean_p =
+/// p0*mean_guide - mean_guide*p0 = 0` EXACTLY, not just numerically small
+/// -- so `a = 0` everywhere no matter what `var_guide` is, `b = mean_p =
+/// p0`, `mean_a = 0`, `mean_b = p0`, giving `q = 0*guide + p0 = p0`. This
+/// is Dehaze's own real scenario whenever the dark channel is uniform (the
+/// existing `dehaze_amount_100_matches_hand_derived_recovery` test relies
+/// on exactly this holding, via a non-uniform guide/uniform-transmission
+/// fixture -- confirmed still passing after this slice, not just assumed).
+#[test]
+fn guided_filter_is_exact_identity_when_p_is_constant_regardless_of_guide() {
+    let guide = [0.1f32, 0.9, 0.2, 0.8, 0.05, 0.95, 0.3];
+    let p = vec![0.62f32; 7];
+    let result = guided_filter(&guide, &p, 7, 1, 2, DEHAZE_GUIDED_EPS);
+    for v in result {
+        assert!((v - 0.62).abs() < 1e-5, "{v}");
+    }
+}
+
+/// RFC-0011 §6: a real scene edge and a correlated transmission edge at
+/// the same location (the actual Dehaze scenario a real depth
+/// discontinuity produces) -- `guided_filter` must recover the true
+/// transmission plateau better (closer, less overshoot) than a plain box
+/// mean of `p` alone at Dehaze's own refinement radius, the same halo-
+/// reduction claim RFC-0010 proved for Clarity's self-guided case, now
+/// checked for the two-signal one.
+#[test]
+fn guided_filter_follows_a_correlated_scene_edge_better_than_the_box_mean() {
+    let width = 61;
+    let mut guide = vec![0.2f32; width];
+    let mut p = vec![0.5f32; width];
+    for i in 30..width {
+        guide[i] = 0.8;
+        p[i] = 0.9;
+    }
+    let guided = guided_filter(&guide, &p, width, 1, DEHAZE_REFINE_RADIUS, DEHAZE_GUIDED_EPS);
+    let boxed = separable_mean_filter(&p, width, 1, DEHAZE_REFINE_RADIUS);
+    // Only x in [edge - radius + 1, edge + radius - 1] = [27, 33] actually has
+    // a box-mean window straddling the edge at all (radius=4); past that,
+    // the box mean's own window sits entirely inside one plateau and is
+    // already exact, leaving nothing for the guided filter to improve on --
+    // checking there would test floating-point noise, not this claim.
+    for x in 31..34 {
+        let guided_err = (guided[x] - 0.9f32).abs();
+        let boxed_err = (boxed[x] - 0.9f32).abs();
+        assert!(
+            guided_err < boxed_err,
+            "at x={x}: guided error {guided_err} not smaller than box-mean error {boxed_err}"
+        );
+    }
+}
+
+/// RFC-0011 §6's reverse case: a real edge in `p` (the transmission map)
+/// with NO corresponding edge in `guide` (the scene) at all -- the filter
+/// has no depth signal to justify preserving it, and shouldn't do better
+/// than a plain box mean at recovering it. Hand-derived: a perfectly
+/// constant `guide` makes `var_guide = 0` everywhere, so (same exact-zero
+/// reasoning as the constant-`p` test above, mirrored) `cov_guide_p = 0`
+/// exactly too, giving `a = 0` everywhere -- but this time `b = mean_p`
+/// (not constant, since `p` itself isn't), so `mean_b =
+/// boxfilter(boxfilter(p))`: a DOUBLE box mean, not a single one. This is
+/// RFC-0011's own restatement of the exact mistake RFC-0010's `eps ->
+/// infinity` claim made (assuming a degenerate case reduces to a single
+/// box-filter pass when it actually chains two) -- caught here by deriving
+/// it properly up front rather than asserting the wrong thing and letting
+/// a failing test catch it again. The double-filtered result is smoother,
+/// hence FARTHER from the true plateau near the edge than a single box
+/// mean -- i.e. strictly worse, not merely "no better."
+#[test]
+fn guided_filter_does_not_preserve_a_p_edge_the_guide_has_no_signal_for() {
+    let width = 61;
+    let guide = vec![0.5f32; width];
+    let mut p = vec![0.5f32; width];
+    for v in p.iter_mut().skip(30) {
+        *v = 0.9;
+    }
+    let guided = guided_filter(&guide, &p, width, 1, DEHAZE_REFINE_RADIUS, DEHAZE_GUIDED_EPS);
+    let boxed = separable_mean_filter(&p, width, 1, DEHAZE_REFINE_RADIUS);
+    for x in 31..35 {
+        let guided_err = (guided[x] - 0.9f32).abs();
+        let boxed_err = (boxed[x] - 0.9f32).abs();
+        assert!(
+            guided_err > boxed_err,
+            "at x={x}: guided error {guided_err} not larger than box-mean error {boxed_err} (expected the double-filtered result to be smoother, not sharper)"
+        );
+    }
+}
+
 /// Same passthrough contract as `apply_local_contrast_amount_zero_is_exact_passthrough`,
 /// for the new Clarity-only `apply_clarity`.
 #[test]

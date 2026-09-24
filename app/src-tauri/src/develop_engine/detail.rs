@@ -372,11 +372,14 @@ pub(super) fn apply_clarity(graded: &mut [[f32; 3]], width: usize, height: usize
 ///   numerically-close approximation but a structurally different (and
 ///   generally wrong) result once the cross-channel min has already picked
 ///   a channel.
-/// - The transmission-refinement box-mean filter (`separable_mean_filter`)
-///   stands in for He et al.'s edge-preserving guided filter -- named
-///   limitation: mild haloing near strong contrast edges a real guided
-///   filter would avoid. Deferred to a later slice (cheap to add given the
-///   box-filter primitive already built here).
+/// - The transmission-refinement filter (RFC-0011): a plain box mean
+///   (`separable_mean_filter`) used to stand in for He et al.'s own
+///   edge-preserving guided filter here -- named limitation: mild haloing
+///   near strong contrast edges a real guided filter would avoid. Fixed
+///   in this slice via `guided_filter` (general, two-signal -- see its
+///   own doc comment for why this is a genuinely different function from
+///   `guided_filter_self`, not a second caller of the same one), guided
+///   by the graded image's own luma against the transmission map itself.
 pub(super) const DEHAZE_PATCH_RADIUS: i32 = 7;
 
 pub(super) const DEHAZE_OMEGA: f32 = 0.95;
@@ -384,6 +387,14 @@ pub(super) const DEHAZE_OMEGA: f32 = 0.95;
 pub(super) const DEHAZE_T0: f32 = 0.1;
 
 pub(super) const DEHAZE_REFINE_RADIUS: i32 = 4;
+
+/// RFC-0011's `eps` for the transmission-refinement guided filter --
+/// analogous to `CLARITY_GUIDED_EPS`, but a transmission map's own natural
+/// variance is much smaller than an image's luma variance (it's already a
+/// smoothed derived quantity, not raw pixel data), so this sits well below
+/// that constant -- He, Sun, Tang's own haze-removal worked example (ECCV
+/// 2010 §4) uses an eps on this order for the same application.
+pub(super) const DEHAZE_GUIDED_EPS: f32 = 0.0001;
 
 /// Atmospheric light: the whole RGB triple of the graded image's own
 /// highest-LUMINANCE pixel -- a single full-image scan. No bounded-pass
@@ -514,4 +525,35 @@ pub(super) fn guided_filter_self(buf: &[f32], width: usize, height: usize, radiu
     let mean_a = separable_mean_filter(&a, width, height, radius);
     let mean_b = separable_mean_filter(&b, width, height, radius);
     (0..buf.len()).map(|i| mean_a[i] * buf[i] + mean_b[i]).collect()
+}
+
+/// General, two-signal guided image filter (RFC-0011; He, Sun, Tang, ECCV
+/// 2010/TPAMI 2013) -- `guide` and `p` are DIFFERENT signals here (Dehaze:
+/// the graded image's own luma guides a refinement of the transmission
+/// map), unlike `guided_filter_self` above, where they're the same one.
+/// Deliberately a SEPARATE function, not `guided_filter_self` generalized
+/// with `guide == p` passed in: when the two signals really are the same,
+/// `corr_guide` and `corr_guide_p` collapse to the identical quantity
+/// (`corr_p`), and `mean_guide`/`mean_p` do too -- a naive general call
+/// would recompute both redundantly, wasting two of `guided_filter_self`'s
+/// four box-filter passes. Six `separable_mean_filter` calls here (vs.
+/// four for the self case) plus the same two cheap per-pixel passes.
+pub(super) fn guided_filter(guide: &[f32], p: &[f32], width: usize, height: usize, radius: i32, eps: f32) -> Vec<f32> {
+    let mean_guide = separable_mean_filter(guide, width, height, radius);
+    let mean_p = separable_mean_filter(p, width, height, radius);
+    let guide_sq: Vec<f32> = guide.iter().map(|v| v * v).collect();
+    let corr_guide = separable_mean_filter(&guide_sq, width, height, radius);
+    let guide_p: Vec<f32> = guide.iter().zip(p.iter()).map(|(g, v)| g * v).collect();
+    let corr_guide_p = separable_mean_filter(&guide_p, width, height, radius);
+    let mut a = vec![0.0f32; guide.len()];
+    let mut b = vec![0.0f32; guide.len()];
+    for i in 0..guide.len() {
+        let var_guide = corr_guide[i] - mean_guide[i] * mean_guide[i];
+        let cov_guide_p = corr_guide_p[i] - mean_guide[i] * mean_p[i];
+        a[i] = cov_guide_p / (var_guide + eps);
+        b[i] = mean_p[i] - a[i] * mean_guide[i];
+    }
+    let mean_a = separable_mean_filter(&a, width, height, radius);
+    let mean_b = separable_mean_filter(&b, width, height, radius);
+    (0..guide.len()).map(|i| mean_a[i] * guide[i] + mean_b[i]).collect()
 }

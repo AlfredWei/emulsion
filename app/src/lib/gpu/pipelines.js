@@ -122,16 +122,99 @@ export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} *
     fragment: { module, entryPoint: "fs_min_v", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.meanHPipeline = gpu.device.createRenderPipeline({
+  // Dehaze transmission refinement (RFC-0011): 15 pipelines replacing the
+  // old fs_mean_h/v pair -- see dehazeLocalContrast.js's own doc comment
+  // for the full guided-filter pass list. Every new intermediate is
+  // single-channel, "r32float", same convention as every other scalar
+  // intermediate in this file.
+  gpu.dehazeMeanguideHPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_mean_h", targets: [{ format: "r32float" }] },
+    fragment: { module, entryPoint: "fs_dehaze_meanguide_h", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.meanVPipeline = gpu.device.createRenderPipeline({
+  gpu.dehazeMeanguideVPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_mean_v", targets: [{ format: "r32float" }] },
+    fragment: { module, entryPoint: "fs_dehaze_meanguide_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeMeanpHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_meanp_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeMeanpVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_meanp_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeCorrguideHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_corrguide_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeCorrguideVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_corrguide_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeCorrguidepHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_corrguidep_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeCorrguidepVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_corrguidep_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeAPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_a", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeBPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_b", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeMeanaHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_meana_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeMeanaVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_meana_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeMeanbHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_meanb_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeMeanbVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_meanb_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.dehazeRefinePipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_dehaze_refine", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
   gpu.textureHPipeline = gpu.device.createRenderPipeline({

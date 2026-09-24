@@ -89,6 +89,9 @@
    *   onCopySettingsRequest: () => void,
    *   canPasteSettings: boolean,
    *   onPasteSettingsRequest: () => void,
+   *   isPanelHidden: (panel: string) => boolean,
+   *   onTogglePanelVisibility: (panel: string) => void,
+   *   onResetPanel: (panel: string) => void,
    *   width?: number,
    * }}
    */
@@ -163,6 +166,9 @@
     onCopySettingsRequest,
     canPasteSettings,
     onPasteSettingsRequest,
+    isPanelHidden,
+    onTogglePanelVisibility,
+    onResetPanel,
     width = 240,
   } = $props();
 
@@ -256,6 +262,82 @@
   </svg>
 {/snippet}
 
+<!-- RFC-0013: per-panel visibility/reset icons + the shared summary-row
+     snippet every one of the 12 op-bearing panels below renders through,
+     instead of a bare text summary. -->
+{#snippet panelVisibilityIcon(/** @type {boolean} */ hidden)}
+  {#if hidden}
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+      <!-- Eye, crossed out -- "hidden" -->
+      <path
+        d="M1.5 8 C3 4.5 6 2.8 8 2.8 C10 2.8 13 4.5 14.5 8 C13 11.5 10 13.2 8 13.2 C6 13.2 3 11.5 1.5 8 Z"
+        stroke="currentColor"
+        stroke-width="1.3"
+      />
+      <circle cx="8" cy="8" r="2.1" stroke="currentColor" stroke-width="1.3" />
+      <line x1="2" y1="14" x2="14" y2="2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+    </svg>
+  {:else}
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+      <!-- Plain open eye -- "visible" -->
+      <path
+        d="M1.5 8 C3 4.5 6 2.8 8 2.8 C10 2.8 13 4.5 14.5 8 C13 11.5 10 13.2 8 13.2 C6 13.2 3 11.5 1.5 8 Z"
+        stroke="currentColor"
+        stroke-width="1.3"
+      />
+      <circle cx="8" cy="8" r="2.1" stroke="currentColor" stroke-width="1.3" />
+    </svg>
+  {/if}
+{/snippet}
+
+{#snippet panelResetIcon()}
+  <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+    <!-- Circular "revert" arrow -->
+    <path d="M13 8 A5 5 0 1 1 11.2 4.3" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" />
+    <path
+      d="M13.2 2.5 L13 5.5 L10 5.2"
+      stroke="currentColor"
+      stroke-width="1.3"
+      fill="none"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </svg>
+{/snippet}
+
+{#snippet panelHeader(/** @type {string} */ title, /** @type {string} */ panel)}
+  <span class="summary-title">{title}</span>
+  <span class="panel-header-actions">
+    <button
+      type="button"
+      class="panel-icon-btn"
+      class:active={isPanelHidden(panel)}
+      title={isPanelHidden(panel) ? `Show ${title}` : `Hide ${title}`}
+      aria-label={isPanelHidden(panel) ? `Show ${title}` : `Hide ${title}`}
+      onclick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onTogglePanelVisibility(panel);
+      }}
+    >
+      {@render panelVisibilityIcon(isPanelHidden(panel))}
+    </button>
+    <button
+      type="button"
+      class="panel-icon-btn"
+      title="Reset {title}"
+      aria-label="Reset {title}"
+      onclick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onResetPanel(panel);
+      }}
+    >
+      {@render panelResetIcon()}
+    </button>
+  </span>
+{/snippet}
+
 <!-- Step-nudge (up/down) buttons for a slider (M4.5 Slice 7): fine
      single-step adjustment beyond drag precision. `onChange` always takes
      the new plain number -- callers wrap patch-shaped handlers (e.g.
@@ -296,8 +378,8 @@
     <button class="reset-btn" type="button" disabled={!hasEdits} onclick={onResetRequest}>Reset</button>
   </div>
   <Histogram data={histogramData} {showClippingOverlay} {onToggleClippingOverlay} {hoverPixel} />
-  <details class="section" open>
-    <summary>Basic</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("basic")} open>
+    <summary>{@render panelHeader("Basic", "basic")}</summary>
     <div class="sub-body">
       <!-- White Balance -->
       <div class="subsection-header">
@@ -494,8 +576,8 @@
     </div>
   </details>
 
-  <details class="section" open>
-    <summary>Tone Curve</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("tone_curve")} open>
+    <summary>{@render panelHeader("Tone Curve", "tone_curve")}</summary>
     <div class="sub-body">
       <div class="row eyedropper-row">
         <button
@@ -514,8 +596,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>HSL / Color</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("hsl")}>
+    <summary>{@render panelHeader("HSL / Color", "hsl")}</summary>
     <div class="sub-body">
       <div class="row eyedropper-row">
         <button
@@ -584,8 +666,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Split Toning</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("split_toning")}>
+    <summary>{@render panelHeader("Split Toning", "split_toning")}</summary>
     <div class="sub-body">
       <div class="split-zone">
         <div class="split-zone-label">
@@ -692,8 +774,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Texture &amp; Clarity</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("texture_clarity")}>
+    <summary>{@render panelHeader("Texture & Clarity", "texture_clarity")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="texture-amount">Texture</label>
@@ -726,8 +808,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Dehaze</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("dehaze")}>
+    <summary>{@render panelHeader("Dehaze", "dehaze")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="dehaze-amount">Amount</label>
@@ -746,8 +828,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Sharpening</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("sharpening")}>
+    <summary>{@render panelHeader("Sharpening", "sharpening")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="sharpen-amount">Amount</label>
@@ -808,8 +890,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Noise Reduction</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("noise_reduction")}>
+    <summary>{@render panelHeader("Noise Reduction", "noise_reduction")}</summary>
     <div class="sub-body">
       <div class="subsection-label">Luminance</div>
       <div class="row">
@@ -886,8 +968,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Vignette</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("vignette")}>
+    <summary>{@render panelHeader("Vignette", "vignette")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="vignette-amount">Amount</label>
@@ -934,8 +1016,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Grain</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("grain")}>
+    <summary>{@render panelHeader("Grain", "grain")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="grain-amount">Amount</label>
@@ -982,8 +1064,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Lens Corrections</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("lens_corrections")}>
+    <summary>{@render panelHeader("Lens Corrections", "lens_corrections")}</summary>
     <div class="sub-body">
       {#if lensCorrection.profile}
         <div class="static-note">Profile found: {lensCorrection.profile.camera} + {lensCorrection.profile.lens}</div>
@@ -1080,8 +1162,8 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>Perspective</summary>
+  <details class="section" class:panel-hidden={isPanelHidden("perspective")}>
+    <summary>{@render panelHeader("Perspective", "perspective")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="perspective-vertical">Vertical</label>
@@ -1378,6 +1460,39 @@
   }
   .section[open] summary::before {
     transform: rotate(90deg);
+  }
+  /* RFC-0013: per-panel visibility/reset icons, in the summary row itself
+     (flex row already established by `.section summary` above). */
+  .summary-title {
+    flex: 1;
+  }
+  .panel-header-actions {
+    display: flex;
+    gap: 2px;
+    flex: none;
+  }
+  .panel-icon-btn {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    padding: 3px;
+    border-radius: var(--radius-s);
+    color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .panel-icon-btn:hover {
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+  }
+  .panel-icon-btn.active {
+    color: var(--accent-strong);
+  }
+  /* Dims a hidden panel's own body -- controls stay interactive (RFC-0013
+     §3/§6), only their visual weight changes. */
+  .section.panel-hidden .sub-body {
+    opacity: 0.45;
   }
   .sub-body {
     padding-bottom: 8px;

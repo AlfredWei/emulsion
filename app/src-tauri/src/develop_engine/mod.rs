@@ -56,4 +56,4 @@ use crop::*;
 pub(crate) use crop::apply_crop;
 pub(crate) use lens::apply_lens_correction;
 pub(crate) use perspective::apply_perspective;
-pub(crate) use pipeline::apply_edit_stack;
+pub(crate) use pipeline::{apply_edit_stack, effective_stack_for_render};

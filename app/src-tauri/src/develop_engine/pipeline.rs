@@ -286,3 +286,73 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         }
     }
 }
+
+/// RFC-0013: the 12 op-bearing Develop panels' own key -> op-name mapping,
+/// the single source of truth `effective_stack_for_render` and every
+/// per-panel reset action reads. Soft Proof, Crop, and masks are
+/// deliberately absent -- see the RFC's own §2 for why each is out of
+/// scope (Soft Proof isn't an edit-stack op at all; Crop and masks weren't
+/// part of what was asked).
+pub(crate) const PANEL_OP_NAMES: &[(&str, &[&str])] = &[
+    (
+        "basic",
+        &[
+            "exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows", "whites", "blacks",
+        ],
+    ),
+    ("tone_curve", &["tone_curve"]),
+    ("hsl", &["hsl"]),
+    ("split_toning", &["split_toning"]),
+    ("texture_clarity", &["texture", "clarity"]),
+    ("dehaze", &["dehaze"]),
+    ("sharpening", &["sharpen"]),
+    ("noise_reduction", &["luma_nr", "color_nr"]),
+    ("vignette", &["vignette"]),
+    ("grain", &["grain"]),
+    ("lens_corrections", &["lens_correction"]),
+    ("perspective", &["perspective"]),
+];
+
+/// Strips every op belonging to a hidden panel (per `{"op": "panel_hidden",
+/// "panel": "<key>"}` markers), and the markers themselves, before any
+/// apply_* function ever sees the stack -- so `apply_edit_stack`/
+/// `apply_lens_correction`/`apply_perspective`/`apply_crop` stay completely
+/// unaware panel visibility exists; a hidden panel's ops are, to them,
+/// simply absent, the same as if the user had never touched that panel at
+/// all (every op's own getter already falls back to its own identity
+/// default when its op is absent -- see RFC-0013 §3/§4). Called once at
+/// each of the three real render entry points (`preview_cache.rs`,
+/// `export.rs`, `import.rs`'s thumbnail regeneration), ahead of their
+/// existing four `apply_*` calls -- those four functions, and every
+/// existing Rust unit test that builds an `EditStack` directly and calls
+/// them, are untouched by this change.
+pub(crate) fn effective_stack_for_render(stack: &EditStack) -> EditStack {
+    let hidden: std::collections::HashSet<&str> = stack
+        .ops
+        .iter()
+        .filter(|op| op.get("op").and_then(|v| v.as_str()) == Some("panel_hidden"))
+        .filter_map(|op| op.get("panel").and_then(|v| v.as_str()))
+        .collect();
+    if hidden.is_empty() {
+        return stack.clone();
+    }
+    let hidden_op_names: std::collections::HashSet<&str> = PANEL_OP_NAMES
+        .iter()
+        .filter(|(panel, _)| hidden.contains(panel))
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect();
+    let ops = stack
+        .ops
+        .iter()
+        .filter(|op| {
+            let name = op.get("op").and_then(|v| v.as_str());
+            match name {
+                Some("panel_hidden") => false,
+                Some(n) => !hidden_op_names.contains(n),
+                None => true,
+            }
+        })
+        .cloned()
+        .collect();
+    EditStack { schema_version: stack.schema_version, ops }
+}

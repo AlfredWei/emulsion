@@ -342,6 +342,10 @@ pub fn ensure_graded_preview_for_hash(
     let preview = ensure_develop_preview_for_hash(source_path, content_hash, previews_dir)?;
     let mut decoded = image::open(&preview.path)?.into_rgb8();
 
+    // RFC-0013: a hidden panel's ops are stripped here, once, before any of
+    // the four apply_* calls below -- see effective_stack_for_render's own
+    // doc comment.
+    let stack = &crate::develop_engine::effective_stack_for_render(stack);
     crate::develop_engine::apply_lens_correction(&mut decoded, stack);
     crate::develop_engine::apply_perspective(&mut decoded, stack);
     crate::develop_engine::apply_edit_stack(&mut decoded, stack);

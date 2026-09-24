@@ -27,6 +27,8 @@ import {
   previewSnapshot,
   addSnapshot,
   deleteSnapshot,
+  togglePanelVisibility,
+  resetPanel,
 } from "$lib/api/develop.js";
 import { developView } from "$lib/state/developView.svelte.js";
 import { inscribedCropForAngle, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
@@ -53,6 +55,38 @@ const ADJUSTMENT_LABELS = /** @type {Record<string, string>} */ ({
 export function handleAdjustmentChange(/** @type {string} */ opName, /** @type {number} */ value) {
   develop.editStack = upsertOp(develop.editStack, opName, value);
   develop.scheduleFlush(ADJUSTMENT_LABELS[opName] ?? opName);
+}
+
+// RFC-0013: human-readable History labels for the 12 op-bearing panels'
+// visibility/reset actions -- same fallback-to-key shape ADJUSTMENT_LABELS
+// uses above.
+const PANEL_LABELS = /** @type {Record<string, string>} */ ({
+  basic: "Basic",
+  tone_curve: "Tone Curve",
+  hsl: "HSL / Color Mixer",
+  split_toning: "Split Toning",
+  texture_clarity: "Texture & Clarity",
+  dehaze: "Dehaze",
+  sharpening: "Sharpening",
+  noise_reduction: "Noise Reduction",
+  vignette: "Vignette",
+  grain: "Grain",
+  lens_corrections: "Lens Corrections",
+  perspective: "Perspective",
+});
+
+/** Toggles a panel's own visibility (RFC-0013) -- independent of its
+ * values, which are never touched here. */
+export function handleTogglePanelVisibility(/** @type {string} */ panel) {
+  develop.editStack = togglePanelVisibility(develop.editStack, panel);
+  develop.scheduleFlush(`${PANEL_LABELS[panel] ?? panel} Visibility`);
+}
+
+/** Reverts just one panel's own values to default (RFC-0013) -- never
+ * touches that panel's visibility marker. */
+export function handleResetPanel(/** @type {string} */ panel) {
+  develop.editStack = resetPanel(develop.editStack, panel);
+  develop.scheduleFlush(`Reset ${PANEL_LABELS[panel] ?? panel}`);
 }
 
 export function handleToneCurveChange(/** @type {readonly {x: number, y: number}[]} */ points) {

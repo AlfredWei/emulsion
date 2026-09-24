@@ -28,6 +28,8 @@ import {
   IDENTITY_LENS_CORRECTION,
   getPerspective,
   IDENTITY_PERSPECTIVE,
+  effectiveEditStack as computeEffectiveEditStack,
+  isPanelHidden as checkPanelHidden,
 } from "$lib/api/develop.js";
 import { develop } from "./develop.svelte.js";
 
@@ -96,6 +98,50 @@ export class DevelopView {
   // every other multi-field op above -- see develop_engine.rs's own
   // `apply_crop` doc comment for why this one has no WGSL/uniform twin.
   crop = $derived(getCrop(this.develop.editStack, IDENTITY_CROP));
+
+  // RFC-0013: every field ABOVE is deliberately UI-facing and keeps
+  // reading the RAW `develop.editStack` -- a hidden panel's sliders must
+  // stay showing (and editing) their real stored values, exactly like
+  // real Lightroom's own panel switch (dimmed, not reset). `isPanelHidden`
+  // below reads the raw stack for the same reason. Everything BELOW this
+  // line is the separate, render-facing counterpart: the same fields,
+  // sourced from `effectiveEditStack` instead, for DevelopCanvas's GPU
+  // uniform-buffer inputs only -- DevelopPanel must never read these.
+  effectiveEditStack = $derived(computeEffectiveEditStack(this.develop.editStack));
+
+  /** Reads the RAW editStack (not `effectiveEditStack`, which never
+   * contains a `panel_hidden` marker by construction -- checking against
+   * the filtered view would always answer false). A plain method, not a
+   * $derived, so DevelopPanel can call it per-panel without a $derived
+   * field per panel. */
+  isPanelHidden(/** @type {string} */ panel) {
+    return checkPanelHidden(this.develop.editStack, panel);
+  }
+
+  renderExposure = $derived(opValue(this.effectiveEditStack, "exposure", 0));
+  renderContrast = $derived(opValue(this.effectiveEditStack, "contrast", 0));
+  renderSaturation = $derived(opValue(this.effectiveEditStack, "saturation", 0));
+  renderTemperature = $derived(opValue(this.effectiveEditStack, "temperature", 0));
+  renderTint = $derived(opValue(this.effectiveEditStack, "tint", 0));
+  renderHighlights = $derived(opValue(this.effectiveEditStack, "highlights", 0));
+  renderShadows = $derived(opValue(this.effectiveEditStack, "shadows", 0));
+  renderWhites = $derived(opValue(this.effectiveEditStack, "whites", 0));
+  renderBlacks = $derived(opValue(this.effectiveEditStack, "blacks", 0));
+  renderToneCurvePoints = $derived(getToneCurvePoints(this.effectiveEditStack, IDENTITY_TONE_CURVE));
+  renderHslBands = $derived(getHslBands(this.effectiveEditStack, IDENTITY_HSL_BANDS));
+  renderSplitToning = $derived(getSplitToning(this.effectiveEditStack, IDENTITY_SPLIT_TONING));
+  renderDehaze = $derived(opValue(this.effectiveEditStack, "dehaze", 0));
+  renderTexture = $derived(opValue(this.effectiveEditStack, "texture", 0));
+  renderClarity = $derived(opValue(this.effectiveEditStack, "clarity", 0));
+  renderVignette = $derived(getVignette(this.effectiveEditStack, IDENTITY_VIGNETTE));
+  renderLensCorrection = $derived(getLensCorrection(this.effectiveEditStack, IDENTITY_LENS_CORRECTION));
+  renderPerspective = $derived(getPerspective(this.effectiveEditStack, IDENTITY_PERSPECTIVE));
+  renderGrain = $derived(getGrain(this.effectiveEditStack, IDENTITY_GRAIN));
+  renderSharpen = $derived(getSharpen(this.effectiveEditStack, IDENTITY_SHARPEN));
+  renderLumaNR = $derived(getLumaNr(this.effectiveEditStack, IDENTITY_LUMA_NR));
+  renderColorNR = $derived(getColorNr(this.effectiveEditStack, IDENTITY_COLOR_NR));
+  // Crop has no render* counterpart -- out of scope for panel visibility
+  // (RFC-0013 §2), so DevelopCanvas keeps reading the plain `crop` field.
 }
 
 /** @param {import('./develop.svelte.js').DevelopStore} dev */

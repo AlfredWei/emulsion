@@ -125,7 +125,9 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         None
     };
     let luma_nr_blur = if luma_nr.amount != 0.0 {
-        Some(separable_mean_filter(&graded_luma, w, h, LUMA_NR_RADIUS))
+        // RFC-0012: guided_filter_self, not a plain box mean -- see
+        // LUMA_NR_RADIUS's own doc comment in detail.rs.
+        Some(guided_filter_self(&graded_luma, w, h, LUMA_NR_RADIUS, LUMA_NR_GUIDED_EPS))
     } else {
         None
     };

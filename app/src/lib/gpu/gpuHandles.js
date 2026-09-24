@@ -86,8 +86,17 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPURenderPipeline | null} clarityVPipeline
  * @property {GPURenderPipeline | null} sharpenHPipeline
  * @property {GPURenderPipeline | null} sharpenVPipeline
- * @property {GPURenderPipeline | null} lumaNRHPipeline
- * @property {GPURenderPipeline | null} lumaNRVPipeline
+ * @property {GPURenderPipeline | null} lumaNRMeanpHPipeline
+ * @property {GPURenderPipeline | null} lumaNRMeanpVPipeline
+ * @property {GPURenderPipeline | null} lumaNRCorrpHPipeline
+ * @property {GPURenderPipeline | null} lumaNRCorrpVPipeline
+ * @property {GPURenderPipeline | null} lumaNRAPipeline
+ * @property {GPURenderPipeline | null} lumaNRBPipeline
+ * @property {GPURenderPipeline | null} lumaNRMeanaHPipeline
+ * @property {GPURenderPipeline | null} lumaNRMeanaVPipeline
+ * @property {GPURenderPipeline | null} lumaNRMeanbHPipeline
+ * @property {GPURenderPipeline | null} lumaNRMeanbVPipeline
+ * @property {GPURenderPipeline | null} lumaNRFinalPipeline
  * @property {GPURenderPipeline | null} colorNRHPipeline
  * @property {GPURenderPipeline | null} colorNRVPipeline
  * @property {GPUTexture | null} lensCorrectedTex
@@ -120,6 +129,12 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUTexture | null} sharpenBlurTex
  * @property {GPUTexture | null} lumaNRBlurHTex
  * @property {GPUTexture | null} lumaNRBlurTex
+ * @property {GPUTexture | null} lumaNRMeanPTex
+ * @property {GPUTexture | null} lumaNRCorrPTex
+ * @property {GPUTexture | null} lumaNRATex
+ * @property {GPUTexture | null} lumaNRBTex
+ * @property {GPUTexture | null} lumaNRMeanATex
+ * @property {GPUTexture | null} lumaNRMeanBTex
  * @property {GPUTexture | null} colorNRBlurHTex
  * @property {GPUTexture | null} colorNRBlurTex
  * @property {GPUBindGroup | null} lensCorrectBindGroup
@@ -158,8 +173,17 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUBindGroup | null} clarityVBindGroup
  * @property {GPUBindGroup | null} sharpenHBindGroup
  * @property {GPUBindGroup | null} sharpenVBindGroup
- * @property {GPUBindGroup | null} lumaNRHBindGroup
- * @property {GPUBindGroup | null} lumaNRVBindGroup
+ * @property {GPUBindGroup | null} lumaNRMeanpHBindGroup
+ * @property {GPUBindGroup | null} lumaNRMeanpVBindGroup
+ * @property {GPUBindGroup | null} lumaNRCorrpHBindGroup
+ * @property {GPUBindGroup | null} lumaNRCorrpVBindGroup
+ * @property {GPUBindGroup | null} lumaNRABindGroup
+ * @property {GPUBindGroup | null} lumaNRBBindGroup
+ * @property {GPUBindGroup | null} lumaNRMeanaHBindGroup
+ * @property {GPUBindGroup | null} lumaNRMeanaVBindGroup
+ * @property {GPUBindGroup | null} lumaNRMeanbHBindGroup
+ * @property {GPUBindGroup | null} lumaNRMeanbVBindGroup
+ * @property {GPUBindGroup | null} lumaNRFinalBindGroup
  * @property {GPUBindGroup | null} colorNRHBindGroup
  * @property {GPUBindGroup | null} colorNRVBindGroup
  * @property {GPUBindGroup[]} atmReduceBindGroups
@@ -368,8 +392,17 @@ export function createGpuHandles() {
     clarityVPipeline: null,
     sharpenHPipeline: null,
     sharpenVPipeline: null,
-    lumaNRHPipeline: null,
-    lumaNRVPipeline: null,
+    lumaNRMeanpHPipeline: null,
+    lumaNRMeanpVPipeline: null,
+    lumaNRCorrpHPipeline: null,
+    lumaNRCorrpVPipeline: null,
+    lumaNRAPipeline: null,
+    lumaNRBPipeline: null,
+    lumaNRMeanaHPipeline: null,
+    lumaNRMeanaVPipeline: null,
+    lumaNRMeanbHPipeline: null,
+    lumaNRMeanbVPipeline: null,
+    lumaNRFinalPipeline: null,
     colorNRHPipeline: null,
     colorNRVPipeline: null,
     // Intermediate textures -- all sized to match the CURRENT source
@@ -429,6 +462,12 @@ export function createGpuHandles() {
     sharpenBlurTex: null,
     lumaNRBlurHTex: null,
     lumaNRBlurTex: null,
+    lumaNRMeanPTex: null,
+    lumaNRCorrPTex: null,
+    lumaNRATex: null,
+    lumaNRBTex: null,
+    lumaNRMeanATex: null,
+    lumaNRMeanBTex: null,
     colorNRBlurHTex: null,
     colorNRBlurTex: null,
     lensCorrectBindGroup: null,
@@ -467,8 +506,17 @@ export function createGpuHandles() {
     clarityVBindGroup: null,
     sharpenHBindGroup: null,
     sharpenVBindGroup: null,
-    lumaNRHBindGroup: null,
-    lumaNRVBindGroup: null,
+    lumaNRMeanpHBindGroup: null,
+    lumaNRMeanpVBindGroup: null,
+    lumaNRCorrpHBindGroup: null,
+    lumaNRCorrpVBindGroup: null,
+    lumaNRABindGroup: null,
+    lumaNRBBindGroup: null,
+    lumaNRMeanaHBindGroup: null,
+    lumaNRMeanaVBindGroup: null,
+    lumaNRMeanbHBindGroup: null,
+    lumaNRMeanbVBindGroup: null,
+    lumaNRFinalBindGroup: null,
     colorNRHBindGroup: null,
     colorNRVBindGroup: null,
     atmReduceBindGroups: [],

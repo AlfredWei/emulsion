@@ -131,7 +131,28 @@ pub(super) fn sharpen_delta(l: f32, blurred_luma: f32, grad_mag: f32, s: &Sharpe
 /// can leave. Scaled by `amount` too (not just `contrast`) -- Contrast
 /// restoring signal that was never removed in the first place (Amount=0)
 /// wouldn't make sense.
+///
+/// RFC-0012: `blurred_luma` (the value `smooth_weight`/`contrast_restore`
+/// above are computed relative to) comes from `guided_filter_self`, not a
+/// plain `separable_mean_filter` -- self-guided, same specialization
+/// Clarity's own `apply_clarity` uses (RFC-0010), since the guide and the
+/// thing being smoothed are both `graded_luma` here too. This section's
+/// own reconstruction formula (everything above this paragraph) is
+/// unchanged; only what produces the blur it reads is different.
 pub(super) const LUMA_NR_RADIUS: i32 = 3;
+
+/// RFC-0012's `eps`: deliberately smaller than `CLARITY_GUIDED_EPS`.
+/// Clarity's `eps` was tuned as a *contrast-enhancement* working point
+/// (He, Sun, Tang's own detail-enhancement example, where `a` staying
+/// away from 0 even in fairly flat regions is part of the desired local-
+/// contrast boost) -- but Luminance NR's blur exists purely to estimate
+/// "what this pixel would be without noise," so it should behave like a
+/// near-plain box mean in genuinely flat/noisy regions (matching today's
+/// box-mean baseline there) and back off only where local variance is
+/// large enough to be a real edge rather than noise. A smaller `eps`
+/// moves that flat-vs-edge threshold down into the noise-variance regime
+/// this op actually operates in.
+pub(super) const LUMA_NR_GUIDED_EPS: f32 = 0.0009;
 
 pub(super) const NR_DETAIL_SCALE: f32 = 0.05;
 

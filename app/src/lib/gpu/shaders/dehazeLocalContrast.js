@@ -348,15 +348,68 @@ export const dehazeLocalContrast = `    // Dehaze (M3): dark-channel-prior haze 
       return vec4<f32>(tRaw, 0.0, 0.0, 1.0);
     }
 
-    // Separable box-MEAN filter (transmission refinement, standing in for
-    // He et al.'s edge-preserving guided filter -- named limitation: mild
-    // haloing near strong contrast edges a real guided filter would
-    // avoid). A sum-based sliding-window accumulator would be cheaper on
-    // the CPU side (see develop_engine.rs's separable_mean_filter), but a
-    // naive per-tap sum here is simplest and still cheap at this radius --
-    // GPU fragment shaders parallelize across pixels, not within one.
+    // Transmission refinement (RFC-0011): general two-signal guided filter
+    // (He, Sun, Tang, ECCV 2010/TPAMI 2013 §4, haze removal) replacing the
+    // plain box mean this used to be -- see develop_engine.rs's own
+    // guided_filter doc comment for the full derivation and why this is a
+    // DIFFERENT (larger) algorithm from Clarity's self-guided case above,
+    // not a second caller of the same one. Guidance is the graded image's
+    // own luma (gradedTex); the signal being filtered is t_raw (read via
+    // filterInput, same rebinding this file's own header comment already
+    // documents). DEHAZE_GUIDED_EPS matches the Rust twin exactly.
+    //
+    // 15 passes total (vs. 2 before): mean_guide, mean_p, corr_guide,
+    // corr_guide_p (4 box-filter pairs -- twice Clarity's self-guided case,
+    // since the general algorithm needs four distinct filtered quantities
+    // where the self case only needed two), the a/b compose (2 per-pixel
+    // passes), mean_a/mean_b (2 more box-filter pairs), then the final
+    // compose. Every H-pass here shares transmissionHTex as its scratch,
+    // completed by its own V-pass reading it back via filterInput's
+    // existing rebinding trick -- same discipline RFC-0010's Clarity
+    // passes established for clarityBlurScratchTex.
+    const DEHAZE_GUIDED_EPS: f32 = 0.0001;
+
+    @group(0) @binding(35) var dehazeMeanGuideFinal: texture_2d<f32>;
+    @group(0) @binding(36) var dehazeMeanPFinal: texture_2d<f32>;
+    @group(0) @binding(37) var dehazeCorrGuideFinal: texture_2d<f32>;
+    @group(0) @binding(38) var dehazeCorrGuidePFinal: texture_2d<f32>;
+    @group(0) @binding(39) var dehazeAFinal: texture_2d<f32>;
+    @group(0) @binding(40) var dehazeBFinal: texture_2d<f32>;
+    @group(0) @binding(41) var dehazeMeanAFinal: texture_2d<f32>;
+    @group(0) @binding(42) var dehazeMeanBFinal: texture_2d<f32>;
+
+    // mean_guide: box mean of the scene's own luma.
     @fragment
-    fn fs_mean_h(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_dehaze_meanguide_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      var sum = 0.0;
+      for (var dx = -DEHAZE_REFINE_RADIUS; dx <= DEHAZE_REFINE_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + luma(textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb);
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_dehaze_meanguide_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var sum = 0.0;
+      for (var dy = -DEHAZE_REFINE_RADIUS; dy <= DEHAZE_REFINE_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(filterInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // mean_p: box mean of t_raw -- identical shape to the old fs_mean_h/v
+    // this replaces, just no longer the FINAL output (that's the last pass
+    // below now).
+    @fragment
+    fn fs_dehaze_meanp_h(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       let dims = vec2<i32>(textureDimensions(filterInput));
       var sum = 0.0;
@@ -369,7 +422,7 @@ export const dehazeLocalContrast = `    // Dehaze (M3): dark-channel-prior haze 
     }
 
     @fragment
-    fn fs_mean_v(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_dehaze_meanp_v(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       let dims = vec2<i32>(textureDimensions(filterInput));
       var sum = 0.0;
@@ -379,6 +432,159 @@ export const dehazeLocalContrast = `    // Dehaze (M3): dark-channel-prior haze 
       }
       let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
       return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // corr_guide: box mean of luma(gradedTex)^2.
+    @fragment
+    fn fs_dehaze_corrguide_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      var sum = 0.0;
+      for (var dx = -DEHAZE_REFINE_RADIUS; dx <= DEHAZE_REFINE_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        let l = luma(textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb);
+        sum = sum + l * l;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_dehaze_corrguide_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var sum = 0.0;
+      for (var dy = -DEHAZE_REFINE_RADIUS; dy <= DEHAZE_REFINE_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(filterInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // corr_guide_p: box mean of luma(gradedTex) * t_raw -- the only H pass
+    // here reading two different textures at once (gradedTex for the
+    // guide, filterInput bound to tRawTex for p).
+    @fragment
+    fn fs_dehaze_corrguidep_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      var sum = 0.0;
+      for (var dx = -DEHAZE_REFINE_RADIUS; dx <= DEHAZE_REFINE_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        let l = luma(textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb);
+        let p = textureLoad(filterInput, vec2<i32>(sx, coord.y), 0).r;
+        sum = sum + l * p;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_dehaze_corrguidep_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var sum = 0.0;
+      for (var dy = -DEHAZE_REFINE_RADIUS; dy <= DEHAZE_REFINE_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(filterInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // a = cov_guide_p / (var_guide + eps), var_guide = corr_guide -
+    // mean_guide^2, cov_guide_p = corr_guide_p - mean_guide*mean_p -- a
+    // single per-pixel pass, no window loop (same "split from b below
+    // because this file's own convention is one render target per pass"
+    // reasoning RFC-0010's fs_clarity_a already established).
+    @fragment
+    fn fs_dehaze_a(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let meanGuide = textureLoad(dehazeMeanGuideFinal, coord, 0).r;
+      let meanP = textureLoad(dehazeMeanPFinal, coord, 0).r;
+      let corrGuide = textureLoad(dehazeCorrGuideFinal, coord, 0).r;
+      let corrGuideP = textureLoad(dehazeCorrGuidePFinal, coord, 0).r;
+      let varGuide = corrGuide - meanGuide * meanGuide;
+      let covGuideP = corrGuideP - meanGuide * meanP;
+      let a = covGuideP / (varGuide + DEHAZE_GUIDED_EPS);
+      return vec4<f32>(a, 0.0, 0.0, 1.0);
+    }
+
+    // b = mean_p - a*mean_guide.
+    @fragment
+    fn fs_dehaze_b(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let meanGuide = textureLoad(dehazeMeanGuideFinal, coord, 0).r;
+      let meanP = textureLoad(dehazeMeanPFinal, coord, 0).r;
+      let a = textureLoad(dehazeAFinal, coord, 0).r;
+      return vec4<f32>(meanP - a * meanGuide, 0.0, 0.0, 1.0);
+    }
+
+    // mean_a / mean_b: box mean of a and b respectively.
+    @fragment
+    fn fs_dehaze_meana_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(dehazeAFinal));
+      var sum = 0.0;
+      for (var dx = -DEHAZE_REFINE_RADIUS; dx <= DEHAZE_REFINE_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(dehazeAFinal, vec2<i32>(sx, coord.y), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_dehaze_meana_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var sum = 0.0;
+      for (var dy = -DEHAZE_REFINE_RADIUS; dy <= DEHAZE_REFINE_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(filterInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_dehaze_meanb_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(dehazeBFinal));
+      var sum = 0.0;
+      for (var dx = -DEHAZE_REFINE_RADIUS; dx <= DEHAZE_REFINE_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(dehazeBFinal, vec2<i32>(sx, coord.y), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_dehaze_meanb_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(filterInput));
+      var sum = 0.0;
+      for (var dy = -DEHAZE_REFINE_RADIUS; dy <= DEHAZE_REFINE_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(filterInput, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * DEHAZE_REFINE_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // Final: q = mean_a*luma(gradedTex) + mean_b -- t_refined itself,
+    // written to transmissionTex (the SAME final texture premask.js's own
+    // recovery step already reads; this pass's only change from before is
+    // what feeds it).
+    @fragment
+    fn fs_dehaze_refine(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let l = luma(textureLoad(gradedTex, coord, 0).rgb);
+      let meanA = textureLoad(dehazeMeanAFinal, coord, 0).r;
+      let meanB = textureLoad(dehazeMeanBFinal, coord, 0).r;
+      return vec4<f32>(meanA * l + meanB, 0.0, 0.0, 1.0);
     }
 
 `;

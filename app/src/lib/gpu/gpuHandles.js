@@ -56,8 +56,21 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPURenderPipeline | null} minChannelPipeline
  * @property {GPURenderPipeline | null} minHPipeline
  * @property {GPURenderPipeline | null} minVPipeline
- * @property {GPURenderPipeline | null} meanHPipeline
- * @property {GPURenderPipeline | null} meanVPipeline
+ * @property {GPURenderPipeline | null} dehazeMeanguideHPipeline
+ * @property {GPURenderPipeline | null} dehazeMeanguideVPipeline
+ * @property {GPURenderPipeline | null} dehazeMeanpHPipeline
+ * @property {GPURenderPipeline | null} dehazeMeanpVPipeline
+ * @property {GPURenderPipeline | null} dehazeCorrguideHPipeline
+ * @property {GPURenderPipeline | null} dehazeCorrguideVPipeline
+ * @property {GPURenderPipeline | null} dehazeCorrguidepHPipeline
+ * @property {GPURenderPipeline | null} dehazeCorrguidepVPipeline
+ * @property {GPURenderPipeline | null} dehazeAPipeline
+ * @property {GPURenderPipeline | null} dehazeBPipeline
+ * @property {GPURenderPipeline | null} dehazeMeanaHPipeline
+ * @property {GPURenderPipeline | null} dehazeMeanaVPipeline
+ * @property {GPURenderPipeline | null} dehazeMeanbHPipeline
+ * @property {GPURenderPipeline | null} dehazeMeanbVPipeline
+ * @property {GPURenderPipeline | null} dehazeRefinePipeline
  * @property {GPURenderPipeline | null} textureHPipeline
  * @property {GPURenderPipeline | null} textureVPipeline
  * @property {GPURenderPipeline | null} clarityMeanpHPipeline
@@ -85,6 +98,14 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUTexture | null} tRawTex
  * @property {GPUTexture | null} transmissionHTex
  * @property {GPUTexture | null} transmissionTex
+ * @property {GPUTexture | null} dehazeMeanGuideTex
+ * @property {GPUTexture | null} dehazeMeanPTex
+ * @property {GPUTexture | null} dehazeCorrGuideTex
+ * @property {GPUTexture | null} dehazeCorrGuidePTex
+ * @property {GPUTexture | null} dehazeATex
+ * @property {GPUTexture | null} dehazeBTex
+ * @property {GPUTexture | null} dehazeMeanATex
+ * @property {GPUTexture | null} dehazeMeanBTex
  * @property {GPUTexture[]} atmLightChain
  * @property {GPUTexture | null} textureBlurScratchTex
  * @property {GPUTexture | null} textureAdjustedTex
@@ -107,8 +128,21 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUBindGroup | null} minChannelBindGroup
  * @property {GPUBindGroup | null} minHBindGroup
  * @property {GPUBindGroup | null} minVBindGroup
- * @property {GPUBindGroup | null} meanHBindGroup
- * @property {GPUBindGroup | null} meanVBindGroup
+ * @property {GPUBindGroup | null} dehazeMeanguideHBindGroup
+ * @property {GPUBindGroup | null} dehazeMeanguideVBindGroup
+ * @property {GPUBindGroup | null} dehazeMeanpHBindGroup
+ * @property {GPUBindGroup | null} dehazeMeanpVBindGroup
+ * @property {GPUBindGroup | null} dehazeCorrguideHBindGroup
+ * @property {GPUBindGroup | null} dehazeCorrguideVBindGroup
+ * @property {GPUBindGroup | null} dehazeCorrguidepHBindGroup
+ * @property {GPUBindGroup | null} dehazeCorrguidepVBindGroup
+ * @property {GPUBindGroup | null} dehazeABindGroup
+ * @property {GPUBindGroup | null} dehazeBBindGroup
+ * @property {GPUBindGroup | null} dehazeMeanaHBindGroup
+ * @property {GPUBindGroup | null} dehazeMeanaVBindGroup
+ * @property {GPUBindGroup | null} dehazeMeanbHBindGroup
+ * @property {GPUBindGroup | null} dehazeMeanbVBindGroup
+ * @property {GPUBindGroup | null} dehazeRefineBindGroup
  * @property {GPUBindGroup | null} textureHBindGroup
  * @property {GPUBindGroup | null} textureVBindGroup
  * @property {GPUBindGroup | null} clarityMeanpHBindGroup
@@ -304,8 +338,21 @@ export function createGpuHandles() {
     minChannelPipeline: null,
     minHPipeline: null,
     minVPipeline: null,
-    meanHPipeline: null,
-    meanVPipeline: null,
+    dehazeMeanguideHPipeline: null,
+    dehazeMeanguideVPipeline: null,
+    dehazeMeanpHPipeline: null,
+    dehazeMeanpVPipeline: null,
+    dehazeCorrguideHPipeline: null,
+    dehazeCorrguideVPipeline: null,
+    dehazeCorrguidepHPipeline: null,
+    dehazeCorrguidepVPipeline: null,
+    dehazeAPipeline: null,
+    dehazeBPipeline: null,
+    dehazeMeanaHPipeline: null,
+    dehazeMeanaVPipeline: null,
+    dehazeMeanbHPipeline: null,
+    dehazeMeanbVPipeline: null,
+    dehazeRefinePipeline: null,
     textureHPipeline: null,
     textureVPipeline: null,
     clarityMeanpHPipeline: null,
@@ -346,6 +393,14 @@ export function createGpuHandles() {
     tRawTex: null,
     transmissionHTex: null,
     transmissionTex: null,
+    dehazeMeanGuideTex: null,
+    dehazeMeanPTex: null,
+    dehazeCorrGuideTex: null,
+    dehazeCorrGuidePTex: null,
+    dehazeATex: null,
+    dehazeBTex: null,
+    dehazeMeanATex: null,
+    dehazeMeanBTex: null,
     atmLightChain: [],
     // Texture & Clarity (M3): local-contrast passes that run BEFORE Dehaze's
     // own maps, writing their final result back into gradedTex itself (see
@@ -382,8 +437,21 @@ export function createGpuHandles() {
     minChannelBindGroup: null,
     minHBindGroup: null,
     minVBindGroup: null,
-    meanHBindGroup: null,
-    meanVBindGroup: null,
+    dehazeMeanguideHBindGroup: null,
+    dehazeMeanguideVBindGroup: null,
+    dehazeMeanpHBindGroup: null,
+    dehazeMeanpVBindGroup: null,
+    dehazeCorrguideHBindGroup: null,
+    dehazeCorrguideVBindGroup: null,
+    dehazeCorrguidepHBindGroup: null,
+    dehazeCorrguidepVBindGroup: null,
+    dehazeABindGroup: null,
+    dehazeBBindGroup: null,
+    dehazeMeanaHBindGroup: null,
+    dehazeMeanaVBindGroup: null,
+    dehazeMeanbHBindGroup: null,
+    dehazeMeanbVBindGroup: null,
+    dehazeRefineBindGroup: null,
     textureHBindGroup: null,
     textureVBindGroup: null,
     clarityMeanpHBindGroup: null,

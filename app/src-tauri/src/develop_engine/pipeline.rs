@@ -157,7 +157,11 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             .collect();
         let dark_channel = separable_min_filter(&min_channel, w, h, DEHAZE_PATCH_RADIUS);
         let t_raw: Vec<f32> = dark_channel.iter().map(|d| 1.0 - DEHAZE_OMEGA * d).collect();
-        let t_refined = separable_mean_filter(&t_raw, w, h, DEHAZE_REFINE_RADIUS);
+        // RFC-0011: guided by the graded image's own luma, not a plain box
+        // mean of t_raw -- see guided_filter's own doc comment for why this
+        // is the general two-signal case, not guided_filter_self.
+        let graded_luma: Vec<f32> = graded.iter().map(|c| c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722).collect();
+        let t_refined = guided_filter(&graded_luma, &t_raw, w, h, DEHAZE_REFINE_RADIUS, DEHAZE_GUIDED_EPS);
         Some((a, t_refined))
     } else {
         None

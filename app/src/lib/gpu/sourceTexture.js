@@ -10,7 +10,7 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
   // defensive guard against an unexpected call order, and because
   // TypeScript's null-narrowing from a caller's own guard doesn't carry
   // across a function boundary.
-  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.meanHPipeline || !gpu.meanVPipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpVPipeline || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpVPipeline || !gpu.clarityAPipeline || !gpu.clarityBPipeline || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbVPipeline || !gpu.clarityVPipeline || !gpu.sharpenHPipeline || !gpu.sharpenVPipeline || !gpu.lumaNRHPipeline || !gpu.lumaNRVPipeline || !gpu.colorNRHPipeline || !gpu.colorNRVPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
+  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.dehazeMeanguideHPipeline || !gpu.dehazeMeanguideVPipeline || !gpu.dehazeMeanpHPipeline || !gpu.dehazeMeanpVPipeline || !gpu.dehazeCorrguideHPipeline || !gpu.dehazeCorrguideVPipeline || !gpu.dehazeCorrguidepHPipeline || !gpu.dehazeCorrguidepVPipeline || !gpu.dehazeAPipeline || !gpu.dehazeBPipeline || !gpu.dehazeMeanaHPipeline || !gpu.dehazeMeanaVPipeline || !gpu.dehazeMeanbHPipeline || !gpu.dehazeMeanbVPipeline || !gpu.dehazeRefinePipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpVPipeline || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpVPipeline || !gpu.clarityAPipeline || !gpu.clarityBPipeline || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbVPipeline || !gpu.clarityVPipeline || !gpu.sharpenHPipeline || !gpu.sharpenVPipeline || !gpu.lumaNRHPipeline || !gpu.lumaNRVPipeline || !gpu.colorNRHPipeline || !gpu.colorNRVPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
 
   // GPU texture-dimension safety: a genuinely native-resolution decode
   // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -151,6 +151,58 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
   });
   gpu.transmissionTex?.destroy();
   gpu.transmissionTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  // Transmission refinement's guided filter (RFC-0011): eight new
+  // persistent single-channel intermediates -- same "own fixed binding
+  // instead of a rebinding trick" reasoning as Clarity's own six (RFC-0010),
+  // since more than one is read simultaneously by a later pass.
+  gpu.dehazeMeanGuideTex?.destroy();
+  gpu.dehazeMeanGuideTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.dehazeMeanPTex?.destroy();
+  gpu.dehazeMeanPTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.dehazeCorrGuideTex?.destroy();
+  gpu.dehazeCorrGuideTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.dehazeCorrGuidePTex?.destroy();
+  gpu.dehazeCorrGuidePTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.dehazeATex?.destroy();
+  gpu.dehazeATex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.dehazeBTex?.destroy();
+  gpu.dehazeBTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.dehazeMeanATex?.destroy();
+  gpu.dehazeMeanATex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.dehazeMeanBTex?.destroy();
+  gpu.dehazeMeanBTex = gpu.device.createTexture({
     size: [bitmap.width, bitmap.height],
     format: "r32float",
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
@@ -361,13 +413,86 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
     layout: gpu.minVPipeline.getBindGroupLayout(0),
     entries: [{ binding: 11, resource: gpu.darkChannelHTex.createView() }],
   });
-  gpu.meanHBindGroup = gpuDevice.createBindGroup({
-    layout: gpu.meanHPipeline.getBindGroupLayout(0),
+  // Transmission refinement's guided filter (RFC-0011): 15 bind groups
+  // replacing the old meanHBindGroup/meanVBindGroup pair. Every H-pass
+  // here writes into transmissionHTex, completed by its own V-pass
+  // reading it back via filterInput's existing rebinding role (binding
+  // 11) -- same discipline as every other box-filter pair in this file.
+  gpu.dehazeMeanguideHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeMeanguideHPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 8, resource: gpu.gradedTex.createView() }],
+  });
+  gpu.dehazeMeanguideVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeMeanguideVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 11, resource: gpu.transmissionHTex.createView() }],
+  });
+  gpu.dehazeMeanpHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeMeanpHPipeline.getBindGroupLayout(0),
     entries: [{ binding: 11, resource: gpu.tRawTex.createView() }],
   });
-  gpu.meanVBindGroup = gpuDevice.createBindGroup({
-    layout: gpu.meanVPipeline.getBindGroupLayout(0),
+  gpu.dehazeMeanpVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeMeanpVPipeline.getBindGroupLayout(0),
     entries: [{ binding: 11, resource: gpu.transmissionHTex.createView() }],
+  });
+  gpu.dehazeCorrguideHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeCorrguideHPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 8, resource: gpu.gradedTex.createView() }],
+  });
+  gpu.dehazeCorrguideVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeCorrguideVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 11, resource: gpu.transmissionHTex.createView() }],
+  });
+  gpu.dehazeCorrguidepHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeCorrguidepHPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 8, resource: gpu.gradedTex.createView() },
+      { binding: 11, resource: gpu.tRawTex.createView() },
+    ],
+  });
+  gpu.dehazeCorrguidepVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeCorrguidepVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 11, resource: gpu.transmissionHTex.createView() }],
+  });
+  gpu.dehazeABindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeAPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 35, resource: gpu.dehazeMeanGuideTex.createView() },
+      { binding: 36, resource: gpu.dehazeMeanPTex.createView() },
+      { binding: 37, resource: gpu.dehazeCorrGuideTex.createView() },
+      { binding: 38, resource: gpu.dehazeCorrGuidePTex.createView() },
+    ],
+  });
+  gpu.dehazeBBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeBPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 35, resource: gpu.dehazeMeanGuideTex.createView() },
+      { binding: 36, resource: gpu.dehazeMeanPTex.createView() },
+      { binding: 39, resource: gpu.dehazeATex.createView() },
+    ],
+  });
+  gpu.dehazeMeanaHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeMeanaHPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 39, resource: gpu.dehazeATex.createView() }],
+  });
+  gpu.dehazeMeanaVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeMeanaVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 11, resource: gpu.transmissionHTex.createView() }],
+  });
+  gpu.dehazeMeanbHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeMeanbHPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 40, resource: gpu.dehazeBTex.createView() }],
+  });
+  gpu.dehazeMeanbVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeMeanbVPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 11, resource: gpu.transmissionHTex.createView() }],
+  });
+  gpu.dehazeRefineBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.dehazeRefinePipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 8, resource: gpu.gradedTex.createView() },
+      { binding: 41, resource: gpu.dehazeMeanATex.createView() },
+      { binding: 42, resource: gpu.dehazeMeanBTex.createView() },
+    ],
   });
 
   // Texture & Clarity (M3): textureHPipeline/textureVPipeline read

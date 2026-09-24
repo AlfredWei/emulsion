@@ -505,6 +505,74 @@ export function resetEditStack(/** @type {EditStack} */ stack) {
   return { ...stack, ops: [] };
 }
 
+/** RFC-0013: the 12 op-bearing Develop panels' own key -> op-name mapping,
+ * the JS twin of `PANEL_OP_NAMES` in develop_engine/pipeline.rs -- keep the
+ * two in sync by hand if either changes. Soft Proof, Crop, and masks are
+ * deliberately absent, see the RFC's own §2. */
+export const PANEL_OP_NAMES = /** @type {const} */ ({
+  basic: ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows", "whites", "blacks"],
+  tone_curve: ["tone_curve"],
+  hsl: ["hsl"],
+  split_toning: ["split_toning"],
+  texture_clarity: ["texture", "clarity"],
+  dehaze: ["dehaze"],
+  sharpening: ["sharpen"],
+  noise_reduction: ["luma_nr", "color_nr"],
+  vignette: ["vignette"],
+  grain: ["grain"],
+  lens_corrections: ["lens_correction"],
+  perspective: ["perspective"],
+});
+
+/** Is this panel currently hidden (a `panel_hidden` marker present for it)? */
+export function isPanelHidden(/** @type {EditStack} */ stack, /** @type {string} */ panel) {
+  return stack.ops.some((o) => o.op === "panel_hidden" && /** @type {any} */ (o).panel === panel);
+}
+
+/** Toggles a panel's own `panel_hidden` marker -- independent of its
+ * values, which are never touched here (see `resetPanel` below for the
+ * separate reset action). */
+export function togglePanelVisibility(/** @type {EditStack} */ stack, /** @type {string} */ panel) {
+  const hidden = isPanelHidden(stack, panel);
+  const ops = stack.ops.filter((o) => !(o.op === "panel_hidden" && /** @type {any} */ (o).panel === panel));
+  if (!hidden) ops.push(/** @type {any} */ ({ op: "panel_hidden", panel }));
+  return { ...stack, ops };
+}
+
+/** Removes a panel's own op entries, reverting it to default (each field's
+ * existing identity/fallback value, the same mechanism `resetEditStack`
+ * already relies on, just scoped to one panel's own op names). Never
+ * touches that panel's `panel_hidden` marker -- resetting doesn't change
+ * visibility. */
+export function resetPanel(/** @type {EditStack} */ stack, /** @type {string} */ panel) {
+  const names = /** @type {Record<string, readonly string[]>} */ (PANEL_OP_NAMES)[panel] ?? [];
+  const ops = stack.ops.filter((o) => !names.includes(o.op));
+  return { ...stack, ops };
+}
+
+/** JS twin of `effective_stack_for_render` in develop_engine/pipeline.rs --
+ * the GPU counterpart to that Rust filter. Strips every op belonging to a
+ * hidden panel, and the `panel_hidden` markers themselves, so every
+ * `developView.svelte.js` field reading through this (instead of the raw
+ * `editStack`) sees a hidden panel's op as simply absent, going through
+ * that same field's own existing identity-default fallback -- no separate
+ * "is this panel hidden" branch needed anywhere downstream. */
+export function effectiveEditStack(/** @type {EditStack} */ stack) {
+  const hidden = new Set(
+    stack.ops.filter((o) => o.op === "panel_hidden").map((o) => /** @type {any} */ (o).panel),
+  );
+  if (hidden.size === 0) return stack;
+  const hiddenOpNames = /** @type {Set<string>} */ (
+    new Set(
+      Object.entries(PANEL_OP_NAMES)
+        .filter(([panel]) => hidden.has(panel))
+        .flatMap(([, names]) => names),
+    )
+  );
+  const ops = stack.ops.filter((o) => o.op !== "panel_hidden" && !hiddenOpNames.has(o.op));
+  return { ...stack, ops };
+}
+
 // Tone Curve (M3): a global-only op (see the pipeline-order comment in
 // develop_engine.rs/DevelopCanvas.svelte -- exposure -> contrast ->
 // saturation -> tone curve, applied before any mask reads the graded rgb),

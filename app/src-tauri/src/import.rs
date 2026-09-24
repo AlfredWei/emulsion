@@ -482,6 +482,10 @@ pub fn regenerate_edited_thumbnail(
     let preview =
         crate::preview_cache::ensure_develop_preview_for_hash(source_path, content_hash, previews_dir).ok()?;
     let mut decoded = image::open(&preview.path).ok()?.into_rgb8();
+    // RFC-0013: a hidden panel's ops are stripped here, once, before any of
+    // the four apply_* calls below -- see effective_stack_for_render's own
+    // doc comment.
+    let stack = &crate::develop_engine::effective_stack_for_render(stack);
     // Lens Corrections (M3): same ordering export.rs uses -- see
     // develop_engine.rs's own header comment on `apply_lens_correction`.
     crate::develop_engine::apply_lens_correction(&mut decoded, stack);

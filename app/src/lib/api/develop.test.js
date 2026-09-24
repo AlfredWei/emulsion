@@ -8,6 +8,11 @@ import {
   computeAutoWhiteBalance,
   computeEyedropperWhiteBalance,
   computeAutoTone,
+  PANEL_OP_NAMES,
+  isPanelHidden,
+  togglePanelVisibility,
+  resetPanel,
+  effectiveEditStack,
 } from "./develop.js";
 
 // Fixtures here model real op shapes (vignette/crop/hsl/masks) that the
@@ -266,3 +271,81 @@ describe("computeAutoTone", () => {
   });
 });
 
+
+// RFC-0013: per-panel visibility toggle + reset.
+describe("panel visibility and reset", () => {
+  test("isPanelHidden is false with no markers, true once one is added", () => {
+    const stack = /** @type {EditStack} */ ({ schema_version: 1, ops: [{ op: "dehaze", value: 50 }] });
+    expect(isPanelHidden(stack, "dehaze")).toBe(false);
+    const hidden = togglePanelVisibility(stack, "dehaze");
+    expect(isPanelHidden(hidden, "dehaze")).toBe(true);
+    // the real op is untouched -- toggling visibility never touches values
+    expect(hidden.ops).toContainEqual({ op: "dehaze", value: 50 });
+  });
+
+  test("toggling visibility twice round-trips to the original stack", () => {
+    const stack = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "vignette", amount: 30 }] });
+    const roundTripped = togglePanelVisibility(togglePanelVisibility(stack, "vignette"), "vignette");
+    expect(roundTripped).toEqual(stack);
+  });
+
+  test("resetPanel removes only that panel's own op names, per the panel->op-name table", () => {
+    for (const [panel, names] of Object.entries(PANEL_OP_NAMES)) {
+      const stack = /** @type {EditStack} */ ({
+        schema_version: 1,
+        ops: [...names.map((op) => ({ op, value: 1 })), { op: "exposure", value: 5 }],
+      });
+      const reset = resetPanel(stack, panel);
+      const remaining = reset.ops.map((o) => o.op);
+      for (const name of names) expect(remaining).not.toContain(name);
+      // an op outside this panel's own table survives, unless the panel
+      // itself IS "basic" (which owns "exposure")
+      if (panel !== "basic") expect(remaining).toContain("exposure");
+    }
+  });
+
+  test("resetPanel never touches that panel's own panel_hidden marker", () => {
+    const stack = /** @type {EditStack} */ ({
+      schema_version: 1,
+      ops: [
+        { op: "dehaze", value: 50 },
+        { op: "panel_hidden", panel: "dehaze" },
+      ],
+    });
+    const reset = resetPanel(stack, "dehaze");
+    expect(isPanelHidden(reset, "dehaze")).toBe(true);
+    expect(reset.ops.some((o) => o.op === "dehaze")).toBe(false);
+  });
+
+  test("effectiveEditStack strips a hidden panel's ops and its own marker, leaving other panels untouched", () => {
+    const stack = /** @type {EditStack} */ ({
+      schema_version: 1,
+      ops: [
+        { op: "exposure", value: 20 },
+        { op: "dehaze", value: 50 },
+        { op: "panel_hidden", panel: "dehaze" },
+      ],
+    });
+    const effective = effectiveEditStack(stack);
+    expect(effective.ops.map((o) => o.op)).toEqual(["exposure"]);
+    // the real stack (what a slider reads/writes) is untouched
+    expect(stack.ops).toHaveLength(3);
+  });
+
+  test("effectiveEditStack returns the same stack unchanged when nothing is hidden", () => {
+    const stack = /** @type {EditStack} */ ({ schema_version: 1, ops: [{ op: "exposure", value: 20 }] });
+    expect(effectiveEditStack(stack)).toBe(stack);
+  });
+
+  test("effectiveEditStack strips every op a multi-op panel owns (Noise Reduction: luma_nr + color_nr)", () => {
+    const stack = /** @type {any} */ ({
+      schema_version: 1,
+      ops: [
+        { op: "luma_nr", amount: 40 },
+        { op: "color_nr", amount: 40 },
+        { op: "panel_hidden", panel: "noise_reduction" },
+      ],
+    });
+    expect(effectiveEditStack(stack).ops).toEqual([]);
+  });
+});

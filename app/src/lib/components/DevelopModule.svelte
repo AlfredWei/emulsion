@@ -3,7 +3,7 @@
   import { develop } from "$lib/state/develop.svelte.js";
   import { restoreTo, handleRestoreSnapshot } from "$lib/actions/historyActions.js";
   import { presets } from "$lib/state/presets.svelte.js";
-  import { handleDeleteSnapshot, handlePeekHistory, handlePeekSnapshot, handleCropChange, handleSourceDimensions, handleHistogramUpdate, handleHoverPixel, handleToggleClippingOverlay, handleAdjustmentChange, handleAutoWhiteBalance, handleAutoTone, handleWbPresetChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropAspectPreset, handleCropReset } from "$lib/actions/developActions.js";
+  import { handleDeleteSnapshot, handlePeekHistory, handlePeekSnapshot, handleCropChange, handleSourceDimensions, handleHistogramUpdate, handleHoverPixel, handleToggleClippingOverlay, handleAdjustmentChange, handleAutoWhiteBalance, handleAutoTone, handleWbPresetChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropAspectPreset, handleCropReset, handleTogglePanelVisibility, handleResetPanel } from "$lib/actions/developActions.js";
   import { handleApplyPreset, handleSaveCurrentAsPresetRequest, handleExportPreset, handleDeletePresetRequest, handleImportPresetRequest, handlePeekPreset, handleCopySettingsRequest, handlePasteSettings } from "$lib/actions/presetActions.js";
   import { shell } from "$lib/state/shell.svelte.js";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
@@ -51,15 +51,15 @@
   <DevelopCanvas
     imagePath={develop.imagePath}
     imageContentHash={develop.imageContentHash}
-    exposure={developView.exposure}
-    contrast={developView.contrast}
-    saturation={developView.saturation}
-    temperature={developView.temperature}
-    tint={developView.tint}
-    highlights={developView.highlights}
-    shadows={developView.shadows}
-    whites={developView.whites}
-    blacks={developView.blacks}
+    exposure={developView.renderExposure}
+    contrast={developView.renderContrast}
+    saturation={developView.renderSaturation}
+    temperature={developView.renderTemperature}
+    tint={developView.renderTint}
+    highlights={developView.renderHighlights}
+    shadows={developView.renderShadows}
+    whites={developView.renderWhites}
+    blacks={developView.renderBlacks}
     masks={masks.list}
     activeTool={masks.activeTool}
     selectedMaskId={masks.selectedMaskId}
@@ -79,19 +79,19 @@
     colorRangeResampleId={masks.colorRangeResampleTarget}
     onColorRangeResampled={handleColorRangeResampled}
     onEyedropperSampled={handleEyedropperSampled}
-    toneCurvePoints={developView.toneCurvePoints}
-    hslBands={developView.hslBands}
-    splitToning={developView.splitToning}
-    dehaze={developView.dehaze}
-    texture={developView.texture}
-    clarity={developView.clarity}
-    vignette={developView.vignette}
-    lensCorrection={developView.lensCorrection}
-    perspective={developView.perspective}
-    grain={developView.grain}
-    sharpen={developView.sharpen}
-    lumaNR={developView.lumaNR}
-    colorNR={developView.colorNR}
+    toneCurvePoints={developView.renderToneCurvePoints}
+    hslBands={developView.renderHslBands}
+    splitToning={developView.renderSplitToning}
+    dehaze={developView.renderDehaze}
+    texture={developView.renderTexture}
+    clarity={developView.renderClarity}
+    vignette={developView.renderVignette}
+    lensCorrection={developView.renderLensCorrection}
+    perspective={developView.renderPerspective}
+    grain={developView.renderGrain}
+    sharpen={developView.renderSharpen}
+    lumaNR={developView.renderLumaNR}
+    colorNR={developView.renderColorNR}
     crop={developView.crop}
     onCropChange={handleCropChange}
     cropAspectLock={develop.cropAspectLock}
@@ -199,6 +199,9 @@
     onCopySettingsRequest={handleCopySettingsRequest}
     canPasteSettings={develop.copiedSettings !== null}
     onPasteSettingsRequest={handlePasteSettings}
+    isPanelHidden={(panel) => developView.isPanelHidden(panel)}
+    onTogglePanelVisibility={handleTogglePanelVisibility}
+    onResetPanel={handleResetPanel}
   />
 </div>
 <MaskToolStrip

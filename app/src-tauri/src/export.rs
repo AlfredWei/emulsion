@@ -107,6 +107,12 @@ pub(crate) fn render_full_resolution(source_path: &Path, stack: &EditStack) -> R
     let mut image = RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
         .ok_or(ExportError::BufferMismatch)?;
 
+    // RFC-0013: a hidden panel's ops are stripped here, once, before any of
+    // the four apply_* calls below -- also covers Print (print.rs reuses
+    // this same function) -- see effective_stack_for_render's own doc
+    // comment.
+    let stack = &crate::develop_engine::effective_stack_for_render(stack);
+
     // Lens Corrections (M3): runs FIRST, before grading -- the user is
     // grading/cropping the corrected image, not the raw lens-distorted
     // one, matching real Lightroom. See develop_engine.rs's own header

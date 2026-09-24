@@ -94,6 +94,40 @@ describe("structured adjustment handlers", () => {
   });
 });
 
+describe("panel visibility and reset (RFC-0013)", () => {
+  it("toggling visibility writes a panel_hidden marker and schedules a labeled flush, without touching the panel's own values", () => {
+    A.handleAdjustmentChange("dehaze", 50);
+    A.handleTogglePanelVisibility("dehaze");
+    expect(developView.isPanelHidden("dehaze")).toBe(true);
+    expect(develop.editStack.ops).toContainEqual({ op: "dehaze", value: 50 });
+    // the UI-facing field keeps showing the real value (dimmed, not reset)
+    expect(developView.dehaze).toBe(50);
+    // only the render-facing counterpart (GPU input) sees it as absent
+    expect(developView.renderDehaze).toBe(0);
+    expect(labels()).toEqual(["Dehaze", "Dehaze Visibility"]);
+  });
+
+  it("toggling visibility twice restores the original render state", () => {
+    A.handleAdjustmentChange("dehaze", 50);
+    A.handleTogglePanelVisibility("dehaze");
+    A.handleTogglePanelVisibility("dehaze");
+    expect(developView.isPanelHidden("dehaze")).toBe(false);
+    expect(developView.dehaze).toBe(50);
+    expect(developView.renderDehaze).toBe(50);
+  });
+
+  it("resetting a panel clears just that panel's own ops and schedules a labeled flush, leaving visibility untouched", () => {
+    A.handleAdjustmentChange("exposure", 2);
+    A.handleVignetteChange({ amount: -20 });
+    A.handleTogglePanelVisibility("vignette");
+    A.handleResetPanel("vignette");
+    expect(opNames()).not.toContain("vignette");
+    expect(opNames()).toContain("exposure"); // untouched
+    expect(developView.isPanelHidden("vignette")).toBe(true); // reset never un-hides
+    expect(labels().at(-1)).toBe("Reset Vignette");
+  });
+});
+
 describe("crop", () => {
   it("an ordinary patch passes through", () => {
     A.handleCropChange({ x: 0.1, y: 0.2, width: 0.5, height: 0.5 });

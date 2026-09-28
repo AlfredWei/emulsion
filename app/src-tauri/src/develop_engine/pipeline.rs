@@ -135,10 +135,14 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         let r: Vec<f32> = graded.iter().map(|c| c[0]).collect();
         let g: Vec<f32> = graded.iter().map(|c| c[1]).collect();
         let b: Vec<f32> = graded.iter().map(|c| c[2]).collect();
+        // RFC-0014: guided by graded_luma (shared across all three
+        // channels), not each channel's own noisy statistics -- see
+        // COLOR_NR_GUIDED_EPS's own doc comment in detail.rs for why this
+        // is the general two-signal case, not guided_filter_self.
         Some((
-            separable_mean_filter(&r, w, h, COLOR_NR_RADIUS),
-            separable_mean_filter(&g, w, h, COLOR_NR_RADIUS),
-            separable_mean_filter(&b, w, h, COLOR_NR_RADIUS),
+            guided_filter(&graded_luma, &r, w, h, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS),
+            guided_filter(&graded_luma, &g, w, h, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS),
+            guided_filter(&graded_luma, &b, w, h, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS),
         ))
     } else {
         None

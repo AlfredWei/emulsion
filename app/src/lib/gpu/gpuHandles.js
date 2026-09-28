@@ -97,8 +97,21 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPURenderPipeline | null} lumaNRMeanbHPipeline
  * @property {GPURenderPipeline | null} lumaNRMeanbVPipeline
  * @property {GPURenderPipeline | null} lumaNRFinalPipeline
- * @property {GPURenderPipeline | null} colorNRHPipeline
- * @property {GPURenderPipeline | null} colorNRVPipeline
+ * @property {GPURenderPipeline | null} colorNRMeanguideHPipeline
+ * @property {GPURenderPipeline | null} colorNRMeanguideVPipeline
+ * @property {GPURenderPipeline | null} colorNRCorrguideHPipeline
+ * @property {GPURenderPipeline | null} colorNRCorrguideVPipeline
+ * @property {GPURenderPipeline | null} colorNRMeanpHPipeline
+ * @property {GPURenderPipeline | null} colorNRMeanpVPipeline
+ * @property {GPURenderPipeline | null} colorNRCorrguidepHPipeline
+ * @property {GPURenderPipeline | null} colorNRCorrguidepVPipeline
+ * @property {GPURenderPipeline | null} colorNRAPipeline
+ * @property {GPURenderPipeline | null} colorNRBPipeline
+ * @property {GPURenderPipeline | null} colorNRMeanaHPipeline
+ * @property {GPURenderPipeline | null} colorNRMeanaVPipeline
+ * @property {GPURenderPipeline | null} colorNRMeanbHPipeline
+ * @property {GPURenderPipeline | null} colorNRMeanbVPipeline
+ * @property {GPURenderPipeline | null} colorNRFinalPipeline
  * @property {GPUTexture | null} lensCorrectedTex
  * @property {GPUTexture | null} perspectiveCorrectedTex
  * @property {GPUTexture | null} gradedTex
@@ -137,6 +150,15 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUTexture | null} lumaNRMeanBTex
  * @property {GPUTexture | null} colorNRBlurHTex
  * @property {GPUTexture | null} colorNRBlurTex
+ * @property {GPUTexture | null} colorNRGuideHTex
+ * @property {GPUTexture | null} colorNRMeanGuideTex
+ * @property {GPUTexture | null} colorNRCorrGuideTex
+ * @property {GPUTexture | null} colorNRMeanPTex
+ * @property {GPUTexture | null} colorNRCorrGuidePTex
+ * @property {GPUTexture | null} colorNRATex
+ * @property {GPUTexture | null} colorNRBTex
+ * @property {GPUTexture | null} colorNRMeanATex
+ * @property {GPUTexture | null} colorNRMeanBTex
  * @property {GPUBindGroup | null} lensCorrectBindGroup
  * @property {GPUBindGroup | null} perspectiveBindGroup
  * @property {GPUBindGroup | null} gradeBindGroup
@@ -184,8 +206,21 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUBindGroup | null} lumaNRMeanbHBindGroup
  * @property {GPUBindGroup | null} lumaNRMeanbVBindGroup
  * @property {GPUBindGroup | null} lumaNRFinalBindGroup
- * @property {GPUBindGroup | null} colorNRHBindGroup
- * @property {GPUBindGroup | null} colorNRVBindGroup
+ * @property {GPUBindGroup | null} colorNRMeanguideHBindGroup
+ * @property {GPUBindGroup | null} colorNRMeanguideVBindGroup
+ * @property {GPUBindGroup | null} colorNRCorrguideHBindGroup
+ * @property {GPUBindGroup | null} colorNRCorrguideVBindGroup
+ * @property {GPUBindGroup | null} colorNRMeanpHBindGroup
+ * @property {GPUBindGroup | null} colorNRMeanpVBindGroup
+ * @property {GPUBindGroup | null} colorNRCorrguidepHBindGroup
+ * @property {GPUBindGroup | null} colorNRCorrguidepVBindGroup
+ * @property {GPUBindGroup | null} colorNRABindGroup
+ * @property {GPUBindGroup | null} colorNRBBindGroup
+ * @property {GPUBindGroup | null} colorNRMeanaHBindGroup
+ * @property {GPUBindGroup | null} colorNRMeanaVBindGroup
+ * @property {GPUBindGroup | null} colorNRMeanbHBindGroup
+ * @property {GPUBindGroup | null} colorNRMeanbVBindGroup
+ * @property {GPUBindGroup | null} colorNRFinalBindGroup
  * @property {GPUBindGroup[]} atmReduceBindGroups
  * @property {string | null} spatialOpsInputsKey
  * @property {GPUTexture | null} brushTextureArray
@@ -403,8 +438,21 @@ export function createGpuHandles() {
     lumaNRMeanbHPipeline: null,
     lumaNRMeanbVPipeline: null,
     lumaNRFinalPipeline: null,
-    colorNRHPipeline: null,
-    colorNRVPipeline: null,
+    colorNRMeanguideHPipeline: null,
+    colorNRMeanguideVPipeline: null,
+    colorNRCorrguideHPipeline: null,
+    colorNRCorrguideVPipeline: null,
+    colorNRMeanpHPipeline: null,
+    colorNRMeanpVPipeline: null,
+    colorNRCorrguidepHPipeline: null,
+    colorNRCorrguidepVPipeline: null,
+    colorNRAPipeline: null,
+    colorNRBPipeline: null,
+    colorNRMeanaHPipeline: null,
+    colorNRMeanaVPipeline: null,
+    colorNRMeanbHPipeline: null,
+    colorNRMeanbVPipeline: null,
+    colorNRFinalPipeline: null,
     // Intermediate textures -- all sized to match the CURRENT source
     // texture's own resolution (recreated in applyBitmapToGpu whenever that
     // changes, same lifecycle as sourceTexture/brushTextureArray), except
@@ -470,6 +518,15 @@ export function createGpuHandles() {
     lumaNRMeanBTex: null,
     colorNRBlurHTex: null,
     colorNRBlurTex: null,
+    colorNRGuideHTex: null,
+    colorNRMeanGuideTex: null,
+    colorNRCorrGuideTex: null,
+    colorNRMeanPTex: null,
+    colorNRCorrGuidePTex: null,
+    colorNRATex: null,
+    colorNRBTex: null,
+    colorNRMeanATex: null,
+    colorNRMeanBTex: null,
     lensCorrectBindGroup: null,
     perspectiveBindGroup: null,
     gradeBindGroup: null,
@@ -517,8 +574,21 @@ export function createGpuHandles() {
     lumaNRMeanbHBindGroup: null,
     lumaNRMeanbVBindGroup: null,
     lumaNRFinalBindGroup: null,
-    colorNRHBindGroup: null,
-    colorNRVBindGroup: null,
+    colorNRMeanguideHBindGroup: null,
+    colorNRMeanguideVBindGroup: null,
+    colorNRCorrguideHBindGroup: null,
+    colorNRCorrguideVBindGroup: null,
+    colorNRMeanpHBindGroup: null,
+    colorNRMeanpVBindGroup: null,
+    colorNRCorrguidepHBindGroup: null,
+    colorNRCorrguidepVBindGroup: null,
+    colorNRABindGroup: null,
+    colorNRBBindGroup: null,
+    colorNRMeanaHBindGroup: null,
+    colorNRMeanaVBindGroup: null,
+    colorNRMeanbHBindGroup: null,
+    colorNRMeanbVBindGroup: null,
+    colorNRFinalBindGroup: null,
     atmReduceBindGroups: [],
     // Dirty-key caching: the dark-channel/atmospheric-light/transmission
     // passes above, PLUS Texture/Clarity's own local-contrast passes (which

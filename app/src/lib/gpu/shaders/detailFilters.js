@@ -60,6 +60,23 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
     @group(0) @binding(46) var lumaNrBFinal: texture_2d<f32>;
     @group(0) @binding(47) var lumaNrMeanAFinal: texture_2d<f32>;
     @group(0) @binding(48) var lumaNrMeanBFinal: texture_2d<f32>;
+    // RFC-0014: Color NR's own guided filter -- the GENERAL two-signal
+    // case (guide = graded_luma, p = each of R/G/B), not the self-guided
+    // shape above, matching Dehaze's own eight-binding pattern (RFC-0011)
+    // for the guide-only statistics (49-50, single-channel, shared across
+    // all three color channels) but PACKING the per-channel quantities
+    // (51-56) as vec3 in one rgba16float texture each -- three independent
+    // single-channel passes per quantity would triple the pass count for
+    // no reason, since a box filter is per-channel-independent (the same
+    // linearity the OLD fs_colorNR_h/fs_colorNR_v pair already relied on).
+    @group(0) @binding(49) var colorNrMeanGuideFinal: texture_2d<f32>;
+    @group(0) @binding(50) var colorNrCorrGuideFinal: texture_2d<f32>;
+    @group(0) @binding(51) var colorNrMeanPFinal: texture_2d<f32>;
+    @group(0) @binding(52) var colorNrCorrGuidePFinal: texture_2d<f32>;
+    @group(0) @binding(53) var colorNrAFinal: texture_2d<f32>;
+    @group(0) @binding(54) var colorNrBFinal: texture_2d<f32>;
+    @group(0) @binding(55) var colorNrMeanAFinal: texture_2d<f32>;
+    @group(0) @binding(56) var colorNrMeanBFinal: texture_2d<f32>;
 
     const SHARPEN_MAX_RADIUS_PX: i32 = 8;
     const SHARPEN_STRENGTH: f32 = 1.6;
@@ -74,6 +91,11 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
     const NR_CONTRAST_STRENGTH: f32 = 0.6;
     const COLOR_NR_RADIUS: i32 = 4;
     const COLOR_NR_DETAIL_SCALE: f32 = 0.08;
+    // RFC-0014: matches the Rust twin's COLOR_NR_GUIDED_EPS exactly -- see
+    // that constant's own doc comment in detail.rs for why it ended up
+    // matching DEHAZE_GUIDED_EPS rather than LUMA_NR_GUIDED_EPS (the RFC's
+    // own original guess, corrected during implementation).
+    const COLOR_NR_GUIDED_EPS: f32 = 0.0001;
 
     // Sharpening's Radius is a genuine USER slider, not a compile-time
     // const the way every other radius in this shader is (Texture/
@@ -260,8 +282,78 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
       return vec4<f32>(meanA * l + meanB, 0.0, 0.0, 1.0);
     }
 
+    // Color NR (RFC-0014): the general two-signal guided filter (guide =
+    // graded_luma, p = each of R/G/B independently, ALL sharing one guide),
+    // not the self-guided shape Clarity/Luma NR use -- see
+    // COLOR_NR_GUIDED_EPS's own comment above and detail.rs's matching
+    // Rust doc comment for why a channel's own statistics make a poor
+    // guide for itself here. The guide-only quantities (meanGuide,
+    // corrGuide) are single-channel and computed ONCE, shared across all
+    // three channels; the per-channel quantities (meanP, corrGuideP, a, b,
+    // meanA, meanB) are each packed as one vec3 in an rgba16float texture,
+    // filtered in a single joint pass per quantity -- a box filter is
+    // per-channel-independent, the same linearity the OLD fs_colorNR_h/
+    // fs_colorNR_v pair (now fs_colorNR_meanp_h/_v below, unchanged logic)
+    // already relied on, applied one level deeper so this doesn't cost
+    // 3x a fully independent per-channel guided filter would.
     @fragment
-    fn fs_colorNR_h(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_colorNR_meanguide_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      var sum = 0.0;
+      for (var dx = -COLOR_NR_RADIUS; dx <= COLOR_NR_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + luma(textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb);
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_meanguide_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchR32));
+      var sum = 0.0;
+      for (var dy = -COLOR_NR_RADIUS; dy <= COLOR_NR_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchR32, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_corrguide_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      var sum = 0.0;
+      for (var dx = -COLOR_NR_RADIUS; dx <= COLOR_NR_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        let l = luma(textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb);
+        sum = sum + l * l;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_corrguide_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchR32));
+      var sum = 0.0;
+      for (var dy = -COLOR_NR_RADIUS; dy <= COLOR_NR_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchR32, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // Same computation the old fs_colorNR_h/fs_colorNR_v pair already did
+    // (box mean of gradedTex.rgb) -- renamed and redirected to
+    // colorNrMeanPFinal instead of being the filter's own final output.
+    @fragment
+    fn fs_colorNR_meanp_h(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       let dims = vec2<i32>(textureDimensions(gradedTex));
       var sum = vec3<f32>(0.0, 0.0, 0.0);
@@ -274,7 +366,7 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
     }
 
     @fragment
-    fn fs_colorNR_v(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_colorNR_meanp_v(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       let dims = vec2<i32>(textureDimensions(blurScratchRgba));
       var sum = vec3<f32>(0.0, 0.0, 0.0);
@@ -284,6 +376,120 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
       }
       let window = f32(2 * COLOR_NR_RADIUS + 1);
       return vec4<f32>(sum / window, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_corrguidep_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      for (var dx = -COLOR_NR_RADIUS; dx <= COLOR_NR_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        let rgb = textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb;
+        sum = sum + luma(rgb) * rgb;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_corrguidep_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchRgba));
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      for (var dy = -COLOR_NR_RADIUS; dy <= COLOR_NR_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchRgba, vec2<i32>(coord.x, sy), 0).rgb;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_a(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let meanGuide = textureLoad(colorNrMeanGuideFinal, coord, 0).r;
+      let corrGuide = textureLoad(colorNrCorrGuideFinal, coord, 0).r;
+      let meanP = textureLoad(colorNrMeanPFinal, coord, 0).rgb;
+      let corrGuideP = textureLoad(colorNrCorrGuidePFinal, coord, 0).rgb;
+      let varGuide = corrGuide - meanGuide * meanGuide;
+      let covGuideP = corrGuideP - meanGuide * meanP;
+      let a = covGuideP / (varGuide + COLOR_NR_GUIDED_EPS);
+      return vec4<f32>(a, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_b(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let meanGuide = textureLoad(colorNrMeanGuideFinal, coord, 0).r;
+      let meanP = textureLoad(colorNrMeanPFinal, coord, 0).rgb;
+      let a = textureLoad(colorNrAFinal, coord, 0).rgb;
+      return vec4<f32>(meanP - a * meanGuide, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_meana_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(colorNrAFinal));
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      for (var dx = -COLOR_NR_RADIUS; dx <= COLOR_NR_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(colorNrAFinal, vec2<i32>(sx, coord.y), 0).rgb;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_meana_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchRgba));
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      for (var dy = -COLOR_NR_RADIUS; dy <= COLOR_NR_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchRgba, vec2<i32>(coord.x, sy), 0).rgb;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_meanb_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(colorNrBFinal));
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      for (var dx = -COLOR_NR_RADIUS; dx <= COLOR_NR_RADIUS; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(colorNrBFinal, vec2<i32>(sx, coord.y), 0).rgb;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 1.0);
+    }
+
+    @fragment
+    fn fs_colorNR_meanb_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchRgba));
+      var sum = vec3<f32>(0.0, 0.0, 0.0);
+      for (var dy = -COLOR_NR_RADIUS; dy <= COLOR_NR_RADIUS; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchRgba, vec2<i32>(coord.x, sy), 0).rgb;
+      }
+      let window = f32(2 * COLOR_NR_RADIUS + 1);
+      return vec4<f32>(sum / window, 1.0);
+    }
+
+    // Final: q = mean_a*luma + mean_b -- the guided-filter output replacing
+    // the old plain per-channel box mean, written to colorNrBlurFinal, the
+    // SAME binding (24) premask.js's own color_nr_delta port already reads
+    // -- that downstream consumer needed no change at all.
+    @fragment
+    fn fs_colorNR_final(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let l = luma(textureLoad(gradedTex, coord, 0).rgb);
+      let meanA = textureLoad(colorNrMeanAFinal, coord, 0).rgb;
+      let meanB = textureLoad(colorNrMeanBFinal, coord, 0).rgb;
+      return vec4<f32>(meanA * l + meanB, 1.0);
     }
 
 `;

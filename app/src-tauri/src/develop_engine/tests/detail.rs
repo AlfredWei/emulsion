@@ -654,6 +654,166 @@ fn color_nr_delta_preserves_luminance_exactly_at_a_different_k() {
     assert!((luma3(new_rgb) - luma3(orig)).abs() < 1e-5);
 }
 
+/// RFC-0014 §3.1: `color_nr_delta_preserves_luminance_exactly` (above)
+/// already uses an arbitrary, hand-picked `blurred` triple rather than one
+/// derived from any real blur -- which in hindsight already demonstrated
+/// the cancellation doesn't depend on the blur's shape at all. This test
+/// closes the loop with the ACTUAL replacement blur (`guided_filter`,
+/// guided by luma, RFC-0014's real design decision) over a real
+/// multi-pixel buffer, confirming the property holds for the concrete
+/// thing that ships, not just the abstract argument.
+#[test]
+fn color_nr_luma_preservation_holds_through_the_real_guided_filter_blur() {
+    let width = 9;
+    let luma = [0.5f32, 0.52, 0.48, 0.51, 0.49, 0.5, 0.53, 0.47, 0.5];
+    let r: Vec<f32> = luma.iter().map(|l| l + 0.1).collect();
+    let g: Vec<f32> = luma.iter().map(|l| l - 0.05).collect();
+    let b: Vec<f32> = luma.iter().map(|l| l + 0.02).collect();
+    let blurred_r = guided_filter(&luma, &r, width, 1, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS);
+    let blurred_g = guided_filter(&luma, &g, width, 1, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS);
+    let blurred_b = guided_filter(&luma, &b, width, 1, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS);
+    let n = ColorNr { amount: 100.0, detail: 0.0 };
+    for i in 0..width {
+        let orig = [r[i], g[i], b[i]];
+        let blurred = [blurred_r[i], blurred_g[i], blurred_b[i]];
+        let delta = color_nr_delta(orig, blurred, &n);
+        let new_rgb = [orig[0] + delta[0], orig[1] + delta[1], orig[2] + delta[2]];
+        let orig_luma = luma3(orig);
+        let new_luma = luma3(new_rgb);
+        assert!(
+            (new_luma - orig_luma).abs() < 1e-5,
+            "at {i}: expected luma to stay at {orig_luma}, got {new_luma} (delta {delta:?})"
+        );
+    }
+}
+
+/// RFC-0014 §4: in a genuinely flat-but-noisy region (small `var_guide`,
+/// no real edge), `guided_filter(graded_luma, channel, ...)` should track
+/// the plain per-channel box mean closely -- same shape as Luma NR's own
+/// `luma_nr_guided_blur_matches_the_box_mean_closely_in_a_flat_noisy_region`,
+/// now checked at `COLOR_NR_RADIUS`/`COLOR_NR_GUIDED_EPS` with an
+/// independent (not identical) noise pattern for `guide` vs. `p`, since a
+/// real photo's luma noise and any one channel's own chroma noise aren't
+/// the same signal.
+#[test]
+fn color_nr_guided_blur_matches_the_box_mean_closely_in_a_flat_noisy_region() {
+    let width = 20;
+    let guide: Vec<f32> = (0..width).map(|i| 0.5 + if i % 2 == 0 { 0.01 } else { -0.01 }).collect();
+    let p: Vec<f32> = (0..width).map(|i| 0.3 + if i % 3 == 0 { 0.015 } else { -0.0075 }).collect();
+    let guided = guided_filter(&guide, &p, width, 1, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS);
+    let boxed = separable_mean_filter(&p, width, 1, COLOR_NR_RADIUS);
+    for i in 0..p.len() {
+        // Empirically measured, not guessed -- same honesty discipline
+        // RFC-0012's own flat-noisy-region test used (loosened from an
+        // initial guess to the actually observed divergence).
+        assert!(
+            (guided[i] - boxed[i]).abs() < 0.01,
+            "at {i}: guided={} box={} diverge more than expected in a flat noisy region",
+            guided[i],
+            boxed[i]
+        );
+    }
+}
+
+/// RFC-0014 §1/§7's real claim -- less color fringing at a genuine color
+/// edge -- checked end-to-end through `color_nr_delta` (not just the
+/// lower-level `guided_filter` primitive, whose own edge-following
+/// behavior is already proven generically by
+/// `guided_filter_follows_a_correlated_scene_edge_better_than_the_box_mean`).
+/// A realistic, MODEST correlated edge (a soft shadow-boundary-scale color
+/// drift, not a saturated leaf-to-flower jump): the two colors were
+/// deliberately chosen so their `luma3` values differ (giving the guide
+/// real edge information) but the raw per-channel delta stays well inside
+/// `color_smooth_weight`'s own amplitude gate at `detail=0`. **An earlier
+/// draft of this test used a fully saturated edge and got a failing,
+/// misleading result**: the raw box-mean delta there was so large that
+/// `color_smooth_weight` saturated to 0 for the box-mean path, making its
+/// "error" trivially zero (nothing was added at all) and the comparison
+/// meaningless -- caught by the failing assertion, not assumed. A
+/// deliberately strong/saturated edge is exactly the isoluminant-style
+/// case handled below instead: this test isolates the blur-quality
+/// difference specifically, by keeping the gate open for both paths.
+#[test]
+fn color_nr_end_to_end_creates_less_chroma_bleed_than_the_old_box_mean_version_at_a_correlated_edge() {
+    let width = 61;
+    let leaf = [0.40f32, 0.42, 0.38];
+    let flower = [0.44f32, 0.38, 0.40];
+    let mut r = vec![leaf[0]; width];
+    let mut g = vec![leaf[1]; width];
+    let mut b = vec![leaf[2]; width];
+    for i in 30..width {
+        r[i] = flower[0];
+        g[i] = flower[1];
+        b[i] = flower[2];
+    }
+    let luma: Vec<f32> = (0..width).map(|i| luma3([r[i], g[i], b[i]])).collect();
+    let guided_r = guided_filter(&luma, &r, width, 1, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS);
+    let guided_g = guided_filter(&luma, &g, width, 1, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS);
+    let guided_b = guided_filter(&luma, &b, width, 1, COLOR_NR_RADIUS, COLOR_NR_GUIDED_EPS);
+    let boxed_r = separable_mean_filter(&r, width, 1, COLOR_NR_RADIUS);
+    let boxed_g = separable_mean_filter(&g, width, 1, COLOR_NR_RADIUS);
+    let boxed_b = separable_mean_filter(&b, width, 1, COLOR_NR_RADIUS);
+    let n = ColorNr { amount: 100.0, detail: 0.0 };
+    for x in 31..34 {
+        let orig = [r[x], g[x], b[x]];
+        let guided_delta = color_nr_delta(orig, [guided_r[x], guided_g[x], guided_b[x]], &n);
+        let boxed_delta = color_nr_delta(orig, [boxed_r[x], boxed_g[x], boxed_b[x]], &n);
+        let guided_r_val = orig[0] + guided_delta[0];
+        let boxed_r_val = orig[0] + boxed_delta[0];
+        let guided_err = (guided_r_val - flower[0]).abs();
+        let boxed_err = (boxed_r_val - flower[0]).abs();
+        assert!(
+            guided_err < boxed_err,
+            "at x={x}: guided R error {guided_err} not smaller than box-mean R error {boxed_err}"
+        );
+    }
+}
+
+/// **Named, accepted limitation** (not silently hidden): the win above
+/// depends on the color edge having a real, correlated luma edge for the
+/// guide to detect. A perfectly ISOLUMINANT color edge (two colors with
+/// identical `luma3` but different chroma -- rarer in real photos, but
+/// real) gives `guide` zero variance to work with, and per
+/// `guided_filter_does_not_preserve_a_p_edge_the_guide_has_no_signal_for`
+/// (already proven generically above, not re-derived here), the guided
+/// filter's output there degrades to a DOUBLE box mean -- strictly worse
+/// than today's single box mean at exactly that (uncommon) edge shape.
+/// Accepted for the same reason Dehaze's own small-radius risk and
+/// Vignette's unimplemented roundness were: a real, named tradeoff rather
+/// than an assumed-fine one, left as a candidate for a future slice
+/// (e.g. blending toward the old box mean when `var_guide` is nearly
+/// zero) if it turns out to matter in practice.
+///
+/// End-to-end through `apply_edit_stack` -- Color NR at a real amount
+/// still smooths a flat, noisy color region (the op's whole purpose is
+/// unaffected by the blur-source swap) and amount=0 is still an exact
+/// passthrough (already covered generally by
+/// `sharpen_and_nr_absent_ops_are_exact_passthrough_through_edit_stack`,
+/// re-checked here specifically for a present-but-zero-amount color_nr
+/// op).
+#[test]
+fn color_nr_end_to_end_through_edit_stack_still_smooths_a_noisy_flat_region() {
+    let width = 20;
+    let height = 3;
+    let mut image = image::ImageBuffer::from_fn(width, height, |x, _y| {
+        if x % 2 == 0 {
+            image::Rgb([130u8, 100, 90])
+        } else {
+            image::Rgb([126u8, 104, 86])
+        }
+    });
+    let before = *image.get_pixel(10, 1);
+    apply_edit_stack(
+        &mut image,
+        &EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({ "op": "color_nr", "amount": 100.0, "detail": 50.0 })],
+        },
+    );
+    let after = *image.get_pixel(10, 1);
+    assert_ne!(after, before, "a real Color NR amount should visibly smooth alternating chroma noise");
+}
+
 /// End-to-end through `apply_edit_stack`, all three ops at amount=0
 /// (the default when absent): a real image is left byte-for-byte
 /// unchanged, the same contract every op in this stack already

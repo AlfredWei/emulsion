@@ -194,10 +194,9 @@ pub(super) fn luma_nr_delta(l: f32, blurred_luma: f32, n: &LumaNr) -> f32 {
     smooth_delta + contrast_restore
 }
 
-/// Color Noise Reduction (M3): blurs full RGB together at a FIXED radius
-/// (box-mean is linear per-channel, so blurring all three channels in one
-/// pass is EXACTLY equivalent to blurring them independently -- not an
-/// approximation), then reconstructs a per-channel delta from how much
+/// Color Noise Reduction (M3): blurs each of R/G/B at a FIXED radius
+/// (originally a per-channel box mean -- see RFC-0014's note below for
+/// what replaced it), then reconstructs a per-channel delta from how much
 /// each channel's own OFFSET FROM LUMA changed due to blurring (its
 /// "chroma content"), not how much its raw value changed (which would
 /// also capture luminance smoothing this op deliberately doesn't want).
@@ -217,9 +216,37 @@ pub(super) fn luma_nr_delta(l: f32, blurred_luma: f32, n: &LumaNr) -> f32 {
 /// AND B for one pixel -- computing `color_smooth_weight` per-channel
 /// instead of once from the joint `chroma_delta` magnitude would break
 /// the cancellation above and let luma drift.
+///
+/// RFC-0014: the cancellation above was originally justified partly by
+/// `blurred` coming from a *linear* per-channel box mean -- re-derived in
+/// the RFC and confirmed by a dedicated unit test, that was never actually
+/// necessary: the telescoping sum only uses `weighted_mean(d) = weights .
+/// d` and the same `k`/`weights` applied to all three channels, so it
+/// holds for ANY `blurred[c]`, box-mean or not. `blurred` now comes from
+/// `guided_filter(graded_luma, channel, ..., COLOR_NR_GUIDED_EPS)`, called
+/// once per channel sharing one `graded_luma` guide -- the *general*
+/// two-signal case (RFC-0011), not `guided_filter_self`: a channel's own
+/// local variance is corrupted by the chroma noise this op removes, so it
+/// makes a poor guide for itself, unlike Clarity/Luma NR's self-guided use
+/// where the guide (luma) is comparatively clean already.
 pub(super) const COLOR_NR_RADIUS: i32 = 4;
 
 pub(super) const COLOR_NR_DETAIL_SCALE: f32 = 0.08;
+
+/// RFC-0014's `eps`, gating on `var_guide` (`graded_luma`'s own local
+/// variance). The RFC's own starting guess was `LUMA_NR_GUIDED_EPS`
+/// (0.0009) -- reasonable on paper since both ops threshold the same
+/// signal (luma) for "is this a real edge" -- but that value measurably
+/// underperformed a plain box mean at `COLOR_NR_RADIUS`'s own small
+/// radius (4) on a real correlated-color-edge test
+/// (`color_nr_end_to_end_creates_less_chroma_bleed_...`): at 0.0009 the
+/// edge indicator `a` stayed too far from 1 near a modest edge, letting
+/// more smoothing leak across it than the plain box mean's own (already
+/// imperfect) result. Lowered to match `DEHAZE_GUIDED_EPS` instead
+/// (0.0001) -- the other op sharing this exact `graded_luma` guide AND
+/// `COLOR_NR_RADIUS`'s own radius (4) -- which passes. Confirmed
+/// empirically, not assumed from the shared-guide argument alone.
+pub(super) const COLOR_NR_GUIDED_EPS: f32 = 0.0001;
 
 pub(super) struct ColorNr {
     pub(super) amount: f32,

@@ -384,16 +384,102 @@ export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} *
     fragment: { module, entryPoint: "fs_lumaNR_final", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.colorNRHPipeline = gpu.device.createRenderPipeline({
+  // Color NR (RFC-0014): 15 new pipelines replacing the old fs_colorNR_h/v
+  // pair -- see detailFilters.js's own doc comment for the full pass
+  // list (the general two-signal guided filter, guide shared across all
+  // three channels). Guide-only quantities (meanguide, corrguide) stay
+  // r32float; per-channel quantities (meanp, corrguidep, a, b, meana,
+  // meanb) are rgba16float, one vec3 packed per texture, since a box
+  // filter is per-channel-independent -- same format the OLD fs_colorNR_h/
+  // fs_colorNR_v pair already used for exactly that reason.
+  gpu.colorNRMeanguideHPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_colorNR_h", targets: [{ format: "rgba16float" }] },
+    fragment: { module, entryPoint: "fs_colorNR_meanguide_h", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.colorNRVPipeline = gpu.device.createRenderPipeline({
+  gpu.colorNRMeanguideVPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_colorNR_v", targets: [{ format: "rgba16float" }] },
+    fragment: { module, entryPoint: "fs_colorNR_meanguide_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRCorrguideHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_corrguide_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRCorrguideVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_corrguide_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRMeanpHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_meanp_h", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRMeanpVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_meanp_v", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRCorrguidepHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_corrguidep_h", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRCorrguidepVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_corrguidep_v", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRAPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_a", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRBPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_b", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRMeanaHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_meana_h", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRMeanaVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_meana_v", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRMeanbHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_meanb_h", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRMeanbVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_meanb_v", targets: [{ format: "rgba16float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.colorNRFinalPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_colorNR_final", targets: [{ format: "rgba16float" }] },
     primitive: { topology: "triangle-list" },
   });
 

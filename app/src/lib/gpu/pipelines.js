@@ -302,16 +302,74 @@ export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} *
     fragment: { module, entryPoint: "fs_clarity_v", targets: [{ format: "rgba16float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.sharpenHPipeline = gpu.device.createRenderPipeline({
+  // Sharpening (RFC-0015): 11 new pipelines replacing the old fs_sharpen_h/v
+  // pair -- see detailFilters.js's own doc comment for the full
+  // guided-filter pass list (same self-guided shape as Clarity/Luma NR
+  // above, at Sharpening's own RUNTIME radius/SHARPEN_GUIDED_EPS).
+  gpu.sharpenMeanpHPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_sharpen_h", targets: [{ format: "r32float" }] },
+    fragment: { module, entryPoint: "fs_sharpen_meanp_h", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
-  gpu.sharpenVPipeline = gpu.device.createRenderPipeline({
+  gpu.sharpenMeanpVPipeline = gpu.device.createRenderPipeline({
     layout: "auto",
     vertex: { module, entryPoint: "vs_main" },
-    fragment: { module, entryPoint: "fs_sharpen_v", targets: [{ format: "r32float" }] },
+    fragment: { module, entryPoint: "fs_sharpen_meanp_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenCorrpHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_corrp_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenCorrpVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_corrp_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenAPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_a", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenBPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_b", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenMeanaHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_meana_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenMeanaVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_meana_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenMeanbHPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_meanb_h", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenMeanbVPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_meanb_v", targets: [{ format: "r32float" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpu.sharpenFinalPipeline = gpu.device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs_main" },
+    fragment: { module, entryPoint: "fs_sharpen_final", targets: [{ format: "r32float" }] },
     primitive: { topology: "triangle-list" },
   });
   // Luma NR (RFC-0012): 11 new pipelines replacing the old fs_lumaNR_h/v

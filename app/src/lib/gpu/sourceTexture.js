@@ -10,7 +10,7 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
   // defensive guard against an unexpected call order, and because
   // TypeScript's null-narrowing from a caller's own guard doesn't carry
   // across a function boundary.
-  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.dehazeMeanguideHPipeline || !gpu.dehazeMeanguideVPipeline || !gpu.dehazeMeanpHPipeline || !gpu.dehazeMeanpVPipeline || !gpu.dehazeCorrguideHPipeline || !gpu.dehazeCorrguideVPipeline || !gpu.dehazeCorrguidepHPipeline || !gpu.dehazeCorrguidepVPipeline || !gpu.dehazeAPipeline || !gpu.dehazeBPipeline || !gpu.dehazeMeanaHPipeline || !gpu.dehazeMeanaVPipeline || !gpu.dehazeMeanbHPipeline || !gpu.dehazeMeanbVPipeline || !gpu.dehazeRefinePipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpVPipeline || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpVPipeline || !gpu.clarityAPipeline || !gpu.clarityBPipeline || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbVPipeline || !gpu.clarityVPipeline || !gpu.sharpenHPipeline || !gpu.sharpenVPipeline || !gpu.lumaNRMeanpHPipeline || !gpu.lumaNRMeanpVPipeline || !gpu.lumaNRCorrpHPipeline || !gpu.lumaNRCorrpVPipeline || !gpu.lumaNRAPipeline || !gpu.lumaNRBPipeline || !gpu.lumaNRMeanaHPipeline || !gpu.lumaNRMeanaVPipeline || !gpu.lumaNRMeanbHPipeline || !gpu.lumaNRMeanbVPipeline || !gpu.lumaNRFinalPipeline || !gpu.colorNRMeanguideHPipeline || !gpu.colorNRMeanguideVPipeline || !gpu.colorNRCorrguideHPipeline || !gpu.colorNRCorrguideVPipeline || !gpu.colorNRMeanpHPipeline || !gpu.colorNRMeanpVPipeline || !gpu.colorNRCorrguidepHPipeline || !gpu.colorNRCorrguidepVPipeline || !gpu.colorNRAPipeline || !gpu.colorNRBPipeline || !gpu.colorNRMeanaHPipeline || !gpu.colorNRMeanaVPipeline || !gpu.colorNRMeanbHPipeline || !gpu.colorNRMeanbVPipeline || !gpu.colorNRFinalPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
+  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.dehazeMeanguideHPipeline || !gpu.dehazeMeanguideVPipeline || !gpu.dehazeMeanpHPipeline || !gpu.dehazeMeanpVPipeline || !gpu.dehazeCorrguideHPipeline || !gpu.dehazeCorrguideVPipeline || !gpu.dehazeCorrguidepHPipeline || !gpu.dehazeCorrguidepVPipeline || !gpu.dehazeAPipeline || !gpu.dehazeBPipeline || !gpu.dehazeMeanaHPipeline || !gpu.dehazeMeanaVPipeline || !gpu.dehazeMeanbHPipeline || !gpu.dehazeMeanbVPipeline || !gpu.dehazeRefinePipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpVPipeline || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpVPipeline || !gpu.clarityAPipeline || !gpu.clarityBPipeline || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbVPipeline || !gpu.clarityVPipeline || !gpu.sharpenMeanpHPipeline || !gpu.sharpenMeanpVPipeline || !gpu.sharpenCorrpHPipeline || !gpu.sharpenCorrpVPipeline || !gpu.sharpenAPipeline || !gpu.sharpenBPipeline || !gpu.sharpenMeanaHPipeline || !gpu.sharpenMeanaVPipeline || !gpu.sharpenMeanbHPipeline || !gpu.sharpenMeanbVPipeline || !gpu.sharpenFinalPipeline || !gpu.lumaNRMeanpHPipeline || !gpu.lumaNRMeanpVPipeline || !gpu.lumaNRCorrpHPipeline || !gpu.lumaNRCorrpVPipeline || !gpu.lumaNRAPipeline || !gpu.lumaNRBPipeline || !gpu.lumaNRMeanaHPipeline || !gpu.lumaNRMeanaVPipeline || !gpu.lumaNRMeanbHPipeline || !gpu.lumaNRMeanbVPipeline || !gpu.lumaNRFinalPipeline || !gpu.colorNRMeanguideHPipeline || !gpu.colorNRMeanguideVPipeline || !gpu.colorNRCorrguideHPipeline || !gpu.colorNRCorrguideVPipeline || !gpu.colorNRMeanpHPipeline || !gpu.colorNRMeanpVPipeline || !gpu.colorNRCorrguidepHPipeline || !gpu.colorNRCorrguidepVPipeline || !gpu.colorNRAPipeline || !gpu.colorNRBPipeline || !gpu.colorNRMeanaHPipeline || !gpu.colorNRMeanaVPipeline || !gpu.colorNRMeanbHPipeline || !gpu.colorNRMeanbVPipeline || !gpu.colorNRFinalPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
 
   // GPU texture-dimension safety: a genuinely native-resolution decode
   // (the 1:1 tier, upgradeToFullTier) could in principle exceed this
@@ -283,6 +283,48 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
   });
   gpu.sharpenBlurTex?.destroy();
   gpu.sharpenBlurTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  // Sharpening's own guided filter (RFC-0015): six new persistent
+  // single-channel intermediates, same shape/lifecycle as Clarity's/Luma
+  // NR's own six -- sharpenBlurHTex (created just above) is reused as the
+  // shared H-scratch across all four of this filter's own box-filter
+  // pairs; sharpenBlurTex (also just above) stays the final result, now
+  // written by fs_sharpen_final instead of the old fs_sharpen_v.
+  gpu.sharpenMeanPTex?.destroy();
+  gpu.sharpenMeanPTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.sharpenCorrPTex?.destroy();
+  gpu.sharpenCorrPTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.sharpenATex?.destroy();
+  gpu.sharpenATex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.sharpenBTex?.destroy();
+  gpu.sharpenBTex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.sharpenMeanATex?.destroy();
+  gpu.sharpenMeanATex = gpu.device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "r32float",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpu.sharpenMeanBTex?.destroy();
+  gpu.sharpenMeanBTex = gpu.device.createTexture({
     size: [bitmap.width, bitmap.height],
     format: "r32float",
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
@@ -701,18 +743,89 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
   // passes additionally need binding 19 (sharpenParams) for its
   // uniform-driven radius; Luma/Color NR's radii are fixed WGSL consts,
   // so their own H/V bind groups need no uniform at all.
-  gpu.sharpenHBindGroup = gpuDevice.createBindGroup({
-    layout: gpu.sharpenHPipeline.getBindGroupLayout(0),
+  // Sharpening's own guided filter (RFC-0015): 11 bind groups replacing
+  // the old sharpenHBindGroup/sharpenVBindGroup pair -- same "own texture
+  // per intermediate, shared H-scratch rebinding for every box-filter
+  // pair" shape as Luma NR's own 11 above, except EVERY H/V pass here
+  // also needs binding 19 (sharpenParams), since its own runtime radius
+  // (not a fixed WGSL const) is read from it in every one of those passes,
+  // not just the original H/V pair.
+  gpu.sharpenMeanpHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenMeanpHPipeline.getBindGroupLayout(0),
     entries: [
       { binding: 8, resource: gpu.gradedTex.createView() },
       { binding: 19, resource: { buffer: gpu.sharpenBuffer } },
     ],
   });
-  gpu.sharpenVBindGroup = gpuDevice.createBindGroup({
-    layout: gpu.sharpenVPipeline.getBindGroupLayout(0),
+  gpu.sharpenMeanpVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenMeanpVPipeline.getBindGroupLayout(0),
     entries: [
       { binding: 17, resource: gpu.sharpenBlurHTex.createView() },
       { binding: 19, resource: { buffer: gpu.sharpenBuffer } },
+    ],
+  });
+  gpu.sharpenCorrpHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenCorrpHPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 8, resource: gpu.gradedTex.createView() },
+      { binding: 19, resource: { buffer: gpu.sharpenBuffer } },
+    ],
+  });
+  gpu.sharpenCorrpVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenCorrpVPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 17, resource: gpu.sharpenBlurHTex.createView() },
+      { binding: 19, resource: { buffer: gpu.sharpenBuffer } },
+    ],
+  });
+  gpu.sharpenABindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenAPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 57, resource: gpu.sharpenMeanPTex.createView() },
+      { binding: 58, resource: gpu.sharpenCorrPTex.createView() },
+    ],
+  });
+  gpu.sharpenBBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenBPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 57, resource: gpu.sharpenMeanPTex.createView() },
+      { binding: 59, resource: gpu.sharpenATex.createView() },
+    ],
+  });
+  gpu.sharpenMeanaHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenMeanaHPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 59, resource: gpu.sharpenATex.createView() },
+      { binding: 19, resource: { buffer: gpu.sharpenBuffer } },
+    ],
+  });
+  gpu.sharpenMeanaVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenMeanaVPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 17, resource: gpu.sharpenBlurHTex.createView() },
+      { binding: 19, resource: { buffer: gpu.sharpenBuffer } },
+    ],
+  });
+  gpu.sharpenMeanbHBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenMeanbHPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 60, resource: gpu.sharpenBTex.createView() },
+      { binding: 19, resource: { buffer: gpu.sharpenBuffer } },
+    ],
+  });
+  gpu.sharpenMeanbVBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenMeanbVPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 17, resource: gpu.sharpenBlurHTex.createView() },
+      { binding: 19, resource: { buffer: gpu.sharpenBuffer } },
+    ],
+  });
+  gpu.sharpenFinalBindGroup = gpuDevice.createBindGroup({
+    layout: gpu.sharpenFinalPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 8, resource: gpu.gradedTex.createView() },
+      { binding: 61, resource: gpu.sharpenMeanATex.createView() },
+      { binding: 62, resource: gpu.sharpenMeanBTex.createView() },
     ],
   });
   // Luma NR's guided filter (RFC-0012): same "own texture per intermediate,

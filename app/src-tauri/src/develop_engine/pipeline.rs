@@ -120,7 +120,12 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     let graded_luma: Vec<f32> = graded.iter().map(|c| luma3(*c)).collect();
 
     let sharpen_blur = if sharpen.amount != 0.0 {
-        Some(separable_mean_filter(&graded_luma, w, h, sharpen_radius_px(sharpen.radius)))
+        // RFC-0015: guided_filter_self, not a plain box mean -- see
+        // SHARPEN_GUIDED_EPS's own doc comment in detail.rs. Radius is a
+        // genuine runtime value here (unlike Clarity's/Luma NR's own fixed
+        // radii), but guided_filter_self already takes it as a plain i32
+        // parameter, so this is a direct drop-in on the CPU side.
+        Some(guided_filter_self(&graded_luma, w, h, sharpen_radius_px(sharpen.radius), SHARPEN_GUIDED_EPS))
     } else {
         None
     };

@@ -80,7 +80,7 @@ describe("DevelopView", () => {
     develop.editStack = togglePanelVisibility(develop.editStack, "vignette");
     expect(view.vignette).toMatchObject({ amount: 40, midpoint: 60, feather: 70 });
     // the real stored op is untouched by hiding
-    expect(develop.editStack.ops).toContainEqual({ op: "vignette", amount: 40, midpoint: 60, feather: 70 });
+    expect(develop.editStack.ops).toContainEqual({ op: "vignette", amount: 40, midpoint: 60, feather: 70, roundness: 0 });
   });
 
   it("hiding a panel reverts its render* counterpart to the identity default, without touching the plain field", () => {

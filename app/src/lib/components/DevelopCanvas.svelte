@@ -59,7 +59,7 @@
    *   dehaze: number,
    *   texture: number,
    *   clarity: number,
-   *   vignette: {amount: number, midpoint: number, feather: number},
+   *   vignette: {amount: number, midpoint: number, feather: number, roundness: number},
    *   lensCorrection: {
    *     profile_enabled: boolean,
    *     distortion_amount: number,

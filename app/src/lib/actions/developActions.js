@@ -116,7 +116,7 @@ export function handleSplitToningBalanceChange(/** @type {number} */ balance) {
 }
 
 export function handleVignetteChange(
-  /** @type {Partial<{amount: number, midpoint: number, feather: number}>} */ patch,
+  /** @type {Partial<{amount: number, midpoint: number, feather: number, roundness: number}>} */ patch,
 ) {
   develop.editStack = upsertVignette(develop.editStack, patch);
   develop.scheduleFlush("Vignette");

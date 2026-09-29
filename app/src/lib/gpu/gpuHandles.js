@@ -274,7 +274,7 @@ export const HISTOGRAM_SIZE = 256;
    *     profile: import('$lib/api/develop.js').LensProfileMatch | null,
    *   },
    *   perspective: {vertical: number, horizontal: number, rotate: number, aspect: number, scale: number},
-   *   vignette: {amount: number, midpoint: number, feather: number},
+   *   vignette: {amount: number, midpoint: number, feather: number, roundness: number},
    *   grain: {amount: number, size: number, roughness: number},
    *   sharpen: {amount: number, radius: number, detail: number, masking: number},
    *   lumaNR: {amount: number, detail: number, contrast: number},

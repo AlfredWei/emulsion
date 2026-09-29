@@ -844,14 +844,15 @@ export function buildSplitToningUniformData(
 
 // Vignette (M3): a flat, non-nested payload -- unlike Split Toning's
 // per-zone shape above, there's no natural per-element repetition in
-// three named fields, so this mirrors upsertSplitToningBalance's flat
+// four named fields, so this mirrors upsertSplitToningBalance's flat
 // patch-and-replace shape rather than upsertSplitToningZone's per-zone
 // one. Global-only (applied after Dehaze, before any mask -- see
 // develop_engine.rs/DevelopCanvas.svelte's shared pipeline-order
-// comment).
-export const IDENTITY_VIGNETTE = Object.freeze({ amount: 0, midpoint: 50, feather: 50 });
+// comment). `roundness` added by RFC-0016; 0 is the identity value
+// (today's aspect-corrected ellipse, unchanged).
+export const IDENTITY_VIGNETTE = Object.freeze({ amount: 0, midpoint: 50, feather: 50, roundness: 0 });
 
-/** @returns {{amount: number, midpoint: number, feather: number}} */
+/** @returns {{amount: number, midpoint: number, feather: number, roundness: number}} */
 export function getVignette(
   /** @type {EditStack} */ stack,
   /** @type {typeof IDENTITY_VIGNETTE} */ fallback = IDENTITY_VIGNETTE,
@@ -862,15 +863,16 @@ export function getVignette(
     amount: op.amount ?? 0,
     midpoint: op.midpoint ?? 50,
     feather: op.feather ?? 50,
+    roundness: op.roundness ?? 0,
   };
 }
 
-/** Patches any subset of {amount, midpoint, feather}, leaving the rest
- * untouched.
+/** Patches any subset of {amount, midpoint, feather, roundness}, leaving
+ * the rest untouched.
  * @returns {EditStack} */
 export function upsertVignette(
   /** @type {EditStack} */ stack,
-  /** @type {Partial<{amount: number, midpoint: number, feather: number}>} */ patch,
+  /** @type {Partial<{amount: number, midpoint: number, feather: number, roundness: number}>} */ patch,
 ) {
   const current = getVignette(stack);
   const next = { ...current, ...patch };
@@ -881,11 +883,13 @@ export function upsertVignette(
 
 /** Packs into the exact Float32Array layout DevelopCanvas.svelte's
  * `vignetteBuffer`/the WGSL `Vignette` struct expects (field order
- * matters -- must match the struct's own field order exactly). */
+ * matters -- must match the struct's own field order exactly).
+ * `roundness` occupies what used to be a literal 0 padding slot -- see
+ * gradeUniforms.js's Vignette struct, RFC-0016. */
 export function buildVignetteUniformData(
   /** @type {ReturnType<typeof getVignette>} */ v,
 ) {
-  return new Float32Array([v.amount, v.midpoint, v.feather, 0]);
+  return new Float32Array([v.amount, v.midpoint, v.feather, v.roundness]);
 }
 
 // Grain (M3): same flat, non-nested payload shape as Vignette above.

@@ -35,17 +35,26 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
     };
     @group(0) @binding(7) var<uniform> splitToning: SplitToning;
 
-    // Vignette (M3): a flat 3-field struct, same reasoning SplitToning's
+    // Vignette (M3): a flat 4-field struct, same reasoning SplitToning's
     // own comment gives for not using curveLut/hslBands' vec4-array shape.
     // Padded to a full vec4 (16 bytes) per the same footgun documented
-    // above.
+    // above -- roundness (RFC-0016) reuses what was _pad0, so this is
+    // still exactly one vec4, no layout change.
     struct Vignette {
-      amount: f32,   // -100..100, negative darkens, positive lightens
-      midpoint: f32, // 0..100, normalized radius where falloff begins
-      feather: f32,  // 0..100, width of the falloff transition
-      _pad0: f32,
+      amount: f32,    // -100..100, negative darkens, positive lightens
+      midpoint: f32,  // 0..100, normalized radius where falloff begins
+      feather: f32,   // 0..100, width of the falloff transition
+      roundness: f32, // -100..100, 0=today's ellipse; see RFC-0016
     };
     @group(0) @binding(15) var<uniform> vignette: Vignette;
+
+    // RFC-0016: the exponent Vignette's "more rectangular" branch (see
+    // fs_premask below) blends toward as roundness approaches -100.
+    // Mirrors VIGNETTE_ROUNDNESS_MAX_P in develop_engine/effects.rs --
+    // keep both in sync. No reference signal to tune this against (it's
+    // a shape parameter, not a filter accuracy constant), so this is a
+    // reasoned choice, not a verified match to Adobe's own algorithm.
+    const VIGNETTE_ROUNDNESS_MAX_P: f32 = 5.0;
 
     // Grain (M3): same flat-struct, own-buffer treatment as Vignette,
     // same reasoning.

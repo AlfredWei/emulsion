@@ -134,16 +134,42 @@ export const premask = `    // Histogram clipping-overlay toggle (own tiny padde
       let shDelta = shDiff * (sharpenParams.amount / 100.0) * shDetailWeight * shMaskWeight * SHARPEN_STRENGTH;
       rgb = rgb + vec3<f32>(shDelta, shDelta, shDelta);
 
-      // Vignette: aspect-corrected elliptical falloff -- see
+      // Vignette: aspect-corrected elliptical falloff at roundness=0,
+      // generalized by RFC-0016 for nonzero roundness -- see
       // develop_engine.rs's vignette_factor doc comment for the full
       // shape/parameter reasoning, mirrored exactly here.
       let dims = vec2<f32>(textureDimensions(gradedTex));
       let vAspect = dims.y / dims.x;
       let centered = (in.uv - vec2<f32>(0.5, 0.5)) * 2.0;
-      let vDx = centered.x;
-      let vDy = centered.y * vAspect;
-      let cornerDist = sqrt(1.0 + vAspect * vAspect);
-      let normDist = sqrt(vDx * vDx + vDy * vDy) / cornerDist;
+      let vRoundness = clamp(vignette.roundness, -100.0, 100.0);
+      var normDist: f32;
+      if (vRoundness == 0.0) {
+        // Untouched since before RFC-0016 -- bit-for-bit identical to
+        // every vignette rendered before this RFC.
+        let vDx = centered.x;
+        let vDy = centered.y * vAspect;
+        let cornerDist = sqrt(1.0 + vAspect * vAspect);
+        normDist = sqrt(vDx * vDx + vDy * vDy) / cornerDist;
+      } else if (vRoundness > 0.0) {
+        // RFC-0016 "rounder": blend the aspect correction itself toward
+        // 1.0 (a true circle) as roundness approaches +100.
+        let vEffAspect = vAspect + (1.0 - vAspect) * (vRoundness / 100.0);
+        let vDx = centered.x;
+        let vDy = centered.y * vEffAspect;
+        let cornerDist = sqrt(1.0 + vEffAspect * vEffAspect);
+        normDist = sqrt(vDx * vDx + vDy * vDy) / cornerDist;
+      } else {
+        // RFC-0016 "more rectangular": generalize the L2 norm to a
+        // superellipse (Lp) norm, blending the exponent from 2.0 toward
+        // VIGNETTE_ROUNDNESS_MAX_P as roundness approaches -100. abs()
+        // is load-bearing, not stylistic -- WGSL's pow() is undefined
+        // for a negative base with a non-integer exponent.
+        let vP = 2.0 + (-vRoundness / 100.0) * (VIGNETTE_ROUNDNESS_MAX_P - 2.0);
+        let vDx = centered.x;
+        let vDy = centered.y * vAspect;
+        let cornerDist = pow(1.0 + pow(vAspect, vP), 1.0 / vP);
+        normDist = pow(pow(abs(vDx), vP) + pow(abs(vDy), vP), 1.0 / vP) / cornerDist;
+      }
       let vInner = clamp(vignette.midpoint / 100.0, 0.0, 0.999);
       let vOuter = clamp(vInner + max(vignette.feather / 100.0, 0.001) * (1.0 - vInner), vInner + 0.001, 1.0);
       let vT = smoothstep(vInner, vOuter, normDist);

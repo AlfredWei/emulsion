@@ -224,71 +224,154 @@ describe("white balance and tone", () => {
     return { r, g: new Uint32Array(r), b: new Uint32Array(r) };
   };
 
-  it("auto WB with no histogram assumes mid-grey", () => {
-    A.handleAutoWhiteBalance();
+  /** Bug-fix regression coverage (see handleAutoWhiteBalance/
+   * handleAutoTone's own doc comments): both handlers now reset their
+   * own controlled ops FIRST, then await two fresh
+   * `reportHistogramUpdate` calls (discarding the first, standing in
+   * for a possibly-stale in-flight read) before computing their real
+   * target -- simulating DevelopCanvas reporting a render exactly the
+   * way it would after that reset, so these tests exercise the actual
+   * fixed sequencing, not just the final math. */
+  async function settleHistogram(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array}} */ data) {
+    develop.reportHistogramUpdate(data);
+    await Promise.resolve();
+    develop.reportHistogramUpdate(data);
+  }
+
+  it("auto WB with no histogram ever reported falls back to mid-grey after a timeout, not a hang", async () => {
+    // Nothing calls reportHistogramUpdate -- stands in for CPU-fallback
+    // mode (M5 Slice 1), which never reports a histogram at all.
+    const promise = A.handleAutoWhiteBalance();
     const expected = computeAutoWhiteBalance({ r: 0.5, g: 0.5, b: 0.5 });
+    await promise;
     expect(developView.temperature).toBe(expected.temperature);
     expect(developView.tint).toBe(expected.tint);
     expect(labels()).toEqual(["Auto White Balance"]);
-  });
+  }, 2000);
 
-  it("auto WB averages the histogram (bin index / 255, weighted by count)", () => {
-    develop.histogramData = hist(204, 1000); // every pixel at 0.8 in all channels
-    A.handleAutoWhiteBalance();
+  it("auto WB averages the histogram (bin index / 255, weighted by count)", async () => {
+    const promise = A.handleAutoWhiteBalance();
+    await settleHistogram(hist(204, 1000)); // every pixel at 0.8 in all channels
+    await promise;
     const expected = computeAutoWhiteBalance({ r: 204 / 255, g: 204 / 255, b: 204 / 255 });
     expect(developView.temperature).toBe(expected.temperature);
     expect(developView.tint).toBe(expected.tint);
   });
 
-  it("an empty histogram falls back to mid-grey", () => {
-    develop.histogramData = hist(0, 0);
-    A.handleAutoWhiteBalance();
+  it("an empty (all-zero) histogram falls back to mid-grey", async () => {
+    const promise = A.handleAutoWhiteBalance();
+    await settleHistogram(hist(0, 0));
+    await promise;
     const expected = computeAutoWhiteBalance({ r: 0.5, g: 0.5, b: 0.5 });
     expect(developView.temperature).toBe(expected.temperature);
   });
 
-  it("WB preset: applies the preset's temperature/tint under its own label; unknown keys do nothing; 'auto' runs auto WB", () => {
-    A.handleWbPresetChange("tungsten");
+  it("WB preset: applies the preset's temperature/tint under its own label; unknown keys do nothing; 'auto' runs auto WB", async () => {
+    await A.handleWbPresetChange("tungsten");
     expect([developView.temperature, developView.tint]).toEqual([WB_PRESETS.tungsten.temperature, WB_PRESETS.tungsten.tint]);
     expect(labels()).toEqual(["WB Profile: Tungsten"]);
     schedule.mockClear();
-    A.handleWbPresetChange("nonsense");
+    await A.handleWbPresetChange("nonsense");
     expect(schedule).not.toHaveBeenCalled();
-    A.handleWbPresetChange("auto");
+    const promise = A.handleWbPresetChange("auto");
+    await settleHistogram(hist(128, 100));
+    await promise;
     expect(labels()).toEqual(["Auto White Balance"]);
   });
 
-  it("auto WB with unequal channels writes temperature and tint to their own ops", () => {
+  it("auto WB with unequal channels writes temperature and tint to their own ops", async () => {
     const r = new Uint32Array(256);
     const g = new Uint32Array(256);
     const b = new Uint32Array(256);
     r[200] = 10;
     g[100] = 10;
     b[50] = 10;
-    develop.histogramData = { r, g, b };
-    A.handleAutoWhiteBalance();
+    const promise = A.handleAutoWhiteBalance();
+    await settleHistogram({ r, g, b });
+    await promise;
     const expected = computeAutoWhiteBalance({ r: 200 / 255, g: 100 / 255, b: 50 / 255 });
     expect(expected.temperature).not.toBe(expected.tint);
     expect(developView.temperature).toBe(expected.temperature);
     expect(developView.tint).toBe(expected.tint);
   });
 
-  it("auto tone needs a histogram, then sets all six tone ops from computeAutoTone", () => {
-    A.handleAutoTone();
-    expect(schedule).not.toHaveBeenCalled();
+  it("auto WB resets temperature/tint to identity before reading the histogram, so a repeat click is idempotent, not drifting", async () => {
+    // The exact bug this fix targets: clicking auto WB against an
+    // already-white-balanced image must NOT measure its own prior
+    // result -- it always resets to 0/0 first, so every click reads
+    // the same underlying (un-white-balanced) average and lands on
+    // the same answer, not a residual correction on top of the last one.
+    const data = hist(180, 500);
+    const first = A.handleAutoWhiteBalance();
+    await settleHistogram(data);
+    await first;
+    const firstResult = { temperature: developView.temperature, tint: developView.tint };
+
+    const second = A.handleAutoWhiteBalance();
+    await settleHistogram(data);
+    await second;
+    expect(developView.temperature).toBe(firstResult.temperature);
+    expect(developView.tint).toBe(firstResult.tint);
+  });
+
+  it("auto tone needs a histogram, then sets all six tone ops from computeAutoTone", async () => {
     const r = new Uint32Array(256);
     r[26] = 1000;
     r[110] = 3000;
     r[254] = 500;
-    develop.histogramData = { r, g: new Uint32Array(r), b: new Uint32Array(r) };
-    A.handleAutoTone();
-    const tone = computeAutoTone(develop.histogramData);
+    const data = { r, g: new Uint32Array(r), b: new Uint32Array(r) };
+    const promise = A.handleAutoTone();
+    await settleHistogram(data);
+    await promise;
+    const tone = computeAutoTone(data);
     expect(new Set([tone.highlights, tone.shadows, tone.whites, tone.blacks, tone.contrast]).size).toBeGreaterThan(3);
     expect(opNames().sort()).toEqual(["blacks", "contrast", "exposure", "highlights", "shadows", "whites"]);
     for (const k of /** @type {const} */ (["exposure", "contrast", "highlights", "shadows", "whites", "blacks"])) {
       expect(developView[k], k).toBe(tone[k]);
     }
     expect(labels()).toEqual(["Auto Tone"]);
+  });
+
+  it("auto tone with no histogram ever reported resets its six ops to identity and stops there, without a labeled flush", async () => {
+    // handleAutoTone writes its reset (0) unconditionally before waiting
+    // on the histogram, so the six ops exist at identity value even on
+    // the timeout path -- only the labeled flush (a real edit) is skipped.
+    const promise = A.handleAutoTone();
+    await promise;
+    expect(opNames().sort()).toEqual(["blacks", "contrast", "exposure", "highlights", "shadows", "whites"]);
+    for (const k of /** @type {const} */ (["exposure", "contrast", "highlights", "shadows", "whites", "blacks"])) {
+      expect(developView[k], k).toBe(0);
+    }
+    expect(schedule).not.toHaveBeenCalled();
+  }, 2000);
+
+  it("auto tone resets its six ops to identity before reading the histogram, so a repeat click is idempotent, not drifting", async () => {
+    const r = new Uint32Array(256);
+    r[40] = 1000;
+    r[220] = 200;
+    const data = { r, g: new Uint32Array(r), b: new Uint32Array(r) };
+
+    const first = A.handleAutoTone();
+    await settleHistogram(data);
+    await first;
+    const firstTone = {
+      exposure: developView.exposure,
+      contrast: developView.contrast,
+      highlights: developView.highlights,
+      shadows: developView.shadows,
+      whites: developView.whites,
+      blacks: developView.blacks,
+    };
+
+    const second = A.handleAutoTone();
+    await settleHistogram(data);
+    await second;
+    expect(developView.exposure).toBe(firstTone.exposure);
+    expect(developView.contrast).toBe(firstTone.contrast);
+    expect(developView.highlights).toBe(firstTone.highlights);
+    expect(developView.shadows).toBe(firstTone.shadows);
+    expect(developView.whites).toBe(firstTone.whites);
+    expect(developView.blacks).toBe(firstTone.blacks);
   });
 });
 

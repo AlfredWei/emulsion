@@ -1,15 +1,93 @@
-/// White balance adjustment (Temperature and Tint).
-/// Temperature shifts warm (yellow) vs cool (blue).
-/// Tint shifts magenta vs green.
+use super::*;
+
+/// White balance adjustment (Temperature and Tint). RFC-0017: a real
+/// per-channel gain on LIGHT, so it's computed in linear space
+/// (`srgb_to_linear`/`linear_to_srgb` bracket it) rather than applied
+/// directly to the gamma-encoded value -- applying a physical gain
+/// post-gamma is a different, wrong transform, not a stylistic
+/// difference (see RFC-0017 SS3.1).
+///
+/// Temperature shifts warm (yellow) vs cool (blue). Tint shifts magenta
+/// vs green. The three raw per-channel coefficients below are unchanged
+/// from before RFC-0017 (they already move the right channel the right
+/// direction) -- what's new is normalizing them by the LINEAR-light
+/// luma they'd produce on a neutral gray, so a purely-hue-shifting WB
+/// adjustment cannot ALSO change overall physical brightness as a side
+/// effect. Before this normalization, `temperature=100` measurably
+/// brightened a neutral gray's (gamma-space) value by ~5%
+/// (`luma([1.35,1.0,0.65]) ≈ 1.049`) -- a real, described bug, not just
+/// an approximation gap. See RFC-0017 SS3.2.
+///
+/// The guarantee this normalization actually proves is LINEAR luma
+/// preservation, not gamma-space luma of the three (individually
+/// re-encoded) output channels -- those are NOT the same quantity once
+/// the channels diverge, since `linear_to_srgb` is a nonlinear (concave)
+/// per-channel function and the weighted sum of encoded values isn't
+/// the encoding of the weighted sum (Jensen's inequality). This
+/// module's own tests check the linear-domain claim specifically, after
+/// an initial version checked the wrong (gamma-domain) one and failed
+/// at the extremes -- see that test's own doc comment for the full
+/// finding.
 pub(super) fn apply_white_balance(rgb: [f32; 3], temperature: f32, tint: f32) -> [f32; 3] {
-    let mut c = rgb;
     let t = temperature / 100.0;
     let tint_norm = tint / 100.0;
 
-    c[0] *= 1.0 + 0.35 * t + 0.15 * tint_norm;
-    c[1] *= 1.0 - 0.35 * tint_norm;
-    c[2] *= 1.0 - 0.35 * t + 0.15 * tint_norm;
-    c
+    let g_r = 1.0 + 0.35 * t + 0.15 * tint_norm;
+    let g_g = 1.0 - 0.35 * tint_norm;
+    let g_b = 1.0 - 0.35 * t + 0.15 * tint_norm;
+    let luma_of_gray = g_r * 0.2126 + g_g * 0.7152 + g_b * 0.0722;
+    let (g_r, g_g, g_b) = (g_r / luma_of_gray, g_g / luma_of_gray, g_b / luma_of_gray);
+
+    [
+        linear_to_srgb(srgb_to_linear(rgb[0]) * g_r),
+        linear_to_srgb(srgb_to_linear(rgb[1]) * g_g),
+        linear_to_srgb(srgb_to_linear(rgb[2]) * g_b),
+    ]
+}
+
+/// RFC-0017: Exposure is a real gain on LIGHT (a genuine photographic
+/// stop), so it's computed in linear space -- see `apply_white_balance`'s
+/// own doc comment for the same reasoning. Factored out here (previously
+/// duplicated inline in `apply_global_adjustments` and `apply_adjustments`
+/// below) so global and local-mask Exposure are provably the same
+/// function, not just visually similar formulas kept in sync by hand.
+///
+/// Honest, described consequence, not a hidden side effect: because
+/// gamma compression is steepest near black, a nominal `+1 EV` now
+/// produces a visibly GENTLER brightening of a midtone than the old
+/// direct-gamma-multiply did (a mid-gray at 100/255 lands around
+/// 138/255, not 200/255) -- this is the fix, not a regression to
+/// compensate for by rescaling the EV numbers. A real camera stop
+/// behaves exactly this way once gamma is accounted for correctly.
+pub(super) fn apply_exposure(rgb: [f32; 3], exposure_ev: f32) -> [f32; 3] {
+    let gain = 2f32.powf(exposure_ev);
+    [
+        linear_to_srgb(srgb_to_linear(rgb[0]) * gain),
+        linear_to_srgb(srgb_to_linear(rgb[1]) * gain),
+        linear_to_srgb(srgb_to_linear(rgb[2]) * gain),
+    ]
+}
+
+/// RFC-0017: Contrast as a smoothstep-blended S-curve, replacing the old
+/// hard linear stretch (`(v-0.5)*(1+contrast/100)+0.5`), which ran
+/// straight into the final [0,1] clamp with no roll-off -- an abrupt cut
+/// rather than the smooth compression a real Contrast curve gives
+/// shadows/highlights. Reuses this module's own `smoothstep` primitive
+/// (already used by Vignette/Split Toning/Parametric Tone) rather than
+/// introducing a new curve family. At `amount=0` this is the exact
+/// identity; at `amount=1` (Contrast=100) it reduces exactly to
+/// `smoothstep(0,1,v)`, a real S-curve whose derivative is 0 at both
+/// v=0 and v=1 (smooth roll-off at black/white) and 1.5 at the pivot
+/// (steeper midtones -- the actual "more contrast" effect). Stays in
+/// the same gamma/perceptual domain Contrast always operated in --
+/// unlike White Balance/Exposure above, Contrast is not a linear-light
+/// gain, so it is NOT bracketed by srgb_to_linear/linear_to_srgb.
+/// Honesty caveat (RFC-0017 SS3.3, same class as RFC-0016's): this
+/// specific curve family is a reasoned, well-behaved choice, not a
+/// verified match to Lightroom's own unpublished Contrast curve shape.
+pub(super) fn apply_contrast(rgb: [f32; 3], contrast: f32) -> [f32; 3] {
+    let amount = (contrast / 100.0).clamp(-1.0, 1.0);
+    rgb.map(|v| v + amount * (smoothstep(0.0, 1.0, v) - v))
 }
 
 /// Parametric Tone expansion (Highlights, Shadows, Whites, Blacks).
@@ -62,15 +140,15 @@ pub(super) fn apply_parametric_tone(
     [rgb[0] + delta, rgb[1] + delta, rgb[2] + delta]
 }
 
-/// Local adjustments for masks (exposure, contrast, saturation).
+/// Local adjustments for masks (exposure, contrast, saturation). RFC-0017:
+/// Exposure/Contrast now go through the exact same `apply_exposure`/
+/// `apply_contrast` the global chain below uses -- previously each had
+/// its own inline copy of the same formula, kept in sync by hand rather
+/// than provably identical; a test now checks the two paths agree on
+/// the same input rather than assuming it from the refactor alone.
 pub(super) fn apply_adjustments(rgb: [f32; 3], exposure_ev: f32, contrast: f32, saturation: f32) -> [f32; 3] {
-    let mut c = rgb;
-    for v in c.iter_mut() {
-        *v *= 2f32.powf(exposure_ev);
-    }
-    for v in c.iter_mut() {
-        *v = (*v - 0.5) * (1.0 + contrast / 100.0) + 0.5;
-    }
+    let mut c = apply_exposure(rgb, exposure_ev);
+    c = apply_contrast(c, contrast);
     let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
     for v in c.iter_mut() {
         *v = luma + (*v - luma) * (1.0 + saturation / 100.0);
@@ -92,12 +170,8 @@ pub(super) fn apply_global_adjustments(
     blacks: f32,
 ) -> [f32; 3] {
     let mut c = apply_white_balance(rgb, temperature, tint);
-    for v in c.iter_mut() {
-        *v *= 2f32.powf(exposure_ev);
-    }
-    for v in c.iter_mut() {
-        *v = (*v - 0.5) * (1.0 + contrast / 100.0) + 0.5;
-    }
+    c = apply_exposure(c, exposure_ev);
+    c = apply_contrast(c, contrast);
     c = apply_parametric_tone(c, highlights, shadows, whites, blacks);
     let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
     for v in c.iter_mut() {

@@ -220,18 +220,68 @@ export function handleCropReset() {
   handleCropChange(IDENTITY_CROP);
 }
 
-export function handleAutoWhiteBalance() {
+/** Waits for two fresh histograms (discarding the first -- see
+ * `waitForFreshHistogram`'s own doc comment) after Auto Tone/Auto White
+ * Balance reset their own controlled ops, but never longer than
+ * `timeoutMs`: CPU-fallback mode (M5 Slice 1, RFC-0002) renders a
+ * static `<img>` and never calls `reportHistogramUpdate` at all, so an
+ * unconditional wait would hang these buttons forever there. On
+ * timeout, falls back to whatever `develop.histogramData` already
+ * holds -- the pre-fix behavior, degraded but not stuck -- rather than
+ * a permanently spinning button. A histogram that DOES arrive after
+ * the timeout still resolves its own now-unobserved promise (nothing
+ * reads it), which is harmless: neither branch re-enters the compute-
+ * and-apply step below.
+ */
+function waitForFreshHistogramOrFallback(/** @type {number} */ timeoutMs = 500) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(develop.histogramData);
+    }, timeoutMs);
+    (async () => {
+      await develop.waitForFreshHistogram();
+      return develop.waitForFreshHistogram();
+    })().then((data) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(data);
+    });
+  });
+}
+
+/** Bug fix: repeated clicks used to drift then slowly converge, because
+ * `develop.histogramData` reflects whatever is CURRENTLY rendered --
+ * including this same op's own PREVIOUS result. Computing the gray-
+ * world average from that histogram means every click after the first
+ * measures an already-corrected image, not the original one, so it
+ * kept computing a residual correction on top of its own last output
+ * instead of the same absolute answer every time (unlike a real
+ * Lightroom Auto White Balance click, which is idempotent). Fixed by
+ * resetting temperature/tint to identity FIRST, then awaiting a fresh
+ * render's histogram before computing the real target, so the average
+ * this reads is always the un-white-balanced image's own, regardless
+ * of what was set before the click.
+ */
+export async function handleAutoWhiteBalance() {
+  develop.editStack = upsertOp(develop.editStack, "temperature", 0);
+  develop.editStack = upsertOp(develop.editStack, "tint", 0);
+  const histogramData = await waitForFreshHistogramOrFallback();
+
   let avgRgb = { r: 0.5, g: 0.5, b: 0.5 };
-  if (develop.histogramData) {
+  if (histogramData) {
     let rSum = 0,
       gSum = 0,
       bSum = 0,
       count = 0;
     for (let i = 0; i < 256; i++) {
-      rSum += develop.histogramData.r[i] * (i / 255);
-      gSum += develop.histogramData.g[i] * (i / 255);
-      bSum += develop.histogramData.b[i] * (i / 255);
-      count += develop.histogramData.r[i];
+      rSum += histogramData.r[i] * (i / 255);
+      gSum += histogramData.g[i] * (i / 255);
+      bSum += histogramData.b[i] * (i / 255);
+      count += histogramData.r[i];
     }
     if (count > 0) {
       avgRgb = { r: rSum / count, g: gSum / count, b: bSum / count };
@@ -243,9 +293,9 @@ export function handleAutoWhiteBalance() {
   develop.scheduleFlush("Auto White Balance");
 }
 
-export function handleWbPresetChange(/** @type {string} */ presetKey) {
+export async function handleWbPresetChange(/** @type {string} */ presetKey) {
   if (presetKey === "auto") {
-    handleAutoWhiteBalance();
+    await handleAutoWhiteBalance();
     return;
   }
   const preset = WB_PRESETS[/** @type {keyof typeof WB_PRESETS} */ (presetKey)];
@@ -255,9 +305,28 @@ export function handleWbPresetChange(/** @type {string} */ presetKey) {
   develop.scheduleFlush(`WB Profile: ${preset.name}`);
 }
 
-export function handleAutoTone() {
-  if (!develop.histogramData) return;
-  const tone = computeAutoTone(develop.histogramData);
+/** Bug fix, same root cause as `handleAutoWhiteBalance` above: Auto
+ * Tone's target exposure/contrast/highlights/shadows/whites/blacks were
+ * computed from `develop.histogramData`, which reflects whatever is
+ * CURRENTLY rendered -- including this same op's own previous result.
+ * Repeated clicks kept computing a residual correction on top of their
+ * own last output rather than the same absolute answer every time
+ * (a real Lightroom Auto Tone click is idempotent). Fixed the same
+ * way: reset the six controlled ops to identity FIRST, then await a
+ * fresh render's histogram before computing the real target against
+ * the un-toned image.
+ */
+export async function handleAutoTone() {
+  develop.editStack = upsertOp(develop.editStack, "exposure", 0);
+  develop.editStack = upsertOp(develop.editStack, "contrast", 0);
+  develop.editStack = upsertOp(develop.editStack, "highlights", 0);
+  develop.editStack = upsertOp(develop.editStack, "shadows", 0);
+  develop.editStack = upsertOp(develop.editStack, "whites", 0);
+  develop.editStack = upsertOp(develop.editStack, "blacks", 0);
+  const histogramData = await waitForFreshHistogramOrFallback();
+  if (!histogramData) return;
+
+  const tone = computeAutoTone(histogramData);
   develop.editStack = upsertOp(develop.editStack, "exposure", tone.exposure);
   develop.editStack = upsertOp(develop.editStack, "contrast", tone.contrast);
   develop.editStack = upsertOp(develop.editStack, "highlights", tone.highlights);
@@ -273,7 +342,7 @@ export function handleSourceDimensions(/** @type {number} */ width, /** @type {n
 }
 
 export function handleHistogramUpdate(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array}} */ data) {
-  develop.histogramData = data;
+  develop.reportHistogramUpdate(data);
 }
 
 export function handleToggleClippingOverlay() {

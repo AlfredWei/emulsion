@@ -6,9 +6,59 @@ export const gradeMath = `    fn smoothstep_val(edge0: f32, edge1: f32, x: f32) 
       return t * t * (3.0 - 2.0 * t);
     }
 
+    // RFC-0017: the exact sRGB EOTF/OETF pair -- NOT a pow(2.2)
+    // approximation. White Balance and Exposure are the only two real
+    // multiplicative gains on LIGHT in this chain, so they're bracketed
+    // by these two functions (linearize -> gain -> re-encode) rather
+    // than applied directly to the gamma-encoded value, which is a
+    // different, physically wrong transform. See develop_engine.rs's
+    // srgb_to_linear/linear_to_srgb doc comments for the full reasoning
+    // (this WGSL twin must match that Rust pair exactly).
+    fn srgbToLinear(c: f32) -> f32 {
+      if (c <= 0.04045) {
+        return c / 12.92;
+      }
+      return pow((c + 0.055) / 1.055, 2.4);
+    }
+
+    fn linearToSrgb(cIn: f32) -> f32 {
+      let c = max(cIn, 0.0);
+      if (c <= 0.0031308) {
+        return c * 12.92;
+      }
+      return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+    }
+
+    // RFC-0017: factored out so global (apply_global_adjustments) and
+    // local-mask (apply_adjustments) Exposure are provably the same
+    // function, not two independently-typed copies of the same formula.
+    fn applyExposure(rgb: vec3<f32>, exposureEv: f32) -> vec3<f32> {
+      let gain = pow(2.0, exposureEv);
+      return vec3<f32>(
+        linearToSrgb(srgbToLinear(rgb.x) * gain),
+        linearToSrgb(srgbToLinear(rgb.y) * gain),
+        linearToSrgb(srgbToLinear(rgb.z) * gain),
+      );
+    }
+
+    // RFC-0017: Contrast as a smoothstep-blended S-curve, replacing the
+    // old hard linear stretch -- see develop_engine.rs's apply_contrast
+    // doc comment for the full reasoning (this WGSL twin must match
+    // that Rust function exactly). Stays in the gamma/perceptual domain
+    // -- unlike Exposure/White Balance, this is NOT a linear-light gain.
+    fn applyContrast(rgb: vec3<f32>, contrast: f32) -> vec3<f32> {
+      let amount = clamp(contrast / 100.0, -1.0, 1.0);
+      let s = vec3<f32>(
+        smoothstep_val(0.0, 1.0, rgb.x),
+        smoothstep_val(0.0, 1.0, rgb.y),
+        smoothstep_val(0.0, 1.0, rgb.z),
+      );
+      return rgb + amount * (s - rgb);
+    }
+
     fn apply_adjustments(rgb: vec3<f32>, exposure_ev: f32, contrast: f32, saturation: f32) -> vec3<f32> {
-      var c = rgb * pow(2.0, exposure_ev);
-      c = (c - 0.5) * (1.0 + contrast / 100.0) + 0.5;
+      var c = applyExposure(rgb, exposure_ev);
+      c = applyContrast(c, contrast);
       let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
       c = luma + (c - luma) * (1.0 + saturation / 100.0);
       return c;
@@ -30,16 +80,25 @@ export const gradeMath = `    fn smoothstep_val(edge0: f32, edge1: f32, x: f32) 
       let t = temperature / 100.0;
       let tint_norm = tint / 100.0;
 
-      // White Balance
-      c.x = c.x * (1.0 + 0.35 * t + 0.15 * tint_norm);
-      c.y = c.y * (1.0 - 0.35 * tint_norm);
-      c.z = c.z * (1.0 - 0.35 * t + 0.15 * tint_norm);
+      // White Balance -- RFC-0017: a real per-channel gain on LIGHT, so
+      // it's computed in linear space (bracketed by srgbToLinear/
+      // linearToSrgb) with the gain normalized so a neutral gray's
+      // LINEAR luma stays exactly 1.0 -- see develop_engine.rs's
+      // apply_white_balance doc comment for the full reasoning this
+      // WGSL twin must match.
+      let gR = 1.0 + 0.35 * t + 0.15 * tint_norm;
+      let gG = 1.0 - 0.35 * tint_norm;
+      let gB = 1.0 - 0.35 * t + 0.15 * tint_norm;
+      let lumaOfGray = gR * 0.2126 + gG * 0.7152 + gB * 0.0722;
+      c.x = linearToSrgb(srgbToLinear(c.x) * (gR / lumaOfGray));
+      c.y = linearToSrgb(srgbToLinear(c.y) * (gG / lumaOfGray));
+      c.z = linearToSrgb(srgbToLinear(c.z) * (gB / lumaOfGray));
 
       // Exposure
-      c = c * pow(2.0, exposure_ev);
+      c = applyExposure(c, exposure_ev);
 
       // Contrast
-      c = (c - 0.5) * (1.0 + contrast / 100.0) + 0.5;
+      c = applyContrast(c, contrast);
 
       // Parametric Tone
       let luma_val = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));

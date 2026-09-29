@@ -49,12 +49,48 @@
     @group(0) @binding(1) var srcTexture: texture_2d<f32>;
     @group(0) @binding(2) var<uniform> adj: Adjustments;
 
+    // RFC-0017: Exposure/Contrast updated to match apply_adjustments'
+    // corrected linear-light/S-curve math (develop_engine.rs, gradeMath.js)
+    // -- this page's own comment above says it must not silently diverge
+    // from what ships, so it gets the same fix, not a frozen old copy.
+    fn srgbToLinear(c: f32) -> f32 {
+      if (c <= 0.04045) {
+        return c / 12.92;
+      }
+      return pow((c + 0.055) / 1.055, 2.4);
+    }
+
+    fn linearToSrgb(cIn: f32) -> f32 {
+      let c = max(cIn, 0.0);
+      if (c <= 0.0031308) {
+        return c * 12.92;
+      }
+      return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+    }
+
+    fn smoothstepVal(edge0: f32, edge1: f32, x: f32) -> f32 {
+      let t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+      return t * t * (3.0 - 2.0 * t);
+    }
+
     @fragment
     fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
       var rgb = textureSample(srcTexture, srcSampler, in.uv).rgb;
 
-      rgb = rgb * pow(2.0, adj.exposure_ev);
-      rgb = (rgb - 0.5) * (1.0 + adj.contrast / 100.0) + 0.5;
+      let gain = pow(2.0, adj.exposure_ev);
+      rgb = vec3<f32>(
+        linearToSrgb(srgbToLinear(rgb.x) * gain),
+        linearToSrgb(srgbToLinear(rgb.y) * gain),
+        linearToSrgb(srgbToLinear(rgb.z) * gain),
+      );
+
+      let contrastAmount = clamp(adj.contrast / 100.0, -1.0, 1.0);
+      let s = vec3<f32>(
+        smoothstepVal(0.0, 1.0, rgb.x),
+        smoothstepVal(0.0, 1.0, rgb.y),
+        smoothstepVal(0.0, 1.0, rgb.z),
+      );
+      rgb = rgb + contrastAmount * (s - rgb);
 
       let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
       rgb = mix(vec3<f32>(luma), rgb, 1.0 + adj.saturation / 100.0);
@@ -199,10 +235,16 @@
     };
     readbackBuffer.unmap();
 
-    // Hand-computed: base (0.6, 0.2, 0.2) -> *2^0.5 -> contrast(+10) ->
-    // saturation(+30), then clamp to [0,1]. See m1-slice3-smoke README math
-    // in the plan/PR description for the derivation.
-    const expected = { r: 255, g: 56, b: 56 };
+    // RFC-0017: Exposure/Contrast are now linear-light/S-curve corrected
+    // (see the shader's own comment above) -- this is the same combined
+    // case develop_engine.rs's own
+    // apply_edit_stack_matches_the_shaders_hand_derived_combined_value
+    // test derives by hand: base (0.6, 0.2, 0.2), linearize -> *2^0.5 ->
+    // re-encode -> blend 10% toward smoothstep(0,1,v) -> saturation(+30)
+    // around that pixel's own luma, then clamp to [0,1]. Was (255,56,56)
+    // under the old, incorrect gamma-space exposure/hard-linear-contrast
+    // formula -- that number is not a typo to restore.
+    const expected = { r: 210, g: 51, b: 51 };
     report.shaderTest = {
       input: inputByte,
       adjustments: { exposure_ev: exposureEv, contrast, saturation },

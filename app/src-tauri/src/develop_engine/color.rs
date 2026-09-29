@@ -81,3 +81,36 @@ pub(super) fn luma3(c: [f32; 3]) -> f32 {
 pub(super) fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
+
+/// RFC-0017: the exact sRGB EOTF (decode side) -- NOT a `pow(2.2)`
+/// approximation. The piecewise linear toe below `0.04045` matters for
+/// shadow behavior specifically because `apply_exposure`/
+/// `apply_white_balance` (tone.rs) both round-trip through this pair to
+/// do their actual gain in linear light, and a pure-power approximation
+/// diverges most right where shadows live. Develop's own preview buffer
+/// is still `decode()`'s auto-brightened, gamma-baked 8-bit output, not
+/// the linear-light working space ADR-0004 calls for (see RFC-0017 SS2/
+/// SS3.4) -- this function makes the MATH applied to that buffer
+/// correct, it does not change where the buffer's own values come from.
+pub(super) fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// RFC-0017: the exact sRGB OETF (encode side), the inverse of
+/// `srgb_to_linear` above. `.max(0.0)` guards a negative input (possible
+/// after a large negative Exposure or a White Balance gain below 1.0
+/// applied to an already-near-zero linear value) -- `powf` on a negative
+/// base with a non-integer exponent is NaN in Rust, same underlying
+/// concern RFC-0016's WGSL `abs()` calls were load-bearing for.
+pub(super) fn linear_to_srgb(c: f32) -> f32 {
+    let c = c.max(0.0);
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}

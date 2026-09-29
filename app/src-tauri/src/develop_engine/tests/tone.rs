@@ -6,31 +6,57 @@ fn apply_edit_stack_is_a_passthrough_with_no_ops() {
     assert_pixel([100, 120, 140], &[], [100, 120, 140]);
 }
 
-/// The combined case from the WGSL shader's own numeric smoke test
-/// (m1-slice3-smoke): (153,51,51) + exposure+0.5/contrast+10/
-/// saturation+30 -> (255,56,56).
+/// RFC-0017: this used to be the WGSL shader's own numeric smoke test
+/// value (m1-slice3-smoke's hand-derived (255,56,56)) from BEFORE
+/// Exposure/Contrast were corrected to linear-light/S-curve math -- that
+/// number encoded the old, wrong formula's output, not a typo to
+/// preserve. Re-derived by hand under the corrected formula: (153,51,51)
+/// normalizes to r=0.6, g=b=0.2 with WB an exact identity (temperature/
+/// tint both 0). `apply_exposure` at +0.5 EV (gain=2^0.5): linearizing,
+/// scaling, re-encoding gives r≈0.702, g=b≈0.240. `apply_contrast` at
+/// amount=0.1 (contrast=10, blending 10% toward smoothstep(0,1,v)) gives
+/// r≈0.7105, g=b≈0.2304. Saturation +30% around that pixel's own luma
+/// (≈0.3324) gives r≈0.8239 -> 210, g=b≈0.1998 -> 51 -- confirmed
+/// against this test's own actual output, not just the symbolic
+/// derivation alone.
 #[test]
 fn apply_edit_stack_matches_the_shaders_hand_derived_combined_value() {
     assert_pixel(
         [153, 51, 51],
         &[("exposure", 0.5), ("contrast", 10.0), ("saturation", 30.0)],
-        [255, 56, 56],
+        [210, 51, 51],
     );
 }
 
+/// RFC-0017: `+1 EV` no longer doubles the gamma-encoded value directly
+/// (that was the bug -- a real photographic stop is a linear-light
+/// gain, not a gamma-space one). Correctly linearized, gained, and
+/// re-encoded, a mid-gray 100/255 lands around 138/255, not 200/255 --
+/// a real, honestly-described consequence of the fix (RFC-0017 SS3.1),
+/// not a regression. The name stays accurate: this is still "pure
+/// exposure pushing a pixel toward white," just by the physically
+/// correct amount now.
 #[test]
 fn apply_edit_stack_pure_exposure_doubles_toward_white() {
-    assert_pixel([100, 100, 100], &[("exposure", 1.0)], [200, 200, 200]);
+    assert_pixel([100, 100, 100], &[("exposure", 1.0)], [138, 138, 138]);
 }
 
+/// RFC-0017: same correction as the positive-exposure test above, mirrored.
 #[test]
 fn apply_edit_stack_pure_negative_exposure_halves_toward_black() {
-    assert_pixel([200, 200, 200], &[("exposure", -1.0)], [100, 100, 100]);
+    assert_pixel([200, 200, 200], &[("exposure", -1.0)], [146, 146, 146]);
 }
 
+/// RFC-0017: Contrast is now a smoothstep-blended S-curve, not a hard
+/// linear stretch -- `contrast=50` (amount=0.5) blends the pixel 50% of
+/// the way toward `smoothstep(0,1,v)`, which compresses rather than
+/// linearly amplifies a value already this close to white, so the new
+/// result (212) is a smaller displacement from 200 than the old
+/// formula's 236 was. Less extreme is the point: the old hard stretch
+/// had no roll-off at all.
 #[test]
 fn apply_edit_stack_pure_contrast_pushes_a_bright_pixel_brighter() {
-    assert_pixel([200, 200, 200], &[("contrast", 50.0)], [236, 236, 236]);
+    assert_pixel([200, 200, 200], &[("contrast", 50.0)], [212, 212, 212]);
 }
 
 #[test]
@@ -81,11 +107,17 @@ fn tone_curve_applies_per_channel_independently() {
 /// inside the luminance mask's [0.45,0.55] range (5 percentage points
 /// of margin on either side, well clear of any rounding noise), so its
 /// feather=0 weight is exactly 1.0. The mask's own +0.5EV then applies
-/// at full weight: 0.500392 * 2^0.5 = 0.707745 -> round(0.707745*255)
-/// = round(180.475) = 180. If the curve applied AFTER (or was skipped
-/// by) the mask loop instead, the mask would read the pre-curve
-/// luma=0.286275 -- clearly outside [0.45,0.55] -- weight would be 0,
-/// and the pixel would stay at ~73, not jump to ~180.
+/// at full weight, through `apply_adjustments`'s `apply_exposure` --
+/// RFC-0017: no longer a direct gamma-space multiply, so this is now a
+/// real linear-light stop rather than `0.500392 * 2^0.5`. Confirmed
+/// (not just symbolically derived) to land around 150, not the old
+/// formula's ~180 -- same class of correction as the pure-exposure
+/// tests above, checked here specifically because it's the one place a
+/// LOCAL mask's own exposure interacts with this ordering test. If the
+/// curve applied AFTER (or was skipped by) the mask loop instead, the
+/// mask would read the pre-curve luma=0.286275 -- clearly outside
+/// [0.45,0.55] -- weight would be 0, and the pixel would stay at ~73,
+/// not jump to ~150.
 #[test]
 fn tone_curve_applies_after_saturation_before_masks() {
     let mut stack = stack_with_curve(&[], &[(0.0, 0.3), (1.0, 1.0)]);
@@ -105,8 +137,8 @@ fn tone_curve_applies_after_saturation_before_masks() {
     let pixel = image.get_pixel(0, 0);
     for actual in pixel.0.iter() {
         assert!(
-            (*actual as i32 - 180).abs() <= 2,
-            "expected ~180 (curve lifts gray=73 into the mask's range, triggering its +0.5EV), got {:?}",
+            (*actual as i32 - 150).abs() <= 2,
+            "expected ~150 (curve lifts gray=73 into the mask's range, triggering its +0.5EV), got {:?}",
             pixel.0
         );
     }
@@ -149,6 +181,90 @@ fn parametric_tone_shadows_lift_dark_pixels() {
 
     assert!(lifted_dark[0] > dark[0], "shadows adjustment should lift dark pixel");
     assert!((lifted_bright[0] - bright[0]).abs() < 1e-4, "shadows adjustment should not touch bright pixel");
+}
+
+// --- RFC-0017: linear-light correctness ---
+
+/// The basic correctness check any EOTF/OETF pair needs before anything
+/// built on top of it (White Balance, Exposure) can be trusted: encoding
+/// then decoding (or vice versa) round-trips to the original value,
+/// across near-black, near-white, and representative midtones -- the
+/// exact boundary points where the piecewise formula switches segments.
+#[test]
+fn srgb_linear_round_trip_is_the_identity() {
+    for v in [0.0f32, 0.001, 0.0031308, 0.02, 0.04045, 0.2, 0.5, 0.7843, 0.98, 1.0] {
+        let roundtrip = linear_to_srgb(srgb_to_linear(v));
+        assert!((roundtrip - v).abs() < 1e-4, "srgb->linear->srgb should round-trip {v}, got {roundtrip}");
+    }
+}
+
+/// The direct, provable claim RFC-0017 SS3.2 makes: White Balance's gain
+/// is normalized so a neutral gray's LINEAR-light luma (physical
+/// brightness) is exactly 1.0 after the adjustment, for any temperature/
+/// tint -- not approximately, and not just at one convenient value.
+/// Checked at the extremes, where the old (unnormalized) formula's
+/// error was largest (~5% at temperature=100).
+///
+/// A first version of this test checked luma of the raw GAMMA-encoded
+/// output bytes directly (`gray[i]*weight` summed) and failed at the
+/// extremes -- a real finding, not a flaky test: once each channel is
+/// individually re-encoded through the nonlinear `linear_to_srgb`, the
+/// gamma-space weighted sum of already-unequal channels is no longer
+/// equal to the gamma-encoding of the linear-space weighted sum
+/// (Jensen's inequality -- `linear_to_srgb` is concave). The actual,
+/// physically meaningful invariant this function's own normalization
+/// guarantees is LINEAR luma, so this test decodes each output channel
+/// back to linear before summing, matching what `apply_white_balance`
+/// can actually promise.
+#[test]
+fn white_balance_preserves_a_neutral_grays_linear_luma_exactly() {
+    for (temperature, tint) in [(-100.0, -100.0), (-100.0, 100.0), (0.0, 0.0), (100.0, -100.0), (100.0, 100.0), (37.0, -63.0)] {
+        let gray = apply_white_balance([1.0, 1.0, 1.0], temperature, tint);
+        let linear_luma = srgb_to_linear(gray[0]) * 0.2126 + srgb_to_linear(gray[1]) * 0.7152 + srgb_to_linear(gray[2]) * 0.0722;
+        assert!((linear_luma - 1.0).abs() < 1e-4, "temperature={temperature} tint={tint}: expected linear luma 1.0, got {linear_luma}");
+    }
+}
+
+/// `amount=0` (contrast=0) is an exact passthrough, and `amount=1`
+/// (contrast=100) reduces exactly to `smoothstep(0,1,v)` -- both are
+/// hand-derivable closed forms straight from `apply_contrast`'s own
+/// definition, not just plausible-looking numbers.
+#[test]
+fn contrast_zero_is_identity_and_max_matches_smoothstep_exactly() {
+    let v = [0.2, 0.5, 0.83];
+    assert_eq!(apply_contrast(v, 0.0), v);
+
+    let full = apply_contrast(v, 100.0);
+    for (actual, input) in full.iter().zip(v.iter()) {
+        let expected = smoothstep(0.0, 1.0, *input);
+        assert!((actual - expected).abs() < 1e-5, "expected smoothstep({input})={expected}, got {actual}");
+    }
+}
+
+/// Regression guard for RFC-0017's own central fix: a nominal `+1 EV`
+/// must land MEANINGFULLY BELOW the old, wrong direct-gamma-doubling
+/// value (200/255 for a 100/255 mid-gray) -- if this ever creeps back up
+/// near 200, `apply_exposure` has silently regressed to gamma-space
+/// math.
+#[test]
+fn exposure_on_a_midtone_is_gentler_than_the_old_gamma_space_formula() {
+    let doubled = apply_exposure([100.0 / 255.0, 100.0 / 255.0, 100.0 / 255.0], 1.0);
+    assert!(doubled[0] < 160.0 / 255.0, "expected a real linear-light stop to land well below the old formula's 200/255, got {}", doubled[0] * 255.0);
+}
+
+/// Global and local-mask Exposure/Contrast were already meant to agree
+/// (same nominal formula, kept in sync by hand) but shared no code
+/// before RFC-0017's refactor -- now they call the exact same
+/// `apply_exposure`/`apply_contrast`, and this proves it rather than
+/// assuming it from the refactor alone.
+#[test]
+fn local_mask_adjustments_agree_with_global_adjustments_on_exposure_and_contrast() {
+    let rgb = [0.62, 0.31, 0.44];
+    let via_global = apply_global_adjustments(rgb, 0.7, -20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    let via_local = apply_adjustments(rgb, 0.7, -20.0, 0.0);
+    for (g, l) in via_global.iter().zip(via_local.iter()) {
+        assert!((g - l).abs() < 1e-5, "global={via_global:?} local={via_local:?} should agree with no WB/parametric-tone/saturation active");
+    }
 }
 
 #[test]

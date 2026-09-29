@@ -6,14 +6,21 @@ fn linear_gradient_mask_before_start_gets_no_local_adjustment() {
     assert_mask_pixel(mask_stack((0.6, 0.5), (0.9, 0.5), 0.0, 1.0), [100, 100, 100]);
 }
 
+/// RFC-0017: full local adjustment is `apply_adjustments` at weight=1,
+/// which now runs Exposure through the corrected linear-light formula
+/// -- a source 100/255 at +1EV lands around 138, not the old formula's
+/// 200 (same correction as the global-exposure tests in tests/tone.rs).
 #[test]
 fn linear_gradient_mask_after_end_gets_full_local_adjustment() {
-    assert_mask_pixel(mask_stack((0.1, 0.5), (0.4, 0.5), 0.0, 1.0), [200, 200, 200]);
+    assert_mask_pixel(mask_stack((0.1, 0.5), (0.4, 0.5), 0.0, 1.0), [138, 138, 138]);
 }
 
+/// RFC-0017: half weight LERPs between the untouched source (100) and
+/// the corrected full-adjustment value (138), not the old 200 -- a
+/// blend of 100 and 138 lands around 119, not the old formula's 150.
 #[test]
 fn linear_gradient_mask_midpoint_blends_halfway() {
-    assert_mask_pixel(mask_stack((0.2, 0.5), (0.8, 0.5), 0.0, 1.0), [150, 150, 150]);
+    assert_mask_pixel(mask_stack((0.2, 0.5), (0.8, 0.5), 0.0, 1.0), [119, 119, 119]);
 }
 
 /// Feather widens the transition band around the midpoint rather than
@@ -21,9 +28,11 @@ fn linear_gradient_mask_midpoint_blends_halfway() {
 /// exactly AT the start point (t=0) gets weight 0.25, not 0. A
 /// deliberate choice matching real Lightroom's own feather model (see
 /// `mask_weight`'s doc comment) -- this test pins that behavior down.
+/// RFC-0017: weight 0.25 now blends toward 138 (not the old 200), so
+/// the expected value moves from 125 to 110.
 #[test]
 fn linear_gradient_mask_feather_moves_the_anchor_off_zero() {
-    assert_mask_pixel(mask_stack((0.5, 0.5), (0.8, 0.5), 50.0, 1.0), [125, 125, 125]);
+    assert_mask_pixel(mask_stack((0.5, 0.5), (0.8, 0.5), 50.0, 1.0), [110, 110, 110]);
 }
 
 /// Default (invert=false) applies OUTSIDE the ellipse -- a pixel at
@@ -37,32 +46,36 @@ fn radial_gradient_mask_center_default_outside_gets_no_local_adjustment() {
 }
 
 /// Same geometry, invert=true (applies INSIDE) -- center gets the full
-/// local adjustment.
+/// local adjustment. RFC-0017: full adjustment is now 138, not 200 --
+/// see `linear_gradient_mask_after_end_gets_full_local_adjustment`'s
+/// own doc comment for the same correction.
 #[test]
 fn radial_gradient_mask_center_inverted_gets_full_local_adjustment() {
     assert_mask_pixel(
         radial_mask_stack((0.5, 0.5), 0.3, 0.3, 0.0, true, 1.0),
-        [200, 200, 200],
+        [138, 138, 138],
     );
 }
 
 /// Well outside the ellipse, default (outside) -- gets the full local
-/// adjustment (the opposite of the center case above).
+/// adjustment (the opposite of the center case above). RFC-0017: 138,
+/// not 200.
 #[test]
 fn radial_gradient_mask_outside_default_gets_full_local_adjustment() {
     assert_mask_pixel(
         radial_mask_stack((0.1, 0.1), 0.05, 0.05, 0.0, false, 1.0),
-        [200, 200, 200],
+        [138, 138, 138],
     );
 }
 
 /// Center is always fully "inside" regardless of feather -- a heavily
 /// feathered, inverted mask still gives the center the full effect.
+/// RFC-0017: 138, not 200.
 #[test]
 fn radial_gradient_mask_center_stays_fully_inside_even_when_feathered() {
     assert_mask_pixel(
         radial_mask_stack((0.5, 0.5), 0.3, 0.3, 50.0, true, 1.0),
-        [200, 200, 200],
+        [138, 138, 138],
     );
 }
 
@@ -222,12 +235,15 @@ fn red_eye_mask_corrects_a_real_photo_pupil_without_touching_skin() {
 }
 
 /// A hard-edged dab (hardness=100) dead center gets the full local
-/// adjustment -- same shape as the radial "center" case.
+/// adjustment -- same shape as the radial "center" case. RFC-0017:
+/// full adjustment is now 138, not 200 (see
+/// `linear_gradient_mask_after_end_gets_full_local_adjustment`'s doc
+/// comment).
 #[test]
 fn brush_mask_dab_at_center_gets_full_local_adjustment() {
     assert_mask_pixel(
         brush_mask_stack(vec![dab(0.5, 0.5, 0.3, 100.0, 1.0, "add")], false, 1.0),
-        [200, 200, 200],
+        [138, 138, 138],
     );
 }
 
@@ -255,6 +271,8 @@ fn brush_mask_pixel_outside_every_dab_gets_no_local_adjustment() {
 /// radius-0.3 dab center falls exactly halfway through the falloff
 /// band, giving weight 0.5) must union via max, not sum -- two
 /// identical partial-coverage dabs still give weight 0.5, not 1.0.
+/// RFC-0017: weight 0.5 now blends toward 138 (not the old 200), so
+/// the expected value moves from 150 to 119.
 #[test]
 fn brush_mask_overlapping_add_dabs_union_via_max_not_sum() {
     assert_mask_pixel(
@@ -266,7 +284,7 @@ fn brush_mask_overlapping_add_dabs_union_via_max_not_sum() {
             false,
             1.0,
         ),
-        [150, 150, 150],
+        [119, 119, 119],
     );
 }
 
@@ -275,7 +293,9 @@ fn brush_mask_overlapping_add_dabs_union_via_max_not_sum() {
 /// dab with its own falloff 0.5 at the same spot, gives weight
 /// 0.5*(1-0.5)=0.25 (multiplicative). A subtractive formula
 /// (0.5-0.5=0) would produce a visibly different pixel ([100,100,100]
-/// instead of [125,125,125]), so this test distinguishes the two.
+/// instead of [110,110,110]), so this test distinguishes the two.
+/// RFC-0017: weight 0.25 now blends toward 138 (not the old 200), so
+/// the expected value moves from 125 to 110.
 #[test]
 fn brush_mask_erase_dab_reduces_weight_multiplicatively() {
     assert_mask_pixel(
@@ -287,7 +307,7 @@ fn brush_mask_erase_dab_reduces_weight_multiplicatively() {
             false,
             1.0,
         ),
-        [125, 125, 125],
+        [110, 110, 110],
     );
 }
 
@@ -299,10 +319,14 @@ fn luminance_range_mask_below_range_gets_no_local_adjustment() {
 }
 
 /// gray=128 -> luma~0.502, inside [0.3,0.7] with feather=0 -- full
-/// local adjustment (exposure+1.0 doubles toward white, clamped).
+/// local adjustment. RFC-0017: `exposure+1.0` is now a real linear-
+/// light stop (`apply_exposure`), which for a midtone no longer
+/// doubles all the way to white -- lands around 176, not the old
+/// formula's clamped 255 (same correction as the global-exposure tests
+/// in tests/tone.rs).
 #[test]
 fn luminance_range_mask_inside_range_gets_full_local_adjustment() {
-    assert_luminance_pixel(128, luminance_mask_stack(30.0, 70.0, 0.0, false, 1.0), [255, 255, 255]);
+    assert_luminance_pixel(128, luminance_mask_stack(30.0, 70.0, 0.0, false, 1.0), [176, 176, 176]);
 }
 
 /// gray=230 -> luma~0.902, well above range [0.3,0.7] with feather=0 --
@@ -315,23 +339,29 @@ fn luminance_range_mask_above_range_gets_no_local_adjustment() {
 /// gray=51 -> luma=0.2 exactly, feather=40 -> feather_width=0.2, so
 /// this sits exactly halfway through the rising edge below range_min
 /// (0.3-0.2=0.1 at weight 0, 0.3 at weight 1, 0.2 is the midpoint) --
-/// weight=0.5, half-strength local adjustment.
+/// weight=0.5, half-strength local adjustment. RFC-0017: the full-
+/// strength value this blends toward is now linear-light-correct (see
+/// the "inside range" test above), moving the expected half-weight
+/// result from 76 to 62.
 #[test]
 fn luminance_range_mask_feathered_edge_blends_halfway() {
-    assert_luminance_pixel(51, luminance_mask_stack(30.0, 70.0, 40.0, false, 1.0), [76, 76, 76]);
+    assert_luminance_pixel(51, luminance_mask_stack(30.0, 70.0, 40.0, false, 1.0), [62, 62, 62]);
 }
 
 /// Order-dependency (design point 4): a linear mask with full weight
-/// at the test point doubles gray=64 (luma~0.251) to ~0.502 BEFORE the
+/// at the test point applies +1.0EV to gray=64 (luma~0.251) BEFORE the
 /// luminance-range mask (range [45,55], feather=0) evaluates its own
-/// weight against the ALREADY-DOUBLED rgb -- 0.502 falls INSIDE
-/// [0.45,0.55], so the luminance mask's own +0.5EV boost also applies,
-/// landing at ~181. If mask order didn't matter (an incorrect
+/// weight against the already-adjusted rgb. RFC-0017: `apply_exposure`
+/// is now linear-light, so the intermediate value after +1.0EV is
+/// ~0.502 (byte ~128) rather than the old formula's exact double --
+/// still landing INSIDE [0.45,0.55], so the luminance mask's own
+/// +0.5EV boost still applies on top, landing at ~90 (not the old
+/// formula's 181). If mask order didn't matter (an incorrect
 /// implementation evaluating luminance weight against the ORIGINAL,
 /// pre-linear-mask rgb=0.251, which falls OUTSIDE the range), the
 /// luminance mask would have no effect at all and the result would
-/// stop at ~128 (just the linear mask's own doubling) -- a value this
-/// test's ±2 tolerance cannot accidentally satisfy alongside 181,
+/// stop at the linear mask's own +1.0EV alone (~128) -- a value this
+/// test's ±2 tolerance cannot accidentally satisfy alongside 90,
 /// making this a real, discriminating test, not just a smoke check.
 #[test]
 fn luminance_range_mask_selection_depends_on_preceding_masks_effect() {
@@ -362,7 +392,7 @@ fn luminance_range_mask_selection_depends_on_preceding_masks_effect() {
             }),
         ],
     };
-    assert_luminance_pixel(64, stack, [181, 181, 181]);
+    assert_luminance_pixel(64, stack, [90, 90, 90]);
 }
 
 /// The exact regression case for the bug the design review caught:
@@ -370,10 +400,13 @@ fn luminance_range_mask_selection_depends_on_preceding_masks_effect() {
 /// against the EXACT reference color (`ref_gray = 128/255`, matching
 /// the pixel's own f32 conversion bit-for-bit, so `dist=0` exactly) --
 /// must still select the clicked pixel at full weight, not zero.
+/// RFC-0017: full weight's own exposure+1.0 is now linear-light-correct
+/// (see `luminance_range_mask_inside_range_gets_full_local_adjustment`),
+/// so the expected value moves from the old formula's clamped 255 to 176.
 #[test]
 fn color_range_mask_exact_match_at_zero_feather_gets_full_local_adjustment() {
     let ref_gray = 128.0 / 255.0;
-    assert_color_pixel(128, color_mask_stack(ref_gray, 0.0, 0.0, false, 1.0), [255, 255, 255]);
+    assert_color_pixel(128, color_mask_stack(ref_gray, 0.0, 0.0, false, 1.0), [176, 176, 176]);
 }
 
 /// White (gray=255) against a black reference (`ref_gray=0`) is
@@ -389,24 +422,30 @@ fn color_range_mask_far_pixel_gets_no_local_adjustment() {
 /// = 0.5196152`. With `range=25` (`threshold=0.4330127`) and `feather=20`
 /// (`denom=0.1732051`), that's exactly `threshold + 0.5*denom` -- the
 /// midpoint of the transition band -- so `weight=0.5`, a half-strength
-/// local adjustment (exposure+1.0 doubles toward white at half
-/// strength: `0.6 + (1.2-0.6)*0.5 = 0.9` -> byte 230).
+/// local adjustment. RFC-0017: `exposure+1.0`'s full-strength value is
+/// now linear-light-correct rather than a straight gamma-space double,
+/// so the half-strength blend lands around byte 181, not the old
+/// formula's 230.
 #[test]
 fn color_range_mask_feathered_edge_blends_halfway() {
-    assert_color_pixel(153, color_mask_stack(0.3, 25.0, 20.0, false, 1.0), [230, 230, 230]);
+    assert_color_pixel(153, color_mask_stack(0.3, 25.0, 20.0, false, 1.0), [181, 181, 181]);
 }
 
 /// Order-dependency, mirroring luminance range's own such test: a
 /// linear mask (full weight at the test point) boosts gray=128/255 by
-/// +0.3EV to ~0.617987 BEFORE the color-range mask (ref_gray=0.6,
-/// range=5 -> threshold=0.0866025, feather=0 -> near-hard edge) checks
-/// its own distance -- `dist(0.617987, 0.6) = 0.031152`, well inside
-/// threshold, so the color-range mask's own +0.5EV also applies, landing
-/// at ~0.873962 (byte ~223). If mask order didn't matter (evaluated
-/// against the ORIGINAL rgb=0.501961 instead), `dist = 0.169809` is far
-/// outside threshold -- weight=0, and the result would stop at just the
-/// linear mask's own boost (~0.617987, byte ~158) -- a value this test's
-/// ±2 tolerance cannot accidentally satisfy alongside 223.
+/// +0.3EV BEFORE the color-range mask (ref_gray=0.6, range=5 ->
+/// threshold=0.0866025, feather=0 -> near-hard edge) checks its own
+/// distance. RFC-0017: `apply_exposure`'s linear-light +0.3EV now
+/// lands the intermediate value around 0.552 (byte ~141), not the old
+/// formula's exact 0.617987 -- still close enough to `ref_gray=0.6`
+/// (`dist ≈ 0.0824`) to stay inside the mask's own threshold
+/// (0.0866025), so the color-range mask's own +0.5EV still applies on
+/// top, landing at byte ~165 (not the old formula's 223). If mask order
+/// didn't matter (evaluated against the ORIGINAL rgb=0.501961 instead),
+/// `dist = 0.169809` is far outside threshold -- weight=0, and the
+/// result would stop at just the linear mask's own boost (~141) -- a
+/// value this test's ±2 tolerance cannot accidentally satisfy alongside
+/// 165.
 #[test]
 fn color_range_mask_selection_depends_on_preceding_masks_effect() {
     let stack = EditStack {
@@ -436,7 +475,7 @@ fn color_range_mask_selection_depends_on_preceding_masks_effect() {
             }),
         ],
     };
-    assert_color_pixel(128, stack, [223, 223, 223]);
+    assert_color_pixel(128, stack, [165, 165, 165]);
 }
 
 /// `radius = 1px` (`1.0 / SPOT_TEST_SIZE`) with `feather = 0` selects
@@ -515,10 +554,14 @@ fn spot_mask_clone_samples_the_graded_source_not_the_raw_pixel() {
     let spot_op = spot_mask_op((2, 5), (7, 5), 1.0 / 10.0, 0.0, "clone");
     apply_edit_stack(&mut image, &EditStack { schema_version: 1, ops: vec![exposure_op, spot_op] });
     let dest = image.get_pixel(2, 5).0;
-    for (actual, expected) in dest.iter().zip([160i32; 3].iter()) {
+    // RFC-0017: `apply_exposure` is now linear-light-correct -- a
+    // real +1EV stop on 80/255 lands around 111, not the old formula's
+    // straight gamma-space double to 160 (same correction as the
+    // global-exposure tests in tests/tone.rs).
+    for (actual, expected) in dest.iter().zip([111i32; 3].iter()) {
         assert!(
             (*actual as i32 - expected).abs() <= 2,
-            "expected dest ~{expected:?} (graded source, 80 doubled to 160), got {dest:?}"
+            "expected dest ~{expected:?} (graded source, 80 pushed by a real +1EV stop), got {dest:?}"
         );
     }
 }

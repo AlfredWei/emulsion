@@ -388,6 +388,21 @@ describe("Develop CPU/GPU parity", () => {
     await assertParityAt(ROAD_PATCH, "White balance");
   });
 
+  // RFC-0017: the first slice where the CPU/GPU Exposure/White-Balance/
+  // Contrast formulas both change SHAPE (linear-light EOTF/OETF, a
+  // luma-preserving WB gain, a smoothstep-blended Contrast curve), not
+  // just a blur source -- parity here is really testing that both sides
+  // implement the same nonlinear transfer functions identically, not
+  // just the same linear formula the single-slider tests above already
+  // covered independently.
+  it("Exposure + White balance + Contrast combined: CPU and GPU renders agree", async () => {
+    await setSliderValue("exposure", 0.7);
+    await setSliderValue("temperature", -25);
+    await setSliderValue("tint", 10);
+    await setSliderValue("contrast", -20);
+    await assertParityAt(ROAD_PATCH, "Exposure + White balance + Contrast combined");
+  });
+
   it("HSL green-band saturation: CPU and GPU renders agree", async () => {
     await setSliderValue("hsl-green-sat", 60);
     await assertParityAt(GREEN_PATCH, "HSL green saturation", HUE_SENSITIVE_TOLERANCE);

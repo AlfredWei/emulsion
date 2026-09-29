@@ -84,8 +84,17 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPURenderPipeline | null} clarityMeanbHPipeline
  * @property {GPURenderPipeline | null} clarityMeanbVPipeline
  * @property {GPURenderPipeline | null} clarityVPipeline
- * @property {GPURenderPipeline | null} sharpenHPipeline
- * @property {GPURenderPipeline | null} sharpenVPipeline
+ * @property {GPURenderPipeline | null} sharpenMeanpHPipeline
+ * @property {GPURenderPipeline | null} sharpenMeanpVPipeline
+ * @property {GPURenderPipeline | null} sharpenCorrpHPipeline
+ * @property {GPURenderPipeline | null} sharpenCorrpVPipeline
+ * @property {GPURenderPipeline | null} sharpenAPipeline
+ * @property {GPURenderPipeline | null} sharpenBPipeline
+ * @property {GPURenderPipeline | null} sharpenMeanaHPipeline
+ * @property {GPURenderPipeline | null} sharpenMeanaVPipeline
+ * @property {GPURenderPipeline | null} sharpenMeanbHPipeline
+ * @property {GPURenderPipeline | null} sharpenMeanbVPipeline
+ * @property {GPURenderPipeline | null} sharpenFinalPipeline
  * @property {GPURenderPipeline | null} lumaNRMeanpHPipeline
  * @property {GPURenderPipeline | null} lumaNRMeanpVPipeline
  * @property {GPURenderPipeline | null} lumaNRCorrpHPipeline
@@ -140,6 +149,12 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUTexture | null} clarityMeanBTex
  * @property {GPUTexture | null} sharpenBlurHTex
  * @property {GPUTexture | null} sharpenBlurTex
+ * @property {GPUTexture | null} sharpenMeanPTex
+ * @property {GPUTexture | null} sharpenCorrPTex
+ * @property {GPUTexture | null} sharpenATex
+ * @property {GPUTexture | null} sharpenBTex
+ * @property {GPUTexture | null} sharpenMeanATex
+ * @property {GPUTexture | null} sharpenMeanBTex
  * @property {GPUTexture | null} lumaNRBlurHTex
  * @property {GPUTexture | null} lumaNRBlurTex
  * @property {GPUTexture | null} lumaNRMeanPTex
@@ -193,8 +208,17 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUBindGroup | null} clarityMeanbHBindGroup
  * @property {GPUBindGroup | null} clarityMeanbVBindGroup
  * @property {GPUBindGroup | null} clarityVBindGroup
- * @property {GPUBindGroup | null} sharpenHBindGroup
- * @property {GPUBindGroup | null} sharpenVBindGroup
+ * @property {GPUBindGroup | null} sharpenMeanpHBindGroup
+ * @property {GPUBindGroup | null} sharpenMeanpVBindGroup
+ * @property {GPUBindGroup | null} sharpenCorrpHBindGroup
+ * @property {GPUBindGroup | null} sharpenCorrpVBindGroup
+ * @property {GPUBindGroup | null} sharpenABindGroup
+ * @property {GPUBindGroup | null} sharpenBBindGroup
+ * @property {GPUBindGroup | null} sharpenMeanaHBindGroup
+ * @property {GPUBindGroup | null} sharpenMeanaVBindGroup
+ * @property {GPUBindGroup | null} sharpenMeanbHBindGroup
+ * @property {GPUBindGroup | null} sharpenMeanbVBindGroup
+ * @property {GPUBindGroup | null} sharpenFinalBindGroup
  * @property {GPUBindGroup | null} lumaNRMeanpHBindGroup
  * @property {GPUBindGroup | null} lumaNRMeanpVBindGroup
  * @property {GPUBindGroup | null} lumaNRCorrpHBindGroup
@@ -425,8 +449,17 @@ export function createGpuHandles() {
     clarityMeanbHPipeline: null,
     clarityMeanbVPipeline: null,
     clarityVPipeline: null,
-    sharpenHPipeline: null,
-    sharpenVPipeline: null,
+    sharpenMeanpHPipeline: null,
+    sharpenMeanpVPipeline: null,
+    sharpenCorrpHPipeline: null,
+    sharpenCorrpVPipeline: null,
+    sharpenAPipeline: null,
+    sharpenBPipeline: null,
+    sharpenMeanaHPipeline: null,
+    sharpenMeanaVPipeline: null,
+    sharpenMeanbHPipeline: null,
+    sharpenMeanbVPipeline: null,
+    sharpenFinalPipeline: null,
     lumaNRMeanpHPipeline: null,
     lumaNRMeanpVPipeline: null,
     lumaNRCorrpHPipeline: null,
@@ -508,6 +541,12 @@ export function createGpuHandles() {
     // separate delta-source textures instead).
     sharpenBlurHTex: null,
     sharpenBlurTex: null,
+    sharpenMeanPTex: null,
+    sharpenCorrPTex: null,
+    sharpenATex: null,
+    sharpenBTex: null,
+    sharpenMeanATex: null,
+    sharpenMeanBTex: null,
     lumaNRBlurHTex: null,
     lumaNRBlurTex: null,
     lumaNRMeanPTex: null,
@@ -561,8 +600,17 @@ export function createGpuHandles() {
     clarityMeanbHBindGroup: null,
     clarityMeanbVBindGroup: null,
     clarityVBindGroup: null,
-    sharpenHBindGroup: null,
-    sharpenVBindGroup: null,
+    sharpenMeanpHBindGroup: null,
+    sharpenMeanpVBindGroup: null,
+    sharpenCorrpHBindGroup: null,
+    sharpenCorrpVBindGroup: null,
+    sharpenABindGroup: null,
+    sharpenBBindGroup: null,
+    sharpenMeanaHBindGroup: null,
+    sharpenMeanaVBindGroup: null,
+    sharpenMeanbHBindGroup: null,
+    sharpenMeanbVBindGroup: null,
+    sharpenFinalBindGroup: null,
     lumaNRMeanpHBindGroup: null,
     lumaNRMeanpVBindGroup: null,
     lumaNRCorrpHBindGroup: null,

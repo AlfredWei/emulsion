@@ -77,6 +77,18 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
     @group(0) @binding(54) var colorNrBFinal: texture_2d<f32>;
     @group(0) @binding(55) var colorNrMeanAFinal: texture_2d<f32>;
     @group(0) @binding(56) var colorNrMeanBFinal: texture_2d<f32>;
+    // RFC-0015: Sharpening's own guided filter -- self-guided, same shape
+    // as Luma NR's six bindings above (43-48), at 57-62 instead. The real
+    // difference from every prior guided-filter slice isn't the binding
+    // shape, it's that every H/V pass below needs sharpenParams(19) bound
+    // too, to compute its own RUNTIME radius via sharpenRadiusPx -- see
+    // that function's own doc comment.
+    @group(0) @binding(57) var sharpenMeanPFinal: texture_2d<f32>;
+    @group(0) @binding(58) var sharpenCorrPFinal: texture_2d<f32>;
+    @group(0) @binding(59) var sharpenAFinal: texture_2d<f32>;
+    @group(0) @binding(60) var sharpenBFinal: texture_2d<f32>;
+    @group(0) @binding(61) var sharpenMeanAFinal: texture_2d<f32>;
+    @group(0) @binding(62) var sharpenMeanBFinal: texture_2d<f32>;
 
     const SHARPEN_MAX_RADIUS_PX: i32 = 8;
     const SHARPEN_STRENGTH: f32 = 1.6;
@@ -96,6 +108,11 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
     // matching DEHAZE_GUIDED_EPS rather than LUMA_NR_GUIDED_EPS (the RFC's
     // own original guess, corrected during implementation).
     const COLOR_NR_GUIDED_EPS: f32 = 0.0001;
+    // RFC-0015: matches the Rust twin's SHARPEN_GUIDED_EPS exactly -- see
+    // that constant's own doc comment in detail.rs for why this is the
+    // first guided filter whose radius varies at runtime, and why this
+    // single eps has to behave reasonably across that whole range.
+    const SHARPEN_GUIDED_EPS: f32 = 0.0009;
 
     // Sharpening's Radius is a genuine USER slider, not a compile-time
     // const the way every other radius in this shader is (Texture/
@@ -108,8 +125,14 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
       return max(i32(round(r)), 1);
     }
 
+    // Sharpening's guided filter (RFC-0015): self-guided, same shape
+    // RFC-0010/0012 already established for Clarity/Luma NR (mean_p,
+    // corr_p, a, b, mean_a, mean_b, final) -- the one real difference is
+    // that every box-filter pass here needs sharpenParams(19) bound too,
+    // to compute ITS OWN runtime radius via sharpenRadiusPx, where
+    // Clarity's/Luma NR's own passes each hard-code a fixed radius const.
     @fragment
-    fn fs_sharpen_h(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_sharpen_meanp_h(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       let dims = vec2<i32>(textureDimensions(gradedTex));
       let radius = sharpenRadiusPx(sharpenParams.radius);
@@ -123,7 +146,7 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
     }
 
     @fragment
-    fn fs_sharpen_v(in: VertexOut) -> @location(0) vec4<f32> {
+    fn fs_sharpen_meanp_v(in: VertexOut) -> @location(0) vec4<f32> {
       let coord = vec2<i32>(in.position.xy);
       let dims = vec2<i32>(textureDimensions(blurScratchR32));
       let radius = sharpenRadiusPx(sharpenParams.radius);
@@ -134,6 +157,122 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
       }
       let window = f32(2 * radius + 1);
       return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_corrp_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(gradedTex));
+      let radius = sharpenRadiusPx(sharpenParams.radius);
+      var sum = 0.0;
+      for (var dx = -radius; dx <= radius; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        let l = luma(textureLoad(gradedTex, vec2<i32>(sx, coord.y), 0).rgb);
+        sum = sum + l * l;
+      }
+      let window = f32(2 * radius + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_corrp_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchR32));
+      let radius = sharpenRadiusPx(sharpenParams.radius);
+      var sum = 0.0;
+      for (var dy = -radius; dy <= radius; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchR32, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * radius + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_a(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let meanP = textureLoad(sharpenMeanPFinal, coord, 0).r;
+      let corrP = textureLoad(sharpenCorrPFinal, coord, 0).r;
+      let varP = corrP - meanP * meanP;
+      let a = varP / (varP + SHARPEN_GUIDED_EPS);
+      return vec4<f32>(a, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_b(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let meanP = textureLoad(sharpenMeanPFinal, coord, 0).r;
+      let a = textureLoad(sharpenAFinal, coord, 0).r;
+      return vec4<f32>(meanP * (1.0 - a), 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_meana_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(sharpenAFinal));
+      let radius = sharpenRadiusPx(sharpenParams.radius);
+      var sum = 0.0;
+      for (var dx = -radius; dx <= radius; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(sharpenAFinal, vec2<i32>(sx, coord.y), 0).r;
+      }
+      let window = f32(2 * radius + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_meana_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchR32));
+      let radius = sharpenRadiusPx(sharpenParams.radius);
+      var sum = 0.0;
+      for (var dy = -radius; dy <= radius; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchR32, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * radius + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_meanb_h(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(sharpenBFinal));
+      let radius = sharpenRadiusPx(sharpenParams.radius);
+      var sum = 0.0;
+      for (var dx = -radius; dx <= radius; dx = dx + 1) {
+        let sx = clamp(coord.x + dx, 0, dims.x - 1);
+        sum = sum + textureLoad(sharpenBFinal, vec2<i32>(sx, coord.y), 0).r;
+      }
+      let window = f32(2 * radius + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    @fragment
+    fn fs_sharpen_meanb_v(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let dims = vec2<i32>(textureDimensions(blurScratchR32));
+      let radius = sharpenRadiusPx(sharpenParams.radius);
+      var sum = 0.0;
+      for (var dy = -radius; dy <= radius; dy = dy + 1) {
+        let sy = clamp(coord.y + dy, 0, dims.y - 1);
+        sum = sum + textureLoad(blurScratchR32, vec2<i32>(coord.x, sy), 0).r;
+      }
+      let window = f32(2 * radius + 1);
+      return vec4<f32>(sum / window, 0.0, 0.0, 1.0);
+    }
+
+    // Final: q = mean_a*luma + mean_b -- the guided-filter output replacing
+    // the old plain box mean, written to sharpenBlurFinal, the SAME binding
+    // (22) premask.js's own sharpen_delta port already reads -- that
+    // downstream consumer needed no change at all.
+    @fragment
+    fn fs_sharpen_final(in: VertexOut) -> @location(0) vec4<f32> {
+      let coord = vec2<i32>(in.position.xy);
+      let l = luma(textureLoad(gradedTex, coord, 0).rgb);
+      let meanA = textureLoad(sharpenMeanAFinal, coord, 0).r;
+      let meanB = textureLoad(sharpenMeanBFinal, coord, 0).r;
+      return vec4<f32>(meanA * l + meanB, 0.0, 0.0, 1.0);
     }
 
     // Luma NR (RFC-0012): self-guided image filter (He, Sun, Tang, ECCV

@@ -47,6 +47,20 @@ pub(super) fn local_gradient_magnitude(luma_buf: &[f32], width: usize, height: u
 /// constant elsewhere in this module -- the WGSL twin needs a real
 /// uniform-driven loop bound for this op specifically, not a compile-time
 /// `const` the way Texture/Clarity/Dehaze's own radii are.
+///
+/// RFC-0015: `blurred_luma` (the value `detail_weight`'s own `diff` is
+/// computed relative to) comes from `guided_filter_self`, not a plain
+/// `separable_mean_filter` -- self-guided, same specialization Clarity's
+/// own `apply_clarity` (RFC-0010) and Luma NR (RFC-0012) use, since the
+/// guide and the thing being filtered are both `graded_luma` here too.
+/// **`mask_weight` does NOT already solve the box-mean halo gap this
+/// fixes** -- it's a genuine, blur-independent spatial edge detector whose
+/// real purpose is protecting flat/noisy regions from being sharpened at
+/// all (matching real Lightroom's own Masking slider); at high Masking it
+/// *concentrates* sharpening exactly at edges, which is precisely where
+/// the box mean's own cross-edge contamination is largest. This section's
+/// own reconstruction formula (`sharpen_delta`, below) is unchanged; only
+/// what produces the blur it reads is different.
 pub(super) const SHARPEN_MAX_RADIUS_PX: i32 = 8;
 
 pub(super) const SHARPEN_STRENGTH: f32 = 1.6;
@@ -54,6 +68,17 @@ pub(super) const SHARPEN_STRENGTH: f32 = 1.6;
 pub(super) const SHARPEN_DETAIL_SCALE: f32 = 0.06;
 
 pub(super) const SHARPEN_MASK_SCALE: f32 = 0.05;
+
+/// RFC-0015's `eps`. Sharpening ENHANCES existing high-frequency detail
+/// (the same category `CLARITY_GUIDED_EPS` was tuned for), but its own
+/// radius (1-8px, user-controlled via `sharpen_radius_px`) sits far below
+/// Clarity's fixed 24px -- closer to Luma NR's/Color NR's small-radius
+/// range, where the smaller "denoise" values were needed instead. This is
+/// the first guided filter in this module whose radius varies at RUNTIME,
+/// so this single `eps` must behave reasonably across `sharpen_radius_px`'s
+/// entire range, not just at one fixed working point -- confirmed by this
+/// slice's own multi-radius tests, not assumed from either precedent.
+pub(super) const SHARPEN_GUIDED_EPS: f32 = 0.0009;
 
 pub(super) struct Sharpen {
     pub(super) amount: f32,
@@ -91,7 +116,8 @@ pub(super) fn sharpen_radius_px(radius_slider: f32) -> i32 {
 }
 
 /// Computes the additive luma delta for one pixel. `blurred_luma` is
-/// `separable_mean_filter`'s own output at `sharpen_radius_px(radius)`,
+/// `guided_filter_self`'s own output at `sharpen_radius_px(radius)`/
+/// `SHARPEN_GUIDED_EPS` (RFC-0015; previously `separable_mean_filter`),
 /// looked up by the caller (this function only does the per-pixel
 /// gate/scale math, not the whole-image blur).
 pub(super) fn sharpen_delta(l: f32, blurred_luma: f32, grad_mag: f32, s: &Sharpen) -> f32 {

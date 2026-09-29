@@ -5,7 +5,9 @@ describe("assembled WGSL source", () => {
   it("defines every entry point the Develop pipelines are built from", () => {
     const entryPoints = [
       "vs_main", "fs_original", "fs_grade", "fs_lens_correct", "fs_perspective",
-      "fs_sharpen_h", "fs_sharpen_v",
+      "fs_sharpen_meanp_h", "fs_sharpen_meanp_v", "fs_sharpen_corrp_h", "fs_sharpen_corrp_v",
+      "fs_sharpen_a", "fs_sharpen_b", "fs_sharpen_meana_h", "fs_sharpen_meana_v",
+      "fs_sharpen_meanb_h", "fs_sharpen_meanb_v", "fs_sharpen_final",
       "fs_lumaNR_meanp_h", "fs_lumaNR_meanp_v", "fs_lumaNR_corrp_h", "fs_lumaNR_corrp_v",
       "fs_lumaNR_a", "fs_lumaNR_b", "fs_lumaNR_meana_h", "fs_lumaNR_meana_v",
       "fs_lumaNR_meanb_h", "fs_lumaNR_meanb_v", "fs_lumaNR_final",

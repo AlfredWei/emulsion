@@ -482,6 +482,98 @@ fn sharpen_radius_px_maps_slider_bounds_correctly() {
     assert_eq!(sharpen_radius_px(100.0), SHARPEN_MAX_RADIUS_PX);
 }
 
+/// RFC-0015 §3.2's own new concern: Sharpening's radius is a real RUNTIME
+/// value (`sharpen_radius_px` can return anything in `1..=SHARPEN_MAX_RADIUS_PX`),
+/// unlike every prior guided-filter slice's fixed radius -- so this checks
+/// the same step-edge-overshoot claim RFC-0010/0012 each proved at their
+/// own single fixed radius, but across the FULL range this op can actually
+/// produce at runtime (the minimum, a middle value, and the maximum),
+/// confirming `SHARPEN_GUIDED_EPS` wasn't tuned to work at just one of them.
+#[test]
+fn sharpen_guided_blur_overshoots_less_than_the_box_mean_across_the_full_radius_range() {
+    let width = 41;
+    let mut buf = vec![0.2f32; width];
+    for v in buf.iter_mut().skip(20) {
+        *v = 0.8;
+    }
+    for radius in [1, SHARPEN_MAX_RADIUS_PX / 2, SHARPEN_MAX_RADIUS_PX] {
+        let guided = guided_filter_self(&buf, width, 1, radius, SHARPEN_GUIDED_EPS);
+        let boxed = separable_mean_filter(&buf, width, 1, radius);
+        // Only points whose window actually straddles the edge have
+        // anything for the guided filter to improve on -- same reasoning
+        // RFC-0011's own DEHAZE_REFINE_RADIUS test used, re-derived per
+        // radius here since the straddling range itself depends on it.
+        let check_range = (21 - radius.min(19)).max(1)..(20 + radius.min(19)).min(width as i32 - 1);
+        for x in check_range {
+            let x = x as usize;
+            let guided_err = (guided[x] - buf[x]).abs();
+            let boxed_err = (boxed[x] - buf[x]).abs();
+            assert!(
+                guided_err <= boxed_err,
+                "radius={radius}, x={x}: guided error {guided_err} not <= box-mean error {boxed_err}"
+            );
+        }
+    }
+}
+
+/// RFC-0015 §6's flat-noisy-region check, at a representative mid-range
+/// radius -- same shape as Luma NR's/Color NR's own (RFC-0012/0014): a
+/// genuinely flat-but-noisy signal should stay close to the old box-mean
+/// baseline, confirming the swap doesn't regress ordinary sharpening in
+/// texture/noise-scale regions just to fix the edge case.
+#[test]
+fn sharpen_guided_blur_matches_the_box_mean_closely_in_a_flat_noisy_region() {
+    let width = 20;
+    let radius = SHARPEN_MAX_RADIUS_PX / 2;
+    let noisy: Vec<f32> = (0..width).map(|i| 0.5 + if i % 2 == 0 { 0.01 } else { -0.01 }).collect();
+    let guided = guided_filter_self(&noisy, width, 1, radius, SHARPEN_GUIDED_EPS);
+    let boxed = separable_mean_filter(&noisy, width, 1, radius);
+    for i in 0..noisy.len() {
+        assert!(
+            (guided[i] - boxed[i]).abs() < 0.01,
+            "at {i}: guided={} box={} diverge more than expected in a flat noisy region",
+            guided[i],
+            boxed[i]
+        );
+    }
+}
+
+/// RFC-0015 §1's real claim, checked directly rather than asserted: at a
+/// HIGH Masking value, sharpening is confined to pixels with a real local
+/// gradient -- for this 1D step edge, `local_gradient_magnitude` is only
+/// nonzero at the two pixels straddling the step itself (x=19, x=20; every
+/// other pixel has identical neighbors on both sides and reads exactly
+/// zero), so THIS is the exact "concentrated at the edge" scenario §1
+/// describes. Checks that `sharpen_delta`, fed the guided blur, produces
+/// less undershoot at x=19 (the scene-side pixel immediately before the
+/// edge) than the same reconstruction fed the old box-mean blur -- the
+/// concrete regression test for "Masking does not already fix this."
+#[test]
+fn sharpen_delta_creates_less_undershoot_than_the_old_box_mean_version_at_high_masking() {
+    let width = 41;
+    let mut buf = vec![0.2f32; width];
+    for v in buf.iter_mut().skip(20) {
+        *v = 0.8;
+    }
+    let radius = 4;
+    let guided_blur = guided_filter_self(&buf, width, 1, radius, SHARPEN_GUIDED_EPS);
+    let boxed_blur = separable_mean_filter(&buf, width, 1, radius);
+    let x = 19;
+    let grad_mag = local_gradient_magnitude(&buf, width, 1, x, 0);
+    assert!(grad_mag > 0.0, "expected a nonzero local gradient right at the step edge");
+    let s = Sharpen { amount: 100.0, radius: 50.0, detail: 50.0, masking: 100.0 };
+    let guided_delta = sharpen_delta(buf[x], guided_blur[x], grad_mag, &s);
+    let boxed_delta = sharpen_delta(buf[x], boxed_blur[x], grad_mag, &s);
+    let guided_val = buf[x] + guided_delta;
+    let boxed_val = buf[x] + boxed_delta;
+    let guided_err = (guided_val - buf[x]).abs();
+    let boxed_err = (boxed_val - buf[x]).abs();
+    assert!(
+        guided_err < boxed_err,
+        "at x={x}: guided error {guided_err} not smaller than box-mean error {boxed_err} (guided_val={guided_val}, boxed_val={boxed_val})"
+    );
+}
+
 #[test]
 fn luma_nr_delta_amount_zero_is_an_exact_passthrough_even_at_full_contrast() {
     let n = LumaNr { amount: 0.0, detail: 50.0, contrast: 100.0 };

@@ -114,6 +114,46 @@ export class DevelopStore {
   // place that ever sees the real rendered output.
   histogramData = $state(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array} | null} */ (null));
 
+  // One-shot resolvers for `waitForFreshHistogram` below -- NOT `$state`,
+  // this is internal plumbing, not UI-reactive data. Auto Tone/Auto White
+  // Balance both need to read a histogram that reflects a specific,
+  // just-triggered render (see `waitForFreshHistogram`'s own doc comment
+  // for why "the current histogramData" isn't good enough for them), and
+  // `onHistogramUpdate`'s own async GPU-readback timing means the only
+  // reliable way to get that is to wait for the callback itself, not poll
+  // this field.
+  #histogramWaiters = /** @type {((data: {r: Uint32Array, g: Uint32Array, b: Uint32Array}) => void)[]} */ ([]);
+
+  /** Resolves with the payload of the NEXT `reportHistogramUpdate` call
+   * below, not whatever `histogramData` already holds. Auto Tone/Auto
+   * White Balance both reset their own controlled ops to identity
+   * first, then call this TWICE via developActions.js's
+   * `waitForFreshHistogramOrFallback` (discarding the first result)
+   * before computing their target values -- a single fresh histogram
+   * could still be one already in flight from BEFORE the reset, since
+   * `readHistogramIfIdle` drops (never queues) an overlapping read
+   * request. That same caller also races this against a timeout, since
+   * CPU-fallback mode never calls `reportHistogramUpdate` at all and an
+   * unconditional wait would hang forever there -- see its own doc
+   * comment. */
+  waitForFreshHistogram() {
+    return new Promise((resolve) => {
+      this.#histogramWaiters.push(resolve);
+    });
+  }
+
+  /** The only writer of `histogramData` -- called from
+   * developActions.js's `handleHistogramUpdate` (DevelopCanvas's own
+   * `onHistogramUpdate` callback) instead of assigning the field
+   * directly, so every update also drains any pending
+   * `waitForFreshHistogram` promise with this same payload. */
+  reportHistogramUpdate(/** @type {{r: Uint32Array, g: Uint32Array, b: Uint32Array}} */ data) {
+    this.histogramData = data;
+    const waiters = this.#histogramWaiters;
+    this.#histogramWaiters = [];
+    for (const resolve of waiters) resolve(data);
+  }
+
   // Histogram clipping-overlay toggle: purely a display preference (not
   // part of the edit stack), reset on openDevelop like histogramData
   // itself since it's meaningless outside a Develop session.

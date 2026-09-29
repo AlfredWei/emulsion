@@ -54,8 +54,8 @@
    *   onTextureChange: (value: number) => void,
    *   clarity: number,
    *   onClarityChange: (value: number) => void,
-   *   vignette: {amount: number, midpoint: number, feather: number},
-   *   onVignetteChange: (patch: Partial<{amount: number, midpoint: number, feather: number}>) => void,
+   *   vignette: {amount: number, midpoint: number, feather: number, roundness: number},
+   *   onVignetteChange: (patch: Partial<{amount: number, midpoint: number, feather: number, roundness: number}>) => void,
    *   lensCorrection: {
    *     profile_enabled: boolean,
    *     distortion_amount: number,
@@ -1012,6 +1012,20 @@
         />
         <span class="val">{vignette.feather}</span>
         {@render stepButtons(vignette.feather, 1, 0, 100, (v) => onVignetteChange({ feather: v }))}
+      </div>
+      <div class="row">
+        <label for="vignette-roundness">Roundness</label>
+        <input
+          id="vignette-roundness"
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          value={vignette.roundness}
+          oninput={(e) => onVignetteChange({ roundness: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{vignette.roundness}</span>
+        {@render stepButtons(vignette.roundness, 1, -100, 100, (v) => onVignetteChange({ roundness: v }))}
       </div>
     </div>
   </details>

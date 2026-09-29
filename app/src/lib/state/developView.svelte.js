@@ -72,10 +72,10 @@ export class DevelopView {
   // above -- -100..100, no dedicated getter/handler pair needed.
   texture = $derived(opValue(this.develop.editStack, "texture", 0));
   clarity = $derived(opValue(this.develop.editStack, "clarity", 0));
-  // Vignette (M3): a structured 3-field payload (amount/midpoint/feather)
-  // -- same getSplitToning/upsertX shape Split Toning already established
-  // for a global-only, non-single-scalar op, not the generic opValue
-  // model Texture/Clarity/Dehaze use.
+  // Vignette (M3): a structured 4-field payload (amount/midpoint/feather/
+  // roundness, the last added by RFC-0016) -- same getSplitToning/upsertX
+  // shape Split Toning already established for a global-only, non-single-
+  // scalar op, not the generic opValue model Texture/Clarity/Dehaze use.
   vignette = $derived(getVignette(this.develop.editStack, IDENTITY_VIGNETTE));
   // Lens Corrections (M3): same structured, own-getter/handler shape as
   // Vignette/Grain above, PLUS a separate profile-baking step (below,

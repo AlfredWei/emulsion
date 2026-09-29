@@ -1,19 +1,21 @@
 use super::*;
 
-/// Vignette (M3): a flat, non-nested payload (`{amount, midpoint, feather}`)
-/// -- unlike Split Toning's per-zone shape above, there's no natural
-/// per-element repetition here, so a plain struct with three named fields
+/// Vignette (M3): a flat, non-nested payload (`{amount, midpoint, feather,
+/// roundness}`) -- unlike Split Toning's per-zone shape above, there's no
+/// natural per-element repetition here, so a plain struct with named fields
 /// is simplest. Same "fall back to identity on partial/corrupt payload"
-/// contract every other structured op already establishes.
+/// contract every other structured op already establishes. `roundness`
+/// added by RFC-0016.
 pub(super) struct Vignette {
     pub(super) amount: f32,
     pub(super) midpoint: f32,
     pub(super) feather: f32,
+    pub(super) roundness: f32,
 }
 
 impl Default for Vignette {
     fn default() -> Self {
-        Vignette { amount: 0.0, midpoint: 50.0, feather: 50.0 }
+        Vignette { amount: 0.0, midpoint: 50.0, feather: 50.0, roundness: 0.0 }
     }
 }
 
@@ -26,8 +28,18 @@ pub(super) fn vignette_op(ops: &[serde_json::Value]) -> Vignette {
         amount: field("amount", 0.0),
         midpoint: field("midpoint", 50.0),
         feather: field("feather", 50.0),
+        roundness: field("roundness", 0.0),
     }
 }
+
+/// RFC-0016: the exponent `vignette_factor`'s "more rectangular" branch
+/// blends toward as `roundness` approaches -100. Chosen for a visually
+/// smooth, clearly noticeable, non-degenerate transition -- there is no
+/// reference signal to tune this against (unlike every guided-filter
+/// `eps` constant elsewhere in this module, each tuned against a
+/// measurable error metric), so this value is this RFC's own reasoned
+/// choice, not a verified match to Adobe's internal algorithm.
+const VIGNETTE_ROUNDNESS_MAX_P: f32 = 5.0;
 
 /// Post-crop vignette (M3): a pure per-pixel radial brightness falloff --
 /// unlike Dehaze/Texture/Clarity above, this needs no neighboring-pixel
@@ -40,29 +52,64 @@ pub(super) fn vignette_op(ops: &[serde_json::Value]) -> Vignette {
 ///
 /// Shape: an ASPECT-CORRECTED ELLIPSE matching the image's own aspect
 /// ratio (so the vignette looks like a natural circular falloff, not a
-/// shape squashed to the image bounds) -- named, deferred simplification:
-/// real Lightroom's Roundness slider (blending toward a more rectangular
-/// shape) isn't implemented; every vignette here is roundness=0's natural
-/// ellipse. `midpoint` (0-100) sets the normalized radius (as a fraction
-/// of the center-to-corner distance) where the falloff begins; `feather`
-/// (0-100) widens the transition zone from there out to the corner;
-/// `amount` (-100..100) scales the resulting multiplicative brightness
-/// factor (negative darkens, positive lightens, matching Lightroom's own
-/// sign convention). `amount=0` is an exact passthrough (`vignette_factor`
-/// returns exactly 1.0, skipping the geometry entirely) -- same discipline
-/// every other op's identity value already gets.
+/// shape squashed to the image bounds) at `roundness=0` -- RFC-0016 adds
+/// `roundness`, a two-sided generalization of this norm: positive values
+/// blend the aspect correction itself toward 1.0 (a true circle, ignoring
+/// the image's own elongation -- "rounder than an ellipse" can't come
+/// from changing the Lp exponent below, since p=2 is already the
+/// roundest shape that family can produce); negative values generalize
+/// the Euclidean (L2) norm to a superellipse (Lp) norm, blending the
+/// exponent toward `VIGNETTE_ROUNDNESS_MAX_P` (more rectangular, matching
+/// this module's own long-standing doc-comment wording for what
+/// Roundness was always meant to do). See RFC-0016 for the full
+/// reasoning and an explicit honesty caveat: the sign convention here is
+/// this RFC's own reasoned design, not a verified match to Adobe's real,
+/// undocumented algorithm. `roundness=0` reuses the exact original
+/// formula, unmodified, so every vignette rendered before RFC-0016 is
+/// bit-for-bit unchanged. `midpoint` (0-100) sets the normalized radius
+/// (as a fraction of the center-to-corner distance, in whichever norm is
+/// active) where the falloff begins; `feather` (0-100) widens the
+/// transition zone from there out to the corner; `amount` (-100..100)
+/// scales the resulting multiplicative brightness factor (negative
+/// darkens, positive lightens, matching Lightroom's own sign convention).
+/// `amount=0` is an exact passthrough (`vignette_factor` returns exactly
+/// 1.0, skipping the geometry entirely) -- same discipline every other
+/// op's identity value already gets.
 pub(super) fn vignette_factor(uv: (f32, f32), aspect: f32, v: &Vignette) -> f32 {
     if v.amount == 0.0 {
         return 1.0;
     }
-    let dx = (uv.0 - 0.5) * 2.0;
-    let dy = (uv.1 - 0.5) * 2.0 * aspect;
-    // Center-to-corner distance in this same aspect-corrected space --
-    // normalizing by it means `midpoint`/`feather` are always relative to
+    let r = v.roundness.clamp(-100.0, 100.0);
+    // Center-to-corner distance in this same normalized space --
+    // dividing by it means `midpoint`/`feather` are always relative to
     // "how far out toward the corner", regardless of the image's own
-    // aspect ratio.
-    let corner_dist = (1.0f32 + aspect * aspect).sqrt();
-    let norm_dist = (dx * dx + dy * dy).sqrt() / corner_dist;
+    // aspect ratio or which of the three branches below is active.
+    let norm_dist = if r == 0.0 {
+        // Untouched since before RFC-0016 -- guarantees roundness=0 is
+        // bit-for-bit identical to every vignette rendered before this
+        // RFC, not merely numerically close to it.
+        let dx = (uv.0 - 0.5) * 2.0;
+        let dy = (uv.1 - 0.5) * 2.0 * aspect;
+        let corner_dist = (1.0f32 + aspect * aspect).sqrt();
+        (dx * dx + dy * dy).sqrt() / corner_dist
+    } else if r > 0.0 {
+        // RFC-0016 "rounder": blend the aspect correction itself toward
+        // 1.0 (a true circle) as r approaches +100.
+        let eff_aspect = aspect + (1.0 - aspect) * (r / 100.0);
+        let dx = (uv.0 - 0.5) * 2.0;
+        let dy = (uv.1 - 0.5) * 2.0 * eff_aspect;
+        let corner_dist = (1.0f32 + eff_aspect * eff_aspect).sqrt();
+        (dx * dx + dy * dy).sqrt() / corner_dist
+    } else {
+        // RFC-0016 "more rectangular": generalize the L2 norm to a
+        // superellipse (Lp) norm, blending the exponent from 2.0 toward
+        // VIGNETTE_ROUNDNESS_MAX_P as r approaches -100.
+        let p = 2.0 + (-r / 100.0) * (VIGNETTE_ROUNDNESS_MAX_P - 2.0);
+        let dx = (uv.0 - 0.5) * 2.0;
+        let dy = (uv.1 - 0.5) * 2.0 * aspect;
+        let corner_dist = (1.0f32 + aspect.powf(p)).powf(1.0 / p);
+        (dx.abs().powf(p) + dy.abs().powf(p)).powf(1.0 / p) / corner_dist
+    };
     // `inner`/`outer` are nudged apart by a small epsilon and clamped away
     // from touching -- smoothstep's own definition is only well-behaved
     // for edge0 < edge1, and midpoint=100 or feather=0 would otherwise

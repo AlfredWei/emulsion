@@ -7,7 +7,7 @@ use super::*;
 /// near-one one.
 #[test]
 fn vignette_amount_zero_is_an_exact_passthrough() {
-    let v = Vignette { amount: 0.0, midpoint: 10.0, feather: 90.0 };
+    let v = Vignette { amount: 0.0, midpoint: 10.0, feather: 90.0, roundness: 0.0 };
     assert_eq!(vignette_factor((0.0, 0.0), 0.6667, &v), 1.0);
     assert_eq!(vignette_factor((0.5, 0.5), 0.6667, &v), 1.0);
 }
@@ -18,7 +18,7 @@ fn vignette_amount_zero_is_an_exact_passthrough() {
 /// is, matching a real vignette's own "corners only" shape.
 #[test]
 fn vignette_center_pixel_is_unaffected_when_midpoint_is_positive() {
-    let v = Vignette { amount: -100.0, midpoint: 50.0, feather: 50.0 };
+    let v = Vignette { amount: -100.0, midpoint: 50.0, feather: 50.0, roundness: 0.0 };
     assert_eq!(vignette_factor((0.5, 0.5), 0.6667, &v), 1.0);
 }
 
@@ -29,8 +29,8 @@ fn vignette_center_pixel_is_unaffected_when_midpoint_is_positive() {
 /// to `1 + amount/100` with no partial falloff to account for.
 #[test]
 fn vignette_corner_pixel_at_full_feather_matches_hand_derived_factor() {
-    let darken = Vignette { amount: -100.0, midpoint: 0.0, feather: 100.0 };
-    let lighten = Vignette { amount: 60.0, midpoint: 0.0, feather: 100.0 };
+    let darken = Vignette { amount: -100.0, midpoint: 0.0, feather: 100.0, roundness: 0.0 };
+    let lighten = Vignette { amount: 60.0, midpoint: 0.0, feather: 100.0, roundness: 0.0 };
     let aspect = 0.6667;
     assert!((vignette_factor((0.0, 0.0), aspect, &darken) - 0.0).abs() < 1e-4);
     assert!((vignette_factor((1.0, 1.0), aspect, &darken) - 0.0).abs() < 1e-4);
@@ -43,8 +43,8 @@ fn vignette_corner_pixel_at_full_feather_matches_hand_derived_factor() {
 #[test]
 fn vignette_sign_of_amount_matches_darken_vs_lighten() {
     let aspect = 0.6667;
-    let darken = Vignette { amount: -80.0, midpoint: 20.0, feather: 60.0 };
-    let lighten = Vignette { amount: 80.0, midpoint: 20.0, feather: 60.0 };
+    let darken = Vignette { amount: -80.0, midpoint: 20.0, feather: 60.0, roundness: 0.0 };
+    let lighten = Vignette { amount: 80.0, midpoint: 20.0, feather: 60.0, roundness: 0.0 };
     let uv = (0.9, 0.9);
     assert!(vignette_factor(uv, aspect, &darken) < 1.0);
     assert!(vignette_factor(uv, aspect, &lighten) > 1.0);
@@ -62,6 +62,109 @@ fn vignette_darkens_corners_and_leaves_center_untouched_through_edit_stack() {
         &EditStack {
             schema_version: 1,
             ops: vec![serde_json::json!({ "op": "vignette", "amount": -100.0, "midpoint": 0.0, "feather": 100.0 })],
+        },
+    );
+    assert_eq!(*image.get_pixel(10, 10), image::Rgb([200, 150, 100]));
+    let corner = image.get_pixel(0, 0);
+    assert!(corner[0] < 50, "expected a near-black corner, got {corner:?}");
+}
+
+// --- RFC-0016: roundness ---
+
+/// `amount=0` must stay an EXACT passthrough regardless of `roundness` --
+/// the short-circuit at the very top of `vignette_factor` runs before
+/// any of the three roundness branches, so a nonzero/extreme roundness
+/// must never be able to re-enable geometry that `amount=0` disabled.
+#[test]
+fn vignette_amount_zero_is_an_exact_passthrough_regardless_of_roundness() {
+    for roundness in [-100.0, -37.0, 0.0, 42.0, 100.0] {
+        let v = Vignette { amount: 0.0, midpoint: 10.0, feather: 90.0, roundness };
+        assert_eq!(vignette_factor((0.1, 0.9), 0.6667, &v), 1.0, "roundness={roundness}");
+    }
+}
+
+/// The corner (uv=(1,1), i.e. normDist's own normalizing point) reaches
+/// the full, un-fed-back Amount effect exactly, for EVERY roundness --
+/// all three `norm_dist` branches divide by a `corner_dist` defined as
+/// exactly the same expression evaluated at (dx=1, dy=<that branch's own
+/// aspect>), so uv=(1,1) yields normDist=1.0 exactly by construction in
+/// every branch, not just the unmodified roundness=0 one. midpoint=0,
+/// feather=100 puts smoothstep's own edges at (0,1), so a normDist of
+/// exactly 1.0 collapses the factor to `1 + amount/100` with zero
+/// partial falloff -- same hand-derived trick the pre-RFC-0016 corner
+/// test already used, now checked across the whole roundness range.
+#[test]
+fn vignette_corner_always_reaches_full_effect_regardless_of_roundness() {
+    let aspect = 0.6667;
+    for roundness in [-100.0, -50.0, 0.0, 50.0, 100.0] {
+        let v = Vignette { amount: -80.0, midpoint: 0.0, feather: 100.0, roundness };
+        let factor = vignette_factor((1.0, 1.0), aspect, &v);
+        assert!((factor - 0.2).abs() < 1e-3, "roundness={roundness}: got {factor}");
+    }
+}
+
+/// `roundness=+100` collapses `eff_aspect` to exactly 1.0 (`aspect + (1 -
+/// aspect) * 1.0 == 1.0` for any `aspect`), so the shape stops being
+/// aspect-corrected at all and becomes a true circle: two points offset
+/// equally from center along the x-axis and the (unscaled) y-axis must
+/// land on the exact same falloff value, even though the image's own
+/// aspect ratio (0.5, i.e. not square) would make those two offsets
+/// land at different normDist values at roundness=0.
+#[test]
+fn vignette_roundness_positive_100_produces_a_true_circle_ignoring_aspect() {
+    let aspect = 0.5;
+    let v = Vignette { amount: 80.0, midpoint: 20.0, feather: 60.0, roundness: 100.0 };
+    // uv_x: dx=0.6, dy=0. uv_y: dy=(0.8-0.5)*2*eff_aspect=0.6 (eff_aspect=1
+    // at roundness=100), dx=0 -- both reduce to the same (0.6, 0.0)-shaped
+    // offset once eff_aspect replaces aspect, so normDist must match.
+    let uv_x = (0.8, 0.5);
+    let uv_y = (0.5, 0.8);
+    let factor_x = vignette_factor(uv_x, aspect, &v);
+    let factor_y = vignette_factor(uv_y, aspect, &v);
+    assert!((factor_x - factor_y).abs() < 1e-4, "circle asymmetry: x={factor_x} y={factor_y}");
+}
+
+/// `roundness=-100` blends the exponent toward `VIGNETTE_ROUNDNESS_MAX_P`,
+/// bulging the shape toward the frame's own rectangle everywhere except
+/// exactly on the axes/diagonal (where the Lp norm is invariant to `p`).
+/// At a point nearer an axis than the diagonal, `corner_dist` (measured
+/// exactly at the diagonal-analog corner point) shrinks faster under a
+/// higher exponent than the point's own raw distance does, so `normDist`
+/// -- and therefore how much of Amount's effect has already kicked in --
+/// is STRICTLY LARGER at roundness=-100 than at roundness=0 at that same
+/// point. This is a real, derived directional claim (verified against
+/// general Lp-norm monotonicity-in-p theory before being encoded here),
+/// not an assumption -- see RFC-0016 SS6.
+#[test]
+fn vignette_roundness_negative_100_reaches_a_near_axis_point_sooner_than_default() {
+    let aspect = 0.6667;
+    let uv = (0.75, 0.6); // near-axis: dx=0.5 dominates, dy=0.1333 is small
+    let default = Vignette { amount: 80.0, midpoint: 20.0, feather: 60.0, roundness: 0.0 };
+    let squarer = Vignette { amount: 80.0, midpoint: 20.0, feather: 60.0, roundness: -100.0 };
+    let factor_default = vignette_factor(uv, aspect, &default);
+    let factor_squarer = vignette_factor(uv, aspect, &squarer);
+    assert!(
+        factor_squarer > factor_default,
+        "expected roundness=-100 to reach more effect at a near-axis point: default={factor_default} squarer={factor_squarer}"
+    );
+}
+
+/// End-to-end through `apply_edit_stack`: `roundness` parses out of the
+/// JSON op payload (`vignette_op`'s new field) and actually reaches
+/// `vignette_factor` -- a strongly negative Amount at roundness=-100
+/// still darkens the corner and leaves dead-center untouched, the same
+/// real-image contract the pre-RFC-0016 end-to-end test already checks,
+/// now with the new field threaded all the way through.
+#[test]
+fn vignette_roundness_field_threads_through_edit_stack_end_to_end() {
+    let mut image = RgbImage::from_pixel(21, 21, image::Rgb([200, 150, 100]));
+    apply_edit_stack(
+        &mut image,
+        &EditStack {
+            schema_version: 1,
+            ops: vec![
+                serde_json::json!({ "op": "vignette", "amount": -100.0, "midpoint": 0.0, "feather": 100.0, "roundness": -100.0 }),
+            ],
         },
     );
     assert_eq!(*image.get_pixel(10, 10), image::Rgb([200, 150, 100]));

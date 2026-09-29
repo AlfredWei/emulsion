@@ -115,8 +115,9 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     // every downstream cache-invalidation concern it's currently exempt
     // from -- accepted as out of scope for this slice, the same class of
     // "named, deferred" approximation Dehaze's own transmission
-    // refinement (a box-mean standing in for a true guided filter) and
-    // Vignette's own roundness (unimplemented) already are.
+    // refinement (a box-mean standing in for a true guided filter) already
+    // is. (Vignette's own roundness -- once a limitation in this same
+    // list -- is now implemented; see RFC-0016/vignette_factor.)
     let graded_luma: Vec<f32> = graded.iter().map(|c| luma3(*c)).collect();
 
     let sharpen_blur = if sharpen.amount != 0.0 {

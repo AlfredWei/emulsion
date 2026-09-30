@@ -183,6 +183,91 @@ fn parametric_tone_shadows_lift_dark_pixels() {
     assert!((lifted_bright[0] - bright[0]).abs() < 1e-4, "shadows adjustment should not touch bright pixel");
 }
 
+// --- RFC-0018: Parametric Tone's hue-preserving clamp ---
+
+/// The concrete regression test for RFC-0018's own worked example: an
+/// orange, near-white-clip pixel at `highlights=100` lands at exactly
+/// `[1.0, 0.75, 0.55]`, not the old formula's `[1.0231, 0.7731, 0.5731]`
+/// (which would then get asymmetrically truncated by the pipeline's own
+/// single final clamp, since only R exceeds 1.0). Verified by hand in
+/// the RFC (SS3.1/SS6): `luma([0.95,0.70,0.50]) = 0.73871`, giving a raw
+/// `delta_h ~= 0.07308` -- comfortably past R's own headroom of `0.05`,
+/// so R becomes the binding channel and the shared scale reduces the
+/// applied delta to exactly R's headroom for all three channels.
+#[test]
+fn parametric_tone_highlights_at_near_clip_matches_the_hand_derived_shared_scale() {
+    let rgb = [0.95, 0.70, 0.50];
+    let result = apply_parametric_tone(rgb, 100.0, 0.0, 0.0, 0.0);
+    let expected = [1.0, 0.75, 0.55];
+    for (r, e) in result.iter().zip(expected.iter()) {
+        assert!((r - e).abs() < 1e-4, "result={result:?} expected={expected:?}");
+    }
+}
+
+/// The actual bug RFC-0018 fixes, stated as a hue claim rather than just
+/// the raw numbers above: pairwise channel differences (R-G, G-B, R-B --
+/// exactly what determines hue) must be preserved EXACTLY by this op's
+/// own shared-scale delta, at the same near-clip pixel/highlights value
+/// the previous test uses. The OLD (pre-RFC-0018) formula would NOT
+/// preserve these once R's overshoot got asymmetrically truncated by the
+/// pipeline's own final clamp (see the RFC's own worked example: old
+/// differences 0.2269/0.20/0.4269 vs. the original 0.25/0.20/0.45).
+#[test]
+fn parametric_tone_preserves_pairwise_channel_differences_exactly_at_near_clip() {
+    let rgb = [0.95, 0.70, 0.50];
+    let before = [rgb[0] - rgb[1], rgb[1] - rgb[2], rgb[0] - rgb[2]];
+    let result = apply_parametric_tone(rgb, 100.0, 0.0, 0.0, 0.0);
+    let after = [result[0] - result[1], result[1] - result[2], result[0] - result[2]];
+    for (b, a) in before.iter().zip(after.iter()) {
+        assert!((b - a).abs() < 1e-4, "hue-determining differences should be exactly preserved: before={before:?} after={after:?}");
+    }
+}
+
+/// This op's own contribution never needs the pipeline's downstream
+/// final clamp to stay in range, for a spread of near-extreme starting
+/// pixels (near-white, near-black, saturated near each) crossed with
+/// the full range of all four sliders -- the direct proof the shared
+/// scale actually bounds every channel, not just the one used in the
+/// worked-example tests above.
+#[test]
+fn parametric_tone_never_exceeds_bounds_on_its_own_when_input_is_in_range() {
+    let pixels = [
+        [0.95, 0.70, 0.50], // near-white, saturated
+        [0.05, 0.30, 0.50], // near-black, saturated
+        [0.98, 0.97, 0.99], // near-white, nearly gray
+        [0.02, 0.01, 0.03], // near-black, nearly gray
+        [0.99, 0.20, 0.20], // extremely saturated red near white clip
+    ];
+    let slider_values = [-100.0, -50.0, 0.0, 50.0, 100.0];
+    for &rgb in &pixels {
+        for &highlights in &slider_values {
+            for &shadows in &slider_values {
+                for &whites in &slider_values {
+                    for &blacks in &slider_values {
+                        let result = apply_parametric_tone(rgb, highlights, shadows, whites, blacks);
+                        for &c in &result {
+                            assert!(
+                                (-1e-4..=1.0 + 1e-4).contains(&c),
+                                "channel {c} out of [0,1] for rgb={rgb:?} h={highlights} s={shadows} w={whites} b={blacks}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The early-return path itself, not just "the math happens to round to
+/// the same value": all four sliders at identity must return the exact
+/// same floats, bit-for-bit.
+#[test]
+fn parametric_tone_all_sliders_at_zero_is_the_exact_identity() {
+    let rgb = [0.37, 0.81, 0.12];
+    let result = apply_parametric_tone(rgb, 0.0, 0.0, 0.0, 0.0);
+    assert_eq!(result, rgb);
+}
+
 // --- RFC-0017: linear-light correctness ---
 
 /// The basic correctness check any EOTF/OETF pair needs before anything

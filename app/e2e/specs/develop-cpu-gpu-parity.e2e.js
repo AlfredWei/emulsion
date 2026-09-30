@@ -403,6 +403,23 @@ describe("Develop CPU/GPU parity", () => {
     await assertParityAt(ROAD_PATCH, "Exposure + White balance + Contrast combined");
   });
 
+  // RFC-0018: Parametric Tone's shared-scale hue-preserving clamp is new
+  // WGSL (select/min/clamp/abs on the combined delta) that the pre-fix
+  // shader never had -- a real port of new arithmetic, not just a
+  // reused formula, so it needs its own parity coverage rather than
+  // relying on the untouched exposure/contrast tests above. A strong
+  // Exposure push first, then Highlights/Whites both maxed, is used to
+  // drive ROAD_PATCH (already an established flat region, see this
+  // file's own header) close enough to the highlight ceiling that at
+  // least one channel is likely to exercise the scale<1 branch on both
+  // sides, not just the scale==1 identity path.
+  it("Parametric Tone Highlights/Whites near clip: CPU and GPU renders agree", async () => {
+    await setSliderValue("exposure", 2.0);
+    await setSliderValue("highlights", 100);
+    await setSliderValue("whites", 100);
+    await assertParityAt(ROAD_PATCH, "Parametric Tone near clip");
+  });
+
   it("HSL green-band saturation: CPU and GPU renders agree", async () => {
     await setSliderValue("hsl-green-sat", 60);
     await assertParityAt(GREEN_PATCH, "HSL green saturation", HUE_SENSITIVE_TOLERANCE);

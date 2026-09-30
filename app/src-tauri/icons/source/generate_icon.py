@@ -9,8 +9,8 @@ its edge, plus a small satellite droplet for asymmetry. No camera hardware
 imagery (no aperture blades, no lens rings) -- deliberately dropped after
 that direction didn't land.
 
-Full-bleed square, no pre-baked corner rounding -- OS icon masks (macOS
-squircle, Windows tile shapes) apply their own shape.
+Transparent background (RGBA), no baked-in backdrop or corner rounding --
+the droplet floats on whatever the OS dock/taskbar/tile shows behind it.
 
 Regenerate:
     python3 -m venv venv && ./venv/bin/pip install Pillow numpy
@@ -37,8 +37,6 @@ def hex_to_rgb(h):
     return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
 
-BG_CENTER = hex_to_rgb("#221f1a")
-BG_EDGE = hex_to_rgb("#0f0d0b")
 # v2: more saturated across the whole gradient -- the pale cream highlight
 # (was #fbd08c, only ~44% saturation) and muddy brown shadow (was #6e3f18)
 # were washing the droplet out and reading as dull. Same hue family, more
@@ -93,10 +91,11 @@ def blob_mask_array(cx, cy, base_r, wobble_seed=0.0, n_pts=720):
     return np.array(mask_img, dtype=np.float64) / 255.0, pts
 
 
-# ---- background ----
-d_bg = np.clip(np.sqrt((xx - C) ** 2 + (yy - C) ** 2) / (S * 0.75), 0, 1)
-bg = np.stack([lerp(BG_CENTER[c], BG_EDGE[c], d_bg) for c in range(3)], axis=-1)
-img = Image.fromarray(bg.astype(np.uint8), "RGB").convert("RGBA")
+# ---- background: fully transparent ----
+# No baked-in backdrop -- the droplet floats on whatever the OS/dock/taskbar
+# shows behind it (an earlier version painted a dark radial gradient here,
+# which showed up as an opaque dark square around the icon).
+img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
 
 # ---- main droplet ----
 drop_r = S * 0.30
@@ -178,8 +177,13 @@ sat_rim = np.clip(sat_mask - sat_inner, 0, 1)
 composite(img, sheen_final, sat_rim * 0.7)
 
 # ---- downsample, then a whisper of blur to settle the edges ----
-img = img.convert("RGB").resize((1024, 1024), Image.LANCZOS)
-img = img.filter(ImageFilter.GaussianBlur(radius=0.6))
+# Both steps run on premultiplied alpha ("RGBa"): the transparent pixels are
+# (0,0,0,0), and blurring/resampling straight (non-premultiplied) RGBA would
+# bleed that black into the droplet's edge as a dark fringe. Pillow's resize
+# premultiplies internally for RGBA, but GaussianBlur does not, so convert
+# explicitly for the blur.
+img = img.resize((1024, 1024), Image.LANCZOS)
+img = img.convert("RGBa").filter(ImageFilter.GaussianBlur(radius=0.6)).convert("RGBA")
 
 out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon-1024.png")
 img.save(out_path)

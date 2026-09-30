@@ -172,13 +172,204 @@ fn vignette_roundness_field_threads_through_edit_stack_end_to_end() {
     assert!(corner[0] < 50, "expected a near-black corner, got {corner:?}");
 }
 
-/// Hand-derived exact value: `sin(0.0) == 0.0` exactly, so
-/// `grain_hash(0.0, 0.0)` collapses to `fract(0.0 * 43758.5453123) ==
-/// 0.0` exactly -- one real closed-form point on an otherwise
-/// opaque-looking hash function.
+/// RFC-0020 §3.1 golden vectors, computed by an independent numpy
+/// implementation (docs/rfc/RFC-0020-appendix/grainlab.py, `hash`), not by
+/// this code. The integer hash must match EXACTLY -- the same values are
+/// reproduced on a real GPU against the WGSL `particleHash`, which is the
+/// proof of the "bit-identical CPU/GPU by construction" claim.
+/// (Replaces `grain_hash_at_origin_is_exactly_zero`, which asserted a
+/// property of the old sin hash -- `0 * 43758 == 0` -- that the new hash
+/// deliberately does not have.)
 #[test]
-fn grain_hash_at_origin_is_exactly_zero() {
-    assert_eq!(grain_hash(0.0, 0.0), 0.0);
+fn grain_particle_hash_matches_golden_vectors_exactly() {
+    let golden: [((i32, i32), u32); 7] = [
+        ((0, 0), 0xae6f80f1),
+        ((1, 0), 0xa07c7a97),
+        ((0, 1), 0x8e374fe0),
+        ((1, 1), 0xa290702b),
+        ((17, 42), 0xf50c661e),
+        ((4095, 3071), 0x30ed22ee),
+        ((123456, 654321), 0x4cdf1783),
+    ];
+    for ((ix, iy), want) in golden {
+        assert_eq!(particle_hash(ix, iy, 0), want, "particle_hash({ix},{iy},0)");
+    }
+    // >> 8 / 2^24 is v1's `grain_hash` value: exactly representable in f32.
+    assert_eq!((particle_hash(0, 0, 0) >> 8) as f32 / 16_777_216.0, 0.6813888549804688);
+}
+
+/// RFC-0020 §5 golden full-function vectors (seed 0), from the numpy
+/// reference. Not bit-exact with numpy (different summation/rounding), so a
+/// tolerance of 1e-4 on a unit-variance value -- ~5e-6 after the * 0.05
+/// scale, far below one 8-bit step.
+#[test]
+fn grain_particle_noise_matches_golden_vectors() {
+    let pts = [(0.0f32, 0.0f32), (3.25, 7.75), (100.5, 200.125), (1234.5, 2345.5)];
+    let golden = [
+        (0.0f32, [-0.154646f32, 0.932119, -0.581099, 1.521419]),
+        (0.5, [-0.257437, 0.772472, -1.018404, 1.568755]),
+        (1.0, [-0.167784, 0.286400, -1.398528, 1.504852]),
+    ];
+    for (rho, want) in golden {
+        for (p, w) in pts.iter().zip(want) {
+            let got = grain_particle_noise(*p, rho, 0);
+            assert!((got - w).abs() < 1e-4, "rho={rho} p={p:?}: got {got}, want {w}");
+        }
+    }
+}
+
+/// Field over a `n` x `n` pixel patch at a given cell size, for the
+/// statistical tests below.
+fn particle_field(n: usize, cell: f32, rho: f32, seed: u32) -> Vec<f32> {
+    let mut v = Vec::with_capacity(n * n);
+    for y in 0..n {
+        for x in 0..n {
+            v.push(grain_particle_noise((x as f32 / cell, y as f32 / cell), rho, seed));
+        }
+    }
+    v
+}
+
+fn mean_std(v: &[f32]) -> (f64, f64) {
+    let n = v.len() as f64;
+    let m = v.iter().map(|&x| x as f64).sum::<f64>() / n;
+    let var = v.iter().map(|&x| (x as f64 - m).powi(2)).sum::<f64>() / n;
+    (m, var.sqrt())
+}
+
+/// RFC-0020's fix for the v1 "Roughness also changes amplitude" item: the
+/// noise is unit-variance zero-mean at every roughness and cell size, so
+/// Roughness changes character only, never strength.
+#[test]
+fn grain_particle_noise_is_unit_variance_at_every_roughness_and_size() {
+    for &cell in &[1.0f32, 3.5, 6.0] {
+        for &rho in &[0.0f32, 0.5, 1.0] {
+            let mut all = Vec::new();
+            for seed in 0..4u32 {
+                all.extend(particle_field(96, cell, rho, seed * 104_729 + 1));
+            }
+            let (m, sd) = mean_std(&all);
+            assert!(m.abs() < 0.05, "cell={cell} rho={rho}: mean {m}");
+            assert!((sd - 1.0).abs() < 0.05, "cell={cell} rho={rho}: std {sd}");
+        }
+    }
+}
+
+/// RFC-0020 §3.3 calibration: the delta's std at Amount 100, default
+/// Size/Roughness stays within 5% of the pre-RFC field's measured 0.0511,
+/// so a given Amount does not silently get stronger or weaker.
+#[test]
+fn grain_delta_std_at_defaults_matches_the_pre_rfc_calibration_target() {
+    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0 };
+    let mut v = Vec::new();
+    for y in 0..256 {
+        for x in 0..256 {
+            v.push(grain_delta((x as f32, y as f32), &g));
+        }
+    }
+    let (_, sd) = mean_std(&v);
+    assert!((sd - 0.0511).abs() / 0.0511 < 0.05, "delta std {sd}");
+}
+
+/// RFC-0020 §1.3 -- the lattice-signature fix, the reason value noise was
+/// replaced. Per-pixel variance ACROSS independent seeds must be the same
+/// everywhere (a stationary field). Measured with the same 3x3-smoothed
+/// variance map as the numpy reference: value noise gives relative std
+/// 0.221, a stationary field of this correlation length ~0.045, this
+/// generator 0.042-0.051. The threshold sits between them, so a value-noise
+/// implementation would fail this loudly. Needs the test-only `seed`
+/// parameter.
+#[test]
+fn grain_particle_noise_is_stationary_across_the_lattice() {
+    const N: usize = 32;
+    const SEEDS: u32 = 800;
+    let cell = 6.0;
+    let mut sum = vec![0.0f64; N * N];
+    let mut sum2 = vec![0.0f64; N * N];
+    for s in 0..SEEDS {
+        let f = particle_field(N, cell, 0.5, s * 104_729 + 1);
+        for (i, &x) in f.iter().enumerate() {
+            sum[i] += x as f64;
+            sum2[i] += (x as f64) * (x as f64);
+        }
+    }
+    let n = SEEDS as f64;
+    let var: Vec<f64> = (0..N * N).map(|i| sum2[i] / n - (sum[i] / n).powi(2)).collect();
+    // 3x3 smoothing, interior pixels only.
+    let mut sm = Vec::new();
+    for y in 1..N - 1 {
+        for x in 1..N - 1 {
+            let mut acc = 0.0;
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    acc += var[(y + dy - 1) * N + (x + dx - 1)];
+                }
+            }
+            sm.push(acc / 9.0);
+        }
+    }
+    let m = sm.iter().sum::<f64>() / sm.len() as f64;
+    let sd = (sm.iter().map(|v| (v - m).powi(2)).sum::<f64>() / sm.len() as f64).sqrt();
+    let rel = sd / m;
+    assert!(rel < 0.09, "variance-map relative std {rel} (value noise ~0.22, stationary ~0.05)");
+}
+
+/// Isotropy: correlation between two points at the SAME Euclidean
+/// distance must not depend on direction -- (5,0) vs (3,4), both 5 px.
+/// A square lattice would favour the axes.
+#[test]
+fn grain_particle_noise_is_isotropic() {
+    let n = 160;
+    let corr = |f: &[f32], dx: usize, dy: usize| -> f64 {
+        let (m, sd) = mean_std(f);
+        let mut acc = 0.0;
+        let mut cnt = 0.0;
+        for y in 0..n - dy {
+            for x in 0..n - dx {
+                acc += (f[y * n + x] as f64 - m) * (f[(y + dy) * n + x + dx] as f64 - m);
+                cnt += 1.0;
+            }
+        }
+        acc / cnt / (sd * sd)
+    };
+    let mut axis = 0.0;
+    let mut diag = 0.0;
+    for seed in 0..6u32 {
+        let f = particle_field(n, 6.0, 0.5, seed * 104_729 + 1);
+        axis += corr(&f, 5, 0);
+        diag += corr(&f, 3, 4);
+    }
+    axis /= 6.0;
+    diag /= 6.0;
+    assert!((axis - diag).abs() < 0.05, "axis {axis} vs diagonal {diag}");
+}
+
+/// The kernel has compact support inside the 3x3 block, so evaluating at
+/// `x` just below and just above a cell boundary (one-ulp `floor`
+/// disagreement between engines) must give nearly the same value: an ulp of
+/// input disagreement stays an ulp-order output difference.
+#[test]
+fn grain_particle_noise_is_continuous_across_cell_boundaries() {
+    for &rho in &[0.0f32, 0.5, 1.0] {
+        for &(bx, by) in &[(3.0f32, 5.5f32), (12.0, 7.0), (100.0, 100.0)] {
+            let below = grain_particle_noise((f32::from_bits(bx.to_bits() - 1), by), rho, 0);
+            let above = grain_particle_noise((bx, by), rho, 0);
+            assert!((below - above).abs() < 1e-4, "rho={rho} at ({bx},{by}): {below} vs {above}");
+        }
+    }
+}
+
+/// Different seeds give independent fields (needed by the follow-on
+/// per-channel film-grain layers), but the same seed is reproducible.
+#[test]
+fn grain_particle_noise_seed_selects_an_independent_field() {
+    let a = particle_field(48, 3.0, 0.5, 1);
+    let b = particle_field(48, 3.0, 0.5, 2);
+    assert_eq!(a, particle_field(48, 3.0, 0.5, 1));
+    let (ma, sa) = mean_std(&a);
+    let (mb, sb) = mean_std(&b);
+    let cov = a.iter().zip(&b).map(|(&x, &y)| (x as f64 - ma) * (y as f64 - mb)).sum::<f64>() / a.len() as f64;
+    assert!((cov / (sa * sb)).abs() < 0.1, "seeds 1 and 2 correlate: {}", cov / (sa * sb));
 }
 
 /// amount=0 must be an EXACT passthrough regardless of coord/size/
@@ -205,28 +396,40 @@ fn grain_delta_is_deterministic_for_the_same_coordinate() {
     assert_eq!(a, b);
 }
 
-/// At roughness=100 (pure lattice-cell hash, no bilinear
-/// interpolation), two DIFFERENT pixel coordinates that fall in the
-/// SAME lattice cell must produce the EXACT SAME delta -- this is
-/// `size`'s whole visible effect (grouping pixels into same-value
-/// blocks), and it's exactly derivable: size=100 -> cell = 1 +
-/// 1.0*(6.0-1.0) = 6.0px, so (0,0) and (3,3) both floor-divide to
-/// lattice cell (0,0), while (7,7) floor-divides to a different cell
-/// (1,1).
+/// `size` still sets the feature size: adjacent-pixel correlation grows
+/// with the cell width (1 px at Size 0 ~ uncorrelated; 6 px at Size 100 ~
+/// strongly correlated). Replaces the old "same blocky lattice cell gives
+/// the same delta" test, which described the pre-RFC-0020 raw-cell mode
+/// that no longer exists (RFC-0020 §3.3).
 #[test]
-fn grain_size_groups_pixels_into_matching_blocky_cells_at_full_roughness() {
-    let g = Grain { amount: 100.0, size: 100.0, roughness: 100.0 };
-    let a = grain_delta((0.0, 0.0), &g);
-    let b = grain_delta((3.0, 3.0), &g);
-    let c = grain_delta((7.0, 7.0), &g);
-    assert_eq!(a, b, "same 6px lattice cell must match exactly");
-    assert_ne!(a, c, "a different lattice cell should (almost certainly) differ");
+fn grain_size_sets_the_feature_size() {
+    let adjacent_corr = |size: f32| -> f64 {
+        let g = Grain { amount: 100.0, size, roughness: 50.0 };
+        let n = 128;
+        let mut f = Vec::new();
+        for y in 0..n {
+            for x in 0..n {
+                f.push(grain_delta((x as f32, y as f32), &g));
+            }
+        }
+        let (m, sd) = mean_std(&f);
+        let mut acc = 0.0;
+        for y in 0..n {
+            for x in 0..n - 1 {
+                acc += (f[y * n + x] as f64 - m) * (f[y * n + x + 1] as f64 - m);
+            }
+        }
+        acc / (n * (n - 1)) as f64 / (sd * sd)
+    };
+    let fine = adjacent_corr(0.0);
+    let coarse = adjacent_corr(100.0);
+    assert!(fine < 0.5, "size 0 adjacent correlation {fine}");
+    assert!(coarse > 0.8, "size 100 adjacent correlation {coarse}");
 }
 
-/// Roughness actually changes the result -- blending smooth
-/// (bilinear) and rough (nearest-cell) noise at the two extremes must
-/// generally disagree at a non-lattice-aligned point, confirming the
-/// blend isn't a no-op.
+/// Roughness actually changes the result -- even (0) and clumpy (100)
+/// particles must generally disagree at a non-lattice-aligned point,
+/// confirming the knob isn't a no-op.
 #[test]
 fn grain_roughness_zero_and_one_hundred_generally_differ() {
     let smooth = Grain { amount: 100.0, size: 50.0, roughness: 0.0 };
@@ -244,4 +447,25 @@ fn grain_absent_op_is_exact_passthrough_through_edit_stack() {
     let mut image = RgbImage::from_pixel(20, 20, image::Rgb([120, 80, 40]));
     apply_edit_stack(&mut image, &stack_with(&[]));
     assert_eq!(*image.get_pixel(5, 5), image::Rgb([120, 80, 40]));
+}
+
+/// RFC-0020 §4.3 performance check, kept as an opt-in report rather than an
+/// assertion (wall-clock thresholds flake on shared CI runners):
+/// `cargo test --release --lib grain_cpu_cost_report -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn grain_cpu_cost_report() {
+    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0 };
+    let (w, h) = (2048usize, 1536usize); // 3.1 MP, ~ the interactive preview cap
+    let t = std::time::Instant::now();
+    let mut acc = 0.0f32;
+    for y in 0..h {
+        for x in 0..w {
+            acc += grain_delta((x as f32, y as f32), &g);
+        }
+    }
+    let dt = t.elapsed();
+    let px = (w * h) as f64;
+    eprintln!("grain_delta: {:.1} ns/px single thread -> {:.0} ms for {:.1} MP, {:.2} s for 24 MP (acc {acc})",
+        dt.as_nanos() as f64 / px, dt.as_secs_f64() * 1e3, px / 1e6, dt.as_secs_f64() / px * 24e6);
 }

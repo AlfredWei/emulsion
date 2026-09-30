@@ -149,75 +149,131 @@ pub(super) fn grain_op(ops: &[serde_json::Value]) -> Grain {
     }
 }
 
-/// A classic GLSL/WGSL-portable pseudo-random hash: deterministic given
-/// the same input coordinate (unlike a seeded RNG, needs no state), which
-/// is exactly what a STATIC grain pattern needs -- re-evaluating this at
-/// the same pixel on every render must return the same value, or the
-/// grain would visibly "boil"/shimmer on every unrelated slider tweak
-/// instead of looking like a fixed film-grain texture. Not bit-exact
-/// across Rust's `f32::sin` and WGSL's own `sin` (different underlying
-/// implementations), but both are IEEE-754 single precision evaluating
-/// the exact same formula -- close enough for this module's own
-/// established "±2/255, not byte-identical" parity bar.
-pub(super) fn grain_hash(x: f32, y: f32) -> f32 {
-    let v = (x * 12.9898 + y * 78.233).sin() * 43758.5453123;
-    v - v.floor()
+/// Chris Wellons' `lowbias32` 32-bit avalanche hash (Hash Prospector).
+/// Pure `u32` xor/shift/wrapping-multiply, which Rust and WGSL define
+/// bit-for-bit identically -- the whole reason RFC-0020 replaced the old
+/// `sin`-based hash: `sin`'s error, multiplied by ~43758 before `fract`,
+/// made the CPU and GPU grain fields uncorrelated (and gave the GPU field
+/// real repeated structure).
+fn lowbias32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    x
 }
 
-/// Bilinear-interpolated value noise over the hash lattice above -- the
-/// "smooth" end of Roughness (organic, softly-varying grain rather than
-/// visibly blocky cells). `coord` is already scaled by grain size (see
-/// `grain_delta`'s own doc comment).
-pub(super) fn grain_value_noise(coord: (f32, f32)) -> f32 {
-    let ix = coord.0.floor();
-    let iy = coord.1.floor();
-    let fx = coord.0 - ix;
-    let fy = coord.1 - iy;
-    let a = grain_hash(ix, iy);
-    let b = grain_hash(ix + 1.0, iy);
-    let c = grain_hash(ix, iy + 1.0);
-    let d = grain_hash(ix + 1.0, iy + 1.0);
-    let ux = fx * fx * (3.0 - 2.0 * fx);
-    let uy = fy * fy * (3.0 - 2.0 * fy);
-    let ab = a + (b - a) * ux;
-    let cd = c + (d - c) * ux;
-    ab + (cd - ab) * uy
+/// One 32-bit hash per (lattice cell, seed). `ix as u32` is a bit
+/// reinterpretation, the same as WGSL's `bitcast<u32>(i32)`. With `s == 0`,
+/// `particle_hash(ix, iy, 0) >> 8` over 2^24 is RFC-0020 §3.1's `grain_hash`.
+/// `grain_particle_noise` inlines this with the row term hoisted (CPU
+/// speed); this un-hoisted form is the spec the golden vectors pin down, and
+/// the noise's own golden test proves the hoisted form agrees with it.
+#[cfg(test)]
+pub(super) fn particle_hash(ix: i32, iy: i32, s: u32) -> u32 {
+    lowbias32((ix as u32) ^ lowbias32((iy as u32) ^ 0x9E37_79B9 ^ s))
 }
 
-/// Film grain (M3): a pure per-pixel procedural noise overlay -- like
-/// Vignette, no neighboring-pixel data needed, so it folds directly into
-/// the existing final per-pixel loop. Applied globally right after
-/// Vignette, before any mask (matching real Lightroom's own Effects-panel
-/// order: Post-Crop Vignette, then Grain, both above Local Adjustments).
+/// Particles scattered per lattice cell (RFC-0020 §3.2: K = 2 is already at
+/// the stationarity floor; cost is `9 * K` hashes per pixel).
+pub(super) const GRAIN_PARTICLES_PER_CELL: u32 = 2;
+
+/// Unit-variance normalization for `grain_particle_noise` (RFC-0020 §3.2):
+/// `1 / sqrt(K * E[w^2] * (pi/5) * E[r^2-factor])`, in closed form.
+fn grain_particle_norm(rho: f32) -> f32 {
+    let ew2 = 1.0 - rho + rho * rho / 3.0;
+    let a = 0.5 * rho;
+    let er2 = 1.0 - a + a * a / 3.0;
+    1.0 / (GRAIN_PARTICLES_PER_CELL as f32 * ew2 * 0.2 * std::f32::consts::PI * er2).sqrt()
+}
+
+/// Stationary sparse-convolution "particle" noise (RFC-0020 §3.2): a sum of
+/// compact-support kernels `w * (1 - d^2/r^2)^2` from `K` random particles
+/// per lattice cell, unit variance and zero mean by construction.
+/// `p` is in CELL units; `roughness01` in [0, 1] (0: identical particles,
+/// 1: strengths in (0,1] and radii in (0.5,1] -- clumpier); `seed` picks an
+/// independent field (tests, and per-channel layers in the follow-on
+/// film-simulation milestone). Every particle lives in its own cell and has
+/// radius <= 1 cell, so the 3x3 block around `floor(p)` is exact -- and a
+/// one-ulp `floor` disagreement between CPU and GPU only drops particles
+/// whose kernel is exactly 0 there, so it cannot change the pattern.
+pub(super) fn grain_particle_noise(p: (f32, f32), roughness01: f32, seed: u32) -> f32 {
+    let rho = roughness01.clamp(0.0, 1.0);
+    let cx = p.0.floor() as i32;
+    let cy = p.1.floor() as i32;
+    // `particle_hash(ix, iy, s) = lowbias32(ix ^ lowbias32(iy ^ C ^ s))`: the
+    // inner term depends only on the ROW (iy) and seed, so it is computed
+    // once per (row, particle) instead of once per (cell, particle) --
+    // 6 inner + 18 outer hashes per call instead of 36, bit-identical results.
+    let mut inner = [[0u32; GRAIN_PARTICLES_PER_CELL as usize]; 3];
+    for (bi, row) in inner.iter_mut().enumerate() {
+        for (k, slot) in row.iter_mut().enumerate() {
+            let s = seed.wrapping_add(k as u32 * 7919);
+            *slot = lowbias32(((cy + bi as i32 - 1) as u32) ^ 0x9E37_79B9 ^ s);
+        }
+    }
+    let mut sum = 0.0f32;
+    for a in -1..=1 {
+        for (bi, row) in inner.iter().enumerate() {
+            let b = bi as i32 - 1;
+            for &inner_hash in row {
+                let h = lowbias32(((cx + a) as u32) ^ inner_hash);
+                let jx = (h & 0xFF) as f32 / 256.0;
+                let jy = ((h >> 8) & 0xFF) as f32 / 256.0;
+                let dx = p.0 - ((cx + a) as f32 + jx);
+                let dy = p.1 - ((cy + b) as f32 + jy);
+                let wbits = (h >> 16) & 0xFF;
+                let ur = ((h >> 24) & 0xFF) as f32 / 256.0;
+                let r = 1.0 - 0.5 * rho * ur;
+                let sign = if wbits & 0x80 != 0 { 1.0 } else { -1.0 };
+                let um = (wbits & 0x7F) as f32 / 128.0;
+                let w = sign * (1.0 - rho * um);
+                // Branch-free: ~35% of the 18 particles reach `p`, at random,
+                // so a data-dependent branch mispredicts constantly. `max(0)`
+                // gives the same 0 outside the kernel (d2 >= 1) as the WGSL
+                // `if (d2 < 1.0)`.
+                let d2 = (dx * dx + dy * dy) / (r * r);
+                let t = (1.0 - d2).max(0.0);
+                sum += w * t * t;
+            }
+        }
+    }
+    sum * grain_particle_norm(rho)
+}
+
+/// Film grain (M3, reworked by RFC-0020): a pure per-pixel procedural noise
+/// overlay -- like Vignette, no neighboring-pixel data needed, so it folds
+/// directly into the existing final per-pixel loop. Applied globally right
+/// after Vignette, before any mask (matching real Lightroom's own
+/// Effects-panel order: Post-Crop Vignette, then Grain, both above Local
+/// Adjustments).
 ///
-/// `size` maps to the lattice cell width in PIXELS (fixed range 1..
-/// GRAIN_MAX_CELL_PX, same "fixed absolute pixel scale, not resolution-
+/// `size` maps to the particle-lattice cell width in PIXELS (fixed range
+/// 1..GRAIN_MAX_CELL_PX, same "fixed absolute pixel scale, not resolution-
 /// scaled" named limitation Dehaze/Texture/Clarity's own radii already
-/// accept) -- larger cells read as coarser, chunkier grain particles.
-/// `roughness` blends between the bilinear-interpolated value noise above
-/// (smooth, roughness=0) and the RAW lattice-cell hash with no
-/// interpolation at all (blocky/uncorrelated between adjacent cells,
-/// roughness=100) -- two ends of the same underlying hash lattice, not
-/// two unrelated noise functions. `amount` scales the resulting additive
-/// luminance delta (added equally to all three channels, same "preserve
-/// chroma via an additive delta" shape Texture/Clarity's own formula
-/// uses) -- real film grain is predominantly a luminance/density effect,
-/// not per-channel chromatic noise. `GRAIN_STRENGTH` is a fixed constant
-/// (not user-exposed) capping the visual amplitude at amount=100, the
-/// same "fix the knob" choice this module's other constants already
-/// make.
+/// accept) -- larger cells read as coarser, chunkier grain. `roughness`
+/// makes the particles more heterogeneous (even <-> clumpy) and, unlike the
+/// pre-RFC-0020 smooth<->blocky blend, does NOT change the strength: the
+/// noise is unit variance at every roughness. `amount` scales the resulting
+/// additive luminance delta (added equally to all three channels, same
+/// "preserve chroma via an additive delta" shape Texture/Clarity's own
+/// formula uses) -- real film grain is predominantly a luminance/density
+/// effect, not per-channel chromatic noise. `GRAIN_SIGMA` is the delta's
+/// standard deviation at amount=100, calibrated to the pre-RFC-0020 field's
+/// measured 0.0511 at the default Size/Roughness.
 pub(super) const GRAIN_MAX_CELL_PX: f32 = 6.0;
 
-pub(super) const GRAIN_STRENGTH: f32 = 0.12;
+pub(super) const GRAIN_SIGMA: f32 = 0.05;
+
+/// The app's grain is the same pattern for every image (unseeded).
+const GRAIN_SEED: u32 = 0;
 
 pub(super) fn grain_delta(coord: (f32, f32), g: &Grain) -> f32 {
     if g.amount == 0.0 {
         return 0.0;
     }
     let cell = 1.0 + (g.size / 100.0) * (GRAIN_MAX_CELL_PX - 1.0);
-    let scaled = (coord.0 / cell, coord.1 / cell);
-    let smooth = grain_value_noise(scaled);
-    let rough = grain_hash(scaled.0.floor(), scaled.1.floor());
-    let noise = smooth + (rough - smooth) * (g.roughness / 100.0).clamp(0.0, 1.0);
-    (noise * 2.0 - 1.0) * (g.amount / 100.0) * GRAIN_STRENGTH
+    let noise = grain_particle_noise((coord.0 / cell, coord.1 / cell), g.roughness / 100.0, GRAIN_SEED);
+    noise * (g.amount / 100.0) * GRAIN_SIGMA
 }

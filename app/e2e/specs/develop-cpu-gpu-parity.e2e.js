@@ -435,4 +435,23 @@ describe("Develop CPU/GPU parity", () => {
     await setSliderValue("st-shadow-sat", 50);
     await assertParityAt(GREEN_PATCH, "Split toning", HUE_SENSITIVE_TOLERANCE);
   });
+
+  // RFC-0020: the test that never existed. Before it, the CPU and GPU grain
+  // fields were uncorrelated (sin-hash error x 43758), so the two paths drew
+  // DIFFERENT grain from the same sliders and nothing here could see it.
+  // Grain is per-pixel noise, so a single pixel is a weak witness: at
+  // Amount 100 the delta std is ~13/255, and two independent fields would
+  // still land inside TOLERANCE about a quarter of the time. Three separate
+  // points along the same flat road strip (each one still needs the
+  // underlying image to be flat, see ROAD_PATCH's own doc comment) drop
+  // that chance of a false pass to ~1.5%; a correct port agrees to 8-bit
+  // quantization at every one.
+  it("Grain: CPU and GPU render the same grain pattern", async () => {
+    await setSliderValue("grain-amount", 100);
+    await setSliderValue("grain-size", 30);
+    await setSliderValue("grain-roughness", 60);
+    for (const du of [0, 0.005, 0.011]) {
+      await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain (u+${du})`);
+    }
+  });
 });

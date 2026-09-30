@@ -60,36 +60,77 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
     // same reasoning.
     struct Grain {
       amount: f32,    // 0..100
-      size: f32,      // 0..100, maps to lattice cell width in pixels
-      roughness: f32, // 0..100, blends smooth<->blocky noise
+      size: f32,      // 0..100, maps to particle-lattice cell width in pixels
+      roughness: f32, // 0..100, even<->clumpy particles (RFC-0020)
       _pad0: f32,
     };
     @group(0) @binding(16) var<uniform> grain: Grain;
 
-    // A direct WGSL port of develop_engine.rs's own grain_hash/
-    // grain_value_noise/grain_delta -- see that module's doc comment on
-    // grain_delta for the full parameter reasoning (size's pixel-cell
-    // mapping, roughness's smooth/blocky blend, amount's additive-delta
-    // shape). Not bit-exact with the Rust twin (different underlying sin
-    // implementations), same "not byte-identical" parity bar as the rest
-    // of this shader.
+    // A direct WGSL port of develop_engine/effects.rs's lowbias32/
+    // particle_hash/grain_particle_noise/grain_delta (RFC-0020) -- see that
+    // module's doc comments for the full parameter reasoning. The hash is
+    // pure u32 xor/shift/wrapping-multiply, which WGSL and Rust define
+    // bit-for-bit identically (the old sin-based hash was neither
+    // bit-exact nor even random on the GPU: sin's error x 43758 before
+    // fract). The noise itself uses only f32 + - * / plus one
+    // normalization (one sqrt), so it agrees with the Rust twin to ~1e-6, and a
+    // one-ulp floor() disagreement cannot change the pattern (compact
+    // kernel support inside the 3x3 block).
     const GRAIN_MAX_CELL_PX: f32 = 6.0;
-    const GRAIN_STRENGTH: f32 = 0.12;
+    const GRAIN_SIGMA: f32 = 0.05;
+    const GRAIN_PARTICLES_PER_CELL: u32 = 2u;
+    const GRAIN_PI: f32 = 3.14159265358979;
 
-    fn grainHash(p: vec2<f32>) -> f32 {
-      let v = sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453123;
-      return fract(v);
+    fn lowbias32(xin: u32) -> u32 {
+      var x = xin;
+      x ^= x >> 16u;
+      x *= 0x7feb352du;
+      x ^= x >> 15u;
+      x *= 0x846ca68bu;
+      x ^= x >> 16u;
+      return x;
     }
 
-    fn grainValueNoise(coord: vec2<f32>) -> f32 {
-      let i = floor(coord);
-      let f = fract(coord);
-      let a = grainHash(i);
-      let b = grainHash(i + vec2<f32>(1.0, 0.0));
-      let c = grainHash(i + vec2<f32>(0.0, 1.0));
-      let d = grainHash(i + vec2<f32>(1.0, 1.0));
-      let u = f * f * (3.0 - 2.0 * f);
-      return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    fn particleHash(ix: i32, iy: i32, s: u32) -> u32 {
+      return lowbias32(bitcast<u32>(ix) ^ lowbias32(bitcast<u32>(iy) ^ 0x9E3779B9u ^ s));
+    }
+
+    fn grainParticleNorm(rho: f32) -> f32 {
+      let ew2 = 1.0 - rho + rho * rho / 3.0;
+      let a = 0.5 * rho;
+      let er2 = 1.0 - a + a * a / 3.0;
+      return 1.0 / sqrt(f32(GRAIN_PARTICLES_PER_CELL) * ew2 * 0.2 * GRAIN_PI * er2);
+    }
+
+    // p in CELL units, rho in [0,1]; unit variance, zero mean.
+    fn grainParticleNoise(p: vec2<f32>, rhoIn: f32, seed: u32) -> f32 {
+      let rho = clamp(rhoIn, 0.0, 1.0);
+      let cx = i32(floor(p.x));
+      let cy = i32(floor(p.y));
+      var sum = 0.0;
+      for (var a = -1; a <= 1; a++) {
+        for (var b = -1; b <= 1; b++) {
+          for (var k = 0u; k < GRAIN_PARTICLES_PER_CELL; k++) {
+            let h = particleHash(cx + a, cy + b, seed + k * 7919u);
+            let jx = f32(h & 0xFFu) / 256.0;
+            let jy = f32((h >> 8u) & 0xFFu) / 256.0;
+            let wbits = (h >> 16u) & 0xFFu;
+            let sgn = select(-1.0, 1.0, (wbits & 0x80u) != 0u);
+            let um = f32(wbits & 0x7Fu) / 128.0;
+            let ur = f32((h >> 24u) & 0xFFu) / 256.0;
+            let w = sgn * (1.0 - rho * um);
+            let r = 1.0 - 0.5 * rho * ur;
+            let dx = p.x - (f32(cx + a) + jx);
+            let dy = p.y - (f32(cy + b) + jy);
+            let d2 = (dx * dx + dy * dy) / (r * r);
+            if (d2 < 1.0) {
+              let t = 1.0 - d2;
+              sum += w * t * t;
+            }
+          }
+        }
+      }
+      return sum * grainParticleNorm(rho);
     }
 
     fn grainDelta(coord: vec2<f32>) -> f32 {
@@ -97,11 +138,8 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
         return 0.0;
       }
       let cellPx = 1.0 + (grain.size / 100.0) * (GRAIN_MAX_CELL_PX - 1.0);
-      let scaled = coord / cellPx;
-      let smoothN = grainValueNoise(scaled);
-      let roughN = grainHash(floor(scaled));
-      let noise = mix(smoothN, roughN, clamp(grain.roughness / 100.0, 0.0, 1.0));
-      return (noise * 2.0 - 1.0) * (grain.amount / 100.0) * GRAIN_STRENGTH;
+      let noise = grainParticleNoise(coord / cellPx, grain.roughness / 100.0, 0u);
+      return noise * (grain.amount / 100.0) * GRAIN_SIGMA;
     }
 
 `;

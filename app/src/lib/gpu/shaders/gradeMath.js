@@ -145,7 +145,9 @@ export const gradeMath = `    fn smoothstep_val(edge0: f32, edge1: f32, x: f32) 
       return mix(v0, v1, frac);
     }
 
-    const HSL_BAND_CENTERS = array<f32, 8>(0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0);
+    // RFC-0019: real-hue centers (unequal gaps) -- must match develop.js's
+    // HSL_BAND_CENTERS_DEG and develop_engine's hsl_split.rs exactly.
+    const HSL_BAND_CENTERS = array<f32, 8>(0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0);
 
     // WGSL's modulo operator is truncated remainder (sign follows the
     // dividend), NOT the always-non-negative floor-mod this HSL math needs
@@ -196,17 +198,28 @@ export const gradeMath = `    fn smoothstep_val(edge0: f32, edge1: f32, x: f32) 
       return rgb1 + vec3<f32>(m, m, m);
     }
 
-    // Raised-cosine blend weight -- see develop_engine.rs's hsl_band_weight
-    // doc comment for why this shape (not a triangular ramp) and why band
-    // centers exactly 45 degrees apart guarantee at most 2 nonzero weights
-    // summing to exactly 1, with no renormalization needed.
-    fn hueBandWeight(hueDeg: f32, centerDeg: f32) -> f32 {
-      let d = rem_euclid(hueDeg - centerDeg + 180.0, 360.0) - 180.0;
-      let dist = abs(d);
-      if (dist >= 45.0) {
+    // Raised-cosine blend weight of band \`band\`, blending between ADJACENT
+    // centers using each side's own gap (RFC-0019) -- see develop_engine's
+    // hsl_band_weight doc comment for why this shape (not a triangular
+    // ramp) and why blending between neighbors guarantees at most 2
+    // nonzero weights summing to exactly 1 for any gap size, with no
+    // renormalization needed.
+    fn hueBandWeight(hueDeg: f32, band: i32) -> f32 {
+      let center = HSL_BAND_CENTERS[band];
+      let d = rem_euclid(hueDeg - center + 180.0, 360.0) - 180.0;
+      var dist: f32;
+      var gap: f32;
+      if (d >= 0.0) {
+        dist = d;
+        gap = rem_euclid(HSL_BAND_CENTERS[(band + 1) % 8] - center, 360.0);
+      } else {
+        dist = -d;
+        gap = rem_euclid(center - HSL_BAND_CENTERS[(band + 7) % 8], 360.0);
+      }
+      if (dist >= gap) {
         return 0.0;
       }
-      return 0.5 * (cos(dist / 45.0 * 3.14159265) + 1.0);
+      return 0.5 * (cos(dist / gap * 3.14159265) + 1.0);
     }
 
     // See develop_engine.rs's apply_hsl_bands doc comment for the full
@@ -226,7 +239,7 @@ export const gradeMath = `    fn smoothstep_val(edge0: f32, edge1: f32, x: f32) 
       var satAcc = 0.0;
       var lumAcc = 0.0;
       for (var i = 0; i < 8; i = i + 1) {
-        let w = hueBandWeight(hPx, HSL_BAND_CENTERS[i]);
+        let w = hueBandWeight(hPx, i);
         let band = hslBands[i];
         hueAcc = hueAcc + w * band.x;
         satAcc = satAcc + w * band.y;

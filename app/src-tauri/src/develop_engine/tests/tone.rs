@@ -188,8 +188,8 @@ fn parametric_tone_shadows_lift_dark_pixels() {
 /// The concrete regression test for RFC-0018's own worked example: an
 /// orange, near-white-clip pixel at `highlights=100` lands at exactly
 /// `[1.0, 0.75, 0.55]`, not the old formula's `[1.0231, 0.7731, 0.5731]`
-/// (which would then get asymmetrically truncated by the pipeline's own
-/// single final clamp, since only R exceeds 1.0). Verified by hand in
+/// (which would then get asymmetrically truncated by the pipeline's
+/// per-channel Tone Curve-stage clamp, since only R exceeds 1.0). Verified by hand in
 /// the RFC (SS3.1/SS6): `luma([0.95,0.70,0.50]) = 0.73871`, giving a raw
 /// `delta_h ~= 0.07308` -- comfortably past R's own headroom of `0.05`,
 /// so R becomes the binding channel and the shared scale reduces the
@@ -210,7 +210,7 @@ fn parametric_tone_highlights_at_near_clip_matches_the_hand_derived_shared_scale
 /// own shared-scale delta, at the same near-clip pixel/highlights value
 /// the previous test uses. The OLD (pre-RFC-0018) formula would NOT
 /// preserve these once R's overshoot got asymmetrically truncated by the
-/// pipeline's own final clamp (see the RFC's own worked example: old
+/// pipeline's per-channel Tone Curve-stage clamp (see the RFC's own worked example: old
 /// differences 0.2269/0.20/0.4269 vs. the original 0.25/0.20/0.45).
 #[test]
 fn parametric_tone_preserves_pairwise_channel_differences_exactly_at_near_clip() {
@@ -224,7 +224,7 @@ fn parametric_tone_preserves_pairwise_channel_differences_exactly_at_near_clip()
 }
 
 /// This op's own contribution never needs the pipeline's downstream
-/// final clamp to stay in range, for a spread of near-extreme starting
+/// per-channel clamp to stay in range, for a spread of near-extreme starting
 /// pixels (near-white, near-black, saturated near each) crossed with
 /// the full range of all four sliders -- the direct proof the shared
 /// scale actually bounds every channel, not just the one used in the

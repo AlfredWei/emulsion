@@ -249,6 +249,33 @@ Inserted between M4 and M5 (2026-08-30, user request after M4's Print Module shi
 
 ---
 
+## M5.8 — Negative film simulation (grain stocks)
+**Rough size:** 1–2 months · **Lightroom analog:** partially Lightroom's Effects > Grain (Amount/Size/Roughness) — but Lightroom has no per-film-stock selector; closest third-party analogs are film-emulation presets/plugins (e.g. VSCO, Dehancer, Negative Lab-style tools). This milestone is scoped to the *grain* behaviour of a negative stock, not full stock emulation — user request (2026-09-30): "simulate negative film" for the Grain effect, where the user selects a preferred negative film type and controls its grain parameters through sliders.
+
+**Depends on:** [RFC-0020](../docs/rfc/RFC-0020-grain-particle-noise.md) (M5.6) — the stationary, CPU/GPU-identical particle-noise generator with seed and unit variance is the substrate every stock's grain is built from.
+
+### Scope
+- A **film-stock picker** in the Grain panel: a curated list of negative stocks — colour (e.g. Portra 400, Gold 200, Pro 400H, CineStill 800T) and black-and-white (e.g. Tri-X 400, HP5 Plus, Delta 100) — each a *parameter preset*. Choosing a stock loads its parameter set into the sliders; any slider edit flips the picker to "Custom"; "None" is today's plain grain.
+- **Every parameter is a slider**, not a hidden constant: the existing Amount / Size / Roughness plus the new shaping controls this milestone's research decides on — at minimum: **tonal response** (grain strongest in mid-tones, weaker in deep shadows and near white, also fixing RFC-0020's named "additive grain at pure black/white" item), **colour vs mono grain** (independent per-channel noise using distinct seeds of the RFC-0020 generator, for colour negatives), and **resolution-relative grain size** so the preview and a full-resolution export show the same grain (RFC-0020 keeps size a fixed pixel scale).
+- **A documented research pass per stock**: how each preset's numbers were derived from published granularity data (e.g. manufacturers' RMS-granularity figures, published grain power-spectrum/MTF data, ISO/speed-vs-grain relationships), or, where no data exists, marked plainly as an aesthetic choice. **No claim to match any stock's proprietary look** — same honesty class as RFC-0016's Roundness and RFC-0019's band centers.
+- Presets stored in the catalog by stock id + slider values (so a saved edit keeps its numbers if a preset is later tuned), and included in copy/paste-settings and edit-history like every other develop op.
+- CPU and GPU both implement every stock's parameter path, checked for parity (reusing the `develop-cpu-gpu-parity.e2e.js` harness) with at least one colour and one B&W stock scenario; performance check against M5's ~100 ms interactive budget (per-channel grain is 3× the RFC-0020 cost — budget it before shipping).
+
+### Explicitly deferred
+- **Colour/tone rendition of a stock** (its characteristic curve, colour-crossover, per-stock LUTs) — this milestone is grain only; stock *colour* emulation is a separate, much larger research question.
+- **Halation, bloom, and edge effects** (e.g. CineStill's red halation), **print / paper simulation**, **push/pull-processing simulation**.
+- **Positive (slide) and motion-picture stocks**, and **user-authored stock presets** (importing/exporting a stock as a file) — revisit once the built-in set has shipped.
+- A **seeded per-image grain pattern** (same pattern for every image today, per RFC-0020) — a different "regenerate grain" affordance can be scoped later if wanted.
+
+### Exit criteria
+- Selecting a stock visibly changes the grain's character, not just its strength (checked side by side on a fixed test image, including colour-vs-mono grain and tonal response).
+- Every stock parameter is reachable by a slider; editing one flips the picker to "Custom"; selecting a stock then resetting returns to plain grain.
+- Preview and full-resolution export show the same grain at the same relative size (resolution-relative sizing proven with an export-vs-preview comparison, not assumed).
+- CPU/GPU parity passes for each shipped parameter path; the shipped set stays under the ~100 ms interactive budget.
+- Each stock's parameter derivation is written down (published data cited, or "aesthetic choice"), with an explicit statement that it is an approximation, not a reproduction of the real stock.
+
+---
+
 ## M6 — AI-assisted selection & enhancement
 **Rough size:** 4–8 months · **Lightroom analog:** Classic v8–v11, 2018–2022
 

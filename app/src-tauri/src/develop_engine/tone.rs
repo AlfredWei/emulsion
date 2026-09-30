@@ -96,12 +96,15 @@ pub(super) fn apply_contrast(rgb: [f32; 3], contrast: f32) -> [f32; 3] {
 /// added identically to R/G/B -- hue-preserving in isolation (adding the
 /// same constant to all three channels never changes their pairwise
 /// differences, which is what determines hue), but this op is precisely
-/// the one used on pixels already near the tonal extremes. The pipeline
-/// clamps to `[0,1]` only once, at the very final byte conversion
-/// (`pipeline.rs`), after the whole unclamped-float op chain runs -- so
-/// without the shared-scale step below, one channel of a near-clip
-/// saturated pixel could get silently truncated more than its siblings
-/// at that final clamp, breaking the pairwise-difference equality and
+/// the one used on pixels already near the tonal extremes. Everything
+/// from White Balance through Saturation runs in unclamped float; the
+/// first per-channel hard clamp is the Tone Curve stage right after
+/// (`sample_lut` clamps its input to `[0,1]`, applied unconditionally in
+/// `pipeline.rs`; see RFC-0019 SS8, which corrects RFC-0018's original
+/// "single final byte-conversion clamp" wording) -- so without the
+/// shared-scale step below, one channel of a near-clip saturated pixel
+/// could get silently truncated more than its siblings at that clamp,
+/// breaking the pairwise-difference equality and
 /// shifting hue rather than desaturating predictably. See the RFC's own
 /// worked example (an orange `[0.95,0.70,0.50]` at `highlights=100`)
 /// for the exact before/after numbers.
@@ -161,7 +164,7 @@ pub(super) fn apply_parametric_tone(
     // one channel can move in `delta`'s own direction before hitting
     // 0 or 1; a channel already past that edge in the same direction
     // (possible since an earlier op like Exposure can overshoot before
-    // the pipeline's single final clamp) yields a negative headroom,
+    // the Tone Curve stage's per-channel clamp) yields a negative headroom,
     // forcing `scale` to 0 -- this op simply contributes nothing further
     // there rather than adding to an overshoot that isn't its own to fix.
     let mut scale = 1.0f32;

@@ -10,7 +10,13 @@ use super::*;
 /// generally, for every formula here.
 pub(super) const HSL_BAND_NAMES: [&str; 8] = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"];
 
-pub(super) const HSL_BAND_CENTERS_DEG: [f32; 8] = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0];
+/// RFC-0019: centers sit at the hue positions of the colors the band names
+/// actually refer to (yellow at 60, not 90; green at 120, not 135; ...),
+/// so the gaps between neighbors are UNEQUAL (30/30/60/60/60/30/30/60) --
+/// which is why `hsl_band_weight` below blends between adjacent centers
+/// using each side's own gap instead of one shared half-width. Not a
+/// verified match to Lightroom's own (unpublished) centers.
+pub(super) const HSL_BAND_CENTERS_DEG: [f32; 8] = [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0];
 
 #[derive(Clone, Copy)]
 pub(super) struct HslBand {
@@ -47,22 +53,31 @@ pub(super) fn hsl_bands(ops: &[serde_json::Value]) -> [HslBand; 8] {
     result
 }
 
-/// Raised-cosine blend weight between a pixel's hue and one band center --
-/// C1-continuous (zero slope at the center and at each 50/50 crossover),
-/// chosen over a triangular ramp specifically because a triangular ramp
-/// has a slope kink exactly at every band center, which on a continuous
-/// hue gradient (sky, skin) is more likely to read as a visible seam.
-/// Band centers are exactly 45 degrees apart, so at most 2 bands are ever
-/// nonzero at any hue, and they sum to exactly 1 by the cosine identity
-/// cos(x) + cos(pi-x) = 0 -- no gap, no double-count, no renormalization
-/// needed anywhere this is used.
-pub(super) fn hsl_band_weight(hue_deg: f32, center_deg: f32) -> f32 {
-    let d = ((hue_deg - center_deg + 180.0).rem_euclid(360.0)) - 180.0;
-    let dist = d.abs();
-    if dist >= 45.0 {
+/// Raised-cosine blend weight of one band (by index) at a pixel's hue,
+/// blending between ADJACENT centers using each side's own gap (RFC-0019).
+/// Between neighbors `a` and `b`, `w_a = 0.5(1+cos(pi*t))` and
+/// `w_b = 0.5(1+cos(pi*(1-t))) = 1 - w_a`, so exactly two weights are
+/// nonzero and they sum to exactly 1 for ANY gap size -- no gap, no
+/// double-count, no renormalization, even though the centers are no
+/// longer evenly spaced. C1-continuous (zero slope at every center and
+/// crossover), chosen over a triangular ramp for the same reason as
+/// before: a slope kink at a band center is more likely to read as a
+/// visible seam on a continuous hue gradient (sky, skin). Within an
+/// interval `w_a > 0.5` iff the hue is nearer `a`, so the highest-weight
+/// band is always the nearest-center band (`nearestHslBand`, develop.js).
+pub(super) fn hsl_band_weight(hue_deg: f32, band: usize) -> f32 {
+    let n = HSL_BAND_CENTERS_DEG.len();
+    let center = HSL_BAND_CENTERS_DEG[band];
+    let d = ((hue_deg - center + 180.0).rem_euclid(360.0)) - 180.0;
+    let (dist, gap) = if d >= 0.0 {
+        (d, (HSL_BAND_CENTERS_DEG[(band + 1) % n] - center).rem_euclid(360.0))
+    } else {
+        (-d, (center - HSL_BAND_CENTERS_DEG[(band + n - 1) % n]).rem_euclid(360.0))
+    };
+    if dist >= gap {
         0.0
     } else {
-        0.5 * ((dist / 45.0 * std::f32::consts::PI).cos() + 1.0)
+        0.5 * ((dist / gap * std::f32::consts::PI).cos() + 1.0)
     }
 }
 
@@ -89,7 +104,7 @@ pub(super) fn apply_hsl_bands(rgb: [f32; 3], bands: &[HslBand; 8]) -> [f32; 3] {
     let mut sat_acc = 0.0f32;
     let mut lum_acc = 0.0f32;
     for (i, band) in bands.iter().enumerate() {
-        let w = hsl_band_weight(h_px, HSL_BAND_CENTERS_DEG[i]);
+        let w = hsl_band_weight(h_px, i);
         hue_acc += w * band.hue;
         sat_acc += w * band.saturation;
         lum_acc += w * band.luminance;

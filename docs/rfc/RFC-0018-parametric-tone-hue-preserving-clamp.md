@@ -8,6 +8,8 @@
 
 Self-chosen "next" pick, drawn from a specific named item rather than the general "not yet researched effects" list: RFC-0017 §2 already found and explicitly deferred this exact concern while fixing White Balance/Exposure/Contrast — "the additive luma delta applied identically to R/G/B can shift hue/desaturate a channel that's already near clipping while the others aren't... named here as a candidate for its own future slice." This RFC is that slice.
 
+> **Corrected after merge (see [RFC-0019](RFC-0019-hsl-band-centers.md) §8):** this RFC says below that the pipeline clamps to `[0,1]` "exactly once, at the very final byte conversion". That is imprecise. Right after `apply_global_adjustments`, `pipeline.rs` unconditionally runs `sample_lut` on each channel, and `sample_lut` (and the WGSL `sampleCurveLut`) clamps its input to `[0,1]` — so the **first per-channel hard clamp is the Tone Curve stage, immediately after Saturation**; the byte-conversion clamp is a second one. Only the clamp's *location* was misdescribed: the asymmetry mechanism, the shared-scale fix, and its tests are unaffected.
+
 ## 1. Problem
 
 `apply_parametric_tone` (Highlights/Shadows/Whites/Blacks) computes a single scalar `delta` from the pixel's own luma (a blend of four smoothstep-weighted windows) and adds that *same* scalar to R, G, and B identically:

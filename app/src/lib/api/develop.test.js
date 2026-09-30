@@ -9,6 +9,9 @@ import {
   computeEyedropperWhiteBalance,
   computeAutoTone,
   PANEL_OP_NAMES,
+  HSL_BAND_NAMES,
+  HSL_BAND_CENTERS_DEG,
+  nearestHslBand,
   isPanelHidden,
   togglePanelVisibility,
   resetPanel,
@@ -347,5 +350,40 @@ describe("panel visibility and reset", () => {
       ],
     });
     expect(effectiveEditStack(stack).ops).toEqual([]);
+  });
+});
+
+// RFC-0019: HSL band centers at real hues.
+describe("HSL band centers", () => {
+  test("sit at the hue positions of the colors they name, index-aligned with HSL_BAND_NAMES", () => {
+    const at = (/** @type {string} */ name) => HSL_BAND_CENTERS_DEG[HSL_BAND_NAMES.indexOf(name)];
+    expect([at("red"), at("orange"), at("yellow"), at("green")]).toEqual([0, 30, 60, 120]);
+    expect([at("aqua"), at("blue"), at("purple"), at("magenta")]).toEqual([180, 240, 270, 300]);
+  });
+
+  test("nearestHslBand names real yellow/orange/green/blue correctly (old 45deg spacing called 60deg 'orange')", () => {
+    expect(nearestHslBand(60)).toBe("yellow");
+    expect(nearestHslBand(30)).toBe("orange");
+    expect(nearestHslBand(120)).toBe("green");
+    expect(nearestHslBand(240)).toBe("blue");
+    // a chartreuse pixel (hue 90) is now the yellow/green tie's green side of
+    // the boundary, no longer "yellow" by a wide margin
+    expect(nearestHslBand(100)).toBe("green");
+  });
+
+  test("nearestHslBand picks the same band the render path weights highest, across unequal gaps and the 360->0 seam", () => {
+    // weight of band i at a hue, mirroring hsl_band_weight (hsl_split.rs)
+    const weight = (/** @type {number} */ hue, /** @type {number} */ i) => {
+      const n = HSL_BAND_CENTERS_DEG.length;
+      const c = HSL_BAND_CENTERS_DEG[i];
+      const d = ((((hue - c + 180) % 360) + 360) % 360) - 180;
+      const gap = d >= 0 ? (((HSL_BAND_CENTERS_DEG[(i + 1) % n] - c) % 360) + 360) % 360 : (((c - HSL_BAND_CENTERS_DEG[(i + n - 1) % n]) % 360) + 360) % 360;
+      const dist = Math.abs(d);
+      return dist >= gap ? 0 : 0.5 * (Math.cos((dist / gap) * Math.PI) + 1);
+    };
+    for (let hue = 0.3; hue < 360; hue += 1.7) {
+      const best = HSL_BAND_NAMES[HSL_BAND_NAMES.map((_, i) => weight(hue, i)).reduce((bi, w, i, ws) => (w > ws[bi] ? i : bi), 0)];
+      expect(nearestHslBand(hue), `hue ${hue}`).toBe(best);
+    }
   });
 });

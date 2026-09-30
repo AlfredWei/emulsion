@@ -726,11 +726,15 @@ export function sampleCurveLut(/** @type {Float32Array} */ lut, /** @type {numbe
 // is ever uploaded to the GPU, only positional order, so this list is the
 // single source of truth both sides must stay in lockstep with.
 export const HSL_BAND_NAMES = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"];
-// Evenly spaced 45 degrees apart starting at red -- this is a from-scratch
-// reimplementation, not file-compatible with Lightroom, and there's no
-// verifiable source for Adobe's own exact internal band-center angles to
-// match instead. Index-aligned with HSL_BAND_NAMES.
-export const HSL_BAND_CENTERS_DEG = [0, 45, 90, 135, 180, 225, 270, 315];
+// RFC-0019: centers at the hue positions of the colors the band names
+// actually refer to (yellow at 60, not 90; green 120, not 135; ...), so
+// gaps between neighbors are UNEQUAL (30/30/60/60/60/30/30/60). This is a
+// from-scratch reimplementation, not file-compatible with Lightroom, and
+// there's no verifiable source for Adobe's own exact internal band-center
+// angles -- a reasoned placement, not a verified match. Must stay in
+// lockstep with hsl_split.rs's and gradeMath.js's copies.
+// Index-aligned with HSL_BAND_NAMES.
+export const HSL_BAND_CENTERS_DEG = [0, 30, 60, 120, 180, 240, 270, 300];
 
 export const IDENTITY_HSL_BANDS = Object.freeze(
   Object.fromEntries(
@@ -1391,10 +1395,12 @@ export function rgbToHsl(/** @type {number} */ r, /** @type {number} */ g, /** @
  * eyedropper's band-jump navigation only, NOT the render path's
  * `hsl_band_weight`/`hueBandWeight` smooth-blend formula (a different
  * question: "how much should up to 2 adjacent bands blend" vs. this
- * function's "which single band wins"). Since HSL_BAND_CENTERS_DEG are
- * evenly spaced 45deg apart, nearest-by-circular-distance and
- * highest-blend-weight always pick the same band, so this is exact for a
- * single-winner answer, not an approximation of the render-path formula.
+ * function's "which single band wins"). Even with the unequal gaps between
+ * HSL_BAND_CENTERS_DEG (RFC-0019), within any interval between adjacent
+ * centers the nearer center always has the higher blend weight (w > 0.5
+ * iff t < 0.5), so nearest-by-circular-distance and highest-blend-weight
+ * always pick the same band -- exact for a single-winner answer, not an
+ * approximation of the render-path formula.
  * @returns {string} one of HSL_BAND_NAMES */
 export function nearestHslBand(/** @type {number} */ hueDeg) {
   let bestIndex = 0;

@@ -114,7 +114,16 @@ export const gradeMath = `    fn smoothstep_val(edge0: f32, edge1: f32, x: f32) 
       let w_b = smoothstep_val(0.3, 0.0, luma_val);
       let delta_b = (blacks / 100.0) * w_b * 0.35;
 
-      c = c + vec3<f32>(delta_h + delta_s + delta_w + delta_b);
+      let ptDelta = delta_h + delta_s + delta_w + delta_b;
+      // RFC-0018: same shared-scale hue-preserving clamp as tone.rs's
+      // apply_parametric_tone -- see that function's own doc comment.
+      // The SAME (possibly reduced) delta must reach every channel to
+      // keep pairwise channel differences, and therefore hue, exact.
+      if (ptDelta != 0.0) {
+        let headroom = select(c, vec3<f32>(1.0) - c, ptDelta > 0.0);
+        let ptScale = clamp(min(headroom.x, min(headroom.y, headroom.z)) / abs(ptDelta), 0.0, 1.0);
+        c = c + vec3<f32>(ptDelta * ptScale);
+      }
 
       // Saturation
       let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));

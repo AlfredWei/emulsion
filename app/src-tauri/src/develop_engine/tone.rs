@@ -91,6 +91,20 @@ pub(super) fn apply_contrast(rgb: [f32; 3], contrast: f32) -> [f32; 3] {
 }
 
 /// Parametric Tone expansion (Highlights, Shadows, Whites, Blacks).
+///
+/// RFC-0018: the four windows below combine into a single scalar `delta`
+/// added identically to R/G/B -- hue-preserving in isolation (adding the
+/// same constant to all three channels never changes their pairwise
+/// differences, which is what determines hue), but this op is precisely
+/// the one used on pixels already near the tonal extremes. The pipeline
+/// clamps to `[0,1]` only once, at the very final byte conversion
+/// (`pipeline.rs`), after the whole unclamped-float op chain runs -- so
+/// without the shared-scale step below, one channel of a near-clip
+/// saturated pixel could get silently truncated more than its siblings
+/// at that final clamp, breaking the pairwise-difference equality and
+/// shifting hue rather than desaturating predictably. See the RFC's own
+/// worked example (an orange `[0.95,0.70,0.50]` at `highlights=100`)
+/// for the exact before/after numbers.
 pub(super) fn apply_parametric_tone(
     rgb: [f32; 3],
     highlights: f32,
@@ -137,7 +151,28 @@ pub(super) fn apply_parametric_tone(
     let delta_b = (blacks / 100.0) * w_b * 0.35;
 
     let delta = delta_h + delta_s + delta_w + delta_b;
-    [rgb[0] + delta, rgb[1] + delta, rgb[2] + delta]
+    if delta == 0.0 {
+        return rgb;
+    }
+
+    // RFC-0018: a shared scale, not an independent per-channel clamp --
+    // the SAME (possibly reduced) delta must reach every channel to keep
+    // pairwise differences (hence hue) exact. `headroom` is how far this
+    // one channel can move in `delta`'s own direction before hitting
+    // 0 or 1; a channel already past that edge in the same direction
+    // (possible since an earlier op like Exposure can overshoot before
+    // the pipeline's single final clamp) yields a negative headroom,
+    // forcing `scale` to 0 -- this op simply contributes nothing further
+    // there rather than adding to an overshoot that isn't its own to fix.
+    let mut scale = 1.0f32;
+    for &c in &rgb {
+        let headroom = if delta > 0.0 { 1.0 - c } else { c };
+        scale = scale.min(headroom / delta.abs());
+    }
+    scale = scale.max(0.0);
+
+    let applied = delta * scale;
+    [rgb[0] + applied, rgb[1] + applied, rgb[2] + applied]
 }
 
 /// Local adjustments for masks (exposure, contrast, saturation). RFC-0017:

@@ -209,9 +209,12 @@ fn rescale_tca(lctca: &CalibTca, aspect_ratio: f32, crop: f32, real_focal: f64) 
     let hugin_scaling = (real_focal / hugin_scale_in_mm) as f32;
     match lctca.model {
         TcaModel::None => None,
-        // Reverse direction (correcting a real photo) is baked in here --
-        // this profile is always used to CORRECT, never to simulate.
-        TcaModel::Linear { kr, kb } => Some(TcaCoeffs::Linear { kr: 1.0 / kr, kb: 1.0 / kb }),
+        // RFC-0021: stored as calibrated. The correcting direction
+        // (lensfun's `reverse = false`) applies `kr`/`kb` as they are; an
+        // earlier version inverted them here on the strength of the
+        // lensfun crate's backwards `reverse` doc comment, which made the
+        // TCA correction displace each channel the wrong way.
+        TcaModel::Linear { kr, kb } => Some(TcaCoeffs::Linear { kr, kb }),
         TcaModel::Poly3 { red, blue } => {
             let hs = hugin_scaling as f64;
             Some(TcaCoeffs::Poly3 {
@@ -314,13 +317,15 @@ mod tests {
     }
 
     #[test]
-    fn rescale_tca_linear_inverts_for_correction() {
+    fn rescale_tca_linear_is_stored_as_calibrated_not_inverted() {
         let lctca = CalibTca { focal: 50.0, model: TcaModel::Linear { kr: 1.001, kb: 0.999 } };
         let Some(TcaCoeffs::Linear { kr, kb }) = rescale_tca(&lctca, 1.5, 1.0, 50.0) else {
             panic!("expected Linear");
         };
-        assert!((kr - 1.0 / 1.001).abs() < 1e-6);
-        assert!((kb - 1.0 / 0.999).abs() < 1e-6);
+        // RFC-0021: the old assertion here was `kr == 1/1.001` (the wrong,
+        // `reverse = true` direction).
+        assert!((kr - 1.001).abs() < 1e-6);
+        assert!((kb - 0.999).abs() < 1e-6);
     }
 
     #[test]

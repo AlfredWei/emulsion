@@ -2,8 +2,9 @@
 // Part of the WGSL source, split out of DevelopCanvas.svelte; see index.js for the
 // concatenation order, which must not change.
 export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop_engine.rs's own
-    // hand-verified formulas (Newton-iteration distortion/TCA undistort,
-    // radial vignetting gain) -- see that module's own extensive header
+    // hand-verified formulas (forward closed-form distortion/TCA kernels --
+    // RFC-0021 -- plus the Newton inverse for Manual Distortion, and the
+    // radial vignetting gain, applied in linear light) -- see that module's own extensive header
     // comment for the Profile/Manual split, ordering, and the poly3
     // Newton-solve algebra bug its own round-trip tests caught (fixed
     // identically here). Runs as its OWN pass, before fs_grade, writing
@@ -87,64 +88,36 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
       return vec2<f32>(x * scale, y * scale);
     }
 
-    // Port of 'lens_undist_poly5' -- 'Rd = Ru*(1 + k1*Ru^2 + k2*Ru^4)' inverse.
-    fn lensUndistPoly5(x: f32, y: f32, k1: f32, k2: f32) -> vec2<f32> {
-      let rd = sqrt(x * x + y * y);
-      if (rd == 0.0) { return vec2<f32>(x, y); }
-      var ru = rd;
-      var i = 0;
-      var converged = false;
-      loop {
-        let ru2 = ru * ru;
-        let fru = ru * (1.0 + k1 * ru2 + k2 * ru2 * ru2) - rd;
-        if (abs(fru) < 0.00001) { converged = true; break; }
-        if (i > 5) { break; }
-        ru = ru - fru / (1.0 + 3.0 * k1 * ru2 + 5.0 * k2 * ru2 * ru2);
-        i = i + 1;
-      }
-      if (!converged || ru < 0.0) { return vec2<f32>(x, y); }
-      let scale = ru / rd;
-      return vec2<f32>(x * scale, y * scale);
+    // RFC-0021: FORWARD closed-form kernels -- ports of lens_dist_poly3/
+    // poly5/ptlens and lens_tca_poly3_forward (lensfun's 'reverse = false',
+    // the CORRECTING direction; the Newton inverses this replaced were
+    // lensfun's 'reverse = true', which ADDS distortion). No non-
+    // convergence case. 'lensUndistPoly3' above stays for Manual
+    // Distortion only.
+    fn lensDistPoly3(x: f32, y: f32, k1: f32) -> vec2<f32> {
+      let poly2 = k1 * (x * x + y * y) + 1.0;
+      return vec2<f32>(x * poly2, y * poly2);
     }
 
-    // Port of 'lens_undist_ptlens' -- 'Rd = Ru*(a*Ru^3 + b*Ru^2 + c*Ru + 1)' inverse.
-    fn lensUndistPtlens(x: f32, y: f32, a: f32, b: f32, c: f32) -> vec2<f32> {
-      let rd = sqrt(x * x + y * y);
-      if (rd == 0.0) { return vec2<f32>(x, y); }
-      var ru = rd;
-      var i = 0;
-      var converged = false;
-      loop {
-        let fru = ru * (a * ru * ru * ru + b * ru * ru + c * ru + 1.0) - rd;
-        if (abs(fru) < 0.00001) { converged = true; break; }
-        if (i > 5) { break; }
-        ru = ru - fru / (4.0 * a * ru * ru * ru + 3.0 * b * ru * ru + 2.0 * c * ru + 1.0);
-        i = i + 1;
-      }
-      if (!converged || ru < 0.0) { return vec2<f32>(x, y); }
-      let scale = ru / rd;
-      return vec2<f32>(x * scale, y * scale);
+    fn lensDistPoly5(x: f32, y: f32, k1: f32, k2: f32) -> vec2<f32> {
+      let ru2 = x * x + y * y;
+      let poly4 = 1.0 + k1 * ru2 + k2 * ru2 * ru2;
+      return vec2<f32>(x * poly4, y * poly4);
     }
 
-    // Port of 'lens_undist_tca_poly3' -- 'Rd = Ru*(v + c*Ru + b*Ru^2)'
-    // inverse, single channel.
-    fn lensUndistTcaPoly3(x: f32, y: f32, v: f32, c: f32, b: f32) -> vec2<f32> {
-      let rd = sqrt(x * x + y * y);
-      if (rd == 0.0) { return vec2<f32>(x, y); }
-      var ru = rd;
-      var i = 0;
-      var converged = false;
-      loop {
-        let ru2 = ru * ru;
-        let fru = b * ru2 * ru + c * ru2 + v * ru - rd;
-        if (abs(fru) < 0.00001) { converged = true; break; }
-        if (i > 5) { break; }
-        ru = ru - fru / (3.0 * b * ru2 + 2.0 * c * ru + v);
-        i = i + 1;
-      }
-      if (!converged || ru <= 0.0) { return vec2<f32>(x, y); }
-      let scale = ru / rd;
-      return vec2<f32>(x * scale, y * scale);
+    fn lensDistPtlens(x: f32, y: f32, a: f32, b: f32, c: f32) -> vec2<f32> {
+      let ru2 = x * x + y * y;
+      let r = sqrt(ru2);
+      let poly3 = a * ru2 * r + b * ru2 + c * r + 1.0;
+      return vec2<f32>(x * poly3, y * poly3);
+    }
+
+    // Single channel, 'Rd = Ru*(b*Ru^2 + c*Ru + v)'.
+    fn lensTcaPoly3Forward(x: f32, y: f32, v: f32, c: f32, b: f32) -> vec2<f32> {
+      let ru2 = x * x + y * y;
+      var poly2 = b * ru2 + v;
+      if (c != 0.0) { poly2 = b * ru2 + c * sqrt(ru2) + v; }
+      return vec2<f32>(x * poly2, y * poly2);
     }
 
     // Port of 'LensNorm' -- pixel <-> normalized lens-space coordinate
@@ -178,16 +151,17 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
     }
 
     // Port of 'apply_lens_distortion' -- blends the resolved model's
-    // correction toward identity by 'amount' (0..1).
+    // (forward, correcting -- RFC-0021) mapping toward identity by 'amount'
+    // (0..1).
     fn lensApplyDistortion(nx: f32, ny: f32, amount: f32) -> vec2<f32> {
       let model = i32(lensCorrection.distortion_model);
       var c = vec2<f32>(nx, ny);
       if (model == 1) {
-        c = lensUndistPoly3(nx, ny, lensCorrection.distortion_c0);
+        c = lensDistPoly3(nx, ny, lensCorrection.distortion_c0);
       } else if (model == 2) {
-        c = lensUndistPoly5(nx, ny, lensCorrection.distortion_c0, lensCorrection.distortion_c1);
+        c = lensDistPoly5(nx, ny, lensCorrection.distortion_c0, lensCorrection.distortion_c1);
       } else if (model == 3) {
-        c = lensUndistPtlens(nx, ny, lensCorrection.distortion_c0, lensCorrection.distortion_c1, lensCorrection.distortion_c2);
+        c = lensDistPtlens(nx, ny, lensCorrection.distortion_c0, lensCorrection.distortion_c1, lensCorrection.distortion_c2);
       } else {
         return vec2<f32>(nx, ny);
       }
@@ -206,9 +180,9 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
         c = vec2<f32>(nx * k, ny * k);
       } else if (model == 2) {
         if (channel == 0) {
-          c = lensUndistTcaPoly3(nx, ny, lensCorrection.tca_red0, lensCorrection.tca_red1, lensCorrection.tca_red2);
+          c = lensTcaPoly3Forward(nx, ny, lensCorrection.tca_red0, lensCorrection.tca_red1, lensCorrection.tca_red2);
         } else {
-          c = lensUndistTcaPoly3(nx, ny, lensCorrection.tca_blue0, lensCorrection.tca_blue1, lensCorrection.tca_blue2);
+          c = lensTcaPoly3Forward(nx, ny, lensCorrection.tca_blue0, lensCorrection.tca_blue1, lensCorrection.tca_blue2);
         }
       } else {
         return vec2<f32>(nx, ny);
@@ -263,11 +237,22 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
     }
 
     // Port of 'apply_lens_correction''s geometry-resample loop, one output
-    // pixel per invocation -- srcSampler's clamp-to-edge addressing
-    // (initGpu's own sampler) matches 'sample_bilinear''s edge behavior
-    // with no extra clamping needed here. Vignetting correction (a pure
-    // per-pixel gain, not a resample) runs after, on the already
-    // geometry-corrected RGB.
+    // pixel per invocation. NOTE (RFC-0021): srcSampler's clamp-to-edge
+    // addressing does NOT match 'sample_bilinear' (which returns black out
+    // of frame) -- an earlier version of this comment claimed it did, and
+    // the GPU smeared edge pixels where the CPU rendered black. The explicit
+    // lensInFrame test below is what makes them agree. Vignetting
+    // correction (a pure per-pixel gain, not a resample) runs after, on the
+    // already geometry-corrected RGB.
+    // CPU 'sample_bilinear' bound (x in [0, w-1]) in this pass's texel-center
+    // coordinates (+0.5).
+    fn lensInFrame(c: vec2<f32>, dims: vec2<f32>) -> bool {
+      // 0.01-texel slack: at identity 'uv * dims' can land a rounding
+      // error outside [0.5, dims-0.5] on the edge texels, which must NOT
+      // turn them black.
+      return c.x >= 0.49 && c.y >= 0.49 && c.x <= dims.x - 0.49 && c.y <= dims.y - 0.49;
+    }
+
     @fragment
     fn fs_lens_correct(in: VertexOut) -> @location(0) vec4<f32> {
       let dims = vec2<f32>(textureDimensions(srcTexture));
@@ -281,9 +266,14 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
       let gCoord = lensCorrectCoord(px, py, 1, profileNorm, manualNorm);
       let bCoord = lensCorrectCoord(px, py, 2, profileNorm, manualNorm);
 
-      let r = textureSample(srcTexture, srcSampler, rCoord / dims).r;
-      let g = textureSample(srcTexture, srcSampler, gCoord / dims).g;
-      let b = textureSample(srcTexture, srcSampler, bCoord / dims).b;
+      // RFC-0021: a channel whose source falls outside the frame is BLACK,
+      // exactly like the CPU's 'sample_bilinear' ("honestly blank", not the
+      // sampler's default clamp-to-edge smear). 'coord' here is in texel
+      // units with texel centers at +0.5, the CPU's [0, w-1] pixel-index
+      // bound shifted by that half texel.
+      let r = select(0.0, textureSample(srcTexture, srcSampler, rCoord / dims).r, lensInFrame(rCoord, dims));
+      let g = select(0.0, textureSample(srcTexture, srcSampler, gCoord / dims).g, lensInFrame(gCoord, dims));
+      let b = select(0.0, textureSample(srcTexture, srcSampler, bCoord / dims).b, lensInFrame(bCoord, dims));
       var rgb = vec3<f32>(r, g, b);
 
       if (lensCorrection.profile_enabled > 0.5 && lensCorrection.vignette_amount > 0.0) {
@@ -293,7 +283,14 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
         let r6 = r4 * r2;
         let gain = 1.0 + lensCorrection.vignette_k1 * r2 + lensCorrection.vignette_k2 * r4 + lensCorrection.vignette_k3 * r6;
         let mult = mix(1.0, 1.0 / max(gain, 0.01), lensCorrection.vignette_amount / 100.0);
-        rgb = rgb * mult;
+        // RFC-0021: the gain is an optical (linear-light) quantity -- apply it
+        // in linear light, srgbToLinear/linearToSrgb being the exact EOTF/OETF
+        // pair from gradeMath.js (RFC-0017).
+        rgb = vec3<f32>(
+          linearToSrgb(srgbToLinear(rgb.x) * mult),
+          linearToSrgb(srgbToLinear(rgb.y) * mult),
+          linearToSrgb(srgbToLinear(rgb.z) * mult)
+        );
       }
 
       return vec4<f32>(rgb, 1.0);

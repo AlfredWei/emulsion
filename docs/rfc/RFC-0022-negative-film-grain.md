@@ -125,7 +125,24 @@ So without correction the preview would show up to ~2× the grain amplitude of t
 
 ## 4. Data model
 
-The `grain` op gains `stock` (string, optional — the preset id last chosen, for display), `chroma` and `tone`. Absent `chroma`/`tone` read as 0, which reproduces RFC-0020's maths exactly (mono noise, uniform weight). The picker shows a stock only while the current five values equal that stock's preset values; otherwise it shows **Custom** — derived, not a stored flag, so editing a slider "flips" to Custom with no extra bookkeeping and a later preset retune cannot silently change a saved edit (the numbers are stored, not looked up). **None** sets Amount 0 and leaves the other values. Rust (`Grain` struct, `grain_op`), JS (`getGrain`/`upsertGrain`/`buildGrainUniformData`) and the WGSL `Grain` struct each gain the two fields and the frame long edge `L` (a per-render uniform: the uncropped image's long edge in pixels, which the CPU path knows from the image and the GPU path from the source texture). Existing stored edits and the built-in presets (`presets.rs`) keep working unchanged; the only visible difference for them is the size unit (§5).
+The `grain` op gains `stock` (string, optional — the preset id last chosen, for display), `chroma` and `tone`. Absent `chroma`/`tone` read as 0, which reproduces RFC-0020's maths exactly (mono noise, uniform weight). The picker shows a stock only while the current five values equal that stock's preset values; otherwise it shows **Custom** — derived, not a stored flag, so editing a slider "flips" to Custom with no extra bookkeeping and a later preset retune cannot silently change a saved edit (the numbers are stored, not looked up). **None** sets Amount, Colour and Tone to 0 (plain grain, RFC-0020 behaviour) and leaves Size and Roughness, so a hand-tuned size is not lost. Rust (`Grain` struct, `grain_op`), JS (`getGrain`/`upsertGrain`/`buildGrainUniformData`) and the WGSL `Grain` struct each gain the two fields and the frame long edge `L` (a per-render uniform: the uncropped image's long edge in pixels, which the CPU path knows from the image and the GPU path from the source texture). Existing stored edits and the built-in presets (`presets.rs`) keep working unchanged; the only visible difference for them is the size unit (§5).
+
+## 4a. UX
+
+Mock: [grain-film-stock-mockup.html](../ux/mockups/grain-film-stock-mockup.html) (interactive; open in a browser) and its render below. It uses the app's real tokens and the Develop panel's existing row/select/slider markup, so it shows the proposed *delta* to the Grain section, not a redesign.
+
+![Grain film stock picker mock](../ux/mockups/grain-film-stock-mockup.png)
+
+Decisions the mock fixes (and which review should confirm or change):
+
+1. **A dropdown row, not a gallery.** A `Film` row above the sliders, a native `<select>` with `<optgroup>`s (*Colour negative* / *Black & white*) and *None* first — the same control and placement as White Balance › *Profile*. Native gives keyboard, screen-reader and OS menu behaviour for free and costs no panel height. Considered and rejected for v1: a thumbnail grid with grain swatches (would need per-stock rendered previews, a large panel footprint, and still can't show grain faithfully at thumbnail size).
+2. **Every stock only loads slider values.** Nothing is hidden behind the picker; all five (Amount, Size, Roughness, Colour, Tone) stay sliders (milestone requirement).
+3. **Custom is derived** (§4), shown the moment any value differs from the loaded stock; a **Reset to \<stock\>** link appears only in that state. The panel's global Reset still clears the whole edit.
+4. **A one-line caption with the provenance tag** (D/R/A, §2.4) under the picker, so "approximation, not a reproduction" is visible in the product and not only in this RFC.
+5. **Colour is dimmed, not disabled, for B&W stocks**, following the panel's existing "dimmed controls stay interactive" rule (RFC-0013).
+6. **No new panel, no modal:** the section keeps its expand/hide-panel behaviour and its slot in the panel order.
+
+Open for review: whether the caption should be one line (as drawn) or expand to show the §2.4 derivation on demand; whether the stock list should be user-hideable (deferred with user-authored presets).
 
 ## 5. A real, named consequence
 
@@ -146,7 +163,7 @@ Edits with non-default Size re-render at a different *pixel* grain size on any i
 1. **Frame-relative size + footprint compensation** — `L` uniform, `cell_px`, `r(c)`, `SIGMA` recalibration, the export = preview test. No new sliders. Touches Rust, WGSL, uniform packing.
 2. **Tonal response** — `tone` slider and `w(Y)`; closes the black/white clipping item.
 3. **Colour grain** — `chroma` slider, per-channel noise, the performance measurement and any mitigation it forces.
-4. **Stock picker** — preset table with provenance tags, picker UI ("None" / stocks / "Custom"), persistence, copy-paste and history labels, colour + B&W parity scenarios, side-by-side tuning on a test image.
+4. **Stock picker** — preset table with provenance tags, picker UI per §4a ("None" / stocks / "Custom"), persistence, copy-paste and history labels, colour + B&W parity scenarios, side-by-side tuning on a test image.
 
 ## 8. Non-goals
 

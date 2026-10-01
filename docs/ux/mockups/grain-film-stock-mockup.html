@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Grain — film stock picker (RFC-0022 / M5.8 mock)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  UX mock for RFC-0022 (negative film simulation). Static, self-contained,
+  uses the app's real tokens (app/src/lib/styles/tokens.css) and mirrors the
+  Develop panel's real row/select/slider markup (DevelopPanel.svelte), so what
+  is shown is the proposed delta to the existing Grain section, not a redesign.
+  Stock numbers are the RFC-0022 §2.4 PROPOSAL (aesthetic/approximate), not
+  final; the live panel on the right is interactive.
+-->
+<style>
+:root {
+  --bg-canvas:#141210; --bg-app:#1a1815; --bg-panel:#1e1c19; --bg-panel-raised:#28251f; --bg-hover:#332f28;
+  --border-subtle:#37332b; --border-strong:#4a453b;
+  --text-primary:#efeae2; --text-secondary:#a39c8e; --text-tertiary:#6e695e;
+  --accent:#e0932f; --accent-strong:#f0a94a; --accent-soft:#4a371f; --accent-on:#1b1310;
+  --radius-s:3px; --radius-m:5px;
+  --font-ui:-apple-system,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --shadow-soft:0 1px 2px rgba(0,0,0,.4),0 8px 24px -8px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-canvas);color:var(--text-primary);font:13px/1.4 var(--font-ui);padding:28px 32px 48px;-webkit-font-smoothing:antialiased}
+h1{font-size:15px;margin:0 0 4px} h2{font-size:12px;margin:0 0 10px;color:var(--text-secondary);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.lede{color:var(--text-secondary);max-width:820px;margin:0 0 22px}
+.grid{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.state{width:272px}
+.state .cap{font-size:11.5px;color:var(--text-secondary);margin:0 0 8px;min-height:48px}
+.state .cap b{color:var(--text-primary)}
+.panel{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-m);padding:0 10px 4px;position:relative}
+/* ---- mirrors DevelopPanel.svelte ---- */
+.section-head{padding:9px 4px;font-size:11.5px;font-weight:600;letter-spacing:.02em;display:flex;align-items:center;gap:6px}
+.section-head::before{content:"›";color:var(--text-tertiary);display:inline-block;transform:rotate(90deg);font-size:13px;line-height:1;margin-right:2px}
+.row{display:flex;align-items:center;gap:8px;padding:5px 4px}
+.row label{width:66px;font-size:11px;color:var(--text-secondary);flex:none}
+.row input[type=range]{flex:1;min-width:0;appearance:none;-webkit-appearance:none;height:3px;background:var(--border-strong);border-radius:2px;outline:none}
+.row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--accent-strong);border:2px solid var(--bg-panel);cursor:pointer}
+.row .val{width:36px;text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:10.5px;color:var(--text-tertiary)}
+.row .steps{width:12px;flex:none;display:flex;flex-direction:column;color:var(--text-tertiary);font-size:7px;line-height:1.1;text-align:center}
+.select-input{flex:1;background:var(--bg-panel-raised);border:1px solid var(--border-subtle);border-radius:var(--radius-s);color:var(--text-primary);font:11px var(--font-ui);padding:3px 6px;outline:none;min-width:0}
+.select-input:focus{border-color:var(--accent)}
+/* ---- new in M5.8 ---- */
+.film-note{margin:0;padding:0 4px 4px 78px;font-size:10.5px;line-height:1.35;color:var(--text-tertiary)}
+.film-note .tag{font-family:var(--font-mono);font-size:9.5px;color:var(--text-secondary)}
+.film-actions{display:flex;justify-content:flex-end;padding:0 4px 3px}
+.link-btn{appearance:none;background:none;border:none;padding:0;font:10.5px var(--font-ui);color:var(--accent-strong);cursor:pointer}
+.link-btn:hover{text-decoration:underline}
+.divider{height:1px;background:var(--border-subtle);margin:4px 4px 3px}
+.row.dim label,.row.dim .val{opacity:.45}
+.row.dim input[type=range]{opacity:.45}
+/* open dropdown (the native <select> popup is OS-drawn; this shows its grouping/content) */
+.menu{position:absolute;left:84px;right:10px;top:68px;background:var(--bg-panel-raised);border:1px solid var(--border-strong);border-radius:var(--radius-m);box-shadow:var(--shadow-soft);padding:4px 0;z-index:2;font-size:11px}
+.menu .grp{padding:5px 10px 2px;font-size:9.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)}
+.menu .opt{padding:3px 10px 3px 18px;color:var(--text-primary)}
+.menu .opt.hover{background:var(--accent-soft);color:var(--accent-strong)}
+.menu .opt.cur::before{content:"✓";position:absolute;left:10px;color:var(--accent-strong)}
+.menu .opt{position:relative}
+.menu .sep{height:1px;background:var(--border-subtle);margin:4px 0}
+.menu .opt .sub{color:var(--text-tertiary);font-size:10px;margin-left:6px}
+.live{width:300px}
+.legend{margin-top:34px;max-width:860px;color:var(--text-secondary);font-size:12px}
+.legend li{margin:4px 0} .legend code{font-family:var(--font-mono);font-size:11px;color:var(--text-primary)}
+</style>
+</head>
+<body>
+<h1>Grain — film stock picker</h1>
+<p class="lede">Proposed change to the Develop panel's existing <b>Grain</b> section (RFC-0022 / M5.8). It reuses the panel's own pattern — a labelled dropdown row above the sliders, like <i>Profile</i> under White Balance — and adds two sliders (<b>Colour</b>, <b>Tone</b>). Every stock only <i>loads slider values</i>; nothing is hidden behind the picker. The right-hand panel is live: pick a stock, drag a slider, press Reset.</p>
+
+<div class="grid" id="gallery"></div>
+
+<h2 style="margin-top:34px">Live (interactive)</h2>
+<div class="grid"><div class="live"><div class="panel" id="live"></div></div></div>
+
+<ul class="legend">
+  <li><b>Film row</b> — dropdown, grouped <i>Colour negative / Black &amp; white</i>, then <i>None</i>. A native <code>&lt;select&gt;</code> with <code>&lt;optgroup&gt;</code>s (same control as WB <i>Profile</i>), so keyboard, screen-reader and OS menu behaviour come for free.</li>
+  <li><b>Custom</b> — derived, never stored: shown whenever the five slider values differ from the selected stock's preset. The stock's numbers are stored in the edit, so retuning a preset later never changes a saved edit.</li>
+  <li><b>Reset to &lt;stock&gt;</b> — appears only while Custom and a stock was last chosen; restores that stock's five values. The panel's global <i>Reset</i> still clears the whole edit.</li>
+  <li><b>Caption</b> — one line of character plus the provenance tag from RFC-0022 §2.4 (<code>D</code> data-derived, <code>R</code> reasoned, <code>A</code> aesthetic) so the "approximation, not a reproduction" statement is visible in the product, not only in the RFC.</li>
+  <li><b>Colour</b> slider is dimmed (not disabled) for black &amp; white stocks, per the panel's existing "dimmed controls stay interactive" rule (<code>.panel-hidden</code>, RFC-0013).</li>
+  <li>Stock values shown are the RFC §2.4 <i>proposal</i> and will be tuned by eye in slice 4.</li>
+</ul>
+
+<script>
+// RFC-0022 §2.4 proposal: v=[amount,size,roughness,colour,tone]. Size slider = (cell_um-6)/30*100 (RFC §3.4): 11,13,12,16,18,18,9 um -> 17,23,20,33,40,40,10
+const STOCKS = {
+  portra400:{n:"Portra 400",g:"c",v:[40,17,20,80,50],tag:"A·R",cap:"Fine, even grain. Soft colour noise."},
+  gold200:  {n:"Gold 200",g:"c",v:[59,23,40,80,50],tag:"D·A",cap:"Grainier than Portra 400 on Kodak's PGI data."},
+  superia400:{n:"Superia X-tra 400",g:"c",v:[55,20,40,80,50],tag:"A",cap:"Consumer 400-class colour grain."},
+  cs800t:   {n:"CineStill 800T",g:"c",v:[62,33,55,80,50],tag:"A",cap:"Heavier, rounder tungsten-stock grain."},
+  trix400:  {n:"Tri-X 400",g:"b",v:[70,40,60,0,40],tag:"A",cap:"Classic coarse B&W grain, luminance only."},
+  hp5:      {n:"HP5 Plus",g:"b",v:[75,40,65,0,40],tag:"A",cap:"B&W, slightly rougher than Tri-X."},
+  delta100: {n:"Delta 100",g:"b",v:[30,10,25,0,40],tag:"A",cap:"Fine, uniform B&W grain."},
+};
+const NONE=[0,25,50,0,0];
+const LABELS=["Amount","Size","Roughness","Colour","Tone"];
+const eq=(a,b)=>a.every((x,i)=>x===b[i]);
+
+function panelHTML(st,{menu=false,live=false}={}){
+  // st: {stock:id|null, v:[5]}
+  const s=st.stock?STOCKS[st.stock]:null;
+  const custom = s ? !eq(st.v,s.v) : false;
+  const none = !s && st.v[0]===0;
+  let sel = s ? (custom?"Custom":s.n) : (none?"None":"Custom");
+  const opts = ()=>{
+    const o=(id,n,cur)=>`<option value="${id}"${cur?" selected":""}>${n}</option>`;
+    const grp=(l,g)=>`<optgroup label="${l}">`+Object.entries(STOCKS).filter(([,x])=>x.g===g).map(([id,x])=>o(id,x.n,s&&st.stock===id&&!custom)).join("")+`</optgroup>`;
+    return o("none","None",none)+grp("Colour negative","c")+grp("Black &amp; white","b")+((custom||(!s&&!none))?o("custom","Custom",true):"");
+  };
+  const bw = s && s.g==="b";
+  const rows = LABELS.map((l,i)=>`
+    <div class="row${i===3&&bw?" dim":""}"><label>${l}</label>
+      <input type="range" min="0" max="100" value="${st.v[i]}" ${live?`data-i="${i}"`:"disabled"}>
+      <span class="val">${st.v[i]}</span><span class="steps">▲<br>▼</span></div>`).join("");
+  const note = s ? `<p class="film-note">${s.cap} <span class="tag">${s.tag}</span></p>`
+    : `<p class="film-note">${none?"Plain grain, no stock loaded.":"Hand-tuned values."}</p>`;
+  const reset = (s&&custom)?`<div class="film-actions"><button class="link-btn" ${live?'data-reset="1"':""}>Reset to ${s.n}</button></div>`:"";
+  let menuHTML="";
+  if(menu){
+    const row=(id,x)=>`<div class="opt${st.stock===id&&!custom?" cur":""}${id==="superia400"?" hover":""}">${x.n}</div>`;
+    menuHTML=`<div class="menu"><div class="opt${none?" cur":""}">None</div><div class="sep"></div>
+      <div class="grp">Colour negative</div>${Object.entries(STOCKS).filter(([,x])=>x.g==="c").map(([i,x])=>row(i,x)).join("")}
+      <div class="grp">Black &amp; white</div>${Object.entries(STOCKS).filter(([,x])=>x.g==="b").map(([i,x])=>row(i,x)).join("")}</div>`;
+  }
+  return `<div class="section-head">Grain</div>
+    <div class="row"><label>Film</label><select class="select-input" ${live?'data-sel="1"':"disabled"}>${opts()}</select></div>
+    ${note}${reset}<div class="divider"></div>${rows}${menuHTML}`;
+}
+
+const states=[
+ {t:"1 · Default",c:"Existing edits and new photos: <b>None</b>. Sliders behave exactly as today; Colour and Tone read 0 (RFC-0020 maths).",st:{stock:null,v:NONE}},
+ {t:"2 · Picking",c:"Open the dropdown: <b>None</b>, then colour and B&amp;W stocks grouped. (Native menu popup; content shown.)",st:{stock:"portra400",v:STOCKS.portra400.v},menu:true},
+ {t:"3 · Stock loaded",c:"<b>Portra 400</b> loads its five values into the sliders. Caption states character and provenance.",st:{stock:"portra400",v:STOCKS.portra400.v}},
+ {t:"4 · Edited → Custom",c:"Dragging any slider flips the picker to <b>Custom</b> and offers <b>Reset to Portra 400</b>.",st:{stock:"portra400",v:[55,17,20,80,50]}},
+ {t:"5 · Black &amp; white",c:"<b>Tri-X 400</b>: Colour is 0, so the row is dimmed (still adjustable).",st:{stock:"trix400",v:STOCKS.trix400.v}},
+];
+document.getElementById("gallery").innerHTML=states.map(s=>`<div class="state"><h2>${s.t}</h2><p class="cap">${s.c}</p><div class="panel">${panelHTML(s.st,{menu:s.menu})}</div></div>`).join("");
+
+// live
+let live={stock:null,v:NONE.slice()};
+const root=document.getElementById("live");
+function render(){
+  root.innerHTML=panelHTML(live,{live:true});
+  root.querySelector("[data-sel]").onchange=e=>{
+    const id=e.target.value;
+    if(id==="none"){live={stock:null,v:[0,live.v[1],live.v[2],0,0]};}
+    else if(id==="custom"){return;}
+    else live={stock:id,v:STOCKS[id].v.slice()};
+    render();
+  };
+  root.querySelectorAll("input[data-i]").forEach(inp=>inp.oninput=e=>{
+    live.v[+inp.dataset.i]=+inp.value;
+    // update in place so the drag isn't interrupted; re-render on release to refresh picker/Custom state
+    inp.nextElementSibling.textContent=inp.value;
+  });
+  root.querySelectorAll("input[data-i]").forEach(inp=>inp.onchange=()=>render());
+  const r=root.querySelector("[data-reset]"); if(r) r.onclick=()=>{live.v=STOCKS[live.stock].v.slice();render();};
+}
+render();
+</script>
+</body>
+</html>

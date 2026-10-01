@@ -255,6 +255,11 @@ fn grain_particle_noise_is_unit_variance_at_every_roughness_and_size() {
     }
 }
 
+/// A 24 MP frame's long edge: where RFC-0022's frame-relative Size equals the
+/// pre-RFC-0022 fixed pixel scale (Size 25 = 2.25 px), so every pre-existing
+/// grain test keeps its meaning.
+const GRAIN_TEST_LONG_EDGE: f32 = 6000.0;
+
 /// RFC-0020 §3.3 calibration: the delta's std at Amount 100, default
 /// Size/Roughness stays within 5% of the pre-RFC field's measured 0.0511,
 /// so a given Amount does not silently get stronger or weaker.
@@ -264,7 +269,7 @@ fn grain_delta_std_at_defaults_matches_the_pre_rfc_calibration_target() {
     let mut v = Vec::new();
     for y in 0..256 {
         for x in 0..256 {
-            v.push(grain_delta((x as f32, y as f32), &g));
+            v.push(grain_delta((x as f32, y as f32), &g, GRAIN_TEST_LONG_EDGE));
         }
     }
     let (_, sd) = mean_std(&v);
@@ -379,8 +384,8 @@ fn grain_particle_noise_seed_selects_an_independent_field() {
 #[test]
 fn grain_amount_zero_is_an_exact_passthrough() {
     let g = Grain { amount: 0.0, size: 80.0, roughness: 90.0 };
-    assert_eq!(grain_delta((123.0, 456.0), &g), 0.0);
-    assert_eq!(grain_delta((0.0, 0.0), &g), 0.0);
+    assert_eq!(grain_delta((123.0, 456.0), &g, GRAIN_TEST_LONG_EDGE), 0.0);
+    assert_eq!(grain_delta((0.0, 0.0), &g, GRAIN_TEST_LONG_EDGE), 0.0);
 }
 
 /// The grain pattern must be STATIC -- the same coordinate evaluated
@@ -391,8 +396,8 @@ fn grain_amount_zero_is_an_exact_passthrough() {
 #[test]
 fn grain_delta_is_deterministic_for_the_same_coordinate() {
     let g = Grain { amount: 60.0, size: 40.0, roughness: 30.0 };
-    let a = grain_delta((17.0, 42.0), &g);
-    let b = grain_delta((17.0, 42.0), &g);
+    let a = grain_delta((17.0, 42.0), &g, GRAIN_TEST_LONG_EDGE);
+    let b = grain_delta((17.0, 42.0), &g, GRAIN_TEST_LONG_EDGE);
     assert_eq!(a, b);
 }
 
@@ -409,7 +414,7 @@ fn grain_size_sets_the_feature_size() {
         let mut f = Vec::new();
         for y in 0..n {
             for x in 0..n {
-                f.push(grain_delta((x as f32, y as f32), &g));
+                f.push(grain_delta((x as f32, y as f32), &g, GRAIN_TEST_LONG_EDGE));
             }
         }
         let (m, sd) = mean_std(&f);
@@ -435,7 +440,7 @@ fn grain_roughness_zero_and_one_hundred_generally_differ() {
     let smooth = Grain { amount: 100.0, size: 50.0, roughness: 0.0 };
     let rough = Grain { amount: 100.0, size: 50.0, roughness: 100.0 };
     let coord = (11.3, 27.9);
-    assert_ne!(grain_delta(coord, &smooth), grain_delta(coord, &rough));
+    assert_ne!(grain_delta(coord, &smooth, GRAIN_TEST_LONG_EDGE), grain_delta(coord, &rough, GRAIN_TEST_LONG_EDGE));
 }
 
 /// End-to-end through `apply_edit_stack`: amount=0 (the default when
@@ -461,11 +466,145 @@ fn grain_cpu_cost_report() {
     let mut acc = 0.0f32;
     for y in 0..h {
         for x in 0..w {
-            acc += grain_delta((x as f32, y as f32), &g);
+            acc += grain_delta((x as f32, y as f32), &g, w as f32);
         }
     }
     let dt = t.elapsed();
     let px = (w * h) as f64;
     eprintln!("grain_delta: {:.1} ns/px single thread -> {:.0} ms for {:.1} MP, {:.2} s for 24 MP (acc {acc})",
         dt.as_nanos() as f64 / px, dt.as_secs_f64() * 1e3, px / 1e6, dt.as_secs_f64() / px * 24e6);
+}
+
+// ---- RFC-0022 slice 1: frame-relative size + footprint compensation ----
+
+/// §3.4: the cell is a fixed fraction of the frame at any resolution, and a
+/// 24 MP frame keeps the pre-RFC-0022 pixel scale exactly (1 + 5*size/100).
+#[test]
+fn grain_cell_px_is_frame_relative_and_equals_the_old_scale_at_24mp() {
+    for size in [0.0f32, 25.0, 50.0, 100.0] {
+        let old = 1.0 + (size / 100.0) * 5.0;
+        assert!((grain_cell_px(size, 6000.0) - old).abs() < 1e-5, "size {size}");
+    }
+    for size in [0.0f32, 25.0, 70.0] {
+        let a = grain_cell_px(size, 6000.0) / 6000.0;
+        let b = grain_cell_px(size, 2048.0) / 2048.0;
+        assert!((a - b).abs() < 1e-7, "size {size}: {a} vs {b}");
+    }
+}
+
+/// The closed form `r(c)` tracks the measured pixel-integrated / point-sampled
+/// std ratio. Ground truth: the continuous field (the generator evaluated at
+/// any float coordinate) averaged over each pixel's 1x1 footprint with 8x8
+/// supersampling, same method as RFC-0022 §3.4's appendix script.
+#[test]
+fn grain_footprint_ratio_matches_the_supersampled_ground_truth() {
+    const N: usize = 72;
+    const SS: usize = 8;
+    for rho in [0.0f32, 0.5, 1.0] {
+        for c in [0.25f32, 0.5, 0.75, 1.0, 1.5, 2.25, 3.5, 6.0] {
+            let mut point = Vec::with_capacity(N * N);
+            let mut boxed = Vec::with_capacity(N * N);
+            for y in 0..N {
+                for x in 0..N {
+                    point.push(grain_particle_noise((x as f32 / c, y as f32 / c), rho, 0));
+                    let mut acc = 0.0f32;
+                    for sy in 0..SS {
+                        for sx in 0..SS {
+                            let fx = x as f32 + (sx as f32 + 0.5) / SS as f32;
+                            let fy = y as f32 + (sy as f32 + 0.5) / SS as f32;
+                            acc += grain_particle_noise((fx / c, fy / c), rho, 0);
+                        }
+                    }
+                    boxed.push(acc / (SS * SS) as f32);
+                }
+            }
+            let ratio = mean_std(&boxed).1 / mean_std(&point).1;
+            let fit = grain_footprint_ratio(c, rho) as f64;
+            eprintln!("rho {rho:.1} c {c:>4}: measured {ratio:.3} fit {fit:.3} ({:+.1}%)", (fit / ratio - 1.0) * 100.0);
+            assert!((fit / ratio - 1.0).abs() < 0.05, "rho {rho} c {c}: measured {ratio} vs fit {fit}");
+        }
+    }
+}
+
+/// The milestone's own criterion, proven rather than assumed: the same frame
+/// rendered at 6144 px and at 2048 px (a 3x box downsample apart) shows the
+/// same per-pixel grain amplitude once the high-resolution render is
+/// box-downsampled to the preview's grid. The residual (the spectrum is not
+/// matched, only the amplitude) is printed, not hidden -- RFC-0022 §3.4.
+#[test]
+fn grain_preview_matches_a_downsampled_full_resolution_render() {
+    const LO: f32 = 2048.0;
+    const F: usize = 3;
+    const HI: f32 = LO * F as f32;
+    const N: usize = 64;
+    let (ox, oy) = (200usize, 120usize);
+    for size in [25.0f32, 60.0, 100.0] {
+        let g = Grain { amount: 100.0, size, roughness: 50.0 };
+        let mut lo = Vec::with_capacity(N * N);
+        let mut avg = Vec::with_capacity(N * N);
+        for y in 0..N {
+            for x in 0..N {
+                lo.push(grain_delta(((ox + x) as f32, (oy + y) as f32), &g, LO));
+                let mut acc = 0.0f32;
+                for dy in 0..F {
+                    for dx in 0..F {
+                        acc += grain_delta((((ox + x) * F + dx) as f32, ((oy + y) * F + dy) as f32), &g, HI);
+                    }
+                }
+                avg.push(acc / (F * F) as f32);
+            }
+        }
+        let (_, sd_lo) = mean_std(&lo);
+        let (_, sd_hi) = mean_std(&avg);
+        let ratio = sd_hi / sd_lo;
+        let corr = |a: &[f32], b: &[f32]| {
+            let (ma, sa) = mean_std(a);
+            let (mb, sb) = mean_std(b);
+            a.iter().zip(b).map(|(x, y)| (*x as f64 - ma) * (*y as f64 - mb)).sum::<f64>() / a.len() as f64 / (sa * sb)
+        };
+        eprintln!("size {size}: preview std {sd_lo:.4}, downsampled-export std {sd_hi:.4}, ratio {ratio:.3}, pixelwise corr {:.2}", corr(&lo, &avg));
+        assert!((ratio - 1.0).abs() < 0.12, "size {size}: export/preview std ratio {ratio}");
+    }
+}
+
+/// Dumps CPU `grain_delta` values for the golden table below and for the
+/// real-GPU probe (`docs/rfc/RFC-0022-appendix/gpu_grain_probe.js`):
+/// `cargo test --lib grain_reference_dump -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn grain_reference_dump() {
+    for &(le, size, rough, x, y) in GRAIN_GOLDEN_CASES {
+        let g = Grain { amount: 100.0, size, roughness: rough };
+        eprintln!("({le:?}, {size:?}, {rough:?}, {x:?}, {y:?}) -> {:?}", grain_delta((x, y), &g, le));
+    }
+}
+
+/// (long edge, size, roughness, x, y) cases covering sub-pixel (preview-size
+/// default), the 24 MP default, a 3x export, and both roughness extremes.
+const GRAIN_GOLDEN_CASES: &[(f32, f32, f32, f32, f32)] = &[
+    (6000.0, 25.0, 50.0, 123.0, 456.0),
+    (2048.0, 25.0, 50.0, 700.0, 31.0),
+    (2048.0, 0.0, 0.0, 5.0, 9.0),
+    (2048.0, 100.0, 100.0, 1500.0, 1000.0),
+    (6144.0, 60.0, 30.0, 3001.0, 777.0),
+    (1000.0, 25.0, 50.0, 10.0, 10.0),
+    (2048.0, 40.0, 100.0, 333.0, 222.0),
+    (4000.0, 10.0, 0.0, 1234.0, 2345.0),
+];
+
+/// Pinned `grain_delta` values (same order as `GRAIN_GOLDEN_CASES`, Amount 100);
+/// the real-GPU probe checks the WGSL against these same numbers, so CPU and
+/// GPU are each tied to one table rather than only to each other.
+const GRAIN_GOLDEN_VALUES: &[f32] = &[
+    0.042875215, -0.011109176, -0.026815541, -0.042142715,
+    0.025983753, -0.016688382, 0.00022242409, 0.050142936,
+];
+
+#[test]
+fn grain_delta_matches_the_golden_table() {
+    for (&(le, size, rough, x, y), &want) in GRAIN_GOLDEN_CASES.iter().zip(GRAIN_GOLDEN_VALUES) {
+        let g = Grain { amount: 100.0, size, roughness: rough };
+        let got = grain_delta((x, y), &g, le);
+        assert!((got - want).abs() < 2e-6, "({le}, {size}, {rough}, {x}, {y}): {got} vs {want}");
+    }
 }

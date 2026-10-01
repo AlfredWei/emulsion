@@ -179,7 +179,8 @@ export const premask = `    // Histogram clipping-overlay toggle (own tiny padde
       // Grain: pure per-pixel procedural noise, applied right after
       // Vignette -- see grainDelta's own doc comment / develop_engine.rs's
       // grain_delta for the full reasoning.
-      let gDelta = grainDelta(vec2<f32>(coord));
+      let gDims = vec2<f32>(textureDimensions(gradedTex));
+      let gDelta = grainDelta(vec2<f32>(coord), max(gDims.x, gDims.y));
       rgb = rgb + vec3<f32>(gDelta, gDelta, gDelta);
 
       return vec4<f32>(rgb, 1.0);

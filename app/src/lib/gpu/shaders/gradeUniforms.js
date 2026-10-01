@@ -60,7 +60,7 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
     // same reasoning.
     struct Grain {
       amount: f32,    // 0..100
-      size: f32,      // 0..100, maps to particle-lattice cell width in pixels
+      size: f32,      // 0..100, frame-relative cell width (RFC-0022 §3.4)
       roughness: f32, // 0..100, even<->clumpy particles (RFC-0020)
       _pad0: f32,
     };
@@ -76,8 +76,15 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
     // normalization (one sqrt), so it agrees with the Rust twin to ~1e-6, and a
     // one-ulp floor() disagreement cannot change the pattern (compact
     // kernel support inside the 3x3 block).
-    const GRAIN_MAX_CELL_PX: f32 = 6.0;
-    const GRAIN_SIGMA: f32 = 0.05;
+    // RFC-0022 §3.4: frame-relative Size (micrometres of a 36 mm frame ->
+    // pixels via the image's long edge) and the pixel-footprint amplitude
+    // compensation r(c, rho). Constants mirror effects.rs.
+    const GRAIN_FRAME_UM: f32 = 36000.0;
+    const GRAIN_CELL_UM_MIN: f32 = 6.0;
+    const GRAIN_CELL_UM_SPAN: f32 = 30.0;
+    const GRAIN_FOOTPRINT_K2_BASE: f32 = 0.6;
+    const GRAIN_FOOTPRINT_K2_PER_ROUGHNESS: f32 = 0.3;
+    const GRAIN_SIGMA: f32 = 0.0548;
     const GRAIN_PARTICLES_PER_CELL: u32 = 2u;
     const GRAIN_PI: f32 = 3.14159265358979;
 
@@ -133,13 +140,17 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
       return sum * grainParticleNorm(rho);
     }
 
-    fn grainDelta(coord: vec2<f32>) -> f32 {
+    // longEdge: the whole uncropped frame's long edge in pixels (the grain
+    // pass runs on the uncropped source texture), per RFC-0022 §3.4.
+    fn grainDelta(coord: vec2<f32>, longEdge: f32) -> f32 {
       if (grain.amount == 0.0) {
         return 0.0;
       }
-      let cellPx = 1.0 + (grain.size / 100.0) * (GRAIN_MAX_CELL_PX - 1.0);
-      let noise = grainParticleNoise(coord / cellPx, grain.roughness / 100.0, 0u);
-      return noise * (grain.amount / 100.0) * GRAIN_SIGMA;
+      let rho = grain.roughness / 100.0;
+      let cellPx = (GRAIN_CELL_UM_MIN + (grain.size / 100.0) * GRAIN_CELL_UM_SPAN) * longEdge / GRAIN_FRAME_UM;
+      let footprint = cellPx / sqrt(cellPx * cellPx + GRAIN_FOOTPRINT_K2_BASE + GRAIN_FOOTPRINT_K2_PER_ROUGHNESS * rho);
+      let noise = grainParticleNoise(coord / cellPx, rho, 0u);
+      return noise * (grain.amount / 100.0) * GRAIN_SIGMA * footprint;
     }
 
 `;

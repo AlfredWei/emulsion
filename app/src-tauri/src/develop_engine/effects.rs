@@ -129,11 +129,14 @@ pub(super) struct Grain {
     pub(super) amount: f32,
     pub(super) size: f32,
     pub(super) roughness: f32,
+    /// RFC-0022 §3.3: 0 = uniform amplitude (RFC-0020 behaviour), 100 = the
+    /// grain fades to nothing at pure black and pure white.
+    pub(super) tone: f32,
 }
 
 impl Default for Grain {
     fn default() -> Self {
-        Grain { amount: 0.0, size: 25.0, roughness: 50.0 }
+        Grain { amount: 0.0, size: 25.0, roughness: 50.0, tone: 0.0 }
     }
 }
 
@@ -146,6 +149,7 @@ pub(super) fn grain_op(ops: &[serde_json::Value]) -> Grain {
         amount: field("amount", 0.0),
         size: field("size", 25.0),
         roughness: field("roughness", 50.0),
+        tone: field("tone", 0.0),
     }
 }
 
@@ -308,4 +312,23 @@ pub(super) fn grain_delta(coord: (f32, f32), g: &Grain, long_edge: f32) -> f32 {
     let cell = grain_cell_px(g.size, long_edge);
     let noise = grain_particle_noise((coord.0 / cell, coord.1 / cell), g.roughness / 100.0, GRAIN_SEED);
     noise * (g.amount / 100.0) * GRAIN_SIGMA * grain_footprint_ratio(cell, g.roughness / 100.0)
+}
+
+/// RFC-0022 §3.3 tonal response: the grain delta's weight at pre-grain luma
+/// `luma` (encoded, clamped to 0..1): `(1 - t) + t * 4 * Y * (1 - Y)` with
+/// `t = tone / 100`. 1 at mid-gray for every `t` (so Amount keeps its
+/// mid-tone meaning), 0 at pure black and pure white for `t = 1`. Real grain
+/// is density noise seen through the print/scan tone curve, whose slope falls
+/// toward the toe and shoulder; a dome is the simplest one-parameter
+/// stand-in (reasoning, not data -- RFC-0022 §3.3). Where the weight
+/// vanishes the delta cannot be clipped, which also closes RFC-0020's named
+/// "additive grain lifts pure black / darkens pure white" item. `tone = 0`
+/// returns exactly 1.0 (RFC-0020's uniform amplitude).
+pub(super) fn grain_tone_weight(luma: f32, g: &Grain) -> f32 {
+    if g.tone == 0.0 {
+        return 1.0;
+    }
+    let t = g.tone / 100.0;
+    let y = luma.clamp(0.0, 1.0);
+    (1.0 - t) + t * 4.0 * y * (1.0 - y)
 }

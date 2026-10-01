@@ -275,7 +275,7 @@ export const HISTOGRAM_SIZE = 256;
    *   },
    *   perspective: {vertical: number, horizontal: number, rotate: number, aspect: number, scale: number},
    *   vignette: {amount: number, midpoint: number, feather: number, roundness: number},
-   *   grain: {amount: number, size: number, roughness: number},
+   *   grain: {amount: number, size: number, roughness: number, tone: number},
    *   sharpen: {amount: number, radius: number, detail: number, masking: number},
    *   lumaNR: {amount: number, detail: number, contrast: number},
    *   colorNR: {amount: number, detail: number},

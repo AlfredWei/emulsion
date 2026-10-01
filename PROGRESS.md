@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5.8 Slice 2 — Grain: tonal response (Tone slider), per RFC-0022 §3.3 (2026-10-02)
+
+Second M5.8 slice (slice 1 merged in #191). Grain amplitude was uniform across tone, so the additive delta is one-sidedly clipped at 0/1 — measured here: Amount 100 grain **lifts pure black and darkens pure white**.
+
+- **Fix**: new `tone` field (0–100, default 0) on the `grain` op and a `Tone` slider; the delta is multiplied by `w(Y) = (1 − t) + t·4Y(1 − Y)` on the pre-grain Rec.709 luma (`grain_tone_weight`, effects.rs; WGSL `grainToneWeight`, applied in `fs_premask`). `w = 1` at mid-gray for every `t`, so Amount keeps its mid-tone meaning; Tone 100 fades grain to nothing at black and white. The Grain uniform's padding float carries it (no buffer change). Also: JS `getGrain`/`upsertGrain`/`buildGrainUniformData`, types, the panel.
+- **No behaviour change for existing edits**: an op without `tone` reads 0 and `tone = 0` returns exactly 1.0 on CPU and GPU (also the built-in presets).
+- **Verified**: `cargo test --lib` 449 passed / 5 ignored (+5 tests): hand-value weights; `tone = 0` exactly uniform; `grain_op` default; Tone 100 leaves a pure-black and a pure-white strip *exactly* unchanged while Tone 0 lifts/darkens them (the clipping item, as a measured fact); shadow amplitude ratio 0.375 vs the weight's 0.366, mid-gray unchanged (13.05 → 13.05). `vitest` 678 passed (+3). **Real GPU** (Apple / Metal 3): the real WGSL weight equals the hand values within 3.3e-8 (12 cases incl. out-of-range luma); slice-1 numbers unchanged (golden 1.5e-5, std 0.0513).
+- **Corrected / surfaced** (RFC "Corrected during implementation", slice 2): a small test image has a sub-pixel grain cell because Size is frame-relative (96×96 at Amount 100: std 0.65 levels, not 13) — grain tests now use a 6000×16 strip; Tone 50 only halves the black lift (`w(0) = 1 − t`), only Tone 100 removes it.
+- **Not verified**: the new `Grain: Tone weight agrees between CPU and GPU` e2e scenario has **not been run** locally (`tauri-driver` missing) — CI first — and it is a weak witness for the weight's *value* (mid-tone road strip, `w` near 1); the numbers are pinned by the Rust and GPU-probe checks instead. The dome shape is reasoning, not data (RFC §3.3); no visual judgement on a real photograph; Selwyn-law density dependence and the shadow/highlight asymmetry of real negatives are not modelled. One GPU only.
+
 ## M5.8 Slice 1 — Grain: frame-relative Size + pixel-footprint compensation, per RFC-0022 (2026-10-01)
 
 First M5.8 slice, per [RFC-0022](docs/rfc/RFC-0022-negative-film-grain.md) §3.4 (RFC merged in #190, with a UX mock for the picker). Size was a fixed *pixel* scale, so the 2048-px preview and a 6000-px export showed grain at different sizes relative to the picture — and, measured, point-sampled grain smaller than a pixel overstates its amplitude by up to ~3.5× against the pixel-integrated field. No new sliders in this slice.

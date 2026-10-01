@@ -265,7 +265,7 @@ const GRAIN_TEST_LONG_EDGE: f32 = 6000.0;
 /// so a given Amount does not silently get stronger or weaker.
 #[test]
 fn grain_delta_std_at_defaults_matches_the_pre_rfc_calibration_target() {
-    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0 };
+    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone: 0.0 };
     let mut v = Vec::new();
     for y in 0..256 {
         for x in 0..256 {
@@ -383,7 +383,7 @@ fn grain_particle_noise_seed_selects_an_independent_field() {
 /// op's identity value already gets.
 #[test]
 fn grain_amount_zero_is_an_exact_passthrough() {
-    let g = Grain { amount: 0.0, size: 80.0, roughness: 90.0 };
+    let g = Grain { amount: 0.0, size: 80.0, roughness: 90.0, tone: 0.0 };
     assert_eq!(grain_delta((123.0, 456.0), &g, GRAIN_TEST_LONG_EDGE), 0.0);
     assert_eq!(grain_delta((0.0, 0.0), &g, GRAIN_TEST_LONG_EDGE), 0.0);
 }
@@ -395,7 +395,7 @@ fn grain_amount_zero_is_an_exact_passthrough() {
 /// explicitly rather than leaving it implicit.
 #[test]
 fn grain_delta_is_deterministic_for_the_same_coordinate() {
-    let g = Grain { amount: 60.0, size: 40.0, roughness: 30.0 };
+    let g = Grain { amount: 60.0, size: 40.0, roughness: 30.0, tone: 0.0 };
     let a = grain_delta((17.0, 42.0), &g, GRAIN_TEST_LONG_EDGE);
     let b = grain_delta((17.0, 42.0), &g, GRAIN_TEST_LONG_EDGE);
     assert_eq!(a, b);
@@ -409,7 +409,7 @@ fn grain_delta_is_deterministic_for_the_same_coordinate() {
 #[test]
 fn grain_size_sets_the_feature_size() {
     let adjacent_corr = |size: f32| -> f64 {
-        let g = Grain { amount: 100.0, size, roughness: 50.0 };
+        let g = Grain { amount: 100.0, size, roughness: 50.0, tone: 0.0 };
         let n = 128;
         let mut f = Vec::new();
         for y in 0..n {
@@ -437,8 +437,8 @@ fn grain_size_sets_the_feature_size() {
 /// confirming the knob isn't a no-op.
 #[test]
 fn grain_roughness_zero_and_one_hundred_generally_differ() {
-    let smooth = Grain { amount: 100.0, size: 50.0, roughness: 0.0 };
-    let rough = Grain { amount: 100.0, size: 50.0, roughness: 100.0 };
+    let smooth = Grain { amount: 100.0, size: 50.0, roughness: 0.0, tone: 0.0 };
+    let rough = Grain { amount: 100.0, size: 50.0, roughness: 100.0, tone: 0.0 };
     let coord = (11.3, 27.9);
     assert_ne!(grain_delta(coord, &smooth, GRAIN_TEST_LONG_EDGE), grain_delta(coord, &rough, GRAIN_TEST_LONG_EDGE));
 }
@@ -460,7 +460,7 @@ fn grain_absent_op_is_exact_passthrough_through_edit_stack() {
 #[test]
 #[ignore]
 fn grain_cpu_cost_report() {
-    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0 };
+    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone: 0.0 };
     let (w, h) = (2048usize, 1536usize); // 3.1 MP, ~ the interactive preview cap
     let t = std::time::Instant::now();
     let mut acc = 0.0f32;
@@ -539,7 +539,7 @@ fn grain_preview_matches_a_downsampled_full_resolution_render() {
     const N: usize = 64;
     let (ox, oy) = (200usize, 120usize);
     for size in [25.0f32, 60.0, 100.0] {
-        let g = Grain { amount: 100.0, size, roughness: 50.0 };
+        let g = Grain { amount: 100.0, size, roughness: 50.0, tone: 0.0 };
         let mut lo = Vec::with_capacity(N * N);
         let mut avg = Vec::with_capacity(N * N);
         for y in 0..N {
@@ -574,7 +574,7 @@ fn grain_preview_matches_a_downsampled_full_resolution_render() {
 #[ignore]
 fn grain_reference_dump() {
     for &(le, size, rough, x, y) in GRAIN_GOLDEN_CASES {
-        let g = Grain { amount: 100.0, size, roughness: rough };
+        let g = Grain { amount: 100.0, size, roughness: rough, tone: 0.0 };
         eprintln!("({le:?}, {size:?}, {rough:?}, {x:?}, {y:?}) -> {:?}", grain_delta((x, y), &g, le));
     }
 }
@@ -603,8 +603,124 @@ const GRAIN_GOLDEN_VALUES: &[f32] = &[
 #[test]
 fn grain_delta_matches_the_golden_table() {
     for (&(le, size, rough, x, y), &want) in GRAIN_GOLDEN_CASES.iter().zip(GRAIN_GOLDEN_VALUES) {
-        let g = Grain { amount: 100.0, size, roughness: rough };
+        let g = Grain { amount: 100.0, size, roughness: rough, tone: 0.0 };
         let got = grain_delta((x, y), &g, le);
         assert!((got - want).abs() < 2e-6, "({le}, {size}, {rough}, {x}, {y}): {got} vs {want}");
     }
+}
+
+// ---- RFC-0022 slice 2: tonal response ----
+
+fn grain_with_tone(tone: f32) -> Grain {
+    Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone }
+}
+
+/// §3.3 hand values of `w(Y) = (1 - t) + t * 4Y(1 - Y)`.
+#[test]
+fn grain_tone_weight_hand_values() {
+    let cases: &[(f32, f32, f32)] = &[
+        // (tone, luma, weight)
+        (100.0, 0.0, 0.0),
+        (100.0, 0.25, 0.75),
+        (100.0, 0.5, 1.0),
+        (100.0, 1.0, 0.0),
+        (50.0, 0.0, 0.5),
+        (50.0, 0.25, 0.875),
+        (50.0, 0.5, 1.0),
+        (50.0, 1.0, 0.5),
+        (25.0, 0.1, 0.75 + 0.25 * 0.36),
+    ];
+    for &(tone, y, want) in cases {
+        let got = grain_tone_weight(y, &grain_with_tone(tone));
+        assert!((got - want).abs() < 1e-6, "tone {tone} Y {y}: {got} vs {want}");
+    }
+    // Out-of-range luma (HDR / negative intermediate) clamps, never goes negative or above 1.
+    for y in [-0.3f32, 1.4] {
+        let w = grain_tone_weight(y, &grain_with_tone(100.0));
+        assert_eq!(w, 0.0, "luma {y}");
+    }
+}
+
+/// `tone = 0` is RFC-0020's behaviour exactly: the weight is bit-exactly 1.
+#[test]
+fn grain_tone_zero_is_exactly_uniform() {
+    for y in [0.0f32, 0.013, 0.5, 0.97, 1.0] {
+        assert_eq!(grain_tone_weight(y, &grain_with_tone(0.0)), 1.0);
+    }
+}
+
+/// The op reader: absent `tone` is 0 (so every stored edit and the built-in
+/// presets are unchanged); a present one is read.
+#[test]
+fn grain_op_reads_tone_and_defaults_it_to_zero() {
+    let none = grain_op(&[serde_json::json!({"op": "grain", "amount": 40, "size": 25, "roughness": 50})]);
+    assert_eq!(none.tone, 0.0);
+    let some = grain_op(&[serde_json::json!({"op": "grain", "amount": 40, "size": 25, "roughness": 50, "tone": 70})]);
+    assert_eq!(some.tone, 70.0);
+    assert_eq!(grain_op(&[]).tone, 0.0);
+}
+
+/// A 24 MP-class frame's long edge with almost no area: grain size is
+/// frame-relative (RFC-0022 §3.4), so a small test image has a sub-pixel
+/// cell and its grain is (correctly) averaged away; a 6000 x 16 strip has
+/// the 2.25 px default cell and 96k samples.
+fn strip(fill: u8) -> RgbImage {
+    RgbImage::from_pixel(6000, 16, image::Rgb([fill, fill, fill]))
+}
+
+fn grain_stack(tone: f32) -> EditStack {
+    EditStack {
+        schema_version: 1,
+        ops: vec![serde_json::json!({"op": "grain", "amount": 100, "size": 25, "roughness": 50, "tone": tone})],
+    }
+}
+
+/// RFC-0020's named item, closed: a uniform additive delta is one-sidedly
+/// clipped, so grain at Amount 100 LIFTS pure black and DARKENS pure white;
+/// at Tone 100 both stay exactly where they were.
+#[test]
+fn grain_tone_keeps_pure_black_and_pure_white_untouched() {
+    let mean_of = |fill: u8, tone: f32| -> (f64, bool) {
+        let mut img = strip(fill);
+        apply_edit_stack(&mut img, &grain_stack(tone));
+        let all_same = img.pixels().all(|p| p.0 == [fill, fill, fill]);
+        let mean = img.pixels().map(|p| p.0[0] as f64).sum::<f64>() / (img.width() * img.height()) as f64;
+        (mean, all_same)
+    };
+    let (black_uniform, same) = mean_of(0, 0.0);
+    assert!(!same && black_uniform > 1.0, "uniform grain should lift black, mean {black_uniform}");
+    let (white_uniform, same) = mean_of(255, 0.0);
+    assert!(!same && white_uniform < 254.0, "uniform grain should darken white, mean {white_uniform}");
+    assert!(mean_of(0, 100.0).1, "Tone 100 must leave pure black exactly black");
+    assert!(mean_of(255, 100.0).1, "Tone 100 must leave pure white exactly white");
+    // Mid-gray is unaffected by Tone (weight 1 there): same pixels either way.
+    let render = |tone: f32| {
+        let mut img = strip(128);
+        apply_edit_stack(&mut img, &grain_stack(tone));
+        img
+    };
+    let (a, b) = (render(0.0), render(100.0));
+    let differing = a.pixels().zip(b.pixels()).filter(|(p, q)| p != q).count();
+    // 128/255 = 0.502, w = 1 - 1e-5; only a rounding flip is possible.
+    assert!(differing < 40, "{differing} of {} mid-gray pixels differ between Tone 0 and 100", a.width() * a.height());
+}
+
+/// A shadow (Y ~ 0.1) gets visibly less grain than mid-gray at Tone 100:
+/// measured std ratio ~ w(0.1) = 0.36.
+#[test]
+fn grain_tone_reduces_shadow_amplitude_but_not_midtone_amplitude() {
+    let std_of = |fill: u8, tone: f32| -> f64 {
+        let mut img = strip(fill);
+        apply_edit_stack(&mut img, &grain_stack(tone));
+        let v: Vec<f32> = img.pixels().map(|p| p.0[0] as f32).collect();
+        mean_std(&v).1
+    };
+    let shadow_uniform = std_of(26, 0.0);
+    let shadow_toned = std_of(26, 100.0);
+    let mid_uniform = std_of(128, 0.0);
+    let mid_toned = std_of(128, 100.0);
+    eprintln!("shadow std {shadow_uniform:.2} -> {shadow_toned:.2}; mid std {mid_uniform:.2} -> {mid_toned:.2}");
+    let w = 4.0 * (26.0 / 255.0) * (1.0 - 26.0 / 255.0);
+    assert!((shadow_toned / shadow_uniform - w).abs() < 0.08, "ratio {}", shadow_toned / shadow_uniform);
+    assert!((mid_toned / mid_uniform - 1.0).abs() < 0.03);
 }

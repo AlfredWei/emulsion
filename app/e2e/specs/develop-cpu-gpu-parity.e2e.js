@@ -454,4 +454,21 @@ describe("Develop CPU/GPU parity", () => {
       await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain (u+${du})`);
     }
   });
+
+  // RFC-0022 slice 2: wiring check for the Tone slider (slider -> op ->
+  // uniform -> shader) on the same three points. This is a WEAK witness for
+  // the weight's value: the road strip is mid-tone gray, where w is near 1,
+  // so a dropped weight would likely stay inside TOLERANCE. The weight's numbers are pinned instead by the Rust
+  // hand-value test and the real-GPU probe (docs/rfc/RFC-0022-appendix/
+  // gpu_grain_probe.js); this scenario catches the gross failures (field not
+  // plumbed, crash, wrong uniform slot shifting Amount/Size/Roughness).
+  it("Grain: Tone weight agrees between CPU and GPU", async () => {
+    await setSliderValue("grain-amount", 100);
+    await setSliderValue("grain-size", 30);
+    await setSliderValue("grain-roughness", 60);
+    await setSliderValue("grain-tone", 100);
+    for (const du of [0, 0.005, 0.011]) {
+      await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain Tone 100 (u+${du})`);
+    }
+  });
 });

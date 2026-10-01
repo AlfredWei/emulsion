@@ -9,6 +9,9 @@ import {
   computeEyedropperWhiteBalance,
   computeAutoTone,
   PANEL_OP_NAMES,
+  getGrain,
+  upsertGrain,
+  buildGrainUniformData,
   HSL_BAND_NAMES,
   HSL_BAND_CENTERS_DEG,
   nearestHslBand,
@@ -385,5 +388,24 @@ describe("HSL band centers", () => {
       const best = HSL_BAND_NAMES[HSL_BAND_NAMES.map((_, i) => weight(hue, i)).reduce((bi, w, i, ws) => (w > ws[bi] ? i : bi), 0)];
       expect(nearestHslBand(hue), `hue ${hue}`).toBe(best);
     }
+  });
+});
+
+describe("Grain tone (RFC-0022 slice 2)", () => {
+  test("an op without `tone` reads as 0, so stored edits and built-in presets are unchanged", () => {
+    const stack = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "grain", amount: 25, size: 30, roughness: 40 }] });
+    expect(getGrain(stack)).toEqual({ amount: 25, size: 30, roughness: 40, tone: 0 });
+  });
+
+  test("a tone patch keeps the other fields, and a later patch keeps tone", () => {
+    const base = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "grain", amount: 25, size: 30, roughness: 40 }] });
+    const toned = upsertGrain(base, { tone: 70 });
+    expect(getGrain(toned)).toEqual({ amount: 25, size: 30, roughness: 40, tone: 70 });
+    expect(getGrain(upsertGrain(toned, { amount: 55 }))).toEqual({ amount: 55, size: 30, roughness: 40, tone: 70 });
+  });
+
+  test("tone is the fourth uniform float, where the WGSL Grain struct reads it", () => {
+    const data = buildGrainUniformData({ amount: 10, size: 20, roughness: 30, tone: 40 });
+    expect(Array.from(data)).toEqual([10, 20, 30, 40]);
   });
 });

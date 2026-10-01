@@ -62,7 +62,7 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
       amount: f32,    // 0..100
       size: f32,      // 0..100, frame-relative cell width (RFC-0022 §3.4)
       roughness: f32, // 0..100, even<->clumpy particles (RFC-0020)
-      _pad0: f32,
+      tone: f32,      // 0..100, dome-shaped tonal weight (RFC-0022 §3.3)
     };
     @group(0) @binding(16) var<uniform> grain: Grain;
 
@@ -138,6 +138,17 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
         }
       }
       return sum * grainParticleNorm(rho);
+    }
+
+    // RFC-0022 §3.3: grain amplitude weight at pre-grain luma (the argument), a port
+    // of effects.rs's grain_tone_weight (exactly 1.0 at tone 0).
+    fn grainToneWeight(luma: f32) -> f32 {
+      if (grain.tone == 0.0) {
+        return 1.0;
+      }
+      let t = grain.tone / 100.0;
+      let y = clamp(luma, 0.0, 1.0);
+      return (1.0 - t) + t * 4.0 * y * (1.0 - y);
     }
 
     // longEdge: the whole uncropped frame's long edge in pixels (the grain

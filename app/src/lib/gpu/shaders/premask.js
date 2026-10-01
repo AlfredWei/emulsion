@@ -180,7 +180,8 @@ export const premask = `    // Histogram clipping-overlay toggle (own tiny padde
       // Vignette -- see grainDelta's own doc comment / develop_engine.rs's
       // grain_delta for the full reasoning.
       let gDims = vec2<f32>(textureDimensions(gradedTex));
-      let gDelta = grainDelta(vec2<f32>(coord), max(gDims.x, gDims.y));
+      let gDelta = grainDelta(vec2<f32>(coord), max(gDims.x, gDims.y))
+        * grainToneWeight(dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722)));
       rgb = rgb + vec3<f32>(gDelta, gDelta, gDelta);
 
       return vec4<f32>(rgb, 1.0);

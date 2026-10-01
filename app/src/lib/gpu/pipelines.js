@@ -574,7 +574,7 @@ export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} *
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   gpu.grainBuffer = gpu.device.createBuffer({
-    size: 4 * 4, // 4 f32 (3 real fields + 1 padding), matches the WGSL Grain struct
+    size: 8 * 4, // 8 f32 (5 real fields + 3 padding), matches the WGSL Grain struct
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   gpu.sharpenBuffer = gpu.device.createBuffer({

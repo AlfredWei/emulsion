@@ -68,8 +68,8 @@
    *   onLensCorrectionChange: (patch: Partial<{profile_enabled: boolean, distortion_amount: number, vignette_amount: number, ca_amount: number, manual_distortion: number, manual_ca: number}>) => void,
    *   perspective: {vertical: number, horizontal: number, rotate: number, aspect: number, scale: number},
    *   onPerspectiveChange: (patch: Partial<{vertical: number, horizontal: number, rotate: number, aspect: number, scale: number}>) => void,
-   *   grain: {amount: number, size: number, roughness: number, tone: number},
-   *   onGrainChange: (patch: Partial<{amount: number, size: number, roughness: number, tone: number}>) => void,
+   *   grain: {amount: number, size: number, roughness: number, tone: number, chroma: number},
+   *   onGrainChange: (patch: Partial<{amount: number, size: number, roughness: number, tone: number, chroma: number}>) => void,
    *   sharpen: {amount: number, radius: number, detail: number, masking: number},
    *   onSharpenChange: (patch: Partial<{amount: number, radius: number, detail: number, masking: number}>) => void,
    *   lumaNR: {amount: number, detail: number, contrast: number},
@@ -1074,6 +1074,20 @@
         />
         <span class="val">{grain.roughness}</span>
         {@render stepButtons(grain.roughness, 1, 0, 100, (v) => onGrainChange({ roughness: v }))}
+      </div>
+      <div class="row">
+        <label for="grain-chroma">Colour</label>
+        <input
+          id="grain-chroma"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={grain.chroma}
+          oninput={(e) => onGrainChange({ chroma: Number(e.currentTarget.value) })}
+        />
+        <span class="val">{grain.chroma}</span>
+        {@render stepButtons(grain.chroma, 1, 0, 100, (v) => onGrainChange({ chroma: v }))}
       </div>
       <div class="row">
         <label for="grain-tone">Tone</label>

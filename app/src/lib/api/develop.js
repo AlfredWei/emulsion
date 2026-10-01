@@ -900,9 +900,9 @@ export function buildVignetteUniformData(
 // Global-only, applied after Vignette, before any mask (matching real
 // Lightroom's own Effects-panel order). Defaults match real Lightroom's
 // own Grain defaults exactly (Amount 0 -- off, Size 25, Roughness 50).
-export const IDENTITY_GRAIN = Object.freeze({ amount: 0, size: 25, roughness: 50, tone: 0 });
+export const IDENTITY_GRAIN = Object.freeze({ amount: 0, size: 25, roughness: 50, tone: 0, chroma: 0 });
 
-/** @returns {{amount: number, size: number, roughness: number, tone: number}} */
+/** @returns {{amount: number, size: number, roughness: number, tone: number, chroma: number}} */
 export function getGrain(
   /** @type {EditStack} */ stack,
   /** @type {typeof IDENTITY_GRAIN} */ fallback = IDENTITY_GRAIN,
@@ -914,15 +914,16 @@ export function getGrain(
     size: op.size ?? 25,
     roughness: op.roughness ?? 50,
     tone: op.tone ?? 0,
+    chroma: op.chroma ?? 0,
   };
 }
 
-/** Patches any subset of {amount, size, roughness, tone}, leaving the rest
+/** Patches any subset of {amount, size, roughness, tone, chroma}, leaving the rest
  * untouched.
  * @returns {EditStack} */
 export function upsertGrain(
   /** @type {EditStack} */ stack,
-  /** @type {Partial<{amount: number, size: number, roughness: number, tone: number}>} */ patch,
+  /** @type {Partial<{amount: number, size: number, roughness: number, tone: number, chroma: number}>} */ patch,
 ) {
   const current = getGrain(stack);
   const next = { ...current, ...patch };
@@ -937,7 +938,7 @@ export function upsertGrain(
 export function buildGrainUniformData(
   /** @type {ReturnType<typeof getGrain>} */ g,
 ) {
-  return new Float32Array([g.amount, g.size, g.roughness, g.tone]);
+  return new Float32Array([g.amount, g.size, g.roughness, g.tone, g.chroma, 0, 0, 0]);
 }
 
 // Lens Corrections (M3): the one op in this file with a nested `profile`

@@ -250,9 +250,10 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             *c *= vf;
         }
 
-        let gd = grain_delta((x as f32, y as f32), &grain, grain_long_edge) * grain_tone_weight(luma3(rgb), &grain);
-        for c in rgb.iter_mut() {
-            *c += gd;
+        let gd = grain_delta_rgb((x as f32, y as f32), &grain, grain_long_edge);
+        let gw = grain_tone_weight(luma3(rgb), &grain);
+        for (c, d) in rgb.iter_mut().zip(gd) {
+            *c += d * gw;
         }
 
         pre_mask[idx] = rgb;

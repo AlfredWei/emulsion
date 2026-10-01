@@ -781,8 +781,8 @@ fn grain_chroma_keeps_channel_strength_and_sets_cross_channel_correlation() {
     for chroma in [0.0f32, 25.0, 50.0, 100.0] {
         let f = rgb_field(&colour_grain(chroma));
         let m = chroma as f64 / 100.0;
-        for c in 0..3 {
-            let (mean, sd) = mean_std(&f[c]);
+        for (c, ch) in f.iter().enumerate() {
+            let (mean, sd) = mean_std(ch);
             assert!((sd / base_sd - 1.0).abs() < 0.05, "chroma {chroma} channel {c}: std {sd} vs {base_sd}");
             assert!(mean.abs() < 0.1 * sd, "chroma {chroma} channel {c}: mean {mean}");
         }
@@ -801,8 +801,8 @@ fn grain_channel_seeds_are_independent_of_each_other_and_of_the_shared_field() {
     let g = colour_grain(100.0);
     let f = rgb_field(&g);
     let shared = rgb_field(&colour_grain(0.0))[0].clone();
-    for c in 0..3 {
-        let r = corr(&f[c], &shared);
+    for (c, ch) in f.iter().enumerate() {
+        let r = corr(ch, &shared);
         assert!(r.abs() < 0.06, "channel {c} vs shared: {r}");
     }
     for s in GRAIN_CHANNEL_SEEDS {

@@ -255,66 +255,223 @@ fn lens_undist_poly3_solves_the_forward_equation() {
     assert!((recovered_y - ru_y).abs() < 1e-4, "y: {recovered_y} vs {ru_y}");
 }
 
-#[test]
-fn lens_undist_poly5_solves_the_forward_equation() {
-    let (k1, k2) = (-0.08_f32, 0.01_f32);
-    let (ru_x, ru_y) = (0.35_f32, -0.2_f32);
-    let ru2 = ru_x * ru_x + ru_y * ru_y;
-    let poly4 = 1.0 + k1 * ru2 + k2 * ru2 * ru2;
-    let (rd_x, rd_y) = (ru_x * poly4, ru_y * poly4);
+// RFC-0021: profile distortion/TCA use the FORWARD closed forms (lensfun's
+// `reverse = false`, the correcting direction). Expected values below were
+// computed by a separate script (independent of this code), not read off
+// the functions under test.
 
-    let (recovered_x, recovered_y) = lens_undist_poly5(rd_x, rd_y, k1, k2);
-    assert!((recovered_x - ru_x).abs() < 1e-4, "x: {recovered_x} vs {ru_x}");
-    assert!((recovered_y - ru_y).abs() < 1e-4, "y: {recovered_y} vs {ru_y}");
+#[test]
+fn lens_dist_kernels_match_the_documented_forward_formulas() {
+    let close = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| (ax - bx).abs() < 1e-6 && (ay - by).abs() < 1e-6;
+    assert!(close(lens_dist_poly3(0.4, 0.25, -0.15), (0.38665, 0.24165625)));
+    assert!(close(lens_dist_poly5(0.35, -0.2, -0.08, 0.01), (0.345_542_42, -0.197_452_81)));
+    assert!(close(lens_dist_ptlens(0.3, 0.1, 0.01, -0.02, 0.03), (0.302_340_92, 0.100_780_31)));
+    assert!(close(lens_tca_poly3_forward(0.4, 0.15, 1.001, 0.0002, -0.0005), (0.400_397_68, 0.150_149_13)));
+    // c == 0 takes upstream's no-sqrt path; same formula.
+    assert!(close(lens_tca_poly3_forward(0.4, 0.15, 1.001, 0.0, -0.0005), (0.400_363_5, 0.150_136_31)));
 }
 
 #[test]
-fn lens_undist_ptlens_solves_the_forward_equation() {
-    let (a, b, c) = (0.01_f32, -0.02_f32, 0.03_f32);
-    let (ru_x, ru_y) = (0.3_f32, 0.1_f32);
-    let ru2 = ru_x * ru_x + ru_y * ru_y;
-    let r = ru2.sqrt();
-    let poly3 = a * ru2 * r + b * ru2 + c * r + 1.0;
-    let (rd_x, rd_y) = (ru_x * poly3, ru_y * poly3);
-
-    let (recovered_x, recovered_y) = lens_undist_ptlens(rd_x, rd_y, a, b, c);
-    assert!((recovered_x - ru_x).abs() < 1e-4, "x: {recovered_x} vs {ru_x}");
-    assert!((recovered_y - ru_y).abs() < 1e-4, "y: {recovered_y} vs {ru_y}");
-}
-
-#[test]
-fn lens_undist_tca_poly3_solves_the_forward_equation() {
-    let (v, c, b) = (1.001_f32, 0.0002_f32, -0.0005_f32);
-    let (ru_x, ru_y) = (0.4_f32, 0.15_f32);
-    let ru2 = ru_x * ru_x + ru_y * ru_y;
-    let poly2 = b * ru2 + c * ru2.sqrt() + v;
-    let (rd_x, rd_y) = (ru_x * poly2, ru_y * poly2);
-
-    let (recovered_x, recovered_y) = lens_undist_tca_poly3(rd_x, rd_y, v, c, b);
-    assert!((recovered_x - ru_x).abs() < 1e-4, "x: {recovered_x} vs {ru_x}");
-    assert!((recovered_y - ru_y).abs() < 1e-4, "y: {recovered_y} vs {ru_y}");
-}
-
-#[test]
-fn lens_undist_at_origin_is_always_identity() {
-    // rd == 0 short-circuits in every formula -- there's no radius to
-    // solve for, and (0,0) is a fixed point of every one of these
-    // radial models by construction.
+fn lens_dist_at_origin_is_always_identity() {
+    assert_eq!(lens_dist_poly3(0.0, 0.0, -0.2), (0.0, 0.0));
+    assert_eq!(lens_dist_poly5(0.0, 0.0, -0.2, 0.05), (0.0, 0.0));
+    assert_eq!(lens_dist_ptlens(0.0, 0.0, 0.01, -0.02, 0.03), (0.0, 0.0));
+    assert_eq!(lens_tca_poly3_forward(0.0, 0.0, 1.0, 0.0, 0.0), (0.0, 0.0));
     assert_eq!(lens_undist_poly3(0.0, 0.0, -0.2), (0.0, 0.0));
-    assert_eq!(lens_undist_poly5(0.0, 0.0, -0.2, 0.05), (0.0, 0.0));
-    assert_eq!(lens_undist_ptlens(0.0, 0.0, 0.01, -0.02, 0.03), (0.0, 0.0));
-    assert_eq!(lens_undist_tca_poly3(0.0, 0.0, 1.0, 0.0, 0.0), (0.0, 0.0));
 }
 
+/// Profile distortion is closed form, so there is no non-convergence case
+/// to absorb any more (the Newton kernels this replaced had one): even an
+/// extreme coefficient stays finite.
 #[test]
-fn apply_lens_distortion_falls_back_to_input_on_non_convergence() {
-    // A large-enough k1 pushes poly3's Newton solve past its 6-step
-    // budget for some inputs (matches upstream's own NaN contract --
-    // see lens_undist_poly3's doc comment); apply_lens_distortion
-    // must absorb that into "leave the coordinate unchanged", never
-    // let a NaN escape into a pixel coordinate.
+fn apply_lens_distortion_is_finite_for_extreme_coefficients() {
     let (x, y) = apply_lens_distortion(LensDistortion::Poly3 { k1: -50.0 }, 2.0, 2.0, 1.0);
     assert!(x.is_finite() && y.is_finite(), "got ({x}, {y})");
+}
+
+/// Manual Distortion still uses the Newton inverse and its NaN contract
+/// (RFC-0021 leaves it alone): a large k1 can exhaust the 6-step budget.
+#[test]
+fn manual_distortion_poly3_inverse_still_signals_non_convergence_with_nan() {
+    let (x, y) = lens_undist_poly3(2.0, 2.0, -50.0);
+    assert!(x.is_nan() && y.is_nan(), "got ({x}, {y})");
+}
+
+/// THE direction test (RFC-0021 SS1.1), with no library in the loop. A
+/// barrel lens (`Rd/Ru < 1` away from the centre, k1 < 0) must be corrected
+/// by sampling the SOURCE closer to the centre than the output pixel; a
+/// pincushion lens (k1 > 0) further out. The pre-RFC code did the opposite
+/// for both.
+#[test]
+fn profile_distortion_correction_samples_in_the_correcting_direction() {
+    let radius_ratio = |k1: f64| -> f32 {
+        let lc = lens_correction_op(&[serde_json::json!({
+            "op": "lens_correction", "profile_enabled": true, "vignette_amount": 0, "ca_amount": 0,
+            "profile": { "crop_factor": 1.0, "real_focal": 24.0, "distortion": { "model": "poly3", "k1": k1 } },
+        })]);
+        let (w, h) = (601u32, 401u32);
+        let norm = LensNorm::for_profile(lc.profile.as_ref().unwrap(), w, h);
+        let manual = LensNorm::for_manual(w, h);
+        let (cx, cy) = ((w - 1) as f32 / 2.0, (h - 1) as f32 / 2.0);
+        let (px, py) = (cx + 220.0, cy + 120.0);
+        let (sx, sy) = lens_correct_coord(px, py, LensChannel::Green, &lc, Some(norm), manual);
+        (sx - cx).hypot(sy - cy) / (px - cx).hypot(py - cy)
+    };
+    assert!(radius_ratio(-0.15) < 1.0, "barrel must sample inside: {}", radius_ratio(-0.15));
+    assert!(radius_ratio(0.15) > 1.0, "pincushion must sample outside: {}", radius_ratio(0.15));
+}
+
+/// Same direction test for TCA: a stored `kr > 1` (red magnified relative
+/// to green) must sample the red source FARTHER out than the output pixel,
+/// as stored -- the old `1/kr` inversion went the other way.
+#[test]
+fn profile_tca_linear_uses_the_stored_coefficients_in_the_correcting_direction() {
+    let lc = lens_correction_op(&[serde_json::json!({
+        "op": "lens_correction", "profile_enabled": true, "vignette_amount": 0, "distortion_amount": 0,
+        "profile": { "crop_factor": 1.0, "real_focal": 24.0, "tca": { "model": "linear", "kr": 1.002, "kb": 0.998 } },
+    })]);
+    let (w, h) = (601u32, 401u32);
+    let norm = LensNorm::for_profile(lc.profile.as_ref().unwrap(), w, h);
+    let manual = LensNorm::for_manual(w, h);
+    let (cx, cy) = ((w - 1) as f32 / 2.0, (h - 1) as f32 / 2.0);
+    let (px, py) = (cx + 250.0, cy + 100.0);
+    let r_out = (px - cx).hypot(py - cy);
+    let rr = |ch| {
+        let (sx, sy) = lens_correct_coord(px, py, ch, &lc, Some(norm), manual);
+        (sx - cx).hypot(sy - cy) / r_out
+    };
+    assert!((rr(LensChannel::Red) - 1.002).abs() < 1e-3, "red ratio {}", rr(LensChannel::Red));
+    assert!((rr(LensChannel::Blue) - 0.998).abs() < 1e-3, "blue ratio {}", rr(LensChannel::Blue));
+    assert_eq!(rr(LensChannel::Green), 1.0);
+}
+
+/// The independent oracle (RFC-0021 SS4): for real lenses from lensfun's
+/// bundled database, the app's profile mapping must equal the lensfun
+/// crate's own `Modifier::new(.., reverse = false)` -- the upstream default
+/// and what its own correction tests use -- for distortion and for TCA.
+/// This test would have failed at M3 (the app equalled `reverse = true`).
+/// The lens set covers every distortion model (poly3, poly5, ptlens) and
+/// both TCA models (linear, poly3) the app supports, using lens names and
+/// focal lengths from the lensfun crate's own regression tests. A lens the
+/// bundled database lacks is skipped (an upstream data change is not this
+/// test's concern), but at least three distinct model kinds must have been
+/// compared or the test fails -- so it cannot pass by silently comparing
+/// nothing.
+#[test]
+fn profile_mapping_equals_the_upstream_lensfun_correction() {
+    use lensfun::{Database, Modifier};
+    use std::collections::BTreeSet;
+    let Ok(db) = Database::load_bundled() else { return };
+    // (lens query, focal lengths)
+    let lenses: [(&str, &[f32]); 6] = [
+        ("Canon EF 24-70mm f/2.8L II USM", &[24.0, 35.0, 50.0, 70.0]),
+        ("pEntax 50-200 ED", &[80.89]),
+        ("Canon PowerShot G12", &[10.89]),
+        ("PENTAX-F 28-80mm", &[30.89]),
+        ("Olympus ED 14-42mm", &[17.89, 26.89]),
+        ("Nikkor 35mm f/1.8G", &[35.0]),
+    ];
+    let (w, h) = (6000u32, 4000u32);
+    let mut covered: BTreeSet<&'static str> = BTreeSet::new();
+    for (lens_query, focals) in lenses {
+        let Some(lens) = db.find_lenses(None, lens_query).first().copied() else { continue };
+        for &focal in focals {
+            let Some(m) = crate::lens_profile::match_profile(None, Some("zz-unknown-camera"), Some(lens_query), Some(focal), Some(2.8)) else {
+                continue;
+            };
+            let mut op = serde_json::json!({ "op": "lens_correction", "profile_enabled": true });
+            op["profile"] = serde_json::to_value(&m).unwrap();
+            let with = |zero: &[&str]| {
+                let mut o = op.clone();
+                for k in zero {
+                    o[*k] = 0.into();
+                }
+                lens_correction_op(&[o])
+            };
+            let lc_dist = with(&["ca_amount", "vignette_amount"]);
+            let lc_tca = with(&["distortion_amount", "vignette_amount"]);
+            let norm = LensNorm::for_profile(lc_dist.profile.as_ref().unwrap(), w, h);
+            let manual = LensNorm::for_manual(w, h);
+            let mut up_dist = Modifier::new(lens, focal, m.crop_factor, w, h, false);
+            let has_dist = up_dist.enable_distortion_correction(lens);
+            let mut up_tca = Modifier::new(lens, focal, m.crop_factor, w, h, false);
+            let has_tca = up_tca.enable_tca_correction(lens);
+            for &(px, py) in &[(100.0f32, 100.0f32), (1000.0, 700.0), (3000.0, 1000.0), (5900.0, 3900.0), (4500.0, 2600.0)] {
+                if let (true, Some(d)) = (has_dist, m.distortion) {
+                    let (ax, ay) = lens_correct_coord(px, py, LensChannel::Green, &lc_dist, Some(norm), manual);
+                    let mut co = [0.0f32; 2];
+                    up_dist.apply_geometry_distortion(px, py, 1, 1, &mut co);
+                    assert!(
+                        (ax - co[0]).abs() < 0.05 && (ay - co[1]).abs() < 0.05,
+                        "distortion {lens_query} {focal}mm ({px},{py}): app ({ax},{ay}) vs upstream {co:?}"
+                    );
+                    covered.insert(match d {
+                        crate::lens_profile::DistortionCoeffs::Poly3 { .. } => "distortion poly3",
+                        crate::lens_profile::DistortionCoeffs::Poly5 { .. } => "distortion poly5",
+                        crate::lens_profile::DistortionCoeffs::Ptlens { .. } => "distortion ptlens",
+                    });
+                }
+                if let (true, Some(t)) = (has_tca, m.tca) {
+                    let mut co = [0.0f32; 6];
+                    up_tca.apply_subpixel_distortion(px, py, 1, 1, &mut co);
+                    for (ch, i) in [(LensChannel::Red, 0), (LensChannel::Blue, 4)] {
+                        let (ax, ay) = lens_correct_coord(px, py, ch, &lc_tca, Some(norm), manual);
+                        assert!(
+                            (ax - co[i]).abs() < 0.05 && (ay - co[i + 1]).abs() < 0.05,
+                            "TCA {lens_query} {focal}mm ({px},{py}): app ({ax},{ay}) vs upstream ({},{})",
+                            co[i],
+                            co[i + 1]
+                        );
+                    }
+                    covered.insert(match t {
+                        crate::lens_profile::TcaCoeffs::Linear { .. } => "tca linear",
+                        crate::lens_profile::TcaCoeffs::Poly3 { .. } => "tca poly3",
+                    });
+                }
+            }
+        }
+    }
+    eprintln!("lens oracle covered: {covered:?}");
+    assert!(covered.len() >= 3, "oracle compared too few model kinds: {covered:?}");
+}
+
+/// RFC-0021 SS1.2: the vignetting multiplier is applied in LINEAR light.
+/// Expected bytes are from the RFC's table (computed independently):
+/// input 128 at gain 1.5 -> 154 (the old encoded-space multiply gave 192);
+/// 192 at 1.25 -> 212 (old 240); 64 at 2.0 -> 90 (old 128); 32 at 4.1 -> 69 (old 131).
+#[test]
+fn lens_vignette_multiplier_is_applied_in_linear_light() {
+    let apply = |c: u8, gain: f32| lens_vignette_encode(srgb_to_linear(c as f32 / 255.0) * gain);
+    assert_eq!(apply(128, 1.5), 154);
+    assert_eq!(apply(192, 1.25), 212);
+    assert_eq!(apply(64, 2.0), 90);
+    assert_eq!(apply(32, 4.1), 69);
+}
+
+/// A multiplier of exactly 1 must be a passthrough for every byte value
+/// (the decode table + `lens_vignette_encode` round-trips all 256).
+#[test]
+fn lens_vignette_decode_encode_round_trips_every_byte() {
+    for c in 0..=255u8 {
+        assert_eq!(lens_vignette_encode(srgb_to_linear(c as f32 / 255.0)), c, "byte {c}");
+    }
+}
+
+/// Out-of-frame source samples render BLACK on the CPU (and, since
+/// RFC-0021, on the GPU): a pincushion profile pulls the corner's source
+/// outside the frame.
+#[test]
+fn lens_correction_out_of_frame_samples_are_black() {
+    let mut image = RgbImage::from_pixel(41, 41, image::Rgb([200, 200, 200]));
+    apply_lens_correction(
+        &mut image,
+        &lens_correction_op_json(serde_json::json!({
+            "profile_enabled": true, "vignette_amount": 0, "ca_amount": 0,
+            "profile": { "crop_factor": 1.0, "real_focal": 24.0, "distortion": { "model": "poly3", "k1": 1.0 } },
+        })),
+    );
+    assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0], "corner sources outside the frame");
+    assert_eq!(image.get_pixel(20, 20).0, [200, 200, 200], "the centre samples in-frame");
 }
 
 #[test]
@@ -475,4 +632,21 @@ fn apply_perspective_scale_up_alone_never_reveals_blank_corners() {
     for pixel in image.pixels() {
         assert_ne!(*pixel, image::Rgb([0, 0, 0]), "scale-up-only must never sample out of bounds");
     }
+}
+
+/// Opt-in CPU cost report (wall-clock thresholds flake on shared CI):
+/// `cargo test --release --lib lens_cpu_cost_report -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn lens_cpu_cost_report() {
+    let (w, h) = (6000u32, 4000u32);
+    let m = crate::lens_profile::match_profile(Some("Canon"), Some("EOS 5D Mark III"), Some("Canon EF 24-70mm f/2.8L II USM"), Some(24.0), Some(2.8));
+    let Some(m) = m else { return };
+    let mut op = serde_json::json!({ "profile_enabled": true });
+    op["profile"] = serde_json::to_value(&m).unwrap();
+    let stack = lens_correction_op_json(op);
+    let mut img = RgbImage::from_pixel(w, h, image::Rgb([120, 130, 140]));
+    let t = std::time::Instant::now();
+    apply_lens_correction(&mut img, &stack);
+    eprintln!("apply_lens_correction 24 MP (distortion+TCA+vignette): {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
 }

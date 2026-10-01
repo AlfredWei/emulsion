@@ -27,6 +27,7 @@
   const grainWgsl = src.slice(start, i + 1);   // struct, uniform @binding(16), consts, hash, noise, grainDelta
 
   // ---- 2. a compute pass: N x N grid of grainDelta values (+ optional raw hash)
+  const legacy = src.includes('fn grainHash');
   const wgsl = `
     ${grainWgsl}
     struct Job { n: u32, mode: u32, ox: u32, oy: u32 };
@@ -39,8 +40,15 @@
       let c = vec2<f32>(f32(id.x + job.ox), f32(id.y + job.oy));
       var v: f32;
       if (job.mode == 0u) { v = grainDelta(c); }                     // the whole effect
-      else if (job.mode == 1u) { v = grainHash(c); }                  // hash on integer coords
-      else { v = sin(inv[id.y * job.n + id.x]); }                     // mode 2: bare sin() of supplied args
+      else if (job.mode == 1u) { v = ${legacy ? 'grainHash(c)' : '0.0'}; }   // legacy sin hash on integer coords
+      else if (job.mode == 2u) { v = sin(inv[id.y * job.n + id.x]); } // bare sin() of supplied args
+      else if (job.mode == 3u) {                                       // grainParticleNoise at supplied cell-space points
+        let i = id.y * job.n + id.x;
+        v = ${legacy ? '0.0' : 'grainParticleNoise(vec2<f32>(inv[2u * i], inv[2u * i + 1u]), grain.roughness / 100.0, 0u)'};
+      } else {                                                         // particleHash(ix, iy, 0) as raw u32 bits
+        let i = id.y * job.n + id.x;
+        v = ${legacy ? '0.0' : 'bitcast<f32>(particleHash(i32(inv[2u * i]), i32(inv[2u * i + 1u]), 0u))'};
+      }
       outv[id.y * job.n + id.x] = v;
     }`;
   const module = device.createShaderModule({ code: wgsl });
@@ -112,6 +120,22 @@
         gpuSinAbsErr: { median: +median(sinErr).toPrecision(2), p99: +pct(sinErr, 0.99).toPrecision(2) },
         hashDiff: { median: +median(diffs).toFixed(3), p99: +pct(diffs, 0.99).toFixed(3) },  // 0.25 == two independent uniforms
       });
+    }
+  }
+
+  // ---- 3b. RFC-0020 golden vectors on the REAL GPU (new WGSL only) ---------
+  // Hash: must be EXACTLY equal to the numpy/Rust values. Noise: within 1e-4.
+  if (!legacy) {
+    const H = [[0,0,0xae6f80f1],[1,0,0xa07c7a97],[0,1,0x8e374fe0],[1,1,0xa290702b],[17,42,0xf50c661e],[4095,3071,0x30ed22ee],[123456,654321,0x4cdf1783]];
+    const hin = new Float32Array(H.flatMap(([x, y]) => [x, y]));
+    const hraw = new Uint32Array((await run({ n: 8, mode: 4, input: hin })).buffer);
+    out.goldenHash = H.map(([x, y, want], k) => ({ x, y, want: want >>> 0, got: hraw[k], exact: hraw[k] === (want >>> 0) }));
+    const P = [[0,0],[3.25,7.75],[100.5,200.125],[1234.5,2345.5]];
+    const WANT = { 0: [-0.154646,0.932119,-0.581099,1.521419], 50: [-0.257437,0.772472,-1.018404,1.568755], 100: [-0.167784,0.286400,-1.398528,1.504852] };
+    out.goldenNoise = [];
+    for (const [rough, want] of Object.entries(WANT)) {
+      const got = await run({ n: 8, mode: 3, roughness: +rough, input: new Float32Array(P.flat()) });
+      out.goldenNoise.push({ roughness: +rough, maxAbsErr: Math.max(...want.map((w, k) => Math.abs(got[k] - w))) });
     }
   }
 

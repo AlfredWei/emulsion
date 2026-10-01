@@ -190,6 +190,14 @@ Edits with non-default Size re-render at a different *pixel* grain size on any i
 
 **CPU cost** is unchanged within noise: 56.8 ns/px single-threaded release (RFC-0020 measured ~60), 179 ms for a 3.1 MP preview. `r(c, ρ)` adds one `sqrt` per pixel.
 
+### Slice 2 (tonal response)
+
+1. **Shipped as designed:** `w(Y) = (1 - t) + t·4Y(1 - Y)` on the pre-grain Rec.709 luma of the encoded pixel (clamped to 0..1), `tone` stored in the `grain` op, default 0, `Tone` slider after Roughness. `tone = 0` returns exactly 1.0 (CPU and GPU), so every stored edit and the built-in presets are bit-for-bit unchanged. The GPU reads the tone through the existing Grain uniform (the old padding float; no buffer change).
+2. **The clipping item is closed, as a measured fact:** on a 6000×16 strip at Amount 100, uniform grain (`tone = 0`) lifts pure black (mean > 1) and darkens pure white (mean < 254); at `tone = 100` both stay *exactly* 0 and 255. A shadow at 26/255 (w = 0.366) falls from std 12.8 to 4.8 levels (0.375 measured); mid-gray is unchanged (13.05 → 13.05).
+3. **A consequence of slice 1 that the slice-2 tests surfaced:** because grain size is frame-relative, a *small* test image has a sub-pixel cell and (correctly, as an exported-then-downsampled image would) almost no grain — a 96×96 image at Amount 100 measured std 0.65 levels, not 13. Tests that need real grain use a 6000×16 strip (the 24 MP-class long edge with almost no area).
+4. **Partial clipping remains for `0 < t < 1`:** `w(0) = 1 - t`, so at Tone 50 a pure black pixel still receives half the delta and is lifted by half as much as at Tone 0; only Tone 100 removes it. That is the trade of a one-parameter dome (§3.3), not a defect; the stock presets (§2.4) use Tone 40–50, so a deep black is *reduced*, not clean.
+5. **The e2e scenario is a weak witness for the weight's value** (the road strip is mid-tone, where `w` is near 1); the numbers are pinned by the Rust hand-value test and the real-GPU probe (§A.2b: `maxToneWeightAbsDiff` 3.3e-8 against the same hand values; the GPU weight at Y = 0, Tone 100 is 2.2e-8, not exactly 0 — immaterial against the 1/255 step).
+
 ## Appendix A: how the findings were verified
 
 ### A.1 The published figures (§2)
@@ -210,7 +218,7 @@ What was checked and found:
 
 ### A.2b Slice-1 GPU probe
 
-[`gpu_grain_probe.js`](RFC-0022-appendix/gpu_grain_probe.js) slices the grain WGSL verbatim out of the app's shader string, runs it in a private compute pipeline on a real GPU (Apple / Metal 3), and compares it with the Rust golden table (`GRAIN_GOLDEN_CASES` in `develop_engine/tests/effects.rs`): 8 cases covering a 24 MP frame, the 2048-px preview, a 3× export, 1000 px and 4000 px frames, both roughness extremes. Max |GPU − CPU| = **1.5e-5** (on a value of 0.026; the others are ≤ 2.6e-6), against a 1/255 = 3.9e-3 output step. It also reports the GPU std at the 24 MP defaults (0.0513) and the preview-vs-export ratio above.
+[`gpu_grain_probe.js`](RFC-0022-appendix/gpu_grain_probe.js) slices the grain WGSL verbatim out of the app's shader string, runs it in a private compute pipeline on a real GPU (Apple / Metal 3), and compares it with the Rust golden table (`GRAIN_GOLDEN_CASES` in `develop_engine/tests/effects.rs`): 8 cases covering a 24 MP frame, the 2048-px preview, a 3× export, 1000 px and 4000 px frames, both roughness extremes. Max |GPU − CPU| = **1.5e-5** (on a value of 0.026; the others are ≤ 2.6e-6), against a 1/255 = 3.9e-3 output step. It also reports the GPU std at the 24 MP defaults (0.0513) and the preview-vs-export ratio above. Slice 2 added `grainToneWeight` checked on the GPU against the Rust hand values (12 cases incl. out-of-range luma): max |GPU − expected| = 3.3e-8.
 
 ### A.3 Limits of this verification (stated plainly)
 

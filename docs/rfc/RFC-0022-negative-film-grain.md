@@ -177,6 +177,19 @@ Edits with non-default Size re-render at a different *pixel* grain size on any i
 - RFC reviewed and merged; each slice (§7) lands with the §6 tests, real-GPU numbers recorded, and its own corrections section.
 - At milestone close: every §2.4 number carries its tag in the shipped documentation; the export = preview comparison is recorded with measured numbers; the side-by-side of stocks on a fixed test image shows a visible difference in *character*, not only strength.
 
+## Corrected during implementation
+
+### Slice 1 (frame-relative size + footprint compensation)
+
+1. **The footprint constant depends on Roughness.** §3.4 fitted `r(c) = c/sqrt(c² + 0.7)` at ρ = 0.5 only and said ρ = 0 and 1 would be re-checked. They were, in the Rust suite (`grain_footprint_ratio_matches_the_supersampled_ground_truth`, 8×8 supersampled ground truth): with the single constant the error reached **+14%** at ρ = 1, c = 0.25 (rougher particles are smaller, so they lose more amplitude to pixel integration; ρ = 0 is under-corrected the other way, −7%). The shipped form is `r(c, ρ) = c / sqrt(c² + 0.6 + 0.3·ρ)`, within **3.3%** of the measured ratio at every one of 24 (ρ, c) points (ρ ∈ {0, 0.5, 1} × c ∈ {0.25 … 6}); the test asserts 5%.
+2. **`GRAIN_SIGMA` is 0.0548**, not "≈ 0.0545 to be fixed": it is `0.0511 / r(2.25, 0.5)` with the corrected `r`, and the calibration test (24 MP, defaults, Amount 100) still lands within 5% of the old 0.0511 (GPU measured: 0.0513).
+3. **No new uniform on the GPU.** §4 expected the long edge to be a per-render uniform; `fs_premask` already holds the uncropped source texture, so `grainDelta(coord, longEdge)` takes `max(textureDimensions(gradedTex))`. The Grain buffer layout is unchanged.
+4. **Grain-before-crop was checked, not assumed.** CPU: `apply_edit_stack` runs before `apply_crop` at all three call sites (`export.rs`, `import.rs` thumbnails, `preview_cache.rs`); the long edge is the pipeline image's, which is the uncropped frame at each of them (thumbnails and the preview are simply smaller frames; relative size holds, and `r(c)` handles the sub-pixel case). GPU: the shader renders the whole uncropped texture; there is no crop in the shader files.
+
+**Measured result of the milestone's own criterion** (preview std vs the same frame rendered at 3× and box-downsampled to the preview grid, Amount 100, ρ = 0.5, 64×64 patch): downsampled-export / preview std = **0.958** at Size 25, **0.992** at Size 60, **0.996** at Size 100 on the CPU path; **0.972** at Size 25 on a real GPU (Apple / Metal 3). The residual at default Size is the part `r(c)` cannot fix: pixelwise correlation between the preview and the downsampled export is 0.57 at Size 25, 0.81 at Size 60 and 0.90 at Size 100 — same amplitude, same character, but not the same pattern, as §3.4 said. (The 3× average also samples the field a third of a preview pixel off the preview's own sample point; part of the low correlation at fine sizes is that, not a defect of the generator.)
+
+**CPU cost** is unchanged within noise: 56.8 ns/px single-threaded release (RFC-0020 measured ~60), 179 ms for a 3.1 MP preview. `r(c, ρ)` adds one `sqrt` per pixel.
+
 ## Appendix A: how the findings were verified
 
 ### A.1 The published figures (§2)
@@ -195,11 +208,15 @@ What was checked and found:
 
 [`footprint_study.py`](RFC-0022-appendix/footprint_study.py) imports the RFC-0020 reference generator, evaluates the continuous field at 8×8 sub-pixel positions per pixel and averages (the "box-averaged" column) for cell sizes 0.25–6 px, compares its std and adjacent-pixel correlation with point sampling, and prints the closed-form `r(c)` next to the measurement.
 
+### A.2b Slice-1 GPU probe
+
+[`gpu_grain_probe.js`](RFC-0022-appendix/gpu_grain_probe.js) slices the grain WGSL verbatim out of the app's shader string, runs it in a private compute pipeline on a real GPU (Apple / Metal 3), and compares it with the Rust golden table (`GRAIN_GOLDEN_CASES` in `develop_engine/tests/effects.rs`): 8 cases covering a 24 MP frame, the 2048-px preview, a 3× export, 1000 px and 4000 px frames, both roughness extremes. Max |GPU − CPU| = **1.5e-5** (on a value of 0.026; the others are ≤ 2.6e-6), against a 1/255 = 3.9e-3 output step. It also reports the GPU std at the 24 MP defaults (0.0513) and the preview-vs-export ratio above.
+
 ### A.3 Limits of this verification (stated plainly)
 
 - **Data sheets only, and a small set.** Seven stocks were considered; the numeric amplitude relationship between *any two* stocks rests on one pair (Portra 400 vs Gold 200) and one assumed JND ratio. Everything else is tagged **A** or **R** in §2.4 and the RFC claims nothing more.
 - **PGI data are for prints of a given magnification viewed at 14 inches** with diffuse printing; mapping that to an on-screen image at arbitrary zoom is the app's pixel scale, not something the data validates.
 - **No grain-size data exists** for these stocks in the sources used; sizes in §2.4 are aesthetic placements around the order of magnitude that the milestone's frame calibration implies (10–20 µm).
-- **The footprint study uses one roughness (0.5)** and the RFC-0020 kernel; `r(c)` was fitted, not derived, and will be re-checked at ρ = 0 and 1 in slice 1's tests.
+- **`r(c, ρ)` is fitted, not derived**, to the RFC-0020 kernel at three roughness values; it is within 3.3% at those, and interpolated linearly in between (not measured at other ρ).
 - **No visual evaluation yet.** Whether the proposed stock numbers *look* like their stocks is the tuning step in slice 4, not something this RFC establishes.
 - **The CPU cost of colour grain is a projection** from RFC-0020's measured 60 ns/px, not a measurement.

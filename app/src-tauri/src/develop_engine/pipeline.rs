@@ -49,6 +49,9 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
     // width-only `radius` into a true circle in pixel space regardless of
     // the image's own aspect ratio.
     let aspect = height as f32 / width as f32;
+    // Grain size is frame-relative (RFC-0022 §3.4): the pipeline image is the
+    // whole uncropped frame at every call site (crop runs after).
+    let grain_long_edge = width.max(height) as f32;
     let (w, h) = (width as usize, height as usize);
 
     // Pass 1: the existing global chain (exposure -> ... -> split toning),
@@ -247,7 +250,7 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             *c *= vf;
         }
 
-        let gd = grain_delta((x as f32, y as f32), &grain);
+        let gd = grain_delta((x as f32, y as f32), &grain, grain_long_edge);
         for c in rgb.iter_mut() {
             *c += gd;
         }

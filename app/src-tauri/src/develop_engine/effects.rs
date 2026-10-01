@@ -242,38 +242,70 @@ pub(super) fn grain_particle_noise(p: (f32, f32), roughness01: f32, seed: u32) -
     sum * grain_particle_norm(rho)
 }
 
-/// Film grain (M3, reworked by RFC-0020): a pure per-pixel procedural noise
-/// overlay -- like Vignette, no neighboring-pixel data needed, so it folds
-/// directly into the existing final per-pixel loop. Applied globally right
-/// after Vignette, before any mask (matching real Lightroom's own
-/// Effects-panel order: Post-Crop Vignette, then Grain, both above Local
-/// Adjustments).
+/// Film grain (M3, reworked by RFC-0020, sized per RFC-0022 §3.4): a pure
+/// per-pixel procedural noise overlay -- like Vignette, no neighboring-pixel
+/// data needed, so it folds directly into the existing final per-pixel
+/// loop. Applied globally right after Vignette, before any mask (matching
+/// real Lightroom's own Effects-panel order: Post-Crop Vignette, then
+/// Grain, both above Local Adjustments).
 ///
-/// `size` maps to the particle-lattice cell width in PIXELS (fixed range
-/// 1..GRAIN_MAX_CELL_PX, same "fixed absolute pixel scale, not resolution-
-/// scaled" named limitation Dehaze/Texture/Clarity's own radii already
-/// accept) -- larger cells read as coarser, chunkier grain. `roughness`
-/// makes the particles more heterogeneous (even <-> clumpy) and, unlike the
-/// pre-RFC-0020 smooth<->blocky blend, does NOT change the strength: the
-/// noise is unit variance at every roughness. `amount` scales the resulting
-/// additive luminance delta (added equally to all three channels, same
-/// "preserve chroma via an additive delta" shape Texture/Clarity's own
-/// formula uses) -- real film grain is predominantly a luminance/density
-/// effect, not per-channel chromatic noise. `GRAIN_SIGMA` is the delta's
-/// standard deviation at amount=100, calibrated to the pre-RFC-0020 field's
-/// measured 0.0511 at the default Size/Roughness.
-pub(super) const GRAIN_MAX_CELL_PX: f32 = 6.0;
+/// `size` is FRAME-RELATIVE (RFC-0022 §3.4): the particle-lattice cell is
+/// `GRAIN_CELL_UM_MIN + size/100 * GRAIN_CELL_UM_SPAN` micrometres of a
+/// 36 mm frame, converted to pixels with the image's own long edge, so the
+/// 2048-px interactive preview and a 6000-px export show the same grain
+/// relative to the picture. Grain runs before crop, so a crop or straighten
+/// carries the grain with the picture, as a real negative would. At
+/// `long_edge = 6000` (24 MP) Size 25 is 2.25 px, exactly the pre-RFC-0022
+/// default, so a 24 MP frame keeps its look.
+///
+/// `grain_footprint_ratio` makes each pixel's std equal the std of the
+/// continuous field integrated over that pixel (what an export downsampled
+/// from a high-resolution render holds), so sub-pixel grain in the preview
+/// is not overstated by point sampling. It matches amplitude, not spectrum
+/// (RFC-0022 §3.4).
+///
+/// `roughness` makes the particles more heterogeneous (even <-> clumpy) and
+/// does NOT change the strength: the noise is unit variance at every
+/// roughness. `amount` scales the resulting additive luminance delta (added
+/// equally to all three channels, same "preserve chroma via an additive
+/// delta" shape Texture/Clarity's own formula uses). `GRAIN_SIGMA` is the
+/// std of the CONTINUOUS field at amount=100: the pixel std at the default
+/// Size and Roughness on a 24 MP frame is `GRAIN_SIGMA * r(2.25, 0.5)` = 0.0511, the
+/// pre-RFC-0020 field's measured value.
+pub(super) const GRAIN_FRAME_UM: f32 = 36_000.0;
+pub(super) const GRAIN_CELL_UM_MIN: f32 = 6.0;
+pub(super) const GRAIN_CELL_UM_SPAN: f32 = 30.0;
 
-pub(super) const GRAIN_SIGMA: f32 = 0.05;
+/// Footprint-compensation constants of `r(c, rho) = c / sqrt(c^2 + K2)`,
+/// `K2 = K2_BASE + K2_PER_ROUGHNESS * rho`: fitted to the box-averaged std
+/// ratio measured against the supersampled field at rho 0, 0.5 and 1
+/// (RFC-0022 §3.4 as corrected during implementation: rougher particles are
+/// smaller, so they lose more amplitude to pixel integration).
+pub(super) const GRAIN_FOOTPRINT_K2_BASE: f32 = 0.6;
+pub(super) const GRAIN_FOOTPRINT_K2_PER_ROUGHNESS: f32 = 0.3;
+
+pub(super) const GRAIN_SIGMA: f32 = 0.0548;
 
 /// The app's grain is the same pattern for every image (unseeded).
 const GRAIN_SEED: u32 = 0;
 
-pub(super) fn grain_delta(coord: (f32, f32), g: &Grain) -> f32 {
+/// Grain cell width in pixels for a `size` slider value on an image whose
+/// long edge is `long_edge` pixels.
+pub(super) fn grain_cell_px(size: f32, long_edge: f32) -> f32 {
+    (GRAIN_CELL_UM_MIN + (size / 100.0) * GRAIN_CELL_UM_SPAN) * long_edge / GRAIN_FRAME_UM
+}
+
+/// RFC-0022 §3.4: per-pixel std ratio of the pixel-integrated field to the
+/// point-sampled one, for a grain cell `c` pixels wide at roughness `rho` (0..1).
+pub(super) fn grain_footprint_ratio(c: f32, rho: f32) -> f32 {
+    c / (c * c + GRAIN_FOOTPRINT_K2_BASE + GRAIN_FOOTPRINT_K2_PER_ROUGHNESS * rho).sqrt()
+}
+
+pub(super) fn grain_delta(coord: (f32, f32), g: &Grain, long_edge: f32) -> f32 {
     if g.amount == 0.0 {
         return 0.0;
     }
-    let cell = 1.0 + (g.size / 100.0) * (GRAIN_MAX_CELL_PX - 1.0);
+    let cell = grain_cell_px(g.size, long_edge);
     let noise = grain_particle_noise((coord.0 / cell, coord.1 / cell), g.roughness / 100.0, GRAIN_SEED);
-    noise * (g.amount / 100.0) * GRAIN_SIGMA
+    noise * (g.amount / 100.0) * GRAIN_SIGMA * grain_footprint_ratio(cell, g.roughness / 100.0)
 }

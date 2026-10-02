@@ -394,18 +394,37 @@ describe("HSL band centers", () => {
 describe("Grain tone (RFC-0022 slice 2)", () => {
   test("an op without `tone` reads as 0, so stored edits and built-in presets are unchanged", () => {
     const stack = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "grain", amount: 25, size: 30, roughness: 40 }] });
-    expect(getGrain(stack)).toEqual({ amount: 25, size: 30, roughness: 40, tone: 0 });
+    expect(getGrain(stack)).toEqual({ amount: 25, size: 30, roughness: 40, tone: 0, chroma: 0 });
   });
 
   test("a tone patch keeps the other fields, and a later patch keeps tone", () => {
     const base = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "grain", amount: 25, size: 30, roughness: 40 }] });
     const toned = upsertGrain(base, { tone: 70 });
-    expect(getGrain(toned)).toEqual({ amount: 25, size: 30, roughness: 40, tone: 70 });
-    expect(getGrain(upsertGrain(toned, { amount: 55 }))).toEqual({ amount: 55, size: 30, roughness: 40, tone: 70 });
+    expect(getGrain(toned)).toEqual({ amount: 25, size: 30, roughness: 40, tone: 70, chroma: 0 });
+    expect(getGrain(upsertGrain(toned, { amount: 55 }))).toEqual({ amount: 55, size: 30, roughness: 40, tone: 70, chroma: 0 });
   });
 
   test("tone is the fourth uniform float, where the WGSL Grain struct reads it", () => {
-    const data = buildGrainUniformData({ amount: 10, size: 20, roughness: 30, tone: 40 });
-    expect(Array.from(data)).toEqual([10, 20, 30, 40]);
+    const data = buildGrainUniformData({ amount: 10, size: 20, roughness: 30, tone: 40, chroma: 50 });
+    expect(Array.from(data).slice(0, 4)).toEqual([10, 20, 30, 40]);
+  });
+});
+
+describe("Grain colour (RFC-0022 slice 3)", () => {
+  test("an op without `chroma` reads as 0 (mono grain), so stored edits and built-in presets are unchanged", () => {
+    const stack = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "grain", amount: 25, size: 30, roughness: 40, tone: 20 }] });
+    expect(getGrain(stack).chroma).toBe(0);
+  });
+
+  test("a chroma patch keeps the other fields, and later patches keep chroma", () => {
+    const base = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "grain", amount: 25, size: 30, roughness: 40, tone: 20 }] });
+    const coloured = upsertGrain(base, { chroma: 80 });
+    expect(getGrain(coloured)).toEqual({ amount: 25, size: 30, roughness: 40, tone: 20, chroma: 80 });
+    expect(getGrain(upsertGrain(coloured, { tone: 50 })).chroma).toBe(80);
+  });
+
+  test("the uniform is 8 floats (the WGSL Grain struct is 32 bytes): chroma in slot 4, three zero pads", () => {
+    const data = buildGrainUniformData({ amount: 10, size: 20, roughness: 30, tone: 40, chroma: 50 });
+    expect(Array.from(data)).toEqual([10, 20, 30, 40, 50, 0, 0, 0]);
   });
 });

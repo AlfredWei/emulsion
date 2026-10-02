@@ -471,4 +471,20 @@ describe("Develop CPU/GPU parity", () => {
       await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain Tone 100 (u+${du})`);
     }
   });
+
+  // RFC-0022 slice 3: colour grain. Unlike Tone this IS a strong witness: at
+  // Colour 100 the three channels carry independent fields (distinct seeds), so
+  // a swapped/mismatched channel seed, a wrong mix, or a uniform-layout slip
+  // moves one channel by ~13/255 and breaks parity on that channel. Tone is
+  // reset first so only the colour path is under test.
+  it("Grain: colour grain renders the same per-channel pattern on CPU and GPU", async () => {
+    await setSliderValue("grain-amount", 100);
+    await setSliderValue("grain-size", 30);
+    await setSliderValue("grain-roughness", 60);
+    await setSliderValue("grain-tone", 0);
+    await setSliderValue("grain-chroma", 100);
+    for (const du of [0, 0.005, 0.011]) {
+      await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain Colour 100 (u+${du})`);
+    }
+  });
 });

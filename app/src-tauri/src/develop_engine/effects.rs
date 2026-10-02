@@ -132,11 +132,15 @@ pub(super) struct Grain {
     /// RFC-0022 §3.3: 0 = uniform amplitude (RFC-0020 behaviour), 100 = the
     /// grain fades to nothing at pure black and pure white.
     pub(super) tone: f32,
+    /// RFC-0022 §3.1: 0 = one shared (luminance) noise field added to R, G
+    /// and B (RFC-0020 behaviour), 100 = three independent per-channel fields
+    /// (colour-negative dye-layer grain).
+    pub(super) chroma: f32,
 }
 
 impl Default for Grain {
     fn default() -> Self {
-        Grain { amount: 0.0, size: 25.0, roughness: 50.0, tone: 0.0 }
+        Grain { amount: 0.0, size: 25.0, roughness: 50.0, tone: 0.0, chroma: 0.0 }
     }
 }
 
@@ -150,6 +154,7 @@ pub(super) fn grain_op(ops: &[serde_json::Value]) -> Grain {
         size: field("size", 25.0),
         roughness: field("roughness", 50.0),
         tone: field("tone", 0.0),
+        chroma: field("chroma", 0.0),
     }
 }
 
@@ -331,4 +336,41 @@ pub(super) fn grain_tone_weight(luma: f32, g: &Grain) -> f32 {
     let t = g.tone / 100.0;
     let y = luma.clamp(0.0, 1.0);
     (1.0 - t) + t * 4.0 * y * (1.0 - y)
+}
+
+/// RFC-0022 §3.2: the three per-channel noise seeds (R, G, B). Fixed
+/// constants, not exposed; distinct from the shared field's seed 0 and from
+/// each other by far more than the `k * 7919` per-particle offsets
+/// `grain_particle_noise` adds, so no two particle streams coincide. (The
+/// first 32 bits of the fractional parts of sqrt(2), sqrt(3), sqrt(5).)
+pub(super) const GRAIN_CHANNEL_SEEDS: [u32; 3] = [0x6A09_E667, 0xBB67_AE85, 0x3C6E_F372];
+
+/// RFC-0022 §3.1 colour grain: the per-channel delta (before the tonal
+/// weight). `m = chroma / 100`; every channel is
+/// `SIGMA * amount * r * (sqrt(1-m) * n_shared + sqrt(m) * n_c)`. The two
+/// noise terms are independent unit-variance fields, so `a^2 + b^2 = 1` keeps
+/// every channel at unit variance at every `m` (the slider moves colour
+/// character, never strength), and the cross-channel correlation is exactly
+/// `1 - m`. `chroma = 0` evaluates ONE noise field (identical to `grain_delta`
+/// on all channels -- bit-for-bit, the existing cost); `chroma = 100` skips the
+/// shared field and evaluates three; anything between evaluates four.
+pub(super) fn grain_delta_rgb(coord: (f32, f32), g: &Grain, long_edge: f32) -> [f32; 3] {
+    if g.amount == 0.0 {
+        return [0.0; 3];
+    }
+    let m = (g.chroma / 100.0).clamp(0.0, 1.0);
+    if m == 0.0 {
+        return [grain_delta(coord, g, long_edge); 3];
+    }
+    let cell = grain_cell_px(g.size, long_edge);
+    let rho = g.roughness / 100.0;
+    let p = (coord.0 / cell, coord.1 / cell);
+    let scale = (g.amount / 100.0) * GRAIN_SIGMA * grain_footprint_ratio(cell, rho);
+    let shared = if m < 1.0 { (1.0 - m).sqrt() * grain_particle_noise(p, rho, GRAIN_SEED) } else { 0.0 };
+    let b = m.sqrt();
+    let mut out = [0.0f32; 3];
+    for (o, seed) in out.iter_mut().zip(GRAIN_CHANNEL_SEEDS) {
+        *o = (shared + b * grain_particle_noise(p, rho, seed)) * scale;
+    }
+    out
 }

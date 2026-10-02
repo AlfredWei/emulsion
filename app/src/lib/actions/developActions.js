@@ -137,7 +137,7 @@ export function handlePerspectiveChange(
 }
 
 export function handleGrainChange(
-  /** @type {Partial<{amount: number, size: number, roughness: number, tone: number}>} */ patch,
+  /** @type {Partial<{amount: number, size: number, roughness: number, tone: number, chroma: number}>} */ patch,
 ) {
   develop.editStack = upsertGrain(develop.editStack, patch);
   develop.scheduleFlush("Grain");

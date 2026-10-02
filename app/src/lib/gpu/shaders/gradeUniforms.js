@@ -63,6 +63,10 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
       size: f32,      // 0..100, frame-relative cell width (RFC-0022 §3.4)
       roughness: f32, // 0..100, even<->clumpy particles (RFC-0020)
       tone: f32,      // 0..100, dome-shaped tonal weight (RFC-0022 §3.3)
+      chroma: f32,    // 0..100, shared <-> per-channel noise (RFC-0022 §3.1)
+      _pad0: f32,
+      _pad1: f32,
+      _pad2: f32,
     };
     @group(0) @binding(16) var<uniform> grain: Grain;
 
@@ -138,6 +142,39 @@ export const gradeUniforms = `    // Tone curve LUT (M3): 256 f32 samples packed
         }
       }
       return sum * grainParticleNorm(rho);
+    }
+
+    // RFC-0022 §3.2: per-channel noise seeds, mirrors GRAIN_CHANNEL_SEEDS.
+    const GRAIN_SEED_R: u32 = 0x6A09E667u;
+    const GRAIN_SEED_G: u32 = 0xBB67AE85u;
+    const GRAIN_SEED_B: u32 = 0x3C6EF372u;
+
+    // RFC-0022 §3.1 colour grain: a port of effects.rs's grain_delta_rgb
+    // (before the tonal weight). chroma 0 returns grainDelta on all three
+    // channels (one noise field); chroma 100 skips the shared field.
+    fn grainDeltaRgb(coord: vec2<f32>, longEdge: f32) -> vec3<f32> {
+      if (grain.amount == 0.0) {
+        return vec3<f32>(0.0);
+      }
+      let m = clamp(grain.chroma / 100.0, 0.0, 1.0);
+      if (m == 0.0) {
+        return vec3<f32>(grainDelta(coord, longEdge));
+      }
+      let rho = grain.roughness / 100.0;
+      let cellPx = (GRAIN_CELL_UM_MIN + (grain.size / 100.0) * GRAIN_CELL_UM_SPAN) * longEdge / GRAIN_FRAME_UM;
+      let footprint = cellPx / sqrt(cellPx * cellPx + GRAIN_FOOTPRINT_K2_BASE + GRAIN_FOOTPRINT_K2_PER_ROUGHNESS * rho);
+      let scale = (grain.amount / 100.0) * GRAIN_SIGMA * footprint;
+      let p = coord / cellPx;
+      var lumaNoise = 0.0;
+      if (m < 1.0) {
+        lumaNoise = sqrt(1.0 - m) * grainParticleNoise(p, rho, 0u);
+      }
+      let b = sqrt(m);
+      return vec3<f32>(
+        (lumaNoise + b * grainParticleNoise(p, rho, GRAIN_SEED_R)) * scale,
+        (lumaNoise + b * grainParticleNoise(p, rho, GRAIN_SEED_G)) * scale,
+        (lumaNoise + b * grainParticleNoise(p, rho, GRAIN_SEED_B)) * scale
+      );
     }
 
     // RFC-0022 §3.3: grain amplitude weight at pre-grain luma (the argument), a port

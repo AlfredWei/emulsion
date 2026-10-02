@@ -265,7 +265,7 @@ const GRAIN_TEST_LONG_EDGE: f32 = 6000.0;
 /// so a given Amount does not silently get stronger or weaker.
 #[test]
 fn grain_delta_std_at_defaults_matches_the_pre_rfc_calibration_target() {
-    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone: 0.0 };
+    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone: 0.0, chroma: 0.0 };
     let mut v = Vec::new();
     for y in 0..256 {
         for x in 0..256 {
@@ -383,7 +383,7 @@ fn grain_particle_noise_seed_selects_an_independent_field() {
 /// op's identity value already gets.
 #[test]
 fn grain_amount_zero_is_an_exact_passthrough() {
-    let g = Grain { amount: 0.0, size: 80.0, roughness: 90.0, tone: 0.0 };
+    let g = Grain { amount: 0.0, size: 80.0, roughness: 90.0, tone: 0.0, chroma: 0.0 };
     assert_eq!(grain_delta((123.0, 456.0), &g, GRAIN_TEST_LONG_EDGE), 0.0);
     assert_eq!(grain_delta((0.0, 0.0), &g, GRAIN_TEST_LONG_EDGE), 0.0);
 }
@@ -395,7 +395,7 @@ fn grain_amount_zero_is_an_exact_passthrough() {
 /// explicitly rather than leaving it implicit.
 #[test]
 fn grain_delta_is_deterministic_for_the_same_coordinate() {
-    let g = Grain { amount: 60.0, size: 40.0, roughness: 30.0, tone: 0.0 };
+    let g = Grain { amount: 60.0, size: 40.0, roughness: 30.0, tone: 0.0, chroma: 0.0 };
     let a = grain_delta((17.0, 42.0), &g, GRAIN_TEST_LONG_EDGE);
     let b = grain_delta((17.0, 42.0), &g, GRAIN_TEST_LONG_EDGE);
     assert_eq!(a, b);
@@ -409,7 +409,7 @@ fn grain_delta_is_deterministic_for_the_same_coordinate() {
 #[test]
 fn grain_size_sets_the_feature_size() {
     let adjacent_corr = |size: f32| -> f64 {
-        let g = Grain { amount: 100.0, size, roughness: 50.0, tone: 0.0 };
+        let g = Grain { amount: 100.0, size, roughness: 50.0, tone: 0.0, chroma: 0.0 };
         let n = 128;
         let mut f = Vec::new();
         for y in 0..n {
@@ -437,8 +437,8 @@ fn grain_size_sets_the_feature_size() {
 /// confirming the knob isn't a no-op.
 #[test]
 fn grain_roughness_zero_and_one_hundred_generally_differ() {
-    let smooth = Grain { amount: 100.0, size: 50.0, roughness: 0.0, tone: 0.0 };
-    let rough = Grain { amount: 100.0, size: 50.0, roughness: 100.0, tone: 0.0 };
+    let smooth = Grain { amount: 100.0, size: 50.0, roughness: 0.0, tone: 0.0, chroma: 0.0 };
+    let rough = Grain { amount: 100.0, size: 50.0, roughness: 100.0, tone: 0.0, chroma: 0.0 };
     let coord = (11.3, 27.9);
     assert_ne!(grain_delta(coord, &smooth, GRAIN_TEST_LONG_EDGE), grain_delta(coord, &rough, GRAIN_TEST_LONG_EDGE));
 }
@@ -460,19 +460,26 @@ fn grain_absent_op_is_exact_passthrough_through_edit_stack() {
 #[test]
 #[ignore]
 fn grain_cpu_cost_report() {
-    let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone: 0.0 };
-    let (w, h) = (2048usize, 1536usize); // 3.1 MP, ~ the interactive preview cap
-    let t = std::time::Instant::now();
-    let mut acc = 0.0f32;
-    for y in 0..h {
-        for x in 0..w {
-            acc += grain_delta((x as f32, y as f32), &g, w as f32);
+    // RFC-0022 slice 3: mono (chroma 0: one noise field), partial (4 fields), and
+    // full colour (3 fields) -- the per-pixel kernel `apply_edit_stack` runs.
+    for chroma in [0.0f32, 50.0, 100.0] {
+        let g = Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone: 0.0, chroma };
+        let (w, h) = (2048usize, 1536usize); // 3.1 MP, ~ the interactive preview cap
+        let t = std::time::Instant::now();
+        let mut acc = 0.0f32;
+        for y in 0..h {
+            for x in 0..w {
+                let d = grain_delta_rgb((x as f32, y as f32), &g, w as f32);
+                acc += d[0] + d[1] + d[2];
+            }
         }
+        let dt = t.elapsed();
+        let px = (w * h) as f64;
+        eprintln!(
+            "grain_delta_rgb chroma {chroma}: {:.1} ns/px single thread -> {:.0} ms for {:.1} MP, {:.2} s for 24 MP (acc {acc})",
+            dt.as_nanos() as f64 / px, dt.as_secs_f64() * 1e3, px / 1e6, dt.as_secs_f64() / px * 24e6
+        );
     }
-    let dt = t.elapsed();
-    let px = (w * h) as f64;
-    eprintln!("grain_delta: {:.1} ns/px single thread -> {:.0} ms for {:.1} MP, {:.2} s for 24 MP (acc {acc})",
-        dt.as_nanos() as f64 / px, dt.as_secs_f64() * 1e3, px / 1e6, dt.as_secs_f64() / px * 24e6);
 }
 
 // ---- RFC-0022 slice 1: frame-relative size + footprint compensation ----
@@ -539,7 +546,7 @@ fn grain_preview_matches_a_downsampled_full_resolution_render() {
     const N: usize = 64;
     let (ox, oy) = (200usize, 120usize);
     for size in [25.0f32, 60.0, 100.0] {
-        let g = Grain { amount: 100.0, size, roughness: 50.0, tone: 0.0 };
+        let g = Grain { amount: 100.0, size, roughness: 50.0, tone: 0.0, chroma: 0.0 };
         let mut lo = Vec::with_capacity(N * N);
         let mut avg = Vec::with_capacity(N * N);
         for y in 0..N {
@@ -574,7 +581,7 @@ fn grain_preview_matches_a_downsampled_full_resolution_render() {
 #[ignore]
 fn grain_reference_dump() {
     for &(le, size, rough, x, y) in GRAIN_GOLDEN_CASES {
-        let g = Grain { amount: 100.0, size, roughness: rough, tone: 0.0 };
+        let g = Grain { amount: 100.0, size, roughness: rough, tone: 0.0, chroma: 0.0 };
         eprintln!("({le:?}, {size:?}, {rough:?}, {x:?}, {y:?}) -> {:?}", grain_delta((x, y), &g, le));
     }
 }
@@ -603,7 +610,7 @@ const GRAIN_GOLDEN_VALUES: &[f32] = &[
 #[test]
 fn grain_delta_matches_the_golden_table() {
     for (&(le, size, rough, x, y), &want) in GRAIN_GOLDEN_CASES.iter().zip(GRAIN_GOLDEN_VALUES) {
-        let g = Grain { amount: 100.0, size, roughness: rough, tone: 0.0 };
+        let g = Grain { amount: 100.0, size, roughness: rough, tone: 0.0, chroma: 0.0 };
         let got = grain_delta((x, y), &g, le);
         assert!((got - want).abs() < 2e-6, "({le}, {size}, {rough}, {x}, {y}): {got} vs {want}");
     }
@@ -612,7 +619,7 @@ fn grain_delta_matches_the_golden_table() {
 // ---- RFC-0022 slice 2: tonal response ----
 
 fn grain_with_tone(tone: f32) -> Grain {
-    Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone }
+    Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone, chroma: 0.0 }
 }
 
 /// §3.3 hand values of `w(Y) = (1 - t) + t * 4Y(1 - Y)`.
@@ -723,4 +730,158 @@ fn grain_tone_reduces_shadow_amplitude_but_not_midtone_amplitude() {
     let w = 4.0 * (26.0 / 255.0) * (1.0 - 26.0 / 255.0);
     assert!((shadow_toned / shadow_uniform - w).abs() < 0.08, "ratio {}", shadow_toned / shadow_uniform);
     assert!((mid_toned / mid_uniform - 1.0).abs() < 0.03);
+}
+
+// ---- RFC-0022 slice 3: colour grain ----
+
+fn colour_grain(chroma: f32) -> Grain {
+    Grain { amount: 100.0, size: 25.0, roughness: 50.0, tone: 0.0, chroma }
+}
+
+/// Per-channel delta samples over a 512 x 128 patch of a 24 MP-class frame
+/// (2.25 px default cell: ~6k independent samples per channel).
+fn rgb_field(g: &Grain) -> [Vec<f32>; 3] {
+    let mut out = [Vec::new(), Vec::new(), Vec::new()];
+    for y in 0..128 {
+        for x in 0..512 {
+            let d = grain_delta_rgb((x as f32 + 300.0, y as f32 + 40.0), g, GRAIN_TEST_LONG_EDGE);
+            for c in 0..3 {
+                out[c].push(d[c]);
+            }
+        }
+    }
+    out
+}
+
+fn corr(a: &[f32], b: &[f32]) -> f64 {
+    let (ma, sa) = mean_std(a);
+    let (mb, sb) = mean_std(b);
+    a.iter().zip(b).map(|(x, y)| (*x as f64 - ma) * (*y as f64 - mb)).sum::<f64>() / a.len() as f64 / (sa * sb)
+}
+
+/// §3.1: `chroma = 0` is RFC-0020 exactly -- the same delta, bit for bit, on
+/// all three channels.
+#[test]
+fn grain_chroma_zero_is_bit_identical_to_the_shared_field() {
+    let g = colour_grain(0.0);
+    for (x, y) in [(0.0f32, 0.0f32), (17.0, 42.0), (3001.0, 777.0), (5999.0, 15.0)] {
+        let rgb = grain_delta_rgb((x, y), &g, GRAIN_TEST_LONG_EDGE);
+        let mono = grain_delta((x, y), &g, GRAIN_TEST_LONG_EDGE);
+        assert_eq!(rgb, [mono; 3]);
+    }
+    assert_eq!(grain_delta_rgb((5.0, 5.0), &Grain { amount: 0.0, ..colour_grain(100.0) }, 6000.0), [0.0; 3]);
+}
+
+/// §3.1: the mixing keeps every channel at the same std at every `chroma`
+/// (the slider moves colour character, never strength), the means at ~0, and
+/// the cross-channel correlation at `1 - m`.
+#[test]
+fn grain_chroma_keeps_channel_strength_and_sets_cross_channel_correlation() {
+    let (_, base_sd) = mean_std(&rgb_field(&colour_grain(0.0))[0]);
+    for chroma in [0.0f32, 25.0, 50.0, 100.0] {
+        let f = rgb_field(&colour_grain(chroma));
+        let m = chroma as f64 / 100.0;
+        for (c, ch) in f.iter().enumerate() {
+            let (mean, sd) = mean_std(ch);
+            assert!((sd / base_sd - 1.0).abs() < 0.05, "chroma {chroma} channel {c}: std {sd} vs {base_sd}");
+            assert!(mean.abs() < 0.1 * sd, "chroma {chroma} channel {c}: mean {mean}");
+        }
+        for (a, b) in [(0usize, 1usize), (0, 2), (1, 2)] {
+            let r = corr(&f[a], &f[b]);
+            eprintln!("chroma {chroma}: corr({a},{b}) = {r:.3} (want {:.3})", 1.0 - m);
+            assert!((r - (1.0 - m)).abs() < 0.06, "chroma {chroma} corr({a},{b}) = {r}");
+        }
+    }
+}
+
+/// §3.2: the three channel seeds are distinct fields -- at chroma 100 they are
+/// mutually uncorrelated AND uncorrelated with the shared (seed 0) field.
+#[test]
+fn grain_channel_seeds_are_independent_of_each_other_and_of_the_shared_field() {
+    let g = colour_grain(100.0);
+    let f = rgb_field(&g);
+    let shared = rgb_field(&colour_grain(0.0))[0].clone();
+    for (c, ch) in f.iter().enumerate() {
+        let r = corr(ch, &shared);
+        assert!(r.abs() < 0.06, "channel {c} vs shared: {r}");
+    }
+    for s in GRAIN_CHANNEL_SEEDS {
+        assert_ne!(s, 0);
+    }
+    assert!(GRAIN_CHANNEL_SEEDS[0] != GRAIN_CHANNEL_SEEDS[1] && GRAIN_CHANNEL_SEEDS[1] != GRAIN_CHANNEL_SEEDS[2] && GRAIN_CHANNEL_SEEDS[0] != GRAIN_CHANNEL_SEEDS[2]);
+}
+
+/// End to end: a mid-gray strip stays gray under mono grain (every pixel R = G = B)
+/// and picks up per-channel noise under colour grain; the LUMINANCE noise of
+/// independent channels is `sqrt(0.2126^2 + 0.7152^2 + 0.0722^2) = 0.749` of
+/// one channel's, which is the physical reason colour-negative grain looks
+/// finer than the same per-channel amplitude of mono grain.
+#[test]
+fn grain_chroma_colours_the_grain_and_lowers_its_luminance_noise() {
+    let render = |chroma: f32| {
+        let mut img = strip(128);
+        let stack = EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({"op": "grain", "amount": 100, "size": 25, "roughness": 50, "chroma": chroma})],
+        };
+        apply_edit_stack(&mut img, &stack);
+        img
+    };
+    let mono = render(0.0);
+    assert!(mono.pixels().all(|p| p.0[0] == p.0[1] && p.0[1] == p.0[2]), "mono grain must stay gray");
+    let col = render(100.0);
+    let chan = |img: &RgbImage, c: usize| -> Vec<f32> { img.pixels().map(|p| p.0[c] as f32).collect() };
+    let luma: Vec<f32> = col.pixels().map(|p| 0.2126 * p.0[0] as f32 + 0.7152 * p.0[1] as f32 + 0.0722 * p.0[2] as f32).collect();
+    let (_, sd_r) = mean_std(&chan(&col, 0));
+    let (_, sd_mono) = mean_std(&chan(&mono, 0));
+    let (_, sd_luma) = mean_std(&luma);
+    eprintln!("channel std {sd_r:.2} (mono {sd_mono:.2}); colour-grain luma std {sd_luma:.2}, ratio {:.3}", sd_luma / sd_r);
+    assert!((sd_r / sd_mono - 1.0).abs() < 0.05);
+    assert!((sd_luma / sd_r - 0.7494).abs() < 0.04, "luma/channel std ratio {}", sd_luma / sd_r);
+    assert!(col.pixels().any(|p| p.0[0] != p.0[1]));
+}
+
+/// Dumps CPU `grain_delta_rgb` values for the table below and the GPU probe:
+/// `cargo test --lib grain_rgb_reference_dump -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn grain_rgb_reference_dump() {
+    for &(le, size, rough, chroma, x, y) in GRAIN_RGB_GOLDEN_CASES {
+        let g = Grain { amount: 100.0, size, roughness: rough, tone: 0.0, chroma };
+        eprintln!("({le:?}, {size:?}, {rough:?}, {chroma:?}, {x:?}, {y:?}) -> {:?}", grain_delta_rgb((x, y), &g, le));
+    }
+}
+
+/// (long edge, size, roughness, chroma, x, y): partial and full chroma, preview
+/// and 24 MP frames, both roughness extremes.
+const GRAIN_RGB_GOLDEN_CASES: &[(f32, f32, f32, f32, f32, f32)] = &[
+    (6000.0, 25.0, 50.0, 100.0, 123.0, 456.0),
+    (6000.0, 25.0, 50.0, 80.0, 123.0, 456.0),
+    (2048.0, 25.0, 50.0, 50.0, 700.0, 31.0),
+    (2048.0, 100.0, 100.0, 100.0, 1500.0, 1000.0),
+    (6144.0, 60.0, 30.0, 20.0, 3001.0, 777.0),
+    (2048.0, 0.0, 0.0, 100.0, 5.0, 9.0),
+    (4000.0, 10.0, 0.0, 65.0, 1234.0, 2345.0),
+];
+
+/// Pinned per-channel values for `GRAIN_RGB_GOLDEN_CASES` (Amount 100, Tone 0).
+const GRAIN_RGB_GOLDEN_VALUES: &[[f32; 3]] = &[
+    [0.022601508, 0.09157415, -0.10566195],
+    [0.03938978, 0.10108078, -0.075332545],
+    [0.02536841, -0.019924292, -0.049818635],
+    [0.0054202266, -0.0062589725, -0.04917158],
+    [0.032594442, 0.042263743, 0.014614766],
+    [0.012423921, 0.0022487536, -0.00325335],
+    [0.042844504, 0.002495056, 0.020142565],
+];
+
+#[test]
+fn grain_delta_rgb_matches_the_golden_table() {
+    for (&(le, size, rough, chroma, x, y), want) in GRAIN_RGB_GOLDEN_CASES.iter().zip(GRAIN_RGB_GOLDEN_VALUES) {
+        let g = Grain { amount: 100.0, size, roughness: rough, tone: 0.0, chroma };
+        let got = grain_delta_rgb((x, y), &g, le);
+        for c in 0..3 {
+            assert!((got[c] - want[c]).abs() < 2e-6, "({le}, {size}, {rough}, {chroma}, {x}, {y}) ch {c}: {} vs {}", got[c], want[c]);
+        }
+    }
 }

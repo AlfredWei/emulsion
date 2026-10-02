@@ -241,6 +241,23 @@ describe("Develop CPU/GPU parity", () => {
     await waitForEditStackFlush(before);
   }
 
+  /** Picks a `<select>` option by value the way a user would: Svelte's
+   * `onchange` listens for the bubbling `change` event. Same wait-for-flush
+   * discipline as `setSliderValue`. */
+  async function selectOption(/** @type {string} */ id, /** @type {string} */ value) {
+    const before = JSON.stringify(await getEditStack());
+    await browser.execute(
+      (elId, v) => {
+        const el = document.getElementById(elId);
+        el.value = v;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      id,
+      value,
+    );
+    await waitForEditStackFlush(before);
+  }
+
   /** Adds a Tone Curve point via a single click on the graph's background
    * rect, at normalized curve-space (nx, ny) -- mirrors
    * ToneCurveEditor.svelte's own `normalizedFromEvent` math (y inverted:
@@ -486,5 +503,35 @@ describe("Develop CPU/GPU parity", () => {
     for (const du of [0, 0.005, 0.011]) {
       await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain Colour 100 (u+${du})`);
     }
+  });
+
+  // RFC-0022 slice 4: the film picker only loads slider values, so these are
+  // the same per-channel/tone paths as above, reached through a stock. Two
+  // stocks because they exercise opposite ends: Portra 400 (Colour 80, Tone 50:
+  // three partly-independent fields under a tonal weight) and Tri-X 400
+  // (Colour 0: one shared field). Three points each (the RFC-0020 lesson).
+  for (const [stock, label] of [["portra400", "colour stock (Portra 400)"], ["trix400", "B&W stock (Tri-X 400)"]]) {
+    it(`Grain: ${label} renders the same grain pattern on CPU and GPU`, async () => {
+      await selectOption("grain-stock", stock);
+      const grain = (await getEditStack()).ops.find((/** @type {any} */ o) => o.op === "grain");
+      expect(grain.stock).toBe(stock);
+      for (const du of [0, 0.005, 0.011]) {
+        await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain ${label} (u+${du})`);
+      }
+    });
+  }
+
+  it("Grain: moving a slider after loading a stock shows Custom and offers Reset to that stock", async () => {
+    await selectOption("grain-stock", "portra400");
+    await setSliderValue("grain-roughness", 21);
+    expect(await browser.execute(() => document.getElementById("grain-stock").value)).toBe("custom");
+    const reset = await $("#grain-stock-reset");
+    expect(await reset.getText()).toBe("Reset to Kodak Portra 400");
+    const before = JSON.stringify(await getEditStack());
+    await reset.click();
+    await waitForEditStackFlush(before);
+    const grain = (await getEditStack()).ops.find((/** @type {any} */ o) => o.op === "grain");
+    expect([grain.amount, grain.size, grain.roughness, grain.tone, grain.chroma]).toEqual([40, 17, 20, 50, 80]);
+    expect(await browser.execute(() => document.getElementById("grain-stock").value)).toBe("portra400");
   });
 });

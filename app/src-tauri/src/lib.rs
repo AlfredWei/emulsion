@@ -1169,20 +1169,30 @@ fn get_edit_stack(state: State<'_, AppState>, version_id: i64) -> Result<EditSta
 /// no equipment match, matched equipment with no usable calibration data)
 /// -- see `lens_profile::match_profile`'s own doc comment.
 #[tauri::command]
-fn lookup_lens_profile(
+async fn lookup_lens_profile(
     camera_make: Option<String>,
     camera_model: Option<String>,
     lens_model: Option<String>,
     focal_length: Option<f32>,
     aperture: Option<f32>,
 ) -> Option<lens_profile::LensProfileMatch> {
-    lens_profile::match_profile(
-        camera_make.as_deref(),
-        camera_model.as_deref(),
-        lens_model.as_deref(),
-        focal_length,
-        aperture,
-    )
+    // `async` + a blocking-pool thread, not a plain `fn`: a synchronous Tauri
+    // command runs on the main thread, and the first call lazily loads the
+    // whole bundled lensfun database, which stalled every other IPC call
+    // behind it (RFC-0024). `warm_lens_db` normally makes that load happen at
+    // startup instead.
+    tauri::async_runtime::spawn_blocking(move || {
+        lens_profile::match_profile(
+            camera_make.as_deref(),
+            camera_model.as_deref(),
+            lens_model.as_deref(),
+            focal_length,
+            aperture,
+        )
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// `label` is `Some` for a real, user-attributable edit (e.g. "Exposure",
@@ -1980,6 +1990,9 @@ pub fn run() {
                 resolve_thumbnail_dir(app.handle(), &catalog).map_err(std::io::Error::other)?;
             let catalog_for_previews = catalog.clone();
             let catalog_for_thumbs = catalog.clone();
+            // Warm the lens database first (RFC-0024): it is the one-time
+            // cost that otherwise lands on the first Develop open.
+            tauri::async_runtime::spawn_blocking(lens_profile::warm_lens_db);
             tauri::async_runtime::spawn_blocking(move || {
                 preview_cache::pregenerate_missing(&catalog_for_previews, &previews_dir);
             });

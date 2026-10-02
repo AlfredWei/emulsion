@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 0 (accuracy part): smoke test of the shortlisted models, RFC-0023 §4.2–4.3 (2026-10-03)
+
+Closes part of RFC-0023 §7's "no accuracy was measured". **A smoke test, not an evaluation**: four repo test photos (CC-licensed), six clicks, judged by eye, no metric.
+
+- **MobileSAM's ONNX export is unfit as a one-click selector** (one mask per click, partial/mixed results). **SAM 2 Tiny** (3 candidates) gave 4 clean masks of 6 and 2 part-vs-whole ambiguities → it becomes the selection baseline, with the UI offering the candidates. Costs 1.0 s encoder vs 0.35 s, ORT only.
+- **`skyseg`**: crisp on clear skies, **false positive on a bright blurred portrait background**, and its provenance is worse than recorded: its author says the high-precision model is **not public**, so the 176 MB file's origin is unexplained → do not ship as is.
+- **Broader sky test (8 openly licensed photos, 2026-10-03) reversed the 'SAM 2 + sky click' lead**: skyseg is the better *sky* mask in 3 of the 4 photos where they disagree (SAM 2 leaves clouds out, fragments, and bleeds into a low-contrast sea); they agree in 4. Neither handles thin branches (both masks are low-resolution). **The best-performing sky model is the one with the provenance problem**; a quick search found no permissively licensed documented alternative. Next: check COCO-Stuff/ADE20K-trained models' licences, or train on a documented dataset; fall back on existing range masks meanwhile.
+- **Still open** (slice 0): Windows run (ADR-0009 stays *Proposed*), a real metric/ground truth, denoise and super-resolution quality (not looked at), `ort` link/notarization checks.
+
 ## Develop-open latency investigation: RFC-0024 (2026-10-02)
 
 User report: switching to Develop is slow; asked whether all photos are decoded at once and what cache/thumbnail/lazy-loading would help. Investigation only — **no product code changed**.

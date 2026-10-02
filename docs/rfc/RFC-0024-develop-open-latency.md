@@ -2,7 +2,7 @@
 
 - Status: Draft for review (investigation only; no product code changed)
 - Date: 2026-10-02
-- Relates to: [preview_cache.rs](../../app/src-tauri/src/preview_cache.rs) (M1 Slice 4), [ADR-0004](../adr/ADR-0004-rendering-and-color-pipeline.md), M5 performance budget
+- Relates to: [preview_cache.rs](../../app/src-tauri/src/preview_cache.rs) (M1 Slice 4), [ADR-0004](../adr/ADR-0004-rendering-and-color-management.md), M5 performance budget
 
 ## 0. Trigger and scope
 

@@ -241,6 +241,18 @@ fn rescale_vignetting(lcv: &CalibVignetting, crop: f32, real_focal: f64) -> Opti
 
 #[cfg(test)]
 mod tests {
+    /// Timing report: the one-time cost of loading the bundled lensfun database.
+    #[test]
+    #[ignore = "timing report"]
+    fn lens_db_load_timing_report() {
+        let t = std::time::Instant::now();
+        let n = super::lens_db().is_some();
+        eprintln!("LENSDB first lens_db() = {:.1} ms (loaded: {n})", t.elapsed().as_secs_f64() * 1000.0);
+        let t = std::time::Instant::now();
+        let _ = super::match_profile(Some("Canon"), Some("Canon EOS 1000D"), None, Some(35.0), Some(7.1));
+        eprintln!("LENSDB subsequent match_profile = {:.2} ms", t.elapsed().as_secs_f64() * 1000.0);
+    }
+
     use super::*;
 
     #[test]

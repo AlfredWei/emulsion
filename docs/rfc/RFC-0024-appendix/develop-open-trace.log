@@ -1,0 +1,118 @@
+ 51774 ms  AUTO round 1: enter Develop (module remount)
+     0 ms  == openDevelop 5
+     0 ms  flush done
+    23 ms  canvas effect fired, gpu.device=false
+    28 ms  initGpu done
+    42 ms  stack/history/snapshots fetched
+    42 ms  activeModule=develop
+   489 ms  lens profile looked up
+   494 ms  get_develop_preview returned 1953x1301
+   499 ms  fetched blob 5040940 bytes
+   542 ms  createImageBitmap done
+   572 ms  applyBitmapToGpu done
+   576 ms  first render submitted
+   676 ms  first render GPU-complete
+  5490 ms  AUTO round 1: switch image within Develop
+     2 ms  flush done
+     0 ms  == openDevelop 6
+     4 ms  canvas effect fired, gpu.device=true
+     5 ms  activeModule=develop
+     5 ms  stack/history/snapshots fetched
+     8 ms  lens profile looked up
+   132 ms  get_develop_preview returned 1953x1301
+   135 ms  fetched blob 3662692 bytes
+   175 ms  createImageBitmap done
+   195 ms  applyBitmapToGpu done
+   197 ms  first render submitted
+   306 ms  first render GPU-complete
+  5008 ms  AUTO round 1: back to Library
+  7536 ms  AUTO round 2: enter Develop (module remount)
+     0 ms  == openDevelop 5
+     2 ms  flush done
+     5 ms  stack/history/snapshots fetched
+     5 ms  activeModule=develop
+    11 ms  canvas effect fired, gpu.device=false
+    13 ms  initGpu done
+    13 ms  lens profile looked up
+   137 ms  get_develop_preview returned 1953x1301
+   141 ms  fetched blob 5040940 bytes
+   182 ms  createImageBitmap done
+   204 ms  applyBitmapToGpu done
+   256 ms  first render submitted
+   331 ms  first render GPU-complete
+  5014 ms  AUTO round 2: switch image within Develop
+     0 ms  == openDevelop 6
+     4 ms  flush done
+     7 ms  canvas effect fired, gpu.device=true
+    10 ms  stack/history/snapshots fetched
+    11 ms  activeModule=develop
+    15 ms  lens profile looked up
+   133 ms  get_develop_preview returned 1953x1301
+   137 ms  fetched blob 3662692 bytes
+   175 ms  createImageBitmap done
+   194 ms  applyBitmapToGpu done
+   198 ms  first render submitted
+   301 ms  first render GPU-complete
+  5015 ms  AUTO round 2: back to Library
+  7562 ms  AUTO round 3: enter Develop (module remount)
+     0 ms  == openDevelop 5
+     1 ms  flush done
+     3 ms  stack/history/snapshots fetched
+     3 ms  activeModule=develop
+    20 ms  canvas effect fired, gpu.device=false
+    22 ms  initGpu done
+    23 ms  lens profile looked up
+   147 ms  get_develop_preview returned 1953x1301
+   152 ms  fetched blob 5040940 bytes
+   191 ms  createImageBitmap done
+   212 ms  applyBitmapToGpu done
+   214 ms  first render submitted
+   322 ms  first render GPU-complete
+  5024 ms  AUTO round 3: switch image within Develop
+     1 ms  flush done
+     4 ms  stack/history/snapshots fetched
+     3 ms  canvas effect fired, gpu.device=true
+     0 ms  == openDevelop 6
+     4 ms  activeModule=develop
+     7 ms  lens profile looked up
+   134 ms  get_develop_preview returned 1953x1301
+   137 ms  fetched blob 3662692 bytes
+   177 ms  createImageBitmap done
+   195 ms  applyBitmapToGpu done
+   198 ms  first render submitted
+   323 ms  first render GPU-complete
+  5008 ms  AUTO round 3: back to Library
+  7559 ms  AUTO done
+  6008 ms  AUTO round 1: enter Develop (module remount)
+     0 ms  == openDevelop 5
+     0 ms  flush done
+     6 ms  stack/history/snapshots fetched
+     6 ms  activeModule=develop
+    33 ms  canvas effect fired, gpu.device=false
+    38 ms  initGpu done
+   468 ms  lens profile looked up
+   589 ms  get_develop_preview returned 1953x1301
+   594 ms  fetched blob 5040940 bytes
+   635 ms  createImageBitmap done
+   663 ms  applyBitmapToGpu done
+   670 ms  first render submitted
+   770 ms  first render GPU-complete
+  5469 ms  AUTO round 1: switch image within Develop
+     0 ms  == openDevelop 6
+     3 ms  flush done
+     5 ms  canvas effect fired, gpu.device=true
+     6 ms  stack/history/snapshots fetched
+     6 ms  activeModule=develop
+     8 ms  lens profile looked up
+   135 ms  get_develop_preview returned 1953x1301
+   139 ms  fetched blob 3662692 bytes
+   178 ms  createImageBitmap done
+   198 ms  applyBitmapToGpu done
+   200 ms  first render submitted
+   318 ms  first render GPU-complete
+  5009 ms  AUTO round 1: back to Library
+  7541 ms  AUTO round 2: enter Develop (module remount)
+     0 ms  == openDevelop 5
+     2 ms  flush done
+     4 ms  stack/history/snapshots fetched
+     4 ms  activeModule=develop

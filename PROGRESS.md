@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M5.7 — AI editing roadmap spike: RFC-0023 + proposed ADR-0009 (2026-10-02)
+
+Research-only milestone (no product code). User approved a small model download for benchmarking; weights live in a scratch dir outside the repo (hashes in `docs/rfc/RFC-0023-appendix/SHA256SUMS`), harness committed as an appendix.
+
+- **Measured** (Apple M1 Pro 32 GB only; random-input timing, **no accuracy**): ORT CPU vs CoreML vs `tract` on MobileSAM, SAM 2 Tiny, skyseg, SCUNet, Real-ESRGAN general-x4v3. Click-to-mask is interactive (encoder 0.35 s once/image, ~20 ms/click). **`tract` failed to load SAM 2 (enc+dec), SCUNet and the MobileSAM decoder as exported, and is 1.5–5× slower where it works.** **CoreML is not a blanket win**: 2.7× faster for skyseg, 1.5× for Real-ESRGAN, slower for both SAM encoders, **65× slower for SCUNet**. Denoise ≈ 6 min / 24 MP and 4× upscale ≈ 3 min / 24 MP are *extrapolations*, explicit-action scope only.
+- **Proposed** (ADR-0009, status Proposed): add `ort` (ONNX Runtime) behind one thin module, CPU by default, execution provider per model only where benchmarked; keep `tract` for the face models.
+- **Licence findings that block shipping, not just risk**: `skyseg` is a third-party re-host with undocumented training data; Real-ESRGAN's weights have no stated licence (code is BSD-3). SAM 2, MobileSAM, SCUNet are Apache-2.0 upstream.
+- **Not done / open** (RFC-0023 §7): **nothing run on Windows** (so the ADR cannot be Accepted yet); no accuracy evaluation on real photographs; minimum hardware undefined; `ort` is still `2.0.0-rc.13` (pin; `load-dynamic` and notarization unverified); generative fill/remove awareness survey (M5.7 scope item) **not covered**.
+
 ## M5.8 Slice 4 — Grain: film stock picker, per RFC-0022 §4/§4a (2026-10-02)
 
 Fourth and last M5.8 slice (slice 3 merged in #193). Slices 1–3 gave Grain the model (frame-relative size, Tone, Colour); this puts it behind a picker, so a user can choose a negative stock and still see every slider.

@@ -1,0 +1,86 @@
+name: ort spike (M6 slice 0, throwaway)
+
+# RFC-0023 / ADR-0009: does ONNX Runtime (`ort`) link and run on the project's
+# CI platforms, and how fast is it on CPU (and DirectML on Windows)? Manual or on
+# the spike branch only -- NOT part of the normal CI and not required for merges.
+# GitHub-hosted runners have no GPU, so this measures linking + CPU, and whether
+# the DirectML provider can be created at all; it does NOT measure GPU speed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [spike/ort-windows]
+    paths:
+      - spikes/ort-spike/**
+      - .github/workflows/ort-spike.yml
+
+jobs:
+  ort:
+    name: ort (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: spikes/ort-spike
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/ort-spike
+
+      - name: Cache model weights
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: spikes/ort-spike/models
+          key: ort-spike-models-v1
+
+      # Public weights, fetched at run time and never committed (ADR-0007's
+      # pattern). Sources and licences: docs/rfc/RFC-0023-on-device-ai-inference.md §3.
+      - name: Fetch model weights
+        if: steps.models.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          B=https://huggingface.co
+          curl -fsSL -o models/skyseg.onnx $B/JianyuanWang/skyseg/resolve/main/skyseg.onnx
+          curl -fsSL -o models/sam2_tiny_encoder.onnx $B/vietanhdev/segment-anything-2-onnx-models/resolve/main/sam2_hiera_tiny.encoder.onnx
+          curl -fsSL -o models/sam2_tiny_decoder.onnx $B/vietanhdev/segment-anything-2-onnx-models/resolve/main/sam2_hiera_tiny.decoder.onnx
+          ls -l models
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Artifact sizes and native dependencies
+        run: |
+          ls -l target/release | grep -v -E "\.(d|rlib|pdb|exp|lib)$" | head -20
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ls -l target/release/*.dll 2>/dev/null || echo "no .dll next to the exe (ONNX Runtime linked statically)"
+          fi
+
+      # Run from a different directory, so a missing runtime DLL next to the exe
+      # (copy-dylibs) would show up as a failure to start, not be masked.
+      - name: Run the cases
+        run: |
+          set +e
+          EXE="$PWD/target/release/ort-spike"
+          [ "$RUNNER_OS" = "Windows" ] && EXE="$EXE.exe"
+          M="$PWD/models"
+          mkdir -p "$RUNNER_TEMP/elsewhere" && cd "$RUNNER_TEMP/elsewhere"
+          : > results.txt
+          run() { "$EXE" "$@" 2>&1 | grep -E "ORTSPIKE|error|Error" | cut -c1-400 | tee -a results.txt; }
+          PROVIDERS="cpu"
+          [ "$RUNNER_OS" = "Windows" ] && PROVIDERS="cpu directml"
+          [ "$RUNNER_OS" = "macOS" ] && PROVIDERS="cpu coreml"
+          for P in $PROVIDERS; do
+            run "$M/skyseg.onnx" $P "input.1=1x3x320x320"
+            run "$M/sam2_tiny_encoder.onnx" $P "image=1x3x1024x1024"
+            run "$M/sam2_tiny_decoder.onnx" $P "image_embed=1x256x64x64" "high_res_feats_0=1x32x256x256" "high_res_feats_1=1x64x128x128" "point_coords=1x2x2" "point_labels=1x2" "mask_input=1x1x256x256" "has_mask_input=1"
+          done
+          { echo "### ort spike on ${{ matrix.os }}"; echo '```'; cat results.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

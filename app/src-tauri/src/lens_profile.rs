@@ -35,6 +35,14 @@ fn lens_db() -> Option<&'static Database> {
     LENS_DB.get_or_init(|| Database::load_bundled().ok()).as_ref()
 }
 
+/// Loads the bundled database now instead of on the first lookup. Called
+/// from a background thread at startup so the first Develop open of a session
+/// does not pay the one-time load (42 ms release, ~440 ms in a dev build --
+/// RFC-0024).
+pub fn warm_lens_db() {
+    let _ = lens_db();
+}
+
 /// A resolved camera+lens match, with every coefficient the render path
 /// needs already extracted as plain f32s -- baked verbatim into the edit
 /// stack's `lens_correction` op's `profile` field by the frontend after a

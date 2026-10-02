@@ -61,3 +61,11 @@ rsraw = { path = "vendor/rsraw" }
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["rt", "macros"] }
 
+# Dev builds optimise *dependencies* (not this crate): blake3, image, LibRaw,
+# lensfun and tract are the hot loops of every open/decode, and at the default
+# opt-level 0 they run 10-20x slower, which made `tauri dev` feel far slower
+# than the release app (RFC-0024). This crate stays at opt-level 0 so
+# incremental rebuilds and debugging are unchanged; dependencies are compiled
+# once and cached.
+[profile.dev.package."*"]
+opt-level = 3

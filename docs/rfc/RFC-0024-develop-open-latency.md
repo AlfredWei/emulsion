@@ -78,6 +78,15 @@ Do **A + E first** (small, safe, remove the only size-proportional and the only 
 - A folder with your **typical RAW files** (camera model, 24–45 MP, internal vs external drive) so cache-miss and hash costs can be measured on real data instead of extrapolated from 10 MP files.
 - Whether the slow build is the installed release app or `tauri dev` — the debug build's Rust side is ~10–20× slower and would explain most of a "slow" report on its own.
 
+## 6a. User's answers, and what was done (2026-10-02)
+
+The user's case: **first Develop entry of a session, on `tauri dev`, on an already-imported photo.** That is §3.3 points 2 and 3 (lens-database stall + unoptimised dev-build Rust), not the cache-miss or size-proportional costs, so only option **E** plus a dev-profile change were implemented:
+
+- `[profile.dev.package."*"] opt-level = 3` — dependencies (blake3, image, LibRaw, lensfun, tract) are optimised in dev builds; this crate stays at opt-level 0.
+- `warm_lens_db()` runs on a background thread at startup, and `lookup_lens_profile` is now `async` on the blocking pool, so it no longer runs on the main thread.
+
+Measured in the dev profile (`cargo test`, one 9 MB CR2): cache-hit open **113 → 6.6 ms**, BLAKE3 **125 → 7.3 ms**, cache-miss decode **594 → 191 ms**, first lens-DB load **437 → 57 ms** (and now off the open path). Not re-measured end to end through the webview, and the first `tauri dev` build after this change recompiles dependencies once (slower), after which they are cached. A, B, C, D and G are untouched and still open.
+
 ## 7. Non-goals
 
 Interactive slider render latency (M5's own budget), export speed, and Library grid scrolling.

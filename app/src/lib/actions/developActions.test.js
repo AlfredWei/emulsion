@@ -13,7 +13,7 @@ import * as A from "./developActions.js";
 import { develop } from "$lib/state/develop.svelte.js";
 import { developView } from "$lib/state/developView.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
-import { WB_PRESETS, computeAutoWhiteBalance, computeAutoTone, IDENTITY_CROP, upsertCrop } from "$lib/api/develop.js";
+import { GRAIN_STOCKS, getGrain, getGrainStock, grainStockValues, WB_PRESETS, computeAutoWhiteBalance, computeAutoTone, IDENTITY_CROP, upsertCrop } from "$lib/api/develop.js";
 import { inscribedCropForAngle } from "$lib/cropMath.js";
 
 /** @type {ReturnType<typeof vi.spyOn>} */
@@ -54,6 +54,41 @@ describe("handleAdjustmentChange", () => {
     for (const op of Object.keys(known)) A.handleAdjustmentChange(op, 1);
     A.handleAdjustmentChange("vibrance", 1);
     expect(labels()).toEqual([...Object.values(known), "vibrance"]);
+  });
+});
+
+describe("handleGrainStockChange (RFC-0022 slice 4)", () => {
+  it("loads the stock's five values, remembers it, and labels the history entry with its name", () => {
+    A.handleGrainStockChange("portra400");
+    expect(getGrain(develop.editStack)).toEqual(grainStockValues("portra400"));
+    expect(getGrainStock(develop.editStack)).toBe("portra400");
+    expect(labels()).toEqual([`Grain: ${GRAIN_STOCKS.portra400.name}`]);
+  });
+
+  it("None zeroes Amount, Colour and Tone, keeps Size and Roughness, and forgets the stock", () => {
+    A.handleGrainChange({ size: 61, roughness: 7 });
+    A.handleGrainStockChange("gold200");
+    A.handleGrainChange({ size: 61, roughness: 7 });
+    A.handleGrainStockChange("none");
+    expect(getGrain(develop.editStack)).toEqual({ amount: 0, size: 61, roughness: 7, tone: 0, chroma: 0 });
+    expect(getGrainStock(develop.editStack)).toBeNull();
+    expect(labels().at(-1)).toBe("Grain: None");
+  });
+
+  it("a slider edit keeps the remembered stock; re-choosing it restores the preset (Reset to <stock>)", () => {
+    A.handleGrainStockChange("trix400");
+    A.handleGrainChange({ amount: 12 });
+    expect(getGrainStock(develop.editStack)).toBe("trix400");
+    A.handleGrainStockChange("trix400");
+    expect(getGrain(develop.editStack)).toEqual(grainStockValues("trix400"));
+  });
+
+  it("unknown ids and the picker's own 'custom' entry do nothing", () => {
+    A.handleGrainStockChange("custom");
+    A.handleGrainStockChange("constructor");
+    A.handleGrainStockChange("kodachrome");
+    expect(schedule).not.toHaveBeenCalled();
+    expect(develop.editStack.ops).toEqual([]);
   });
 });
 

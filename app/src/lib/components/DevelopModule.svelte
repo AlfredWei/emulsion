@@ -3,7 +3,7 @@
   import { develop } from "$lib/state/develop.svelte.js";
   import { restoreTo, handleRestoreSnapshot } from "$lib/actions/historyActions.js";
   import { presets } from "$lib/state/presets.svelte.js";
-  import { handleDeleteSnapshot, handlePeekHistory, handlePeekSnapshot, handleCropChange, handleSourceDimensions, handleHistogramUpdate, handleHoverPixel, handleToggleClippingOverlay, handleAdjustmentChange, handleAutoWhiteBalance, handleAutoTone, handleWbPresetChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropAspectPreset, handleCropReset, handleTogglePanelVisibility, handleResetPanel } from "$lib/actions/developActions.js";
+  import { handleDeleteSnapshot, handlePeekHistory, handlePeekSnapshot, handleCropChange, handleSourceDimensions, handleHistogramUpdate, handleHoverPixel, handleToggleClippingOverlay, handleAdjustmentChange, handleAutoWhiteBalance, handleAutoTone, handleWbPresetChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleGrainStockChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropAspectPreset, handleCropReset, handleTogglePanelVisibility, handleResetPanel } from "$lib/actions/developActions.js";
   import { handleApplyPreset, handleSaveCurrentAsPresetRequest, handleExportPreset, handleDeletePresetRequest, handleImportPresetRequest, handlePeekPreset, handleCopySettingsRequest, handlePasteSettings } from "$lib/actions/presetActions.js";
   import { shell } from "$lib/state/shell.svelte.js";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
@@ -179,7 +179,9 @@
     perspective={developView.perspective}
     onPerspectiveChange={handlePerspectiveChange}
     grain={developView.grain}
+    grainStock={developView.grainStock}
     onGrainChange={handleGrainChange}
+    onGrainStockChange={handleGrainStockChange}
     sharpen={developView.sharpen}
     onSharpenChange={handleSharpenChange}
     lumaNR={developView.lumaNR}

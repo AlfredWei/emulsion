@@ -667,6 +667,25 @@ fn grain_op_reads_tone_and_defaults_it_to_zero() {
     assert_eq!(grain_op(&[]).tone, 0.0);
 }
 
+/// RFC-0022 §4: the picker's remembered stock id is display-only; the five
+/// slider values are what render, so an op carrying `stock` reads identically
+/// to one without it (and a stock id the app no longer knows is harmless).
+#[test]
+fn grain_op_ignores_the_display_only_stock_field() {
+    let plain = serde_json::json!({"op": "grain", "amount": 40, "size": 17, "roughness": 20, "tone": 50, "chroma": 80});
+    let mut tagged = plain.clone();
+    tagged["stock"] = serde_json::json!("portra400");
+    let mut unknown = plain.clone();
+    unknown["stock"] = serde_json::json!("a-stock-removed-later");
+    let read = |op: &serde_json::Value| {
+        let g = grain_op(std::slice::from_ref(op));
+        (g.amount, g.size, g.roughness, g.tone, g.chroma)
+    };
+    assert_eq!(read(&plain), (40.0, 17.0, 20.0, 50.0, 80.0));
+    assert_eq!(read(&tagged), read(&plain));
+    assert_eq!(read(&unknown), read(&plain));
+}
+
 /// A 24 MP-class frame's long edge with almost no area: grain size is
 /// frame-relative (RFC-0022 §3.4), so a small test image has a sub-pixel
 /// cell and its grain is (correctly) averaged away; a 6000 x 16 strip has
@@ -884,4 +903,51 @@ fn grain_delta_rgb_matches_the_golden_table() {
             assert!((got[c] - want[c]).abs() < 2e-6, "({le}, {size}, {rough}, {chroma}, {x}, {y}) ch {c}: {} vs {}", got[c], want[c]);
         }
     }
+}
+
+/// RFC-0022 slice 4: a 100% crop of every stock preset on a fixed test patch
+/// (a skin-ish mid-tone ramp with a deep-shadow and a highlight band), laid out
+/// 4 x 2, for tuning the §2.4 numbers by eye. The tiles are crops of a 6000 px
+/// long-edge frame (grain size is frame-relative), run through the same
+/// `grain_delta_rgb` x `grain_tone_weight` the pipeline applies. The table
+/// mirrors `GRAIN_STOCKS` in `app/src/lib/api/develop.js` -- keep them in step.
+///
+/// `GRAIN_SHEET_OUT=/path/sheet.png cargo test --lib grain_stock_contact_sheet -- --ignored`
+#[test]
+#[ignore = "writes an image for visual tuning; needs GRAIN_SHEET_OUT"]
+fn grain_stock_contact_sheet() {
+    let Ok(out) = std::env::var("GRAIN_SHEET_OUT") else { return };
+    // (name, amount, size, roughness, chroma, tone)
+    let stocks: [(&str, f32, f32, f32, f32, f32); 8] = [
+        ("None (plain default: amount 40)", 40.0, 25.0, 50.0, 0.0, 0.0),
+        ("Portra 400", 40.0, 17.0, 20.0, 80.0, 50.0),
+        ("Gold 200", 59.0, 23.0, 40.0, 80.0, 50.0),
+        ("Superia X-TRA 400", 55.0, 20.0, 40.0, 80.0, 50.0),
+        ("CineStill 800T", 62.0, 33.0, 55.0, 80.0, 50.0),
+        ("Tri-X 400", 70.0, 40.0, 60.0, 0.0, 40.0),
+        ("HP5 Plus", 75.0, 40.0, 65.0, 0.0, 40.0),
+        ("Delta 100", 30.0, 10.0, 25.0, 0.0, 40.0),
+    ];
+    let (tw, th, cols) = (480u32, 320u32, 4u32);
+    let mut img = image::RgbImage::new(tw * cols, th * 2);
+    for (i, (_name, amount, size, roughness, chroma, tone)) in stocks.iter().enumerate() {
+        let g = Grain { amount: *amount, size: *size, roughness: *roughness, tone: *tone, chroma: *chroma };
+        let (ox, oy) = ((i as u32 % cols) * tw, (i as u32 / cols) * th);
+        for y in 0..th {
+            for x in 0..tw {
+                // Base: left-to-right ramp of a warm mid-tone, with a deep-shadow
+                // band across the top and a highlight band across the bottom.
+                let t = x as f32 / tw as f32;
+                let band = if y < th / 6 { 0.04 } else if y > th - th / 6 { 0.96 } else { 0.25 + 0.55 * t };
+                let base = [band, band * 0.88, band * 0.78];
+                let luma = 0.2126 * base[0] + 0.7152 * base[1] + 0.0722 * base[2];
+                let d = grain_delta_rgb((1500.0 + x as f32, 1500.0 + y as f32), &g, 6000.0);
+                let w = grain_tone_weight(luma, &g);
+                let px = |c: usize| ((base[c] + d[c] * w).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                img.put_pixel(ox + x, oy + y, image::Rgb([px(0), px(1), px(2)]));
+            }
+        }
+    }
+    img.save(&out).expect("write contact sheet");
+    eprintln!("wrote {out}; tiles row-major: {:?}", stocks.iter().map(|s| s.0).collect::<Vec<_>>());
 }

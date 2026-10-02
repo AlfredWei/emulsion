@@ -15,6 +15,8 @@ import {
   upsertLensCorrection,
   upsertPerspective,
   upsertGrain,
+  GRAIN_STOCKS,
+  grainStockValues,
   upsertSharpen,
   upsertLumaNr,
   upsertColorNr,
@@ -141,6 +143,23 @@ export function handleGrainChange(
 ) {
   develop.editStack = upsertGrain(develop.editStack, patch);
   develop.scheduleFlush("Grain");
+}
+
+/** Film picker (RFC-0022 §4): a stock loads its five slider values and is
+ * remembered (display-only) so "Reset to <stock>" can offer itself later.
+ * "none" turns the grain off -- Amount, Colour and Tone to 0 -- and leaves
+ * Size and Roughness, so a hand-tuned size is not lost. Anything else
+ * (including the picker's own "custom" entry) is a no-op. */
+export function handleGrainStockChange(/** @type {string} */ id) {
+  if (id === "none") {
+    develop.editStack = upsertGrain(develop.editStack, { amount: 0, chroma: 0, tone: 0, stock: null });
+    develop.scheduleFlush("Grain: None");
+    return;
+  }
+  if (!Object.hasOwn(GRAIN_STOCKS, id)) return;
+  const stockId = /** @type {keyof typeof GRAIN_STOCKS} */ (id);
+  develop.editStack = upsertGrain(develop.editStack, { ...grainStockValues(stockId), stock: stockId });
+  develop.scheduleFlush(`Grain: ${GRAIN_STOCKS[stockId].name}`);
 }
 
 export function handleSharpenChange(

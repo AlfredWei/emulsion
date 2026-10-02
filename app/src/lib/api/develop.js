@@ -918,18 +918,79 @@ export function getGrain(
   };
 }
 
+/** The id of the film stock last chosen in the Grain picker (RFC-0022 §4),
+ * or null. Display-only memory so "Reset to <stock>" can offer itself once a
+ * slider has moved: the five slider values are what render, and what the
+ * picker shows is derived from them (see `grainPickerState`).
+ * @returns {string | null} */
+export function getGrainStock(/** @type {EditStack} */ stack) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "grain"));
+  return typeof op?.stock === "string" ? op.stock : null;
+}
+
 /** Patches any subset of {amount, size, roughness, tone, chroma}, leaving the rest
- * untouched.
+ * untouched. `stock` (the picker's display-only memory) survives slider edits;
+ * a patch of `stock: null` clears it.
  * @returns {EditStack} */
 export function upsertGrain(
   /** @type {EditStack} */ stack,
-  /** @type {Partial<{amount: number, size: number, roughness: number, tone: number, chroma: number}>} */ patch,
+  /** @type {Partial<{amount: number, size: number, roughness: number, tone: number, chroma: number, stock: string | null}>} */ patch,
 ) {
-  const current = getGrain(stack);
-  const next = { ...current, ...patch };
+  const { stock: stockPatch, ...values } = patch;
+  const next = { ...getGrain(stack), ...values };
+  const stock = stockPatch === undefined ? getGrainStock(stack) : stockPatch;
   const ops = stack.ops.filter((o) => o.op !== "grain");
-  ops.push(/** @type {any} */ ({ op: "grain", ...next }));
+  ops.push(/** @type {any} */ ({ op: "grain", ...next, ...(stock ? { stock } : {}) }));
   return { ...stack, ops };
+}
+
+// Film stock presets (RFC-0022 §2.4, M5.8 slice 4). Each stock only LOADS the
+// five Grain slider values; nothing is hidden behind the picker and the values
+// (not the stock id) are what is stored and rendered, so retuning a stock here
+// never changes a saved edit.
+//
+// Every row is an approximation of the CHARACTER of a stock, not a
+// reproduction of it. `tag` is the provenance of the numbers (RFC §2.4):
+//   D = derived from a published number, R = reasoned from a published
+//   qualitative statement or a physical argument, A = aesthetic choice.
+// Keep the tag next to a number when tuning it, so the provenance is not lost.
+// Size is the slider value for the RFC's cell width in µm of a 36 mm frame:
+// slider = (µm − 6) / 30 · 100 (RFC §3.4) -- 11, 13, 12, 16, 18, 18, 9 µm.
+export const GRAIN_STOCKS = Object.freeze({
+  portra400: { name: "Kodak Portra 400", group: "colour", amount: 40, size: 17, roughness: 20, chroma: 80, tone: 50, tag: "A·R", caption: "Fine, even grain. Soft colour noise." },
+  gold200: { name: "Kodak Gold 200", group: "colour", amount: 59, size: 23, roughness: 40, chroma: 80, tone: 50, tag: "D·A", caption: "Grainier than Portra 400 on Kodak's PGI data." },
+  superia400: { name: "Fujicolor Superia X-TRA 400", group: "colour", amount: 55, size: 20, roughness: 40, chroma: 80, tone: 50, tag: "A", caption: "Consumer 400-class colour grain." },
+  cinestill800t: { name: "CineStill 800T", group: "colour", amount: 62, size: 33, roughness: 55, chroma: 80, tone: 50, tag: "A", caption: "Heavier, rounder tungsten-stock grain." },
+  trix400: { name: "Kodak Tri-X 400", group: "bw", amount: 70, size: 40, roughness: 60, chroma: 0, tone: 40, tag: "A", caption: "Classic coarse B&W grain, luminance only." },
+  hp5: { name: "Ilford HP5 Plus", group: "bw", amount: 75, size: 40, roughness: 65, chroma: 0, tone: 40, tag: "A", caption: "B&W, slightly rougher than Tri-X." },
+  delta100: { name: "Ilford Delta 100", group: "bw", amount: 30, size: 10, roughness: 25, chroma: 0, tone: 40, tag: "A", caption: "Fine, uniform B&W grain." },
+});
+
+/** @typedef {keyof typeof GRAIN_STOCKS} GrainStockId */
+
+const GRAIN_VALUE_KEYS = /** @type {const} */ (["amount", "size", "roughness", "chroma", "tone"]);
+
+/** The five slider values a stock loads.
+ * @returns {{amount: number, size: number, roughness: number, tone: number, chroma: number}} */
+export function grainStockValues(/** @type {GrainStockId} */ id) {
+  const s = GRAIN_STOCKS[id];
+  return { amount: s.amount, size: s.size, roughness: s.roughness, tone: s.tone, chroma: s.chroma };
+}
+
+/** What the picker shows for the current Grain values (RFC-0022 §4): a stock
+ * only while all five values equal its preset, else "none" (Amount 0 -- grain
+ * is off) or "custom". `resetTo` is the last-chosen stock, offered as "Reset to
+ * <stock>" whenever the values have drifted from it.
+ * @returns {{selected: GrainStockId | "none" | "custom", resetTo: GrainStockId | null}} */
+export function grainPickerState(
+  /** @type {ReturnType<typeof getGrain>} */ grain,
+  /** @type {string | null} */ lastStock,
+) {
+  const ids = /** @type {GrainStockId[]} */ (Object.keys(GRAIN_STOCKS));
+  const matched = ids.find((id) => GRAIN_VALUE_KEYS.every((k) => GRAIN_STOCKS[id][k] === grain[k]));
+  if (matched) return { selected: matched, resetTo: null };
+  const resetTo = ids.find((id) => id === lastStock) ?? null;
+  return { selected: grain.amount === 0 ? "none" : "custom", resetTo };
 }
 
 /** Packs into the exact Float32Array layout DevelopCanvas.svelte's

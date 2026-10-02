@@ -2231,3 +2231,16 @@ mod tests {
         remove_matching_files(&dir, |_| true);
     }
 }
+
+/// SPIKE (M6 slice 0): forces `ort` to be linked and its runtime initialised
+/// inside this crate on every CI platform. Not for merge.
+#[cfg(test)]
+mod ort_link_probe {
+    #[test]
+    fn ort_links_and_initialises_next_to_the_rest_of_the_app() {
+        let committed = ort::init().commit();
+        eprintln!("ORTLINK committed={committed} info={}", ort::info());
+        assert!(committed);
+        assert!(!ort::info().is_empty());
+    }
+}

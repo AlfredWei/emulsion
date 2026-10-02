@@ -37,6 +37,8 @@ bytemuck = "1.25"
 printpdf = { version = "0.12.7", default-features = false }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tract-onnx = "0.23.7"
+# SPIKE (M6 slice 0, RFC-0023 / ADR-0009): does ort link next to LibRaw/tract/rustls in this crate? Not for merge.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-native", "copy-dylibs"] }
 sha2 = "0.11.0"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "query"] }
 

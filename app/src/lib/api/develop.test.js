@@ -10,7 +10,11 @@ import {
   computeAutoTone,
   PANEL_OP_NAMES,
   getGrain,
+  getGrainStock,
   upsertGrain,
+  GRAIN_STOCKS,
+  grainStockValues,
+  grainPickerState,
   buildGrainUniformData,
   HSL_BAND_NAMES,
   HSL_BAND_CENTERS_DEG,
@@ -426,5 +430,68 @@ describe("Grain colour (RFC-0022 slice 3)", () => {
   test("the uniform is 8 floats (the WGSL Grain struct is 32 bytes): chroma in slot 4, three zero pads", () => {
     const data = buildGrainUniformData({ amount: 10, size: 20, roughness: 30, tone: 40, chroma: 50 });
     expect(Array.from(data)).toEqual([10, 20, 30, 40, 50, 0, 0, 0]);
+  });
+});
+
+describe("Grain film stocks (RFC-0022 slice 4)", () => {
+  const ids = /** @type {Array<keyof typeof GRAIN_STOCKS>} */ (Object.keys(GRAIN_STOCKS));
+  const none = { amount: 0, size: 25, roughness: 50, tone: 0, chroma: 0 };
+
+  test("every stock's five values are inside the sliders' 0..100 range, with a provenance tag and caption", () => {
+    for (const id of ids) {
+      const v = grainStockValues(id);
+      for (const x of Object.values(v)) {
+        expect(Number.isInteger(x)).toBe(true);
+        expect(x).toBeGreaterThanOrEqual(0);
+        expect(x).toBeLessThanOrEqual(100);
+      }
+      expect(GRAIN_STOCKS[id].tag).toMatch(/^[DRA](·[DRA])*$/);
+      expect(GRAIN_STOCKS[id].caption.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("the table matches RFC-0022 §2.4: Size slider = (µm − 6)/30·100, B&W stocks have Colour 0, Gold 200 grainier than Portra 400", () => {
+    const um = { portra400: 11, gold200: 13, superia400: 12, cinestill800t: 16, trix400: 18, hp5: 18, delta100: 9 };
+    for (const id of ids) expect(GRAIN_STOCKS[id].size).toBe(Math.round(((um[id] - 6) / 30) * 100));
+    for (const id of ids) {
+      if (GRAIN_STOCKS[id].group === "bw") expect(GRAIN_STOCKS[id].chroma).toBe(0);
+      else expect(GRAIN_STOCKS[id].chroma).toBeGreaterThan(0);
+    }
+    expect(GRAIN_STOCKS.portra400.amount).toBe(40);
+    expect(GRAIN_STOCKS.gold200.amount).toBe(59);
+  });
+
+  test("no two stocks share all five values (the picker's derived selection is unambiguous)", () => {
+    const keys = ids.map((id) => JSON.stringify(grainStockValues(id)));
+    expect(new Set(keys).size).toBe(ids.length);
+  });
+
+  test("the picker shows a stock exactly while all five values equal its preset, else None (Amount 0) or Custom", () => {
+    for (const id of ids) expect(grainPickerState(grainStockValues(id), id)).toEqual({ selected: id, resetTo: null });
+    expect(grainPickerState(none, null)).toEqual({ selected: "none", resetTo: null });
+    expect(grainPickerState({ ...none, amount: 30 }, null)).toEqual({ selected: "custom", resetTo: null });
+    const drifted = { ...grainStockValues("portra400"), roughness: 21 };
+    expect(grainPickerState(drifted, "portra400")).toEqual({ selected: "custom", resetTo: "portra400" });
+    // Amount dragged to 0 after loading a stock: shown as None, but Reset is still offered.
+    expect(grainPickerState({ ...grainStockValues("trix400"), amount: 0 }, "trix400")).toEqual({ selected: "none", resetTo: "trix400" });
+    // An unknown remembered id (a stock removed in a later release) offers nothing.
+    expect(grainPickerState(drifted, "kodachrome")).toEqual({ selected: "custom", resetTo: null });
+  });
+
+  test("an op without `stock` reads null, and the stock survives slider patches until cleared", () => {
+    const base = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "grain", amount: 25, size: 30, roughness: 40 }] });
+    expect(getGrainStock(base)).toBeNull();
+    const loaded = upsertGrain(base, { ...grainStockValues("hp5"), stock: "hp5" });
+    expect(getGrainStock(loaded)).toBe("hp5");
+    expect(getGrain(loaded)).toEqual(grainStockValues("hp5"));
+    const edited = upsertGrain(loaded, { amount: 10 });
+    expect(getGrainStock(edited)).toBe("hp5");
+    expect(getGrain(edited).amount).toBe(10);
+    expect(getGrainStock(upsertGrain(edited, { stock: null }))).toBeNull();
+  });
+
+  test("`stock` never reaches the GPU uniform (still 8 floats from the five values)", () => {
+    const g = getGrain(upsertGrain(/** @type {any} */ ({ schema_version: 1, ops: [] }), { ...grainStockValues("portra400"), stock: "portra400" }));
+    expect(Array.from(buildGrainUniformData(g))).toEqual([40, 17, 20, 50, 80, 0, 0, 0]);
   });
 });

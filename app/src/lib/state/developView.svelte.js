@@ -15,6 +15,7 @@ import {
   getVignette,
   IDENTITY_VIGNETTE,
   getGrain,
+  getGrainStock,
   IDENTITY_GRAIN,
   getSharpen,
   IDENTITY_SHARPEN,
@@ -89,6 +90,7 @@ export class DevelopView {
   // Grain (M3): same structured, own-getter/handler shape as Vignette
   // above.
   grain = $derived(getGrain(this.develop.editStack, IDENTITY_GRAIN));
+  grainStock = $derived(getGrainStock(this.develop.editStack));
   // Sharpening / Noise Reduction (M3): same structured, own-getter/
   // handler shape as Vignette/Grain above -- three independent ops.
   sharpen = $derived(getSharpen(this.develop.editStack, IDENTITY_SHARPEN));

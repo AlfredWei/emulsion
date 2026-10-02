@@ -6,6 +6,8 @@
     HSL_BAND_CENTERS_DEG,
     IDENTITY_HSL_BANDS,
     WB_PRESETS,
+    GRAIN_STOCKS,
+    grainPickerState,
   } from "$lib/api/develop.js";
   import { nudgeValue } from "$lib/stepMath.js";
 
@@ -69,7 +71,9 @@
    *   perspective: {vertical: number, horizontal: number, rotate: number, aspect: number, scale: number},
    *   onPerspectiveChange: (patch: Partial<{vertical: number, horizontal: number, rotate: number, aspect: number, scale: number}>) => void,
    *   grain: {amount: number, size: number, roughness: number, tone: number, chroma: number},
+   *   grainStock?: string | null,
    *   onGrainChange: (patch: Partial<{amount: number, size: number, roughness: number, tone: number, chroma: number}>) => void,
+   *   onGrainStockChange?: (id: string) => void,
    *   sharpen: {amount: number, radius: number, detail: number, masking: number},
    *   onSharpenChange: (patch: Partial<{amount: number, radius: number, detail: number, masking: number}>) => void,
    *   lumaNR: {amount: number, detail: number, contrast: number},
@@ -146,7 +150,9 @@
     perspective,
     onPerspectiveChange,
     grain,
+    grainStock = null,
     onGrainChange,
+    onGrainStockChange,
     sharpen,
     onSharpenChange,
     lumaNR,
@@ -171,6 +177,14 @@
     onResetPanel,
     width = 240,
   } = $props();
+
+  const grainPicker = $derived(grainPickerState(grain, grainStock));
+  /** The stock the Grain values currently equal, or null (None / Custom). */
+  const grainPickerStock = $derived(
+    grainPicker.selected in GRAIN_STOCKS
+      ? GRAIN_STOCKS[/** @type {keyof typeof GRAIN_STOCKS} */ (grainPicker.selected)]
+      : null,
+  );
 
   // HSL band-jump eyedropper: scroll the identified band into view whenever
   // it changes. Meaningful (not decorative) because .panel is genuinely
@@ -1033,6 +1047,51 @@
   <details class="section" class:panel-hidden={isPanelHidden("grain")}>
     <summary>{@render panelHeader("Grain", "grain")}</summary>
     <div class="sub-body">
+      {#if onGrainStockChange}
+        {@const picker = grainPicker}
+        {@const stock = grainPickerStock}
+        <div class="row">
+          <label for="grain-stock">Film</label>
+          <select
+            id="grain-stock"
+            class="select-input"
+            value={picker.selected}
+            onchange={(e) => onGrainStockChange(e.currentTarget.value)}
+          >
+            <option value="none">None</option>
+            {#each ["colour", "bw"] as group (group)}
+              <optgroup label={group === "colour" ? "Colour negative" : "Black & white"}>
+                {#each Object.entries(GRAIN_STOCKS).filter(([, s]) => s.group === group) as [id, s] (id)}
+                  <option value={id}>{s.name}</option>
+                {/each}
+              </optgroup>
+            {/each}
+            {#if picker.selected === "custom"}
+              <option value="custom">Custom</option>
+            {/if}
+          </select>
+        </div>
+        <p class="film-note" id="grain-stock-note">
+          {#if stock}
+            {stock.caption}
+            <span class="tag" title="Provenance of this stock's numbers: D derived from a published figure, R reasoned from a published statement, A aesthetic choice. An approximation of the character, not a reproduction of the stock.">{stock.tag}</span>
+          {:else if picker.selected === "none"}
+            Plain grain, no stock loaded.
+          {:else}
+            Hand-tuned values.
+          {/if}
+        </p>
+        {#if picker.resetTo}
+          <div class="film-actions">
+            <button
+              type="button"
+              class="link-btn"
+              id="grain-stock-reset"
+              onclick={() => onGrainStockChange(/** @type {string} */ (picker.resetTo))}
+            >Reset to {GRAIN_STOCKS[picker.resetTo].name}</button>
+          </div>
+        {/if}
+      {/if}
       <div class="row">
         <label for="grain-amount">Amount</label>
         <input
@@ -1075,7 +1134,7 @@
         <span class="val">{grain.roughness}</span>
         {@render stepButtons(grain.roughness, 1, 0, 100, (v) => onGrainChange({ roughness: v }))}
       </div>
-      <div class="row">
+      <div class="row" class:dim={grainPickerStock?.group === "bw"}>
         <label for="grain-chroma">Colour</label>
         <input
           id="grain-chroma"
@@ -1558,6 +1617,42 @@
   }
   .subsection-label:first-child {
     padding-top: 2px;
+  }
+  /* Grain film picker (RFC-0022 §4a). Dimmed rows stay interactive. */
+  .row.dim label,
+  .row.dim .val,
+  .row.dim input[type="range"] {
+    opacity: 0.45;
+  }
+  .film-note {
+    margin: 0;
+    padding: 0 4px 4px 78px;
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: var(--text-tertiary);
+  }
+  .film-note .tag {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--text-secondary);
+    cursor: help;
+  }
+  .film-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 4px 3px;
+  }
+  .link-btn {
+    appearance: none;
+    background: none;
+    border: none;
+    padding: 0;
+    font: 10.5px var(--font-ui);
+    color: var(--accent-strong);
+    cursor: pointer;
+  }
+  .link-btn:hover {
+    text-decoration: underline;
   }
   .static-note {
     color: var(--text-tertiary);

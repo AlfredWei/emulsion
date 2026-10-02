@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Develop-open latency investigation: RFC-0024 (2026-10-02)
+
+User report: switching to Develop is slow; asked whether all photos are decoded at once and what cache/thumbnail/lazy-loading would help. Investigation only — **no product code changed**.
+
+- **Answer**: one image is opened, not all. But `pregenerate_missing` builds every catalog image's preview **sequentially with no priority**, so an image opened before its preview exists pays a full RAW decode (≈ 190 ms per 10 MP file in release; ≈ 1 s for 45 MP is *extrapolated*).
+- **Measured** (instrumented debug dev build driving itself through enter-Develop / switch-image / back-to-Library ×3; Rust side in release via two new `#[ignore]` timing tests): steady open ≈ 330 ms debug (≈ 200 ms *estimated* for release on these small files); first open of a session ≈ 680 ms because the **sync** `lookup_lens_profile` command lazily loads the lensfun DB on the main thread (42 ms release, ~450 ms debug) and the preview request waited behind it. **The suspected cost — re-initialising WebGPU on every Develop entry — is only ~2–20 ms.**
+- **Every open reads and BLAKE3-hashes the whole RAW even on a cache hit** (the catalog's `content_hash` is passed but only used when the file is missing) — the one per-open cost that grows with file size.
+- **Options ranked** in RFC-0024 §4–5 (A: stop re-hashing on open; E: warm lens DB + async command; B: embedded-JPEG placeholder on a miss; C: prioritised/parallel pregeneration; D: neighbour prefetch + texture LRU; G: first-render ~100 ms not yet investigated).
+- **Not known**: the user's slow scenario and RAW files. The only available RAWs are three 9–10 MB CR2s (2.5 MP preview); nothing measured on Windows. RFC-0024 §6 lists the three questions needed before choosing.
+
 ## M5.7 — AI editing roadmap spike: RFC-0023 + proposed ADR-0009 (2026-10-02)
 
 Research-only milestone (no product code). User approved a small model download for benchmarking; weights live in a scratch dir outside the repo (hashes in `docs/rfc/RFC-0023-appendix/SHA256SUMS`), harness committed as an appendix.

@@ -550,6 +550,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&previews_dir);
     }
 
+    /// Timing report (not an assertion): where the milliseconds of opening
+    /// one image in Develop go on the Rust side. `cargo test --release --lib
+    /// develop_open_timing_report -- --ignored --nocapture` with
+    /// EMULSION_TEST_RAW_SAMPLE set. Release matters: debug is 10x+ slower.
+    #[test]
+    #[ignore = "timing report; needs EMULSION_TEST_RAW_SAMPLE"]
+    fn develop_open_timing_report() {
+        use std::time::Instant;
+        let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else { return };
+        let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
+        let previews_dir = temp_previews_dir("timing");
+        let path = Path::new(&sample_path);
+
+        let t = Instant::now();
+        let bytes = std::fs::read(path).unwrap();
+        let read_ms = ms(t);
+        let t = Instant::now();
+        let hash = blake3::hash(&bytes).to_hex().to_string();
+        let hash_ms = ms(t);
+        let t = Instant::now();
+        let decoded = source_decode::decode_develop_preview(path).unwrap();
+        let decode_ms = ms(t);
+        let (dw, dh) = (decoded.width, decoded.height);
+        let src = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb).unwrap();
+        let (tw, th) = capped_dimensions(dw, dh, DEVELOP_PREVIEW_MAX_DIMENSION);
+        let t = Instant::now();
+        let resized = image::imageops::resize(&src, tw, th, image::imageops::FilterType::Triangle);
+        let resize_ms = ms(t);
+        let out = previews_dir.join(format!("{hash}.png"));
+        let t = Instant::now();
+        resized.save(&out).unwrap();
+        let png_enc_ms = ms(t);
+        let t = Instant::now();
+        let _ = image::open(&out).unwrap();
+        let png_dec_ms = ms(t);
+        let t = Instant::now();
+        let _ = image::image_dimensions(&out).unwrap();
+        let dims_ms = ms(t);
+        let jpg = previews_dir.join("p.jpg");
+        let t = Instant::now();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(std::fs::File::create(&jpg).unwrap(), 95)
+            .encode_image(&resized)
+            .unwrap();
+        let jpg_enc_ms = ms(t);
+        let t = Instant::now();
+        let _ = image::open(&jpg).unwrap();
+        let jpg_dec_ms = ms(t);
+        let t = Instant::now();
+        let hit = ensure_develop_preview(path, &previews_dir, None).unwrap();
+        let hit_ms = ms(t);
+        eprintln!(
+            "TIMING {} ({:.1} MB, decoded {dw}x{dh} -> {tw}x{th}, png {:.1} MB, jpg95 {:.1} MB)\n  fs::read {read_ms:.1} ms | blake3 {hash_ms:.1} ms | decode_develop_preview {decode_ms:.1} ms | resize {resize_ms:.1} ms\n  png encode {png_enc_ms:.1} ms | png decode(image crate) {png_dec_ms:.1} ms | image_dimensions {dims_ms:.2} ms | jpg95 encode {jpg_enc_ms:.1} ms | jpg decode(image crate) {jpg_dec_ms:.1} ms\n  ensure_develop_preview CACHE HIT (read+hash+stat): {hit_ms:.1} ms ({})",
+            sample_path,
+            bytes.len() as f64 / 1e6,
+            std::fs::metadata(&out).unwrap().len() as f64 / 1e6,
+            std::fs::metadata(&jpg).unwrap().len() as f64 / 1e6,
+            hit.path.len()
+        );
+        let _ = std::fs::remove_dir_all(&previews_dir);
+    }
+
     /// Real-file-gated, same pattern as raw_decode.rs/import.rs: point
     /// EMULSION_TEST_RAW_SAMPLE at a real RAW/DNG file to run these.
     #[test]

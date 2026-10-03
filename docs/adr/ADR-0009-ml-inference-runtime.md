@@ -1,6 +1,6 @@
 # ADR-0009: ML inference runtime for M6 — ONNX Runtime (`ort`) alongside `tract`
 
-- Status: **Proposed** (macOS evidence only; Windows unmeasured — see Consequences)
+- Status: **Proposed** (macOS accuracy/speed evidence; Windows links and runs on CPU, DirectML unmeasured — see Consequences)
 - Date: 2026-10-02
 - Relates to: [RFC-0023](../rfc/RFC-0023-on-device-ai-inference.md) (the measurements), [ADR-0007](ADR-0007-face-detection-and-recognition.md), [ADR-0003](ADR-0003-raw-decoding.md), [PRD MILESTONES §M5.7/§M6](../../PRD/MILESTONES.md)
 
@@ -23,8 +23,8 @@ M6 names an "architecture decision required before scoping in detail": on-device
 
 ## Consequences / what is *not* settled
 
-- **Proposed, not Accepted.** Nothing was run on Windows; DirectML performance and whether `ort` links cleanly on the project's MSVC setup are unknown. This ADR should be accepted only after M6 slice 0 closes the Windows question, or amended if it fails.
-- `ort` has **no stable 2.0** (latest `2.0.0-rc.13`, 2026-07-28): pin an exact version and budget for API churn. Whether `load-dynamic` linking avoids the link cost, and how a bundled runtime library is signed/notarized, are unverified.
+- **Proposed, not Accepted.** Windows is partly closed (RFC-0023 §4.4): `ort` links statically on MSVC both standalone and inside the app crate next to vcpkg LibRaw/`tract`/`rustls` (CI green on Windows and macOS, probe test passes), and CPU inference runs. **Still unknown: DirectML speed** (the CI runner has no DX12 device; the provider must be requested with CPU fallback because session creation hard-fails without an adapter) and `DirectML.dll` shipping. Accept after a real-Windows-GPU measurement, or amend if it fails.
+- `ort` has **no stable 2.0** (latest `2.0.0-rc.13`, 2026-07-28): pin an exact version and budget for API churn. Whether `load-dynamic` linking avoids the link cost, and how a bundled runtime library (macOS dylib, `DirectML.dll`) is signed/notarized, are unverified.
 - **No accuracy was measured.** Model choices in RFC-0023 §5 are baselines to be judged on real photographs, not decisions. Two have unresolved *license* questions that block shipping: `skyseg` (undocumented training data, third-party re-host) and Real-ESRGAN weights (no stated weight license).
 - Only an M1 Pro was measured; M6's minimum-hardware spec is undefined.
 

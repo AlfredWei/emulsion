@@ -106,12 +106,56 @@ What this establishes — and what it does not:
 5. **`ort` also links inside the real app crate, on both platforms** (throwaway draft PR #199, closed unmerged): with `ort =2.0.0-rc.13` (`download-binaries`, `tls-native`, `copy-dylibs`) added next to the vcpkg LibRaw, `tract`, `rustls` and `lcms2`, the normal CI was green on `windows-latest` and `macos-latest` for Rust build + test (456 tests incl. a probe that calls `ort::init()` and `ort::info()`, which passed on both) and for the WebdriverIO E2E suite (the full app launched). The ADR-0003 pain point (MSVC + vcpkg) did not recur. This is a link-and-initialise check only: no model was run inside the app, and no installer was built.
 6. **Not established here:** code signing/notarization of the bundled runtime and of `DirectML.dll`, the `load-dynamic` alternative, installer size impact, and any GPU number on Windows.
 
+### 4.5 Sky model licence search (desk research, added 2026-10-03, M6 slice 0)
+
+Goal: find a sky model whose weights *and training data* have documented, shippable terms (replacing `skyseg`, §4.3). **No model was downloaded or run in this pass**; this is a read of project pages, not legal advice.
+
+| Candidate | What the page says | Verdict |
+|---|---|---|
+| SegFormer-class models fine-tuned on **ADE20K** (e.g. Keras `segformer_b0_ade20k_512`) | Weights labelled MIT; the card states no data restriction. The upstream NVIDIA SegFormer code/weights use a non-commercial source-code licence, per a search summary (not verified at source). | **Not cleared.** ADE20K's terms say "only for non-commercial research and educational purposes" and that MIT CSAIL "does not own the copyright of the images". The terms do not mention derived models, so whether weights trained on it may ship in a commercial app is an open legal question, not a yes. An MIT label on the weights does not settle it. |
+| `fast-skyseg` (WEIIEW97) | States MIT, though no LICENSE file was seen. Training framework only. | **No weights provided**; says nothing about which dataset was used. Usable only as a training recipe. |
+| Models trained on **COCO-Stuff** (has a `sky` class) | Annotations CC BY 4.0; the underlying COCO images are under Flickr terms (mixed per-image licences). COCO's own terms page could not be retrieved in this pass. | **Unresolved**, but less restrictive than ADE20K on its face. No specific pretrained model was identified or checked. |
+| `skyseg` (current best, §4.2a) | Provenance unexplained (§4.3). | Cannot ship. |
+
+What this means:
+
+1. **No ready-made sky model with clean provenance was found.** The common route (an ADE20K-trained segmenter) inherits a non-commercial dataset term.
+2. **Two realistic paths remain**, neither tried: (a) train a small sky model ourselves on a dataset whose image and annotation terms we have read and can commit to the repo's ATTRIBUTION list (COCO-Stuff annotations on CC BY images only, or openly licensed photos such as the Wikimedia Commons ones already used in §4.2a with our own masks); (b) skip a dedicated sky model and ship *Select Sky* as the existing luminance/colour-range mask refined by a click-to-select model (SAM 2 Tiny), accepting §4.2a's weaker results (clouds left out, fragments, bleeding on low-contrast scenes).
+3. Not checked: SkyFinder and other sky-specific datasets' terms, OneFormer/Mask2Former weights (COCO/ADE-trained; same dataset question), and whether a lawyer would treat model weights as a derivative of the training images at all. That last question decides how much the dataset terms matter, and it is for the product owner, not this spike.
+
+### 4.6 A sky model trained on documented data (added 2026-10-03, M6 slice 0)
+
+Path 1 of §4.5, chosen by the product owner: train our own. The training project is **independent of this repo** (`mask_training/`, sibling directory, own git repo; scripts, `attribution.csv` listing every image's licence and Flickr source, README with provenance). Only results are recorded here.
+
+**What was trained:** a 1.56 M-parameter U-Net **from scratch** (no pretrained weights, so no ImageNet-style dataset terms), 20 epochs on a COCO-Stuff subset: annotations CC BY 4.0, images only those whose own Flickr licence is CC BY 2.0, "no known copyright restrictions" or US-gov (19,935 of 118,287 train images; NC, ND and SA excluded). Used 6,822 sky images + 5,000 non-sky = 11,822 train, 477 held-out. One seed, one run.
+
+**A mistake worth recording:** the first run counted COCO-Stuff's separate `clouds` class as not-sky and drew some "no sky" images from cloud scenes. It scored held-out IoU 0.670 and visibly failed on clouds and overcast skies (agreement with skyseg 0.21–0.45 on three photos). After counting `clouds` as sky (fog ignored) the same recipe gave the numbers below. Anyone reusing COCO-Stuff for sky must merge both classes.
+
+**Results (run 2):**
+
+| Measure | Value |
+|---|---|
+| Held-out sky IoU (277 COCO val images with sky, coarse labels) | **0.777** |
+| Pixels falsely called sky on 200 val images with no sky | **1.8 %** |
+| Agreement with skyseg on the §4.2a photos (IoU, photos 1–8) | 0.99, 0.99, 0.98, 0.77, 0.98, 1.00, 0.89, **0.19** |
+| ONNX size / ORT CPU, M1 Pro | 6.2 MB / 33 ms at 288², 104 ms at 512² (matches torch to 4e-6) |
+
+Sheets: `accuracy-sky-trained-part1.jpg`, `-part2.jpg` (red = skyseg, blue = this model; photo 8 is CC BY-SA and is not in a committed sheet).
+
+**Read this carefully:**
+
+1. **It is a baseline, not a finished model.** On seven of eight photos it matches skyseg closely, including clouds, overcast, sunset and a blurred sea horizon, which the §4.2a SAM 2 route could not do. "Agreement with skyseg" is not accuracy: skyseg is itself imperfect and there is no ground truth for these photos.
+2. **Visible flaws:** a false-positive sky blob on the shadowed slope of the mountain in photo 7 (the IoU of 0.89 hides it); a few small clouds missed in photo 5; blotchy, incomplete mask between thin branches in photo 8 (agreement 0.19, the same thin-structure problem both earlier models had); soft edges, because input is 288² and COCO-Stuff labels are superpixel-coarse. Edge refinement (guided filter at full resolution) is still required.
+3. **The held-out set is COCO photos, not landscape photography**, and the false-positive figure is a proxy: skyseg's known bad case (bright blurred portrait background) was not re-tested on this model.
+4. **Provenance is now documentable** (dataset, licences per image, recipe, hashes) but the legal question in §4.5 point 3 (are weights trained on CC BY images a derivative work) remains the product owner's call; CC BY credit for ~12k images would need an attribution mechanism.
+5. **Not done:** more than one seed, a larger or better-labelled training set (e.g. more landscape images), higher input resolution, a real ground-truth set of our own, edge refinement, Windows/DirectML timing.
+
 ## 5. Recommendations per M6 feature area
 
 These are recommendations to start M6 as a build milestone, not final model choices; each needs the quality evaluation this spike did not do.
 
 1. **Subject / object selection (click, box):** **SAM 2 Tiny** is now the baseline, **not MobileSAM**: in the §4.2 smoke test MobileSAM's single-mask export was unfit as a one-click selector, while SAM 2 Tiny's three candidates produced 4 clean masks out of 6 and 2 part/whole ambiguities. Costs: encoder 1.0 s on CPU (vs 0.35 s), ORT only (`tract` cannot load it), and the upstream ONNX export is flagged experimental. Run the encoder in the background after Develop opens an image and cache the embedding by content hash like the existing Develop preview cache (≈ 1 s once per image, then ~20 ms per click). **The UI must offer the three candidates / a refine click**; auto-picking the top-IoU mask picked the wrong level in 2 of 6 tries. A larger SAM 2 variant and a multi-mask MobileSAM export were not tried.
-2. **Sky:** **`skyseg` is the best performer measured (§4.2a) but cannot ship as it stands** (provenance §4.3, false positive on a bright blurred background §4.2). **SAM 2 with a sky click is *not* an adequate substitute** (§4.2a: leaves out clouds, fragments, bleeds on low-contrast scenes). M6 slice 0 must therefore find a sky model with a documented dataset and licence — check COCO-Stuff/ADE20K-trained segmentation models (read the dataset and weight licences), or train a small sky model on a documented permissive dataset — and meanwhile *Select Sky* can fall back on the existing luminance/colour-range masks. Whatever model is used needs edge refinement at thin structures (branches, spires).
+2. **Sky:** *(update: §4.6 trained a documented-provenance baseline that matches skyseg on 7 of 8 photos, with flaws; it is the candidate to refine, not yet a decision.)* **`skyseg` is the best performer measured (§4.2a) but cannot ship as it stands** (provenance §4.3, false positive on a bright blurred background §4.2). **SAM 2 with a sky click is *not* an adequate substitute** (§4.2a: leaves out clouds, fragments, bleeds on low-contrast scenes). M6 slice 0 must therefore find a sky model with a documented dataset and licence — check COCO-Stuff/ADE20K-trained segmentation models (read the dataset and weight licences), or train a small sky model on a documented permissive dataset — and meanwhile *Select Sky* can fall back on the existing luminance/colour-range masks. Whatever model is used needs edge refinement at thin structures (branches, spires).
 3. **AI denoise:** **SCUNet (Apache-2.0) on ORT CPU, scoped as an explicit action / export-time step with a crop preview**, not a live slider. The 6-minute full-frame extrapolation is the main product risk; a lighter model should be evaluated before committing (candidates *named but not tested*: NAFNet-class, DRUNet-class). Do not use CoreML for it (measured pathological).
 4. **Super-resolution:** **Real-ESRGAN `realesr-general-x4v3`** (4.9 MB) on **ORT CoreML on macOS** (0.37 vs 0.55 s on the one size measured) with CPU fallback, as an explicit action with tiling. **Confirm the weights' license** before shipping (code is BSD-3; the weights' terms are not stated in the upstream README).
 5. **Composable masking (add/subtract/intersect):** no model; this is mask-engine work in M6's own scope and needs no research here.

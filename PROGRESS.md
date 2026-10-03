@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 0 (Windows part): `ort` links and runs on Windows, RFC-0023 §4.4 (2026-10-03)
+
+Throwaway spike (`spike/ort-windows`, never merged) answering the Windows question in ADR-0009. Docs-only PR; no app code changed.
+
+- **Standalone `ort` on `windows-latest`** (MSVC): builds, links ONNX Runtime statically (21.5 MB exe), runs. CPU medians: skyseg 889 ms, SAM 2 encoder 2.8 s, decoder 61 ms (shared 4-vCPU VM: a floor, not user hardware). `DirectML.dll` ships next to the exe.
+- **Inside the real app crate** (draft PR #199, closed unmerged): `ort =2.0.0-rc.13` added next to vcpkg LibRaw, `tract`, `rustls`; Rust build+test and WebdriverIO E2E green on Windows and macOS, `ort::init()` probe passes on both. The ADR-0003 MSVC/vcpkg pain point did not recur.
+- **DirectML unmeasured**: the runner has no DX12 device, and session creation hard-fails without one, so it must be requested with CPU fallback. Needs a real Windows GPU machine.
+- **CoreML pathology reproduced on a second Mac** (SAM 2 encoder 166 s vs 5.5 s CPU; skyseg 5x faster): per-model, CPU-default provider choice confirmed.
+- ADR-0009 stays *Proposed* (DirectML speed, signing/notarization of the bundled runtime and `DirectML.dll`, `load-dynamic`). Remaining slice 0: a sky model with documented provenance, a real accuracy metric, denoise/super-resolution quality, DirectML on a GPU machine.
+
 ## M6 slice 0 (accuracy part): smoke test of the shortlisted models, RFC-0023 §4.2–4.3 (2026-10-03)
 
 Closes part of RFC-0023 §7's "no accuracy was measured". **A smoke test, not an evaluation**: four repo test photos (CC-licensed), six clicks, judged by eye, no metric.

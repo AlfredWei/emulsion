@@ -103,7 +103,8 @@ What this establishes — and what it does not:
 2. **Windows CPU numbers are usable for background work**: ~0.9 s for the sky model, ~2.8 s for the SAM 2 encoder (once per image, background), ~60 ms per click on a shared 4-vCPU runner. These are not representative of user hardware (a shared CI VM); they say the CPU path is not unreasonable, not what a given customer sees.
 3. **DirectML could not be measured: the runner has no DirectX 12 device.** Creating the provider failed on every model with `No devices detected that match the filter criteria` (hard error, because the spike asked for `error_on_failure`). So **DirectML speed, and whether it helps or hurts these models as CoreML does, is still unknown**, and a real Windows GPU machine is required. It also shows a practical point: the provider must be requested with fallback to CPU, or an app on a machine without a DX12 adapter fails to open a session.
 4. **CoreML repeats its pathology on a different Mac**: on the macOS runner the SAM 2 encoder took **166 s on CoreML vs 5.5 s on CPU** (and 8 s of provider load), while the sky model was 5× faster on CoreML (386 vs 1982 ms). This independently confirms §4.1 point 1: provider choice must be per model and measured, CPU by default.
-5. **Not established here:** linking *inside the app crate* next to the vcpkg LibRaw, `tract` and `rustls` (a separate draft PR was opened for the normal CI to build the app with `ort`; result below), code signing/notarization of the bundled runtime, the `load-dynamic` alternative, and any GPU number on Windows.
+5. **`ort` also links inside the real app crate, on both platforms** (throwaway draft PR #199, closed unmerged): with `ort =2.0.0-rc.13` (`download-binaries`, `tls-native`, `copy-dylibs`) added next to the vcpkg LibRaw, `tract`, `rustls` and `lcms2`, the normal CI was green on `windows-latest` and `macos-latest` for Rust build + test (456 tests incl. a probe that calls `ort::init()` and `ort::info()`, which passed on both) and for the WebdriverIO E2E suite (the full app launched). The ADR-0003 pain point (MSVC + vcpkg) did not recur. This is a link-and-initialise check only: no model was run inside the app, and no installer was built.
+6. **Not established here:** code signing/notarization of the bundled runtime and of `DirectML.dll`, the `load-dynamic` alternative, installer size impact, and any GPU number on Windows.
 
 ## 5. Recommendations per M6 feature area
 
@@ -122,7 +123,7 @@ Add **ONNX Runtime via the `ort` crate** behind one thin `ml` module, **CPU exec
 
 ## 7. Open questions M6 slice 0 must close (not answered here)
 
-- **Windows:** DirectML/CUDA numbers, and whether `ort` links cleanly on the project's MSVC/vcpkg setup (the ADR-0003 pain point). Nothing here was run on Windows.
+- **Windows:** DirectML/CUDA numbers on a real GPU machine (the CI runner has no DX12 device). Linking on the project's MSVC/vcpkg setup is closed (§4.4 point 5).
 - **Accuracy:** run each shortlisted model on real photographs (landscape/sky, portrait, busy scenes) and judge masks, denoise, and upscale by eye and with a simple metric; this spike's timing says nothing about quality.
 - **Minimum hardware:** only an M1 Pro (a high-end laptop chip) was measured. M6's "define the target machine spec" is not done.
 - **`ort` link mode and stability:** whether the `load-dynamic` feature (load the runtime library at run time rather than link it) removes the linking cost, how the pre-release `2.0.0-rc` series should be pinned, and what the signed-binary/notarization story is for a bundled `libonnxruntime`. Not verified.

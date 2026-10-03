@@ -106,6 +106,23 @@ What this establishes — and what it does not:
 5. **`ort` also links inside the real app crate, on both platforms** (throwaway draft PR #199, closed unmerged): with `ort =2.0.0-rc.13` (`download-binaries`, `tls-native`, `copy-dylibs`) added next to the vcpkg LibRaw, `tract`, `rustls` and `lcms2`, the normal CI was green on `windows-latest` and `macos-latest` for Rust build + test (456 tests incl. a probe that calls `ort::init()` and `ort::info()`, which passed on both) and for the WebdriverIO E2E suite (the full app launched). The ADR-0003 pain point (MSVC + vcpkg) did not recur. This is a link-and-initialise check only: no model was run inside the app, and no installer was built.
 6. **Not established here:** code signing/notarization of the bundled runtime and of `DirectML.dll`, the `load-dynamic` alternative, installer size impact, and any GPU number on Windows.
 
+### 4.5 Sky model licence search (desk research, added 2026-10-03, M6 slice 0)
+
+Goal: find a sky model whose weights *and training data* have documented, shippable terms (replacing `skyseg`, §4.3). **No model was downloaded or run in this pass**; this is a read of project pages, not legal advice.
+
+| Candidate | What the page says | Verdict |
+|---|---|---|
+| SegFormer-class models fine-tuned on **ADE20K** (e.g. Keras `segformer_b0_ade20k_512`) | Weights labelled MIT; the card states no data restriction. The upstream NVIDIA SegFormer code/weights use a non-commercial source-code licence, per a search summary (not verified at source). | **Not cleared.** ADE20K's terms say "only for non-commercial research and educational purposes" and that MIT CSAIL "does not own the copyright of the images". The terms do not mention derived models, so whether weights trained on it may ship in a commercial app is an open legal question, not a yes. An MIT label on the weights does not settle it. |
+| `fast-skyseg` (WEIIEW97) | States MIT, though no LICENSE file was seen. Training framework only. | **No weights provided**; says nothing about which dataset was used. Usable only as a training recipe. |
+| Models trained on **COCO-Stuff** (has a `sky` class) | Annotations CC BY 4.0; the underlying COCO images are under Flickr terms (mixed per-image licences). COCO's own terms page could not be retrieved in this pass. | **Unresolved**, but less restrictive than ADE20K on its face. No specific pretrained model was identified or checked. |
+| `skyseg` (current best, §4.2a) | Provenance unexplained (§4.3). | Cannot ship. |
+
+What this means:
+
+1. **No ready-made sky model with clean provenance was found.** The common route (an ADE20K-trained segmenter) inherits a non-commercial dataset term.
+2. **Two realistic paths remain**, neither tried: (a) train a small sky model ourselves on a dataset whose image and annotation terms we have read and can commit to the repo's ATTRIBUTION list (COCO-Stuff annotations on CC BY images only, or openly licensed photos such as the Wikimedia Commons ones already used in §4.2a with our own masks); (b) skip a dedicated sky model and ship *Select Sky* as the existing luminance/colour-range mask refined by a click-to-select model (SAM 2 Tiny), accepting §4.2a's weaker results (clouds left out, fragments, bleeding on low-contrast scenes).
+3. Not checked: SkyFinder and other sky-specific datasets' terms, OneFormer/Mask2Former weights (COCO/ADE-trained; same dataset question), and whether a lawyer would treat model weights as a derivative of the training images at all. That last question decides how much the dataset terms matter, and it is for the product owner, not this spike.
+
 ## 5. Recommendations per M6 feature area
 
 These are recommendations to start M6 as a build milestone, not final model choices; each needs the quality evaluation this spike did not do.

@@ -2,6 +2,10 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 0 (sky model licence search): desk research, RFC-0023 §4.5 (2026-10-03)
+
+No download, no run. Read the terms behind the obvious sky-model routes. **No ready-made sky model with clean provenance exists in what was found**: ADE20K-trained segmenters inherit a dataset licensed for non-commercial research only (images not owned by MIT; terms silent on derived models, so unresolved rather than forbidden); `fast-skyseg` ships no weights; COCO-Stuff has CC BY annotations on Flickr-licensed images (COCO's own terms page not retrieved). Two paths left, untried: train a small sky model on terms we can document, or ship *Select Sky* as range mask + SAM 2 click. Product-owner decision needed on how far to trust 'weights are not derivatives of training images'.
+
 ## M6 slice 0 (Windows part): `ort` links and runs on Windows, RFC-0023 §4.4 (2026-10-03)
 
 Throwaway spike (`spike/ort-windows`, never merged) answering the Windows question in ADR-0009. Docs-only PR; no app code changed.

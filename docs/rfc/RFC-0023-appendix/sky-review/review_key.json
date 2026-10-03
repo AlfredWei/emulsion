@@ -1,0 +1,272 @@
+{
+ "1": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "01_Snow_Covered_Himalayan_Range_under_Clear.jpg",
+  "category": "clear blue sky"
+ },
+ "2": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "02_Beautiful_landscape_view_of_a_serene_gar.jpg",
+  "category": "clear blue sky"
+ },
+ "3": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "03_Dusk_Sunset_Sky_jpg.jpg",
+  "category": "clear blue sky"
+ },
+ "4": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "04_Mountain_Lake_Vista_jpg.jpg",
+  "category": "clear blue sky"
+ },
+ "5": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "05_The_Big_Crater_Art_IWMART3001_jpg.jpg",
+  "category": "overcast"
+ },
+ "6": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "06_Sunset_over_Umm_al_Fahm_with_pink_lilac_.jpg",
+  "category": "sunset"
+ },
+ "7": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "07_Smoke_from_the_Apple_Fire_over_desert_hi.jpg",
+  "category": "sunset"
+ },
+ "8": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "08_Smoke_from_the_Apple_Fire_over_desert_hi.jpg",
+  "category": "sunset"
+ },
+ "9": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "09_Smoke_from_the_Apple_Fire_over_desert_hi.jpg",
+  "category": "sunset"
+ },
+ "10": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "10_Sky_Clouds_Sea_jpg.jpg",
+  "category": "sea horizon"
+ },
+ "11": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "11_Sea_horizon_in_Corona_Del_Mar_Unsplash_j.jpg",
+  "category": "sea horizon"
+ },
+ "12": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "12_Dramatic_Atlantic_Ocean_sunrise_under_a_.jpg",
+  "category": "sea horizon"
+ },
+ "13": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "13_New_Horizons_1_Unsplash_jpg.jpg",
+  "category": "sea horizon"
+ },
+ "14": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "14_Man_biking_on_Recife_city_jpg.jpg",
+  "category": "skyline"
+ },
+ "15": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "15_Pont_de_Brooklyn_de_nuit_Octobre_2008_ed.jpg",
+  "category": "skyline"
+ },
+ "16": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "16_AucklandPano_MC_jpg.jpg",
+  "category": "skyline"
+ },
+ "17": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "17_022_Osaka_Japan_city_view_of_Osaka_from_.jpg",
+  "category": "skyline"
+ },
+ "18": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "18_Darjeeling_India_Tree_canopy_against_the.jpg",
+  "category": "trees"
+ },
+ "19": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "19_Gro_er_Feldberg_in_snow_trees_against_bl.jpg",
+  "category": "trees"
+ },
+ "20": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "20_Tall_Palm_Trees_Against_Clear_Blue_Sky_j.jpg",
+  "category": "trees"
+ },
+ "21": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "21_Darjeeling_India_Tree_canopy_against_the.jpg",
+  "category": "trees"
+ },
+ "22": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "22_Urban_winter_trees_with_bare_branches_at.jpg",
+  "category": "bare branches"
+ },
+ "23": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "23_Amsterdam_free_photo_of_old_city_square_.jpg",
+  "category": "bare branches"
+ },
+ "24": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "24_Suburban_street_at_dusk_in_Quebec_City_j.jpg",
+  "category": "bare branches"
+ },
+ "25": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "25_Amsterdam_city_wit_a_view_over_old_canal.jpg",
+  "category": "bare branches"
+ },
+ "26": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "26_Winter_starry_landscape_gerd_huedepohl_5.jpg",
+  "category": "night"
+ },
+ "27": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "27_Paramount_Ranch_Night_Sky_Party_35998624.jpg",
+  "category": "night"
+ },
+ "28": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "28_2011_08_15_23_32_01_stars_constellations.jpg",
+  "category": "night"
+ },
+ "29": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "29_Night_Sky_Satwiwa_Oak_Milky_Way_37077189.jpg",
+  "category": "night"
+ },
+ "30": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "30_Ganga_at_Kaudiayala_jpg.jpg",
+  "category": "fog"
+ },
+ "31": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "31_Misty_morning_in_the_dunes_of_Praia_de_n.jpg",
+  "category": "fog"
+ },
+ "32": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "32_Misty_morning_landscape_with_trees_and_m.jpg",
+  "category": "fog"
+ },
+ "33": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "33_Misty_morning_in_the_mountains_near_the_.jpg",
+  "category": "fog"
+ },
+ "34": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "34_Spring_storm_clouds_over_fields_jpg.jpg",
+  "category": "storm"
+ },
+ "35": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "35_Storm_clouds_over_fields_Eschenhahn_jpg.jpg",
+  "category": "storm"
+ },
+ "36": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "36_Storm_clouds_over_power_lines_jpg.jpg",
+  "category": "storm"
+ },
+ "37": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "37_Cumulonimbus_storm_clouds_over_sunflower.jpg",
+  "category": "storm"
+ },
+ "38": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "38_Desert_Skies_Unsplash_jpg.jpg",
+  "category": "desert"
+ },
+ "39": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "39_Clear_Desert_Night_Sky_Unsplash_jpg.jpg",
+  "category": "desert"
+ },
+ "40": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "40_March_2017_Central_Coast_Field_Office_Wi.jpg",
+  "category": "desert"
+ },
+ "41": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "41_March_2017_Central_Coast_Field_Office_Wi.jpg",
+  "category": "desert"
+ },
+ "42": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "42_Zagedan_Lakes_Mountain_cirque_Caucasus_M.jpg",
+  "category": "lake"
+ },
+ "43": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "43_Jokulsarlon_lake_Iceland_jpg.jpg",
+  "category": "lake"
+ },
+ "44": {
+  "A": "skyseg",
+  "B": "ours",
+  "file": "44_Ergaki_Buiba_Valley_Western_Sayan_Mounta.jpg",
+  "category": "lake"
+ },
+ "45": {
+  "A": "ours",
+  "B": "skyseg",
+  "file": "45_Receding_Fog_over_Lake_Altaussee_jpg.jpg",
+  "category": "lake"
+ }
+}

@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 1 (composable masking): RFC-0025 drafted (2026-10-04)
+
+Slice 0 closed (#205); user chose **composable masking** as the first M6 build slice (no model needed). Design only, **no product code changed**, nothing prototyped or measured.
+
+- **Today** (read in the source): one mask = one op = one shape + one adjustment set, applied in stack order into a running `rgb`; max 8 masks across all kinds (uniform array and brush texture layers share it); no way to say "this region except that".
+- **Recommended** (RFC-0025 §3, Option B): an optional ordered `modifiers[]` on the five weight-producing kinds, each `{combine: add|subtract|intersect, shape}`; a mask without it renders exactly as before (no migration). Fold with the product family (`w+c−wc`, `w(1−c)`, `wc`); adjustments stay on the base mask. GPU: extract `component_weight`, add a second `mods[]` uniform array; brush modifiers share the 8 brush layers. Rejected: a new `mask_group` op (two models forever) and cross-op references (dangling ids).
+- **Slices**: 1a engine (model, Rust fold, WGSL, parity + real-GPU probe, overlay on combined weight), 1b UI (Components list, selection becomes `(maskId, componentId)`), 1c polish (history names, copy/paste id uniqueness, docs).
+- **Open**: product vs min/max on a real photo before kernels are frozen; whole-result invert; modifier cap (16) and brush-layer memory; no downgrade story for older builds ignoring `modifiers`.
+
 ## Develop zoom follow-up: keyboard shortcuts + overlays that no longer scroll (2026-10-04)
 
 Closes two of the gaps listed in the entry below (PR #203).

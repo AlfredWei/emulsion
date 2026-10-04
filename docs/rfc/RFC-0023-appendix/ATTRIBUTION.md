@@ -23,3 +23,11 @@ SHA-256 of the downloaded files:
 - `b6d931de18df9272c9ba127a81b75475d0589948043ac838fed07d631f4737ca` 6_Calm_sea_haleiwa_Unsplash_.jpg
 - `b1dc67496753f8bb38b3dc8d0f644a92e06d170de8840c0da466fd01ccbbebf8` 7_Ama_Dablam_Nepal.jpg
 - `8aa327246548d1ffc48fd2786fd7a5fa734ce8351488e58487f87c94309fc1e1` 8_Branches_in_the_sky.jpg
+
+## Denoise / super-resolution quality test (§4.7)
+
+`quality-denoise-sr-crops.jpg` contains 200×200 crops from CC0 photographs (Wikimedia Commons; per-photo licence and source in the independent `mask_training` project's `gt_photos/meta.json`, mirrored for the sky review at `sky-review/gt_photos_meta.json`): photos 14, 19, 24 and 25 of that set (all CC0, no attribution required; recorded here anyway).
+
+## Real-noise test (§4.7)
+
+`quality-real-noise-crops.jpg` contains 256×256 crops (enlarged 1.5×, plus the SCUNet and blur results) from the Natural Image Noise Dataset (NIND) by **Trougnouf**, licensed **CC BY 4.0**, from Wikimedia Commons: `NIND stairs`, `NIND Leonidas`, `NIND tree1`, `NIND chapel` (ISO200 reference and ISO6400 versions). Titles, page links and SHA-256 of the downloaded files are in `quality-real-noise-sources.json`. The image processing shown (tone match, denoise, blur) was done by this project; the original images are not modified beyond that and are not redistributed here.

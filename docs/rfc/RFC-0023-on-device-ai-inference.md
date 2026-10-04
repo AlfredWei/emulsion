@@ -165,6 +165,29 @@ Sheets: `accuracy-sky-trained-part1.jpg`, `-part2.jpg` (red = skyseg, blue = thi
 
 **What was established regardless of the above:** the training pipeline is reproducible and its provenance is documentable (dataset, licences per image, recipe, hashes in the independent `mask_training/` project); the run-1 label mistake (§4.6 above) cost 0.1 IoU; a model of this size and recipe runs at 33 ms (288²) on an M1 Pro CPU. **What is not established:** whether the failure is the model, the coarse COCO-Stuff labels, the 288-px resolution, or the lack of landscape-style training data. Edge refinement was tried and does not help (above). The failure pattern (dark, mono, through-foliage and saturated skies) points at training data and augmentation first (strong exposure/gamma/hue/B&W augmentation, landscape-style images), then model capacity and input resolution. Augmentation (run 3) and resolution (run 4) were then tried: neither fixed it, and the worst cases are complete misses (no sky predicted). Capacity, global context and more diverse data remain untried.
 
+### 4.7 Denoise and super-resolution quality on a known reference (added 2026-10-04, M6 slice 0)
+
+Until now these two models only had speed numbers (§4.1). This pass measures quality where a ground truth exists, on **synthetic degradations only** (script `quality_denoise_sr.py`, results `quality-denoise-sr-results.json`, crops `quality-denoise-sr-crops.jpg`; ORT CPU, M1 Pro). Eight CC0 photographs (§4.2a-style licences, from the sky review set) were downscaled to 1000 px on the long side as the "clean" reference.
+
+**Denoise (SCUNet `color_real_psnr`):** synthetic signal-dependent noise (variance = a·x + b) at three levels, scored by PSNR / SSIM against the reference; a 1.2-px Gaussian blur is the trivial baseline. Means over 8 photos:
+
+| Noise | Noisy | Gaussian blur | SCUNet |
+|---|---|---|---|
+| low | 29.7 dB / 0.795 | 27.6 / 0.848 | **36.0 / 0.967** |
+| medium | 24.5 / 0.597 | 27.1 / 0.820 | **34.4 / 0.954** |
+| high | 19.3 / 0.389 | 25.7 / 0.745 | **31.9 / 0.925** |
+
+SCUNet beat the blur baseline on every photo at every level (+6 to +13 dB over the noisy input). In the crops it removes the noise cleanly and keeps building edges, power lines and trunks; fine texture is softened (snow on conifer needles, foliage), which is what a PSNR-trained model does. About **11 s per 1000×667 image** (~0.67 MP) on CPU, independent of noise level; scaling linearly that is ~6.5 min for 24 MP, consistent with §4.1's extrapolation. Its ONNX export only accepts sizes that are a multiple of 64 (a 1000×667 input failed until reflect-padded to 1024×704), so a product wrapper must pad and tile.
+
+**Super-resolution (Real-ESRGAN `realesr-general-x4v3`):** the reference downscaled 4× (bicubic), then upscaled 4× by the model and by bicubic. Means: bicubic **26.1 dB / 0.788**, Real-ESRGAN **24.8 / 0.791**. Real-ESRGAN had *lower* PSNR than bicubic on 8 of 8 photos and higher SSIM on 4 of 8. This is the expected behaviour of a perceptually-tuned model, so the numbers cannot decide; **by eye** it is clearly crisper than bicubic but **invents detail and over-sharpens**: balcony railings become hard black stripes, conifer needles turn painterly, thin wires get heavier. 0.37 s for a 250×156 input (1000×624 output); full-size cost was not measured.
+
+**What this does and does not establish:**
+
+1. **SCUNet is a strong denoiser on Gaussian-like, signal-dependent noise** and clearly better than plain smoothing. This supports §5.3 (explicit action with a crop preview), not a live slider.
+2. **Not established: real camera noise.** The noise here is synthetic and close to what SCUNet's training degradations contain; real high-ISO files (chroma blotches, banding, hot pixels, RAW-domain noise) were not tested. Likewise 'bicubic ×4 of a clean photo' is an idealised degradation for super-resolution. Both need real files before any claim of product quality.
+3. **Real-ESRGAN's hallucinated detail is a product risk for a photo editor** (it changes what the photograph shows). If offered, it needs an explicit 'enhance' framing, a before/after view, and its weights licence resolved (§5.4); a subtle strength blend with bicubic is worth testing.
+4. Single machine, eight photos, one noise realisation per level, no perceptual metric (LPIPS needs more weights to be fetched), no raters.
+
 ## 5. Recommendations per M6 feature area
 
 These are recommendations to start M6 as a build milestone, not final model choices; each needs the quality evaluation this spike did not do.
@@ -183,7 +206,7 @@ Add **ONNX Runtime via the `ort` crate** behind one thin `ml` module, **CPU exec
 ## 7. Open questions M6 slice 0 must close (not answered here)
 
 - **Windows:** DirectML/CUDA numbers on a real GPU machine (the CI runner has no DX12 device). Linking on the project's MSVC/vcpkg setup is closed (§4.4 point 5).
-- **Accuracy:** run each shortlisted model on real photographs (landscape/sky, portrait, busy scenes) and judge masks, denoise, and upscale by eye and with a simple metric; this spike's timing says nothing about quality.
+- **Accuracy (partly done: sky §4.2a/§4.6, denoise and super-resolution on synthetic degradations §4.7; real high-ISO files still untested):** run each shortlisted model on real photographs (landscape/sky, portrait, busy scenes) and judge masks, denoise, and upscale by eye and with a simple metric; this spike's timing says nothing about quality.
 - **Minimum hardware:** only an M1 Pro (a high-end laptop chip) was measured. M6's "define the target machine spec" is not done.
 - **`ort` link mode and stability:** whether the `load-dynamic` feature (load the runtime library at run time rather than link it) removes the linking cost, how the pre-release `2.0.0-rc` series should be pinned, and what the signed-binary/notarization story is for a bundled `libonnxruntime`. Not verified.
 - **CoreML compile cache** and why SCUNet partitions so badly (try `MLComputeUnits=CPUAndGPU`, static shapes, or the ORT compiled-model cache).

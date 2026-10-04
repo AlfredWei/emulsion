@@ -96,6 +96,8 @@
     onCropChange={handleCropChange}
     cropAspectLock={develop.cropAspectLock}
     onSourceDimensions={handleSourceDimensions}
+    nativeWidth={develop.imageNativeWidth}
+    nativeHeight={develop.imageNativeHeight}
     onHistogramUpdate={handleHistogramUpdate}
     showClippingOverlay={develop.showClippingOverlay}
     onHoverPixel={handleHoverPixel}

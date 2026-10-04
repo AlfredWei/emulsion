@@ -57,6 +57,7 @@ Open any photo into Develop (`D`, or double-click). Every edit is non-destructiv
 - **Sharpening & noise reduction**: separate luminance/color noise reduction, sharpening.
 - **Presets**: create, save, apply, import/export as files; Copy/Paste Settings and Batch Apply let you carry one photo's edits (or a chosen subset) onto another photo or a whole selection.
 - **Soft proofing** against an output color profile before you export or print.
+- **Zoom & navigate**: **Fit** shows the whole photo; click the photo to jump to 100% (click again for Fit), or use the **− Fit 100% +** controls in the bottom-right corner to step through 50 / 75 / 100 / 150 / 200%. `Ctrl`/`Cmd` + scroll wheel or a trackpad pinch zooms about the cursor, clamped to 50–200%. Percentages are of the photo's native size. While zoomed in, a small **navigator** above the controls shows the whole photo with a frame around the part you're looking at; click or drag in it to move there. Drag the photo (or hold `Space`) to pan.
 - **Panels resize** (drag the History/adjustments panel edges) and every slider supports fine step-nudge via up/down controls in addition to drag.
 
 **Rendering**: Develop renders on the GPU (WebGPU) for interactive speed. If WebGPU isn't available on your machine, the app automatically falls back to a CPU-rendered preview — mask/crop *creation* is disabled in that mode (existing masks still render correctly), and a banner tells you which mode you're in.

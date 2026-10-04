@@ -6,10 +6,12 @@
   import { applyBitmapToGpu as applyBitmapToGpuImpl } from "$lib/gpu/sourceTexture.js";
   import { buildAtmLightChainSizes } from "$lib/gpu/atmChain.js";
   import { rasterizeDab, rasterizeSpotDab } from "$lib/gpu/brushRaster.js";
-  import { tick } from "svelte";
+  import { tick, flushSync } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
-  import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, nativeCropClipSize, scrollTargetForNativeFocus, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
+  import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
+  import { FIT, fitScale, effectiveScale, reduceZoom, contentOffset, visibleRegion, scrollForFocus, focusAtViewportPoint } from "$lib/zoomMath.js";
+  import DevelopZoomHud from "$lib/components/DevelopZoomHud.svelte";
   import { binHistogramPixels } from "$lib/histogramMath.js";
   import { classifyGpuFailure } from "$lib/gpuFallback.js";
 
@@ -78,6 +80,8 @@
    *   onCropChange: (patch: Partial<{x: number, y: number, width: number, height: number, angle: number}>) => void,
    *   cropAspectLock: number | null,
    *   onSourceDimensions?: (width: number, height: number) => void,
+   *   nativeWidth?: number | null,
+   *   nativeHeight?: number | null,
    *   onHistogramUpdate?: (data: {r: Uint32Array, g: Uint32Array, b: Uint32Array}) => void,
    *   showClippingOverlay?: boolean,
    *   onHoverPixel?: (rgb: {r: number, g: number, b: number} | null) => void,
@@ -137,6 +141,8 @@
     onCropChange,
     cropAspectLock,
     onSourceDimensions,
+    nativeWidth = null,
+    nativeHeight = null,
     onHistogramUpdate,
     showClippingOverlay = false,
     onHoverPixel,
@@ -196,10 +202,16 @@
     return () => observer.disconnect();
   });
 
-  // M3 Slice 3: basic pan/zoom. "fit" is today's existing behavior; "100"
-  // is true 1:1 canvas-backing-store pixels, scrollable via the browser's
-  // own native scroll clamping rather than hand-rolled pan math.
-  let zoomMode = $state("fit"); // "fit" | "100"
+  // Zoom. `zoom` is the user's intent -- Fit, or an explicit scale from 50% to
+  // 200% of the photo's NATIVE size (see zoomMath.js: every input goes through
+  // `reduceZoom`, so the range/clamp rules live in one tested place). The
+  // derived values below turn it into pixels. Panning stays the browser's own
+  // native scrolling on `.canvas-wrap` rather than hand-rolled pan math.
+  let zoom = $state(/** @type {import('$lib/zoomMath.js').ZoomState} */ (FIT));
+  let isZoomed = $derived(zoom.mode === "zoom");
+  // Mirrors `.canvas-wrap`'s scroll position so the navigator's region
+  // reacts to panning (scrollLeft/Top themselves are not reactive).
+  let scrollPos = $state({ left: 0, top: 0 });
 
   // Crop & Straighten (M3): reactive mirror of canvasEl.width/height (set
   // once in applyBitmapToGpu, imperative and NOT itself a tracked Svelte
@@ -243,13 +255,14 @@
   const CROP_CLIP_PADDING_PX = 22; // matches .canvas-wrap's own CSS padding
 
   // 1:1 preview tier (mirrors real Lightroom's Standard/1:1 Preview split,
-  // PRD/PRD.md's own explicit phrasing): "fit" always shows the draft tier
+  // PRD/PRD.md's own explicit phrasing): Fit always shows the draft tier
   // (getDevelopPreview, capped to DEVELOP_PREVIEW_MAX_DIMENSION on the
-  // Rust side); "100" lazily upgrades to a true native-resolution texture
-  // the FIRST time an image is zoomed in, so 100% actually shows finer
-  // detail rather than just CSS-magnifying the same capped preview. Once
-  // upgraded, stays upgraded for the rest of this image's session (toggling
-  // back to "fit" doesn't downgrade -- see the zoom-trigger $effect below)
+  // Rust side); a zoom whose on-screen size outgrows the draft lazily
+  // upgrades to a true native-resolution texture the FIRST time that
+  // happens, so zoomed views show finer detail rather than just
+  // CSS-magnifying the same capped preview. Once
+  // upgraded, stays upgraded for the rest of this image's session (zooming
+  // back out doesn't downgrade -- see the zoom-trigger $effect below)
   // -- these three vars are plain module state, not $state, matching
   // dragState/paintingMaskId's own "imperative bookkeeping, not something
   // markup reads reactively" reasoning elsewhere in this file.
@@ -258,25 +271,13 @@
   /** @type {Promise<void> | null} */
   let fullTierPromise = null; // in-flight upgrade, deduped so rapid zoom toggling can't fire it twice
   let activeTier = "draft"; // "draft" | "full"
-  // Normalized (0-1) focus point for zoom-to-100% scroll centering --
-  // resolution-independent (unlike a native-pixel point), so the SAME
-  // fraction re-centers correctly against the draft tier's dimensions at
-  // the moment of the click AND against the full tier's dimensions once
-  // upgradeToFullTier swaps them in moments later. Defaults to center for
-  // the zoom-badge-button entry path, which has no click point at all.
-  let lastZoomFocus = { x: 0.5, y: 0.5 };
-  // Guards upgradeToFullTier's own re-center (see that function's doc
-  // comment) against clobbering a pan the user made WHILE the full-res
-  // decode was still in flight -- reset to false every time lastZoomFocus
-  // is freshly captured (a new zoom-in click), set true by any actual
-  // pan-drag scroll write in the meantime. Without this, a slow full-tier
-  // decode (large/portrait source images that exceed the draft tier's
-  // DEVELOP_PREVIEW_MAX_DIMENSION cap on their long axis are the real-world
-  // trigger, since only those force a genuinely different, non-instant
-  // decode+GPU-upload) lets the user start dragging, then has the view
-  // silently snap back to the original click point the moment the decode
-  // resolves -- visible as jitter/instability, not a single one-time jump.
-  let zoomFocusPanned = false;
+  // True once the native-resolution tier is on the GPU: the canvas backing
+  // store then IS the photo's native size (natRatio below becomes 1). Reactive
+  // (unlike activeTier) because the display scale is derived from it.
+  let fullTierReady = $state(false);
+  let uploadingFullTier = false; // set only around the full tier's own applyBitmapToGpu
+  // Draft-tier preview URL, reused as the navigator's thumbnail.
+  let navThumbUrl = $state(/** @type {string | null} */ (null));
   /** @type {{ startX: number, startY: number, startScrollLeft: number, startScrollTop: number } | null} */
   let dragState = null;
   const DRAG_CLICK_THRESHOLD = 4; // px -- below this, pointerup is a click (toggle zoom), not a completed drag
@@ -520,34 +521,6 @@
     const g = gpu.lastHistogramPixels[i + 1];
     const b = gpu.lastHistogramPixels[bgra ? i : i + 2];
     onHoverPixel({ r, g, b });
-  }
-
-  /** Scrolls `wrapEl` so a focus point given in FULL-IMAGE native-pixel
-   * coordinates (e.g. from `screenToNativePixel`, or `lastZoomFocus`
-   * re-applied against the current tier's dimensions) is centered --
-   * correctly whether or not a crop is currently committed, via
-   * `scrollTargetForNativeFocus` (see that function's own doc comment for
-   * why the committed-crop case needs its own coordinate offset: the
-   * scrollable box in that state is `.crop-clip`, whose own origin sits
-   * away from the canvas's, not the canvas element itself). The one
-   * shared call site both this component's own zoom-in-on-click
-   * (`handlePointerUp`) and its 1:1-tier re-center
-   * (`upgradeToFullTier`) now go through, so the two can't drift apart
-   * the way two independent inline copies of this math eventually would. */
-  function scrollToNativeFocus(/** @type {number} */ nativeX, /** @type {number} */ nativeY) {
-    if (!wrapEl || !canvasEl) return;
-    const { scrollLeft, scrollTop } = scrollTargetForNativeFocus(
-      nativeX,
-      nativeY,
-      showCommittedCropPreview,
-      crop,
-      canvasEl.width,
-      canvasEl.height,
-      wrapEl.clientWidth,
-      wrapEl.clientHeight,
-    );
-    wrapEl.scrollLeft = scrollLeft;
-    wrapEl.scrollTop = scrollTop;
   }
 
   /** Samples the ORIGINAL DECODED SOURCE pixel at a normalized (0..1)
@@ -835,7 +808,6 @@
     if (dragState && wrapEl) {
       wrapEl.scrollLeft = dragState.startScrollLeft - (e.clientX - dragState.startX);
       wrapEl.scrollTop = dragState.startScrollTop - (e.clientY - dragState.startY);
-      zoomFocusPanned = true; // see this flag's own doc comment
       return;
     }
     reportHoverPixel(e.clientX, e.clientY);
@@ -879,7 +851,7 @@
     }
   }
 
-  async function handlePointerUp(/** @type {PointerEvent} */ e) {
+  function handlePointerUp(/** @type {PointerEvent} */ e) {
     try {
       canvasEl?.releasePointerCapture(e.pointerId);
     } catch {
@@ -897,27 +869,11 @@
       const clickPoint = { x: e.clientX, y: e.clientY };
       dragState = null;
       if (moved >= DRAG_CLICK_THRESHOLD) return; // a completed drag, not a click -- leave scroll as-is
-      if (zoomMode === "100") {
-        zoomMode = "fit";
-        return;
-      }
-      if (!canvasEl) return;
-      // Reuses the same helper crop-handle dragging uses (instead of
-      // duplicating the same math inline, as this used to) so both paths
-      // stay correct together.
-      const { x: nativeX, y: nativeY } = screenToNativePixel(clickPoint.x, clickPoint.y);
-      // Stored normalized (0-1), not as a native-pixel point -- the point
-      // itself doesn't change resolution, but the canvas's own backing-store
-      // size DOES once upgradeToFullTier swaps in the 1:1 tier moments
-      // later. A native-pixel value captured here would silently go stale
-      // and mis-center once that resize happens; the normalized fraction
-      // re-applies correctly against whichever tier's dimensions are
-      // current when it's read.
-      lastZoomFocus = { x: nativeX / canvasEl.width, y: nativeY / canvasEl.height };
-      zoomFocusPanned = false; // fresh focus point -- see this flag's own doc comment
-      zoomMode = "100";
-      await tick(); // required: $state-triggered DOM patches (the new canvas size) land on a microtask
-      scrollToNativeFocus(nativeX, nativeY);
+      // Click toggles Fit <-> 100%, holding the clicked point still. A
+      // click while zoomed (at any scale) goes back to Fit.
+      if (!wrapEl) return;
+      const r = wrapEl.getBoundingClientRect();
+      applyZoom({ type: "toggle" }, { x: clickPoint.x - r.left, y: clickPoint.y - r.top });
       return;
     }
     if (placingMask?.kind === "linear_gradient") {
@@ -1007,6 +963,17 @@
   const SPOT_BRUSH_SIZE_MAX = 0.15;
   const SPOT_BRUSH_SIZE_STEP = 0.0025;
   function handleWheel(/** @type {WheelEvent} */ e) {
+    // Ctrl/Cmd + wheel zooms the photo about the cursor (also what Chromium-
+    // style webviews synthesize for a trackpad pinch). Wins over the spot
+    // tool's own wheel-to-resize, which stays on the unmodified wheel.
+    if ((e.ctrlKey || e.metaKey) && wrapEl) {
+      e.preventDefault();
+      const r = wrapEl.getBoundingClientRect();
+      // deltaMode 1 = lines rather than pixels.
+      const deltaY = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+      applyZoom({ type: "wheel", deltaY }, { x: e.clientX - r.left, y: e.clientY - r.top });
+      return;
+    }
     if (activeTool !== "spot" || !onSpotBrushSizeChange) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -SPOT_BRUSH_SIZE_STEP : SPOT_BRUSH_SIZE_STEP;
@@ -1017,24 +984,35 @@
   // A trackpad pinch over the canvas doesn't dispatch `wheel` at all -- in
   // WebKit (this app's webview on macOS) it's a separate, nonstandard
   // `gesturestart`/`gesturechange` event pair that natively zooms the whole
-  // page unless prevented, which is what a user doing a pinch-style gesture
-  // while trying to resize the spot brush would hit: `handleWheel` above
-  // never even fires, so its own `preventDefault()` can't help. These
-  // aren't part of the DOM standard (no TS lib types, no Svelte `on*`
-  // prop), so they're bound imperatively here rather than as a template
-  // attribute like `onwheel`.
+  // page unless prevented. Both are prevented here and `gesturechange`'s
+  // cumulative `scale` drives the PHOTO's zoom instead (`pinch` action: the
+  // scale when the gesture began x the gesture's scale), about the pinch
+  // point. These aren't part of the DOM standard (no TS lib types, no Svelte
+  // `on*` prop), so they're bound imperatively here rather than as a
+  // template attribute like `onwheel`.
   $effect(() => {
     if (!canvasEl) return;
     const el = canvasEl;
+    let pinchBase = 1;
     /** @param {Event} e */
-    const preventIfSpot = (e) => {
-      if (activeTool === "spot") e.preventDefault();
+    const onStart = (e) => {
+      e.preventDefault();
+      pinchBase = scale;
     };
-    el.addEventListener("gesturestart", preventIfSpot);
-    el.addEventListener("gesturechange", preventIfSpot);
+    /** @param {Event} e */
+    const onChange = (e) => {
+      e.preventDefault();
+      if (!wrapEl) return;
+      const g = /** @type {any} */ (e);
+      const r = wrapEl.getBoundingClientRect();
+      const at = typeof g.clientX === "number" ? { x: g.clientX - r.left, y: g.clientY - r.top } : undefined;
+      applyZoom({ type: "pinch", base: pinchBase, gesture: g.scale }, at);
+    };
+    el.addEventListener("gesturestart", onStart);
+    el.addEventListener("gesturechange", onChange);
     return () => {
-      el.removeEventListener("gesturestart", preventIfSpot);
-      el.removeEventListener("gesturechange", preventIfSpot);
+      el.removeEventListener("gesturestart", onStart);
+      el.removeEventListener("gesturechange", onChange);
     };
   });
 
@@ -1221,6 +1199,10 @@
     onSourceDimensions(w, h) {
       sourceWidth = w;
       sourceHeight = h;
+      // Flip with the new dimensions in the SAME synchronous block: set a
+      // microtask later, a render in between would draw the full-size
+      // backing store at the stale draft-to-native ratio for a frame.
+      if (uploadingFullTier) fullTierReady = true;
       onSourceDimensions?.(w, h);
     },
   };
@@ -1252,9 +1234,11 @@
     fullTierPath = null;
     fullTierPromise = null;
     activeTier = "draft";
+    fullTierReady = false;
 
     const preview = await getDevelopPreview(path, imageContentHash);
     isSmartPreview = preview.is_smart_preview;
+    navThumbUrl = convertFileSrc(preview.path);
     const response = await fetch(convertFileSrc(preview.path));
     const bitmap = await createImageBitmap(await response.blob());
     await applyBitmapToGpu(bitmap);
@@ -1292,10 +1276,11 @@
   }
 
   /** Lazily fetches and swaps in the native-resolution 1:1 tier for the
-   * CURRENTLY loaded image, the first time it's actually zoomed to 100%
-   * (triggered by the $effect below, not called directly from pointer
-   * handlers) -- matches real Lightroom's own lazy 1:1-preview-build
-   * behavior, and this request's own trigger ("when the image zooms in").
+   * CURRENTLY loaded image, the first time it's zoomed past what the draft
+   * tier can show (triggered by the `needsFullTier` $effect, not called
+   * directly from pointer handlers) -- matches real Lightroom's own lazy
+   * 1:1-preview-build behavior, and this request's own trigger ("when the
+   * image zooms in").
    * Deliberately does NOT touch `status`: the draft-resolution image stays
    * visible and interactive for the whole time this decodes in the
    * background (a progressive upgrade, not a blank "Decoding..." reload) --
@@ -1314,35 +1299,22 @@
       // was in flight -- only apply if still relevant, otherwise this
       // would silently stomp whatever loadImage/a later upgrade already
       // put in place.
-      if (imagePath !== path || zoomMode !== "100" || !gpu.device) return;
+      if (imagePath !== path || !isZoomed || !gpu.device) return;
       const response = await fetch(convertFileSrc(preview.path));
       const bitmap = await createImageBitmap(await response.blob());
-      if (imagePath !== path || zoomMode !== "100") return; // re-check post-decode too
-      await applyBitmapToGpu(bitmap);
+      if (imagePath !== path || !isZoomed) return; // re-check post-decode too
+      uploadingFullTier = true;
+      try {
+        await applyBitmapToGpu(bitmap);
+      } finally {
+        uploadingFullTier = false;
+      }
       fullTierPath = path;
       activeTier = "full";
-      // Re-center on the same normalized focus point now that the
-      // canvas's native size has just changed out from under any earlier
-      // scroll position -- see lastZoomFocus's own doc comment. In the
-      // committed-crop case `.crop-clip`'s own size is a reactive
-      // `$derived` style binding (`cropClipSize`), not a direct DOM
-      // mutation like the canvas's own backing store -- `tick()` first so
-      // the wrapper has actually resized before `scrollToNativeFocus`
-      // reads/sets scroll position against it (otherwise the browser
-      // clamps the new scrollLeft/scrollTop against the STALE, still
-      // fit-sized box).
-      //
-      // Skipped entirely if the user has already panned since the zoom-in
-      // click (zoomFocusPanned) -- see that flag's own doc comment. This
-      // decode is async and, for a source whose long axis exceeds the
-      // draft tier's own resolution cap, genuinely slow -- long enough for
-      // a user to start dragging before it resolves. Recentering
-      // unconditionally here would silently snap their pan back to the
-      // original click point the instant the decode finishes.
-      await tick();
-      if (canvasEl && !zoomFocusPanned) {
-        scrollToNativeFocus(lastZoomFocus.x * canvasEl.width, lastZoomFocus.y * canvasEl.height);
-      }
+      // No re-centre needed: `onSourceDimensions` above flipped `fullTierReady`
+      // together with the new backing-store size, so `natRatio` becomes 1
+      // exactly as the backing store grows to native -- the canvas keeps its
+      // on-screen size and the view stays where the user left it.
       writeAdjustmentsAndRender();
     })();
     try {
@@ -1356,7 +1328,8 @@
     const path = imagePath;
     const canvas = canvasEl;
     if (!path || !canvas) return;
-    zoomMode = "fit";
+    zoom = FIT;
+    scrollPos = { left: 0, top: 0 };
 
     (async () => {
       // M5 Slice 1: only a failure to ACQUIRE the GPU device itself (no
@@ -1490,62 +1463,172 @@
     status === "ready" && activeTool === null && !selectedMaskId && !isCropIdentity(crop),
   );
 
-  /** `.crop-clip`'s own box size. Two modes, switched on `zoomMode`:
-   * "fit" is an object-fit:contain-style box, the largest box of the
-   * crop's own aspect ratio that fits within the wrap's padded content
-   * area, centered via the wrapper's own `margin:auto` once both
+  // ---- Zoom geometry --------------------------------------------------
+  //
+  // `scale` is CSS px per NATIVE source pixel. The canvas backing store is
+  // not native while only the draft tier is loaded (it is capped at
+  // DEVELOP_PREVIEW_MAX_DIMENSION), so `natRatio` = native px per backing px
+  // converts between them. The native size comes from the catalog
+  // (`nativeWidth/Height`) and only its long edge is trusted -- orientation
+  // metadata could swap the two, and the aspect ratio must always come from
+  // the decoded bitmap or the image would stretch. Once the full tier is
+  // uploaded the backing store IS native and the ratio is exactly 1, so
+  // finishing the upgrade changes sharpness, not on-screen size (no re-centre
+  // needed). With no catalog size, or while showing a Smart Preview (the
+  // original is unreachable, so the draft is all there is), the backing store
+  // is treated as native.
+  let natRatio = $derived.by(() => {
+    const backingLong = Math.max(sourceWidth, sourceHeight);
+    if (fullTierReady || isSmartPreview || !backingLong) return 1;
+    const nativeLong = Math.max(nativeWidth ?? 0, nativeHeight ?? 0);
+    return nativeLong > backingLong ? nativeLong / backingLong : 1;
+  });
+  /** What is shown in the viewport, in native px: the cropped region while a
+   * committed crop is previewed, otherwise the whole photo. */
+  let contentNative = $derived({
+    w: sourceWidth * natRatio * (showCommittedCropPreview ? crop.width : 1),
+    h: sourceHeight * natRatio * (showCommittedCropPreview ? crop.height : 1),
+  });
+  let fitS = $derived(
+    fitScale(contentNative.w, contentNative.h, wrapWidth - CROP_CLIP_PADDING_PX * 2, wrapHeight - CROP_CLIP_PADDING_PX * 2),
+  );
+  let scale = $derived(effectiveScale(zoom, fitS));
+  /** On-screen size of the content box (the canvas, or `.crop-clip`). 0 until
+   * the wrap has been measured, which leaves the CSS auto-sizing in charge. */
+  let contentCss = $derived(
+    wrapWidth && wrapHeight && sourceWidth && sourceHeight
+      ? { w: contentNative.w * scale, h: contentNative.h * scale }
+      : { w: 0, h: 0 },
+  );
+  /** The canvas's own on-screen size. The canvas always holds the WHOLE image
+   * (a committed crop only clips/offsets it inside `.crop-clip`), so this is
+   * the uncropped size at the same scale. */
+  let canvasCss = $derived(
+    contentCss.w ? { w: sourceWidth * natRatio * scale, h: sourceHeight * natRatio * scale } : { w: 0, h: 0 },
+  );
+  // Inline placement of the canvas inside `.crop-clip` for a committed crop
+  // (percentages of the clip box, so scale-invariant); shared with the
+  // navigator thumbnail so it shows exactly the cropped view.
+  let cropPlacementStyle = $derived(
+    `width:${100 / crop.width}%; height:${100 / crop.height}%; left:${(-crop.x * 100) / crop.width}%; top:${(-crop.y * 100) / crop.height}%; transform: rotate(${crop.angle}deg);`,
+  );
+  let viewOffset = $derived(contentOffset({ w: wrapWidth, h: wrapHeight }, contentCss, CROP_CLIP_PADDING_PX));
+  /** The navigator's reference rectangle -- null when the whole content is
+   * visible (Fit, or zoomed out far enough to fit), where it would say
+   * nothing. */
+  let navRegion = $derived.by(() => {
+    if (!isZoomed || !contentCss.w) return null;
+    const r = visibleRegion(
+      { scrollLeft: scrollPos.left, scrollTop: scrollPos.top },
+      { w: wrapWidth, h: wrapHeight },
+      viewOffset,
+      contentCss,
+    );
+    return r.w >= 0.999 && r.h >= 0.999 ? null : r;
+  });
+
+  /** Run a zoom action. `at` is the viewport-relative point (px, from the
+   * wrap's top-left) to hold still while the scale changes -- the cursor for
+   * wheel/pinch/click, the viewport centre for buttons. Everything that
+   * changes the scale funnels through here. */
+  function applyZoom(
+    /** @type {import('$lib/zoomMath.js').ZoomAction} */ action,
+    /** @type {{x: number, y: number} | undefined} */ at,
+  ) {
+    if (!wrapEl) return;
+    const next = reduceZoom(zoom, action, fitS);
+    if (next.mode === zoom.mode && (next.mode === "fit" || (zoom.mode === "zoom" && next.scale === zoom.scale))) return;
+    const anchor = at ?? { x: wrapEl.clientWidth / 2, y: wrapEl.clientHeight / 2 };
+    // The image point under `anchor` BEFORE the change, in content space.
+    const focus = focusAtViewportPoint(
+      anchor,
+      { scrollLeft: wrapEl.scrollLeft, scrollTop: wrapEl.scrollTop },
+      viewOffset,
+      contentCss.w ? contentCss : { w: 1, h: 1 },
+    );
+    zoom = next;
+    flushSync(); // size/class changes must be in the DOM before scroll is set
+    if (next.mode === "fit") {
+      wrapEl.scrollLeft = 0;
+      wrapEl.scrollTop = 0;
+    } else {
+      setScrollForFocus(focus, anchor);
+    }
+    syncScrollPos();
+  }
+
+  /** Scroll so image point `focus` (normalized, content space) lands at
+   * viewport point `at`. Reads the post-change `viewOffset`/`contentCss`. */
+  function setScrollForFocus(/** @type {{x:number,y:number}} */ focus, /** @type {{x:number,y:number}} */ at) {
+    if (!wrapEl) return;
+    const { scrollLeft, scrollTop } = scrollForFocus(focus, at, viewOffset, contentCss);
+    wrapEl.scrollLeft = scrollLeft;
+    wrapEl.scrollTop = scrollTop;
+  }
+
+  function syncScrollPos() {
+    if (!wrapEl) return;
+    scrollPos = { left: wrapEl.scrollLeft, top: wrapEl.scrollTop };
+  }
+
+  /** Navigator click/drag: centre the view on a normalized image point. */
+  function navigateTo(/** @type {{x:number,y:number}} */ focus) {
+    if (!wrapEl) return;
+    setScrollForFocus(focus, { x: wrapEl.clientWidth / 2, y: wrapEl.clientHeight / 2 });
+    syncScrollPos();
+  }
+
+  /** `.crop-clip`'s own box size: the crop's region at the current scale,
+   * whichever mode. Fit is an object-fit:contain-style box (the largest box
+   * of the crop's own aspect ratio inside the wrap's padded content area,
+   * see `fitS`) and centred by the wrapper's own `margin:auto` once both
    * dimensions are explicit (a definite width/height, unlike
    * `aspect-ratio` alone, reliably centers via auto margins in every
    * engine -- see wrapWidth/wrapHeight's own doc comment for why this is
-   * computed in JS at all instead of left to CSS). "100" uses
-   * `nativeCropClipSize` instead -- see that function's own doc comment
-   * for why sizing the wrapper to the crop's true pixel dimensions is
-   * exactly what makes the canvas's existing percentage-based inline
-   * positioning (unchanged either way -- see the markup's own doc
-   * comment) land on a true 1:1 scale. `.crop-clip.active.zoomed`'s own
-   * CSS rule (`max-width/max-height: none`) is what lets this box actually
-   * exceed the wrap's available area so `.canvas-wrap`'s existing
-   * `overflow: auto` (already toggled by the SAME `zoomMode === "100"`
-   * condition, see that class binding) has something real to scroll. */
-  let cropClipSize = $derived.by(() => {
-    if (!showCommittedCropPreview || !sourceWidth || !sourceHeight) {
-      return { w: 0, h: 0 };
-    }
-    if (zoomMode === "100") {
-      return nativeCropClipSize(crop, sourceWidth, sourceHeight);
-    }
-    if (!wrapWidth || !wrapHeight) return { w: 0, h: 0 };
-    const availW = Math.max(wrapWidth - CROP_CLIP_PADDING_PX * 2, 1);
-    const availH = Math.max(wrapHeight - CROP_CLIP_PADDING_PX * 2, 1);
-    const aspect = (crop.width * sourceWidth) / (crop.height * sourceHeight);
-    let w = availW;
-    let h = w / aspect;
-    if (h > availH) {
-      h = availH;
-      w = h * aspect;
-    }
-    return { w, h };
-  });
+   * computed in JS at all instead of left to CSS). Zoomed, the same box
+   * simply grows with the scale; the canvas's percentage-based inline
+   * positioning inside it (unchanged either way -- see the markup's own
+   * doc comment) is scale-invariant, so it lands on the right scale
+   * automatically. `.crop-clip.active.zoomed`'s own CSS rule
+   * (`max-width/max-height: none`) is what lets this box actually exceed
+   * the wrap's available area so `.canvas-wrap`'s existing `overflow: auto`
+   * (toggled by the same `isZoomed` condition) has something real to
+   * scroll. */
+  let cropClipSize = $derived(showCommittedCropPreview && sourceWidth && sourceHeight ? contentCss : { w: 0, h: 0 });
 
-  // 1:1 tier trigger -- fires for BOTH ways zoomMode can flip to "100"
-  // (the canvas click-to-zoom in handlePointerUp, and the zoom-badge
-  // button's onclick both just set zoomMode directly), so neither call
-  // site needs to know about the tier upgrade at all. Guarded on
-  // activeTier so it's a no-op once already upgraded for this image, and
-  // on status==="ready" so it can't fire before loadImage has finished
-  // its own initial setup. Also skipped entirely while showing a Smart
-  // Preview fallback (M4) -- the 1:1 tier needs the same unreachable
-  // source file the draft tier just failed to read, so attempting it
-  // would just fail again; the draft tier's DEVELOP_PREVIEW_MAX_DIMENSION
-  // cap is the effective zoom ceiling while offline.
+  // Full-resolution tier trigger -- fires for every way the zoom can change
+  // (the actions all just set `zoom`, so no call site needs to know about
+  // the tier upgrade at all). Wanted once an explicit zoom draws the photo
+  // larger than the draft backing store (`scale * natRatio > 1` css px per
+  // backing px); when the native size is unknown (`natRatio` stuck at 1) any
+  // explicit zoom upgrades, as before. Guarded on activeTier so it's a
+  // no-op once already upgraded for this image, and on status==="ready" so
+  // it can't fire before loadImage has finished its own initial setup. Also
+  // skipped entirely while showing a Smart Preview fallback (M4) -- the 1:1
+  // tier needs the same unreachable source file the draft tier just failed
+  // to read, so attempting it would just fail again; the draft tier's
+  // DEVELOP_PREVIEW_MAX_DIMENSION cap is the effective zoom ceiling while
+  // offline.
+  let needsFullTier = $derived(
+    isZoomed && !isSmartPreview && (!(nativeWidth && nativeHeight) || scale * natRatio > 1 + 1e-3),
+  );
   $effect(() => {
-    if (status === "ready" && zoomMode === "100" && activeTier !== "full" && !isSmartPreview) {
+    if (status === "ready" && needsFullTier && activeTier !== "full") {
       upgradeToFullTier(imagePath);
     }
   });
 </script>
 
-<div class="canvas-wrap" class:zoomed={zoomMode === "100"} bind:this={wrapEl}>
+<!-- `.canvas-stage` is the non-scrolling frame: `.canvas-wrap` inside it
+     scrolls when zoomed, and the zoom HUD sits beside it (not in it) so it
+     stays fixed in the corner instead of scrolling away with the photo. -->
+<div class="canvas-stage">
+<div
+  class="canvas-wrap"
+  class:zoomed={isZoomed}
+  bind:this={wrapEl}
+  onscroll={syncScrollPos}
+>
   <!-- Crop & Straighten (M3): `.crop-clip` ALWAYS wraps the canvas (a
        stable DOM structure, never conditionally created/destroyed around
        the canvas element itself -- doing so would tear down and recreate
@@ -1563,31 +1646,31 @@
        percentage-based canvas positioning is scale-invariant -- it works
        out to true 1:1 native-pixel scale whenever THIS wrapper itself is
        sized to the crop's own native pixel dimensions, not just when it's
-       fit-scaled -- so `cropClipSize`'s own `zoomMode` branch (see that
+       fit-scaled -- so `cropClipSize` growing with the zoom scale (see that
        variable's doc comment) is the ONLY piece that needed to change to
        support 100%-zoom scrolling in the cropped view; `class:zoomed`
        here pairs with `.crop-clip.active.zoomed`'s own CSS rule to let
        the box actually grow past the wrap's available area so there's
        something for `.canvas-wrap`'s own `overflow:auto` (same
-       `zoomMode` condition) to scroll. -->
+       `isZoomed` condition) to scroll. -->
   <div
     class="crop-clip"
     class:active={showCommittedCropPreview}
-    class:zoomed={zoomMode === "100"}
+    class:zoomed={isZoomed}
     style={showCommittedCropPreview ? `width:${cropClipSize.w}px; height:${cropClipSize.h}px;` : ""}
   >
     <canvas
       bind:this={canvasEl}
-      class:zoomed={zoomMode === "100"}
+      class:zoomed={isZoomed}
+      class:sized={!showCommittedCropPreview && canvasCss.w > 0}
       class:cropped={showCommittedCropPreview}
       class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper" || activeTool === "spot" || activeTool === "red_eye"}
       class:space-pan={spacePanning}
       class:hidden={status === "cpu-fallback"}
       style={showCommittedCropPreview
-        ? `width:${100 / crop.width}%; height:${100 / crop.height}%; left:${(-crop.x * 100) / crop.width}%; top:${(-crop.y * 100) / crop.height}%; transform: rotate(${crop.angle}deg);`
-        : activeTool === "crop"
-          ? `transform: rotate(${crop.angle}deg);`
-          : ""}
+        ? cropPlacementStyle
+        : (canvasCss.w > 0 ? `width:${canvasCss.w}px; height:${canvasCss.h}px;` : "") +
+          (activeTool === "crop" ? `transform: rotate(${crop.angle}deg);` : "")}
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}
       onpointerup={handlePointerUp}
@@ -1892,14 +1975,6 @@
       {/if}
     </div>
   {/if}
-  {#if status === "ready"}
-    <button
-      class="zoom-badge"
-      type="button"
-      title={zoomMode === "fit" ? "Click image for 100%" : "Click image to fit"}
-      onclick={() => (zoomMode = zoomMode === "fit" ? "100" : "fit")}
-    >{zoomMode === "fit" ? "Fit" : "100%"}</button>
-  {/if}
   {#if status === "ready" && isSmartPreview}
     <div
       class="smart-preview-badge"
@@ -1930,8 +2005,30 @@
     </div>
   {/if}
 </div>
+{#if status === "ready"}
+  <DevelopZoomHud
+    {scale}
+    isFit={!isZoomed}
+    region={navRegion}
+    thumbUrl={navThumbUrl}
+    thumbImgStyle={showCommittedCropPreview ? cropPlacementStyle : ""}
+    aspect={contentNative.h > 0 ? contentNative.w / contentNative.h : 1.5}
+    onZoom={(action) => applyZoom(action)}
+    onNavigate={navigateTo}
+  />
+{/if}
+</div>
 
 <style>
+  /* Non-scrolling frame around `.canvas-wrap`: positions the zoom HUD
+     relative to the visible viewport rather than to the scrollable content. */
+  .canvas-stage {
+    flex: 1;
+    display: flex;
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+  }
   .canvas-wrap {
     flex: 1;
     display: flex;
@@ -1982,6 +2079,14 @@
     max-width: none;
     max-height: none;
     cursor: grab;
+  }
+  /* Explicitly sized from the zoom scale (inline width/height): the box is
+     already exactly Fit or the zoom size, so the max-* clamp must not
+     shrink only one axis. flex-shrink for the same reason. */
+  canvas.sized {
+    max-width: none;
+    max-height: none;
+    flex-shrink: 0;
   }
   canvas.placing {
     cursor: crosshair;
@@ -2228,25 +2333,6 @@
     border: 1px dashed rgba(255, 255, 255, 0.5);
     pointer-events: none;
   }
-  .zoom-badge {
-    all: unset;
-    position: absolute;
-    right: 30px;
-    bottom: 30px;
-    padding: 4px 9px;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0.03em;
-    color: var(--text-secondary);
-    background: rgba(20, 18, 16, 0.7);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-s);
-    cursor: pointer;
-    z-index: 1;
-  }
-  .zoom-badge:hover {
-    color: var(--text-primary);
-  }
   /* M4 Soft Proofing: covers the whole canvas area (not just `.crop-clip`'s
      own box -- see the markup's own comment for why this deliberately
      doesn't track the live canvas's pan/zoom/crop-preview transforms),
@@ -2337,7 +2423,7 @@
     z-index: 2;
   }
   /* M4 Slice 3: before/after transient label -- top-center (distinct from
-     `.zoom-badge`'s bottom-right corner) so the two never collide, and
+     the zoom HUD's bottom-right corner) so the two never collide, and
      `pointer-events: none` since this is purely informational, never
      interactive. */
   .before-after-label {

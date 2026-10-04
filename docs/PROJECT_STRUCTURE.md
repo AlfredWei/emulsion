@@ -121,7 +121,7 @@ src/
 │   │                        CatalogRail, LibraryGrid/GridCell, LibraryToolbar, LibraryFilterBar, LibraryImageViewer,
 │   │                        LibraryCompareView, LibrarySurveyView, LibraryMapView (Leaflet; loaded on first open), LibraryHistogram, MetadataPanel. Develop:
 │   │                        DevelopCanvas (WebGPU), DevelopPanel, DevelopInfoBar, Filmstrip, Histogram,
-│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel. Print: PrintPanel,
+│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
 │   │                        PrintLayoutView. Dialogs: SettingsDialog, ExportDialog, ConfirmDialog,
 │   │                        TextPromptDialog, SmartCollectionDialog, CopySettingsDialog, BackupPromptDialog
 │   ├── gpu/                 Develop WebGPU code, split out of DevelopCanvas: gpuHandles.js (handle object +
@@ -129,6 +129,8 @@ src/
 │   │                        render/histogram), atmChain.js + brushRaster.js (pure helpers), shaders/*.js (the
 │   │                        WGSL sections, assembled by shaders/index.js)
 │   ├── maskGeometry.js, cropMath.js, stepMath.js, histogramMath.js   Pure geometry/math helpers (with tests)
+│   ├── zoomMath.js          Develop's zoom model: 50–200% range, Fit as a mode, one `reduceZoom` for every input
+│   │                        (buttons, click, ctrl+wheel, pinch), scroll<->visible-region geometry (with tests)
 │   ├── state/               Shared app state as `.svelte.js` store classes (RFC-0009): shell.svelte.js (active
 │   │                        module, status/notify, settings dialog, Develop rail widths, shortcuts);
 │   │                        print.svelte.js (Print module settings/state), faces.svelte.js (People/Faces state +

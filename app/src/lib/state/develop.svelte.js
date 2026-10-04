@@ -32,6 +32,15 @@ export class DevelopStore {
   imageContentHash = $derived(
     this.library.images.find((img) => img.version_id === this.versionId)?.content_hash ?? null,
   );
+  // Native pixel size from the catalog (null when never recorded). Develop's
+  // zoom percentages are relative to this, not to the capped draft preview
+  // that is first uploaded -- see DevelopCanvas's `natRatio`.
+  imageNativeWidth = $derived(
+    this.library.images.find((img) => img.version_id === this.versionId)?.width ?? null,
+  );
+  imageNativeHeight = $derived(
+    this.library.images.find((img) => img.version_id === this.versionId)?.height ?? null,
+  );
   /** @type {import('$lib/api/develop.js').EditStack} */
   editStack = $state({ schema_version: 1, ops: [] });
 

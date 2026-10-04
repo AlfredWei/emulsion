@@ -1,6 +1,6 @@
 # RFC-0025: Composable masking — add / subtract / intersect within one mask (M6 slice 1)
 
-- Status: Draft for review (design only; no product code changed)
+- Status: Slice 1a (engine) implemented; 1b (UI) and 1c not started. See "Corrected during implementation" below.
 - Date: 2026-10-04
 - Relates to: [PRD MILESTONES §M6](../../PRD/MILESTONES.md) ("Composable masking: add/subtract/intersect multiple masks (AI-generated or manual) in one edit"), [RFC-0023](RFC-0023-on-device-ai-inference.md) §5.5 ("no model; mask-engine work in M6's own scope"), [RFC-0009](RFC-0009-page-svelte-state-design.md) (mask store), M3 mask slices 5–7, M4 spot/red-eye
 
@@ -106,3 +106,12 @@ SAM 2 click-select (RFC-0023 §5.1) yields a raster mask per click with three ca
 ## 8. What this RFC does not establish
 
 No prototype, no timing (CPU per-pixel cost of the fold, GPU cost of the nested loop at 8 masks × 16 modifiers), no visual comparison of the combine formulas, no e2e. All source facts in §1 are from reading the code on `main` at b5b9b68; line-level claims should be re-checked when slice 1a starts.
+
+## Corrected during implementation (slice 1a, 2026-10-04)
+
+- **Layout.** The `Mask` uniform record grew from 3 to 4 `vec4` (new `mods` = first index + count); modifiers live in a second uniform array at `@binding(63)` (the free number: 28 is the perspective buffer). The CPU side needed no new struct: a modifier's shape reuses the stand-alone mask structs (adjustment fields simply unused), so each shape's weight comes from exactly the function a stand-alone mask uses; `modifiers` is filled by `parse_masks` only, so a modifier cannot itself carry modifiers.
+- **Packing moved** out of `renderFrame.js` into a pure `gpu/maskPack.js` (unit-tested without a GPU), plus `rasterTargets` for brush modifiers' raster layers (keyed by modifier id).
+- **Verified on a real GPU** ([gpu_mask_probe.js](RFC-0025-appendix/gpu_mask_probe.js); Apple / Metal 3; the shipped `fs_mask` rendered over a 64x64 image and compared with the CPU path's pixels, five modifier scenes): **max difference 0 of 255** for radial; linear + intersect luminance + add radial; colour minus linear; and a two-mask stack where the second mask's range modifier reads the first mask's result. **The scenes with a brush differ**: max 54, 84 of 12288 channels over 2, but a *stand-alone* hard-edged brush mask (hardness 100) shows the identical numbers, so this is the existing CPU-formula vs Canvas2D-rasterizer difference at a hard dab edge, **not caused by modifiers** (hardness 50: max 1). It was not previously recorded and is not fixed here.
+- **Real app wiring** (a throwaway browser harness mounting the real `DevelopCanvas`, deleted before commit): `initGpu`, bind group with the new buffer, per-frame packing and brush-modifier rasterization ran without a WebGPU validation error and drew the expected result (radial, minus a brush disc, intersected with a left-to-right gradient; the selected-mask fill follows the *combined* weight).
+- **Product-vs-min/max (§7.1) is still open**: nothing here compares the formula families on a photograph.
+- **Not done / not verified**: no UI (1b); e2e parity scenario not run (`tauri-driver` missing, CI first); only one GPU; no timing of the nested loop; `MAX_MODIFIERS = 16` unmeasured; presets still exclude masks so there is no preset surface; an older build ignoring `modifiers` (§5.4) is unchanged.

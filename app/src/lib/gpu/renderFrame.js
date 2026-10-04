@@ -4,8 +4,8 @@
 import { binHistogramPixels } from "$lib/histogramMath.js";
 import { rasterizeSpotDab, rasterizeDab } from "$lib/gpu/brushRaster.js";
 import { buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildVignetteUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData } from "$lib/api/develop.js";
-import { spotCentroidAndRadius } from "$lib/maskGeometry.js";
-import { MAX_MASKS, HISTOGRAM_SIZE } from "./gpuHandles.js";
+import { packMasks, rasterTargets } from "./maskPack.js";
+import { HISTOGRAM_SIZE } from "./gpuHandles.js";
 
 /** One fullscreen-triangle draw into `outputView` -- the shared shape
  * every dehaze pass and the existing final pass use, factored out to
@@ -95,9 +95,9 @@ export async function readHistogramIfIdle(/** @type {import('./gpuHandles.js').G
 export function syncMaskRasterization(/** @type {import('./gpuHandles.js').GpuHandles} */ gpu, /** @type {import('./gpuHandles.js').RenderInputs} */ inputs) {
   if (!gpu.device || !gpu.brushTextureArray) return;
   const presentIds = new Set();
-  for (const mask of inputs.masks) {
+  // Brush modifiers (RFC-0025) own a layer too, keyed by the modifier's id.
+  for (const mask of rasterTargets(inputs.masks)) {
     const isSpot = mask.op === "spot_mask";
-    if (mask.op !== "brush_mask" && !isSpot) continue;
     presentIds.add(mask.id);
     let entry = gpu.brushRasterState.get(mask.id);
     if (!entry) {
@@ -179,7 +179,7 @@ export function syncMaskRasterization(/** @type {import('./gpuHandles.js').GpuHa
 }
 
 export function writeAdjustmentsAndRender(/** @type {import('./gpuHandles.js').GpuHandles} */ gpu, /** @type {import('./gpuHandles.js').RenderInputs} */ inputs) {
-  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.bindGroup || !gpu.preMaskPipeline || !gpu.preMaskBindGroup || !gpu.preMaskTex || !gpu.lensCorrectPipeline || !gpu.lensCorrectBindGroup || !gpu.lensCorrectedTex || !gpu.perspectivePipeline || !gpu.perspectiveBindGroup || !gpu.perspectiveCorrectedTex || !gpu.gradePipeline || !gpu.gradeBindGroup || !gpu.atmReducePipeline || gpu.atmReduceBindGroups.length === 0 || !gpu.minChannelPipeline || !gpu.minChannelBindGroup || !gpu.minHPipeline || !gpu.minHBindGroup || !gpu.minVPipeline || !gpu.minVBindGroup || !gpu.dehazeMeanguideHPipeline || !gpu.dehazeMeanguideHBindGroup || !gpu.dehazeMeanguideVPipeline || !gpu.dehazeMeanguideVBindGroup || !gpu.dehazeMeanpHPipeline || !gpu.dehazeMeanpHBindGroup || !gpu.dehazeMeanpVPipeline || !gpu.dehazeMeanpVBindGroup || !gpu.dehazeCorrguideHPipeline || !gpu.dehazeCorrguideHBindGroup || !gpu.dehazeCorrguideVPipeline || !gpu.dehazeCorrguideVBindGroup || !gpu.dehazeCorrguidepHPipeline || !gpu.dehazeCorrguidepHBindGroup || !gpu.dehazeCorrguidepVPipeline || !gpu.dehazeCorrguidepVBindGroup || !gpu.dehazeAPipeline || !gpu.dehazeABindGroup || !gpu.dehazeBPipeline || !gpu.dehazeBBindGroup || !gpu.dehazeMeanaHPipeline || !gpu.dehazeMeanaHBindGroup || !gpu.dehazeMeanaVPipeline || !gpu.dehazeMeanaVBindGroup || !gpu.dehazeMeanbHPipeline || !gpu.dehazeMeanbHBindGroup || !gpu.dehazeMeanbVPipeline || !gpu.dehazeMeanbVBindGroup || !gpu.dehazeRefinePipeline || !gpu.dehazeRefineBindGroup || !gpu.textureHPipeline || !gpu.textureHBindGroup || !gpu.textureVPipeline || !gpu.textureVBindGroup || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpHBindGroup || !gpu.clarityMeanpVPipeline || !gpu.clarityMeanpVBindGroup || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpHBindGroup || !gpu.clarityCorrpVPipeline || !gpu.clarityCorrpVBindGroup || !gpu.clarityAPipeline || !gpu.clarityABindGroup || !gpu.clarityBPipeline || !gpu.clarityBBindGroup || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaHBindGroup || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanaVBindGroup || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbHBindGroup || !gpu.clarityMeanbVPipeline || !gpu.clarityMeanbVBindGroup || !gpu.clarityVPipeline || !gpu.clarityVBindGroup || !gpu.sharpenMeanpHPipeline || !gpu.sharpenMeanpHBindGroup || !gpu.sharpenMeanpVPipeline || !gpu.sharpenMeanpVBindGroup || !gpu.sharpenCorrpHPipeline || !gpu.sharpenCorrpHBindGroup || !gpu.sharpenCorrpVPipeline || !gpu.sharpenCorrpVBindGroup || !gpu.sharpenAPipeline || !gpu.sharpenABindGroup || !gpu.sharpenBPipeline || !gpu.sharpenBBindGroup || !gpu.sharpenMeanaHPipeline || !gpu.sharpenMeanaHBindGroup || !gpu.sharpenMeanaVPipeline || !gpu.sharpenMeanaVBindGroup || !gpu.sharpenMeanbHPipeline || !gpu.sharpenMeanbHBindGroup || !gpu.sharpenMeanbVPipeline || !gpu.sharpenMeanbVBindGroup || !gpu.sharpenFinalPipeline || !gpu.sharpenFinalBindGroup || !gpu.lumaNRMeanpHPipeline || !gpu.lumaNRMeanpHBindGroup || !gpu.lumaNRMeanpVPipeline || !gpu.lumaNRMeanpVBindGroup || !gpu.lumaNRCorrpHPipeline || !gpu.lumaNRCorrpHBindGroup || !gpu.lumaNRCorrpVPipeline || !gpu.lumaNRCorrpVBindGroup || !gpu.lumaNRAPipeline || !gpu.lumaNRABindGroup || !gpu.lumaNRBPipeline || !gpu.lumaNRBBindGroup || !gpu.lumaNRMeanaHPipeline || !gpu.lumaNRMeanaHBindGroup || !gpu.lumaNRMeanaVPipeline || !gpu.lumaNRMeanaVBindGroup || !gpu.lumaNRMeanbHPipeline || !gpu.lumaNRMeanbHBindGroup || !gpu.lumaNRMeanbVPipeline || !gpu.lumaNRMeanbVBindGroup || !gpu.lumaNRFinalPipeline || !gpu.lumaNRFinalBindGroup || !gpu.colorNRMeanguideHPipeline || !gpu.colorNRMeanguideHBindGroup || !gpu.colorNRMeanguideVPipeline || !gpu.colorNRMeanguideVBindGroup || !gpu.colorNRCorrguideHPipeline || !gpu.colorNRCorrguideHBindGroup || !gpu.colorNRCorrguideVPipeline || !gpu.colorNRCorrguideVBindGroup || !gpu.colorNRMeanpHPipeline || !gpu.colorNRMeanpHBindGroup || !gpu.colorNRMeanpVPipeline || !gpu.colorNRMeanpVBindGroup || !gpu.colorNRCorrguidepHPipeline || !gpu.colorNRCorrguidepHBindGroup || !gpu.colorNRCorrguidepVPipeline || !gpu.colorNRCorrguidepVBindGroup || !gpu.colorNRAPipeline || !gpu.colorNRABindGroup || !gpu.colorNRBPipeline || !gpu.colorNRBBindGroup || !gpu.colorNRMeanaHPipeline || !gpu.colorNRMeanaHBindGroup || !gpu.colorNRMeanaVPipeline || !gpu.colorNRMeanaVBindGroup || !gpu.colorNRMeanbHPipeline || !gpu.colorNRMeanbHBindGroup || !gpu.colorNRMeanbVPipeline || !gpu.colorNRMeanbVBindGroup || !gpu.colorNRFinalPipeline || !gpu.colorNRFinalBindGroup || !gpu.gradedTex || !gpu.minChannelTex || !gpu.darkChannelHTex || !gpu.tRawTex || !gpu.transmissionHTex || !gpu.transmissionTex || !gpu.dehazeMeanGuideTex || !gpu.dehazeMeanPTex || !gpu.dehazeCorrGuideTex || !gpu.dehazeCorrGuidePTex || !gpu.dehazeATex || !gpu.dehazeBTex || !gpu.dehazeMeanATex || !gpu.dehazeMeanBTex || !gpu.textureBlurScratchTex || !gpu.textureAdjustedTex || !gpu.clarityBlurScratchTex || !gpu.clarityMeanPTex || !gpu.clarityCorrPTex || !gpu.clarityATex || !gpu.clarityBTex || !gpu.clarityMeanATex || !gpu.clarityMeanBTex || !gpu.sharpenBlurHTex || !gpu.sharpenBlurTex || !gpu.sharpenMeanPTex || !gpu.sharpenCorrPTex || !gpu.sharpenATex || !gpu.sharpenBTex || !gpu.sharpenMeanATex || !gpu.sharpenMeanBTex || !gpu.lumaNRBlurHTex || !gpu.lumaNRBlurTex || !gpu.lumaNRMeanPTex || !gpu.lumaNRCorrPTex || !gpu.lumaNRATex || !gpu.lumaNRBTex || !gpu.lumaNRMeanATex || !gpu.lumaNRMeanBTex || !gpu.colorNRBlurHTex || !gpu.colorNRBlurTex || !gpu.colorNRGuideHTex || !gpu.colorNRMeanGuideTex || !gpu.colorNRCorrGuideTex || !gpu.colorNRMeanPTex || !gpu.colorNRCorrGuidePTex || !gpu.colorNRATex || !gpu.colorNRBTex || !gpu.colorNRMeanATex || !gpu.colorNRMeanBTex || gpu.atmLightChain.length === 0 || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
+  if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.bindGroup || !gpu.preMaskPipeline || !gpu.preMaskBindGroup || !gpu.preMaskTex || !gpu.lensCorrectPipeline || !gpu.lensCorrectBindGroup || !gpu.lensCorrectedTex || !gpu.perspectivePipeline || !gpu.perspectiveBindGroup || !gpu.perspectiveCorrectedTex || !gpu.gradePipeline || !gpu.gradeBindGroup || !gpu.atmReducePipeline || gpu.atmReduceBindGroups.length === 0 || !gpu.minChannelPipeline || !gpu.minChannelBindGroup || !gpu.minHPipeline || !gpu.minHBindGroup || !gpu.minVPipeline || !gpu.minVBindGroup || !gpu.dehazeMeanguideHPipeline || !gpu.dehazeMeanguideHBindGroup || !gpu.dehazeMeanguideVPipeline || !gpu.dehazeMeanguideVBindGroup || !gpu.dehazeMeanpHPipeline || !gpu.dehazeMeanpHBindGroup || !gpu.dehazeMeanpVPipeline || !gpu.dehazeMeanpVBindGroup || !gpu.dehazeCorrguideHPipeline || !gpu.dehazeCorrguideHBindGroup || !gpu.dehazeCorrguideVPipeline || !gpu.dehazeCorrguideVBindGroup || !gpu.dehazeCorrguidepHPipeline || !gpu.dehazeCorrguidepHBindGroup || !gpu.dehazeCorrguidepVPipeline || !gpu.dehazeCorrguidepVBindGroup || !gpu.dehazeAPipeline || !gpu.dehazeABindGroup || !gpu.dehazeBPipeline || !gpu.dehazeBBindGroup || !gpu.dehazeMeanaHPipeline || !gpu.dehazeMeanaHBindGroup || !gpu.dehazeMeanaVPipeline || !gpu.dehazeMeanaVBindGroup || !gpu.dehazeMeanbHPipeline || !gpu.dehazeMeanbHBindGroup || !gpu.dehazeMeanbVPipeline || !gpu.dehazeMeanbVBindGroup || !gpu.dehazeRefinePipeline || !gpu.dehazeRefineBindGroup || !gpu.textureHPipeline || !gpu.textureHBindGroup || !gpu.textureVPipeline || !gpu.textureVBindGroup || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpHBindGroup || !gpu.clarityMeanpVPipeline || !gpu.clarityMeanpVBindGroup || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpHBindGroup || !gpu.clarityCorrpVPipeline || !gpu.clarityCorrpVBindGroup || !gpu.clarityAPipeline || !gpu.clarityABindGroup || !gpu.clarityBPipeline || !gpu.clarityBBindGroup || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaHBindGroup || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanaVBindGroup || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbHBindGroup || !gpu.clarityMeanbVPipeline || !gpu.clarityMeanbVBindGroup || !gpu.clarityVPipeline || !gpu.clarityVBindGroup || !gpu.sharpenMeanpHPipeline || !gpu.sharpenMeanpHBindGroup || !gpu.sharpenMeanpVPipeline || !gpu.sharpenMeanpVBindGroup || !gpu.sharpenCorrpHPipeline || !gpu.sharpenCorrpHBindGroup || !gpu.sharpenCorrpVPipeline || !gpu.sharpenCorrpVBindGroup || !gpu.sharpenAPipeline || !gpu.sharpenABindGroup || !gpu.sharpenBPipeline || !gpu.sharpenBBindGroup || !gpu.sharpenMeanaHPipeline || !gpu.sharpenMeanaHBindGroup || !gpu.sharpenMeanaVPipeline || !gpu.sharpenMeanaVBindGroup || !gpu.sharpenMeanbHPipeline || !gpu.sharpenMeanbHBindGroup || !gpu.sharpenMeanbVPipeline || !gpu.sharpenMeanbVBindGroup || !gpu.sharpenFinalPipeline || !gpu.sharpenFinalBindGroup || !gpu.lumaNRMeanpHPipeline || !gpu.lumaNRMeanpHBindGroup || !gpu.lumaNRMeanpVPipeline || !gpu.lumaNRMeanpVBindGroup || !gpu.lumaNRCorrpHPipeline || !gpu.lumaNRCorrpHBindGroup || !gpu.lumaNRCorrpVPipeline || !gpu.lumaNRCorrpVBindGroup || !gpu.lumaNRAPipeline || !gpu.lumaNRABindGroup || !gpu.lumaNRBPipeline || !gpu.lumaNRBBindGroup || !gpu.lumaNRMeanaHPipeline || !gpu.lumaNRMeanaHBindGroup || !gpu.lumaNRMeanaVPipeline || !gpu.lumaNRMeanaVBindGroup || !gpu.lumaNRMeanbHPipeline || !gpu.lumaNRMeanbHBindGroup || !gpu.lumaNRMeanbVPipeline || !gpu.lumaNRMeanbVBindGroup || !gpu.lumaNRFinalPipeline || !gpu.lumaNRFinalBindGroup || !gpu.colorNRMeanguideHPipeline || !gpu.colorNRMeanguideHBindGroup || !gpu.colorNRMeanguideVPipeline || !gpu.colorNRMeanguideVBindGroup || !gpu.colorNRCorrguideHPipeline || !gpu.colorNRCorrguideHBindGroup || !gpu.colorNRCorrguideVPipeline || !gpu.colorNRCorrguideVBindGroup || !gpu.colorNRMeanpHPipeline || !gpu.colorNRMeanpHBindGroup || !gpu.colorNRMeanpVPipeline || !gpu.colorNRMeanpVBindGroup || !gpu.colorNRCorrguidepHPipeline || !gpu.colorNRCorrguidepHBindGroup || !gpu.colorNRCorrguidepVPipeline || !gpu.colorNRCorrguidepVBindGroup || !gpu.colorNRAPipeline || !gpu.colorNRABindGroup || !gpu.colorNRBPipeline || !gpu.colorNRBBindGroup || !gpu.colorNRMeanaHPipeline || !gpu.colorNRMeanaHBindGroup || !gpu.colorNRMeanaVPipeline || !gpu.colorNRMeanaVBindGroup || !gpu.colorNRMeanbHPipeline || !gpu.colorNRMeanbHBindGroup || !gpu.colorNRMeanbVPipeline || !gpu.colorNRMeanbVBindGroup || !gpu.colorNRFinalPipeline || !gpu.colorNRFinalBindGroup || !gpu.gradedTex || !gpu.minChannelTex || !gpu.darkChannelHTex || !gpu.tRawTex || !gpu.transmissionHTex || !gpu.transmissionTex || !gpu.dehazeMeanGuideTex || !gpu.dehazeMeanPTex || !gpu.dehazeCorrGuideTex || !gpu.dehazeCorrGuidePTex || !gpu.dehazeATex || !gpu.dehazeBTex || !gpu.dehazeMeanATex || !gpu.dehazeMeanBTex || !gpu.textureBlurScratchTex || !gpu.textureAdjustedTex || !gpu.clarityBlurScratchTex || !gpu.clarityMeanPTex || !gpu.clarityCorrPTex || !gpu.clarityATex || !gpu.clarityBTex || !gpu.clarityMeanATex || !gpu.clarityMeanBTex || !gpu.sharpenBlurHTex || !gpu.sharpenBlurTex || !gpu.sharpenMeanPTex || !gpu.sharpenCorrPTex || !gpu.sharpenATex || !gpu.sharpenBTex || !gpu.sharpenMeanATex || !gpu.sharpenMeanBTex || !gpu.lumaNRBlurHTex || !gpu.lumaNRBlurTex || !gpu.lumaNRMeanPTex || !gpu.lumaNRCorrPTex || !gpu.lumaNRATex || !gpu.lumaNRBTex || !gpu.lumaNRMeanATex || !gpu.lumaNRMeanBTex || !gpu.colorNRBlurHTex || !gpu.colorNRBlurTex || !gpu.colorNRGuideHTex || !gpu.colorNRMeanGuideTex || !gpu.colorNRCorrGuideTex || !gpu.colorNRMeanPTex || !gpu.colorNRCorrGuidePTex || !gpu.colorNRATex || !gpu.colorNRBTex || !gpu.colorNRMeanATex || !gpu.colorNRMeanBTex || gpu.atmLightChain.length === 0 || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.modsBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
 
   // M4 Slice 2: before/after preview -- skips the ENTIRE global-grade +
   // local-mask pipeline below (not just the mask loop) and draws the raw
@@ -245,98 +245,9 @@ export function writeAdjustmentsAndRender(/** @type {import('./gpuHandles.js').G
     ]),
   );
 
-  const maskData = new Float32Array(MAX_MASKS * 12);
-  inputs.masks.slice(0, MAX_MASKS).forEach((/** @type {any} */ m, /** @type {number} */ i) => {
-    const o = i * 12;
-    if (m.op === "radial_gradient_mask") {
-      maskData[o + 0] = m.center.x;
-      maskData[o + 1] = m.center.y;
-      maskData[o + 2] = m.radiusX;
-      maskData[o + 3] = m.radiusY;
-      maskData[o + 4] = m.feather;
-      maskData[o + 6] = 1; // kind = radial
-    } else if (m.op === "brush_mask") {
-      maskData[o + 6] = 2; // kind = brush
-      maskData[o + 7] = gpu.brushRasterState.get(m.id)?.layer ?? 0;
-    } else if (m.op === "luminance_range_mask") {
-      maskData[o + 0] = m.rangeMin;
-      maskData[o + 1] = m.rangeMax;
-      maskData[o + 4] = m.feather;
-      maskData[o + 6] = 3; // kind = luminance range
-    } else if (m.op === "color_range_mask") {
-      maskData[o + 0] = m.refColor.r;
-      maskData[o + 1] = m.refColor.g;
-      maskData[o + 2] = m.refColor.b;
-      maskData[o + 3] = m.range;
-      maskData[o + 4] = m.feather;
-      maskData[o + 6] = 4; // kind = color range
-    } else if (m.op === "spot_mask") {
-      // M4 Slice 1/2 (Healing/Clone brush): structurally unlike every
-      // kind above -- no exposure/contrast/saturation (see SpotMask's
-      // own doc comment in develop.js), so this branch is the ONLY one
-      // that must ALSO set offset 8 (adjustments.x, repurposed as
-      // mode) itself, and skip the trailing common exposure/contrast/
-      // saturation writes below (guarded by the `m.op !== "spot_mask"`
-      // check right after this if/else chain) -- those would otherwise
-      // read `m.exposure` etc as `undefined`, which Float32Array
-      // silently coerces to NaN, corrupting the mode field they'd
-      // overwrite. M4 Slice 2: same texture-array-layer packing as
-      // brush_mask above (o+7), plus the dabs' own centroid/average
-      // radius (o+2/o+3, o+5) for heal-ring sampling -- see the WGSL
-      // Mask struct's own doc comment for the full field-repurposing map.
-      const c = spotCentroidAndRadius(m.dabs);
-      maskData[o + 0] = m.sourceOffset.dx;
-      maskData[o + 1] = m.sourceOffset.dy;
-      maskData[o + 2] = c.x;
-      maskData[o + 3] = c.y;
-      maskData[o + 4] = m.feather;
-      maskData[o + 5] = c.avgRadius;
-      maskData[o + 6] = 5; // kind = spot
-      maskData[o + 7] = gpu.brushRasterState.get(m.id)?.layer ?? 0;
-      maskData[o + 8] = m.mode === "heal" ? 1 : 0;
-    } else if (m.op === "red_eye_mask") {
-      // M4: same center/radiusX/radiusY/feather geometry as radial above,
-      // but o+5 (params.y, radial's own invert slot) is repurposed as
-      // pupilSize and o+11 (adjustments.w, unused padding on every other
-      // kind) as darken -- see the WGSL Mask struct's own doc comment.
-      // Like spot, must set its own o+5/o+8-10 here and be excluded from
-      // the common invert/exposure/contrast/saturation write below,
-      // since `m.invert`/`m.exposure`/etc are all undefined on this
-      // mask kind (see RedEyeMask's own JSDoc typedef in develop.js).
-      maskData[o + 0] = m.center.x;
-      maskData[o + 1] = m.center.y;
-      maskData[o + 2] = m.radiusX;
-      maskData[o + 3] = m.radiusY;
-      maskData[o + 4] = m.feather;
-      maskData[o + 5] = m.pupilSize;
-      maskData[o + 6] = 6; // kind = red eye
-      maskData[o + 11] = m.darken;
-    } else {
-      // linear_gradient_mask -- the only kind left once the four
-      // explicit branches above are exhausted, given MASK_OP_NAMES
-      // already gates what can appear in `masks` at all (develop.js).
-      // A real bug once lived here (before luminance range existed):
-      // an unconditional catch-all `else` assumed "anything that isn't
-      // radial or brush is linear" -- a mask object of a kind with no
-      // .start/.end would have thrown on m.start.x, aborting the render
-      // for every mask in the stack the instant one existed anywhere.
-      // Every new kind since (luminance range, color range) has gotten
-      // its own explicit branch above this fallback for exactly that
-      // reason.
-      maskData[o + 0] = m.start.x;
-      maskData[o + 1] = m.start.y;
-      maskData[o + 2] = m.end.x;
-      maskData[o + 3] = m.end.y;
-      maskData[o + 4] = m.feather;
-      maskData[o + 6] = 0; // kind = linear
-    }
-    if (m.op !== "spot_mask" && m.op !== "red_eye_mask") {
-      maskData[o + 5] = m.invert ? 1 : 0;
-      maskData[o + 8] = m.exposure;
-      maskData[o + 9] = m.contrast;
-      maskData[o + 10] = m.saturation;
-    }
-  });
+  // Layout and per-kind field usage: maskPack.js and the Mask/Modifier structs in shaders/common.js.
+  const { maskData, modData } = packMasks(inputs.masks, (id) => gpu.brushRasterState.get(id)?.layer);
+  gpu.device.queue.writeBuffer(gpu.modsBuffer, 0, modData);
   gpu.device.queue.writeBuffer(gpu.masksBuffer, 0, maskData);
 
   const encoder = gpu.device.createCommandEncoder();

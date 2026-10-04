@@ -2,7 +2,7 @@
 // Moved out of DevelopCanvas.svelte.
 
 import { WGSL } from "$lib/gpu/shaders/index.js";
-import { MAX_MASKS, HISTOGRAM_SIZE } from "./gpuHandles.js";
+import { MAX_MASKS, MAX_MODIFIERS, MASK_STRIDE, MOD_STRIDE, HISTOGRAM_SIZE } from "./gpuHandles.js";
 
 export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} */ gpu, /** @type {HTMLCanvasElement} */ canvas, /** @type {import('./gpuHandles.js').GpuHooks} */ hooks) {
   if (!("gpu" in navigator)) {
@@ -546,7 +546,11 @@ export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} *
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   gpu.masksBuffer = gpu.device.createBuffer({
-    size: MAX_MASKS * 12 * 4, // 12 f32s (3x vec4) per mask
+    size: MAX_MASKS * MASK_STRIDE * 4, // 16 f32s (4x vec4) per mask
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  gpu.modsBuffer = gpu.device.createBuffer({
+    size: MAX_MODIFIERS * MOD_STRIDE * 4, // 12 f32s (3x vec4) per modifier (RFC-0025)
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   gpu.curveLutBuffer = gpu.device.createBuffer({

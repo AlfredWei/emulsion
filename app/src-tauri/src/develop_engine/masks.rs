@@ -12,12 +12,18 @@ pub(super) struct LinearGradientMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// Composable masking (RFC-0025): further shapes folded into this mask's
+    /// weight, in order. Empty for a mask without a `modifiers` array. Filled
+    /// in by `parse_masks`, never by the per-kind parse functions, so a shape
+    /// parsed *as* a modifier cannot itself carry modifiers.
+    pub(super) modifiers: Vec<Modifier>,
 }
 
 pub(super) fn parse_linear_gradient_mask(op: &serde_json::Value) -> Option<LinearGradientMask> {
     let start = op.get("start")?;
     let end = op.get("end")?;
     Some(LinearGradientMask {
+        modifiers: Vec::new(),
         start: (
             start.get("x")?.as_f64()? as f32,
             start.get("y")?.as_f64()? as f32,
@@ -72,11 +78,17 @@ pub(super) struct RadialGradientMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// Composable masking (RFC-0025): further shapes folded into this mask's
+    /// weight, in order. Empty for a mask without a `modifiers` array. Filled
+    /// in by `parse_masks`, never by the per-kind parse functions, so a shape
+    /// parsed *as* a modifier cannot itself carry modifiers.
+    pub(super) modifiers: Vec<Modifier>,
 }
 
 pub(super) fn parse_radial_gradient_mask(op: &serde_json::Value) -> Option<RadialGradientMask> {
     let center = op.get("center")?;
     Some(RadialGradientMask {
+        modifiers: Vec::new(),
         center: (
             center.get("x")?.as_f64()? as f32,
             center.get("y")?.as_f64()? as f32,
@@ -227,6 +239,11 @@ pub(super) struct BrushMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// Composable masking (RFC-0025): further shapes folded into this mask's
+    /// weight, in order. Empty for a mask without a `modifiers` array. Filled
+    /// in by `parse_masks`, never by the per-kind parse functions, so a shape
+    /// parsed *as* a modifier cannot itself carry modifiers.
+    pub(super) modifiers: Vec<Modifier>,
 }
 
 pub(super) fn parse_brush_mask(op: &serde_json::Value) -> Option<BrushMask> {
@@ -250,6 +267,7 @@ pub(super) fn parse_brush_mask(op: &serde_json::Value) -> Option<BrushMask> {
         })
         .collect();
     Some(BrushMask {
+        modifiers: Vec::new(),
         dabs,
         invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
         exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
@@ -330,10 +348,16 @@ pub(super) struct LuminanceRangeMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// Composable masking (RFC-0025): further shapes folded into this mask's
+    /// weight, in order. Empty for a mask without a `modifiers` array. Filled
+    /// in by `parse_masks`, never by the per-kind parse functions, so a shape
+    /// parsed *as* a modifier cannot itself carry modifiers.
+    pub(super) modifiers: Vec<Modifier>,
 }
 
 pub(super) fn parse_luminance_range_mask(op: &serde_json::Value) -> Option<LuminanceRangeMask> {
     Some(LuminanceRangeMask {
+        modifiers: Vec::new(),
         range_min: op.get("rangeMin")?.as_f64()? as f32,
         range_max: op.get("rangeMax")?.as_f64()? as f32,
         feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(20.0) as f32,
@@ -390,11 +414,17 @@ pub(super) struct ColorRangeMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// Composable masking (RFC-0025): further shapes folded into this mask's
+    /// weight, in order. Empty for a mask without a `modifiers` array. Filled
+    /// in by `parse_masks`, never by the per-kind parse functions, so a shape
+    /// parsed *as* a modifier cannot itself carry modifiers.
+    pub(super) modifiers: Vec<Modifier>,
 }
 
 pub(super) fn parse_color_range_mask(op: &serde_json::Value) -> Option<ColorRangeMask> {
     let rc = op.get("refColor")?;
     Some(ColorRangeMask {
+        modifiers: Vec::new(),
         ref_color: [
             rc.get("r")?.as_f64()? as f32,
             rc.get("g")?.as_f64()? as f32,
@@ -632,6 +662,106 @@ pub(super) fn compute_heal_shift(
     ]
 }
 
+/// How a modifier's weight `c` folds into the running weight `w` of the mask
+/// it belongs to (RFC-0025 §3.2). The product family, not max/min: smooth
+/// where two feathered edges cross, and `Subtract` is `Intersect` with the
+/// inverse. For hard (0/1) weights these are exactly set union, difference
+/// and intersection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Combine {
+    Add,
+    Subtract,
+    Intersect,
+}
+
+impl Combine {
+    pub(super) fn fold(self, w: f32, c: f32) -> f32 {
+        match self {
+            Combine::Add => w + c - w * c,
+            Combine::Subtract => w * (1.0 - c),
+            Combine::Intersect => w * c,
+        }
+    }
+}
+
+/// The five weight-producing shapes that can serve as a modifier. Reuses the
+/// stand-alone mask structs (their adjustment fields are simply unused, and
+/// default to 0 when the JSON omits them), so a shape's weight is computed by
+/// exactly the function a stand-alone mask of that kind uses.
+pub(super) enum Shape {
+    Linear(LinearGradientMask),
+    Radial(RadialGradientMask),
+    Brush(BrushMask),
+    LuminanceRange(LuminanceRangeMask),
+    ColorRange(ColorRangeMask),
+}
+
+impl Shape {
+    pub(super) fn weight(&self, uv: (f32, f32), aspect: f32, rgb: [f32; 3]) -> f32 {
+        match self {
+            Shape::Linear(m) => mask_weight(uv, m),
+            Shape::Radial(m) => radial_mask_weight(uv, m),
+            Shape::Brush(m) => brush_mask_weight(uv, m, aspect),
+            Shape::LuminanceRange(m) => luminance_mask_weight(rgb, m),
+            Shape::ColorRange(m) => color_mask_weight(rgb, m),
+        }
+    }
+}
+
+pub(super) struct Modifier {
+    pub(super) combine: Combine,
+    pub(super) shape: Shape,
+}
+
+fn parse_shape(shape: &serde_json::Value) -> Option<Shape> {
+    match shape.get("op").and_then(|v| v.as_str())? {
+        "linear_gradient_mask" => parse_linear_gradient_mask(shape).map(Shape::Linear),
+        "radial_gradient_mask" => parse_radial_gradient_mask(shape).map(Shape::Radial),
+        "brush_mask" => parse_brush_mask(shape).map(Shape::Brush),
+        "luminance_range_mask" => parse_luminance_range_mask(shape).map(Shape::LuminanceRange),
+        "color_range_mask" => parse_color_range_mask(shape).map(Shape::ColorRange),
+        _ => None,
+    }
+}
+
+/// Parses a mask op's optional `modifiers` array. An entry with an unknown
+/// `combine`, a missing/ineligible `shape` (spot and red-eye take no part in
+/// composition) or an unparseable shape is skipped rather than failing the
+/// whole mask -- the same leniency `parse_masks` applies to whole ops.
+pub(super) fn parse_modifiers(op: &serde_json::Value) -> Vec<Modifier> {
+    let Some(arr) = op.get("modifiers").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|m| {
+            let combine = match m.get("combine")?.as_str()? {
+                "add" => Combine::Add,
+                "subtract" => Combine::Subtract,
+                "intersect" => Combine::Intersect,
+                _ => return None,
+            };
+            Some(Modifier {
+                combine,
+                shape: parse_shape(m.get("shape")?)?,
+            })
+        })
+        .collect()
+}
+
+/// Folds `modifiers` over the base weight, in listed order. Every modifier is
+/// evaluated against the same `rgb` the mask itself entered with.
+pub(super) fn fold_modifiers(
+    base: f32,
+    modifiers: &[Modifier],
+    uv: (f32, f32),
+    aspect: f32,
+    rgb: [f32; 3],
+) -> f32 {
+    modifiers.iter().fold(base, |w, m| {
+        m.combine.fold(w, m.shape.weight(uv, aspect, rgb)).clamp(0.0, 1.0)
+    })
+}
+
 /// Wraps either mask kind so `parse_masks` can preserve the edit stack's
 /// TRUE op order across mixed kinds -- the frontend's `masks` array (built
 /// from one unfiltered pass over `stack.ops`, see `develop.js`'s
@@ -664,11 +794,19 @@ impl Mask {
     /// this explicitly below.
     pub(super) fn weight(&self, uv: (f32, f32), aspect: f32, rgb: [f32; 3]) -> f32 {
         match self {
-            Mask::Linear(m) => mask_weight(uv, m),
-            Mask::Radial(m) => radial_mask_weight(uv, m),
-            Mask::Brush(m) => brush_mask_weight(uv, m, aspect),
-            Mask::LuminanceRange(m) => luminance_mask_weight(rgb, m),
-            Mask::ColorRange(m) => color_mask_weight(rgb, m),
+            Mask::Linear(m) => fold_modifiers(mask_weight(uv, m), &m.modifiers, uv, aspect, rgb),
+            Mask::Radial(m) => {
+                fold_modifiers(radial_mask_weight(uv, m), &m.modifiers, uv, aspect, rgb)
+            }
+            Mask::Brush(m) => {
+                fold_modifiers(brush_mask_weight(uv, m, aspect), &m.modifiers, uv, aspect, rgb)
+            }
+            Mask::LuminanceRange(m) => {
+                fold_modifiers(luminance_mask_weight(rgb, m), &m.modifiers, uv, aspect, rgb)
+            }
+            Mask::ColorRange(m) => {
+                fold_modifiers(color_mask_weight(rgb, m), &m.modifiers, uv, aspect, rgb)
+            }
             Mask::Spot(m) => spot_mask_weight(uv, m, aspect),
             Mask::RedEye(m) => red_eye_weight(uv, rgb, m),
         }
@@ -726,11 +864,26 @@ impl Mask {
 pub(super) fn parse_masks(ops: &[serde_json::Value]) -> Vec<Mask> {
     ops.iter()
         .filter_map(|op| match op.get("op").and_then(|v| v.as_str()) {
-            Some("linear_gradient_mask") => parse_linear_gradient_mask(op).map(Mask::Linear),
-            Some("radial_gradient_mask") => parse_radial_gradient_mask(op).map(Mask::Radial),
-            Some("brush_mask") => parse_brush_mask(op).map(Mask::Brush),
-            Some("luminance_range_mask") => parse_luminance_range_mask(op).map(Mask::LuminanceRange),
-            Some("color_range_mask") => parse_color_range_mask(op).map(Mask::ColorRange),
+            Some("linear_gradient_mask") => parse_linear_gradient_mask(op).map(|mut m| {
+                m.modifiers = parse_modifiers(op);
+                Mask::Linear(m)
+            }),
+            Some("radial_gradient_mask") => parse_radial_gradient_mask(op).map(|mut m| {
+                m.modifiers = parse_modifiers(op);
+                Mask::Radial(m)
+            }),
+            Some("brush_mask") => parse_brush_mask(op).map(|mut m| {
+                m.modifiers = parse_modifiers(op);
+                Mask::Brush(m)
+            }),
+            Some("luminance_range_mask") => parse_luminance_range_mask(op).map(|mut m| {
+                m.modifiers = parse_modifiers(op);
+                Mask::LuminanceRange(m)
+            }),
+            Some("color_range_mask") => parse_color_range_mask(op).map(|mut m| {
+                m.modifiers = parse_modifiers(op);
+                Mask::ColorRange(m)
+            }),
             Some("spot_mask") => parse_spot_mask(op).map(Mask::Spot),
             Some("red_eye_mask") => parse_red_eye_mask(op).map(Mask::RedEye),
             _ => None,

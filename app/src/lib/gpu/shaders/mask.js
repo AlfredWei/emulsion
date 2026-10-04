@@ -1,7 +1,109 @@
 // The fs_mask pass: local adjustments composited over the graded image.
 // Part of the WGSL source, split out of DevelopCanvas.svelte; see index.js for the
 // concatenation order, which must not change.
-export const mask = `    // Final pass: reads preMaskTex (this pass's own predecessor's output,
+export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4: linear, radial,
+    // brush, luminance range, colour range) -- the body of what used to be
+    // inlined in fs_mask's mask loop, extracted unchanged (only m.start_end
+    // / m.params / in.uv became se / pr / uv) so a composable-
+    // masking modifier (RFC-0025) is evaluated by exactly the code a
+    // stand-alone mask is. rgb is the pixel as it entered this mask
+    // (range kinds select on it). Mirrors develop_engine/masks.rs's
+    // Shape::weight.
+    fn component_weight(se: vec4<f32>, pr: vec4<f32>, kind: f32, rgb: vec3<f32>, uv: vec2<f32>) -> f32 {
+        var weight: f32 = 0.0;
+        if (kind < 0.5) {
+          // Linear: projection-onto-segment parametrization. 0 at start, 1
+          // at end, extrapolated linearly beyond both, then clamped.
+          let dir = se.zw - se.xy;
+          let len2 = max(dot(dir, dir), 0.000001);
+          let t = dot(uv - se.xy, dir) / len2;
+          // Feather widens the transition band symmetrically around the
+          // midpoint -- at feather=50 the pins themselves move to weight
+          // 0.25/0.75 rather than staying at 0/1, matching real Lightroom's
+          // own gradient-feather model (separate outer feather lines beyond
+          // the pins), not a corner-only softening.
+          let softness = clamp(pr.x / 100.0, 0.0, 0.999);
+          weight = clamp((t + softness) / (1.0 + 2.0 * softness), 0.0, 1.0);
+          if (pr.y > 0.5) { weight = 1.0 - weight; }
+        } else if (kind < 1.5) {
+          // Radial: start_end.xy = center, start_end.zw = (radiusX,
+          // radiusY). d is 0 at center, 1 at the ellipse boundary. At
+          // feather=0 the transition band is d in [0.999, 1.0] (width
+          // 0.001, sitting just inside the boundary, not symmetric around
+          // it); widens to roughly d in [0.001,1.999] as feather
+          // approaches 100. insideWeight is ~1 at/near the center
+          // regardless of feather.
+          let dx = (uv.x - se.x) / se.z;
+          let dy = (uv.y - se.y) / se.w;
+          let d = sqrt(dx * dx + dy * dy);
+          let softness = clamp(pr.x / 100.0, 0.0, 0.999);
+          let denom = max(2.0 * softness, 0.001);
+          let insideWeight = clamp((1.0 + softness - d) / denom, 0.0, 1.0);
+          // Default (invert=false) applies the effect OUTSIDE the ellipse
+          // -- real Lightroom's own Radial Filter convention (its classic
+          // vignette use case); invert=true applies it inside (spotlight/
+          // subject use case).
+          weight = select(1.0 - insideWeight, insideWeight, pr.y > 0.5);
+        } else if (kind < 2.5) {
+          // Brush: rasterized CPU-side into this mask's own texture-array
+          // layer, luminance-as-weight (see DevelopCanvas.svelte's
+          // rasterizeDab/syncBrushRasterization and develop_engine.rs's
+          // dab_falloff/brush_mask_weight for the exact accumulation
+          // formula both renderers agree on).
+          let layer = i32(pr.w);
+          weight = textureSampleLevel(brushMasks, srcSampler, uv, layer, 0.0).r;
+          if (pr.y > 0.5) { weight = 1.0 - weight; }
+        } else if (kind < 3.5) {
+          // Luminance range: the first kind whose weight depends on pixel
+          // VALUE, not position -- reads rgb as already graded by every
+          // PRECEDING mask in the stack (this is a mutating accumulator,
+          // see develop_engine.rs's Mask::weight doc comment for why this
+          // order-dependence is the correct WYSIWYG behavior, not a bug).
+          // Trapezoidal falloff, raw-then-clamp-once (same style as the
+          // linear/radial formulas above) -- start_end.x/y hold
+          // rangeMin/rangeMax (0-100, same scale as feather).
+          let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+          let range_min = se.x / 100.0;
+          let range_max = se.y / 100.0;
+          let softness = clamp(pr.x / 100.0, 0.0, 0.999);
+          let feather_width = softness * 0.5;
+          let denom = max(feather_width, 0.001);
+          let rising = (luma - (range_min - feather_width)) / denom;
+          let falling = (range_max + feather_width - luma) / denom;
+          weight = clamp(min(rising, falling), 0.0, 1.0);
+          if (pr.y > 0.5) { weight = 1.0 - weight; }
+        } else if (kind < 4.5) {
+          // Color range (4): also reads the mutating rgb accumulator,
+          // same order-dependence as luminance range. One reference color
+          // and one tolerance rather than two edges, so this is a
+          // SINGLE-sided falloff (closer to radial's inside/outside
+          // shape, but in RGB-distance space) rather than luminance's
+          // two-sided min(rising,falling) band. start_end.xyz holds
+          // refColor (0-1, matching this shader's own texture-sample
+          // convention), start_end.w holds range (0-100).
+          //
+          // The exact-match pixel must get weight=1 regardless of how
+          // small feather is -- an earlier draft blended feather_width
+          // into the numerator alongside threshold, which meant the same
+          // denom floor meant to prevent divide-by-zero at feather=0 also
+          // diluted that term, so dist=0 could evaluate to LESS than full
+          // weight at low feather (see develop_engine.rs's
+          // color_mask_weight doc comment for the full derivation). Fixed
+          // here the same way: denom is the transition width added AFTER
+          // threshold via the "+ 1.0", never blended into the numerator.
+          let dist = distance(rgb, se.xyz);
+          let max_dist = sqrt(3.0);
+          let threshold = clamp(se.w / 100.0, 0.0, 1.0) * max_dist;
+          let softness = clamp(pr.x / 100.0, 0.0, 0.999);
+          let feather_width = softness * max_dist * 0.5;
+          let denom = max(feather_width, 0.001);
+          weight = clamp((threshold - dist) / denom + 1.0, 0.0, 1.0);
+          if (pr.y > 0.5) { weight = 1.0 - weight; }
+        }
+        return weight;
+    }
+
+    // Final pass: reads preMaskTex (this pass's own predecessor's output,
     // NOT gradedTex -- Dehaze/NR/Sharpen/Vignette/Grain are all already
     // baked in, see fs_premask's own doc comment above for why those
     // needed to be a separate pass this slice), runs the mask loop, then
@@ -36,94 +138,27 @@ export const mask = `    // Final pass: reads preMaskTex (this pass's own predec
         // brush branch). Each else-if here bounds exactly one kind, so a
         // future 5th kind just needs one more band inserted before the
         // final else, not a re-audit of the whole chain's ordering.
-        if (kind < 0.5) {
-          // Linear: projection-onto-segment parametrization. 0 at start, 1
-          // at end, extrapolated linearly beyond both, then clamped.
-          let dir = m.start_end.zw - m.start_end.xy;
-          let len2 = max(dot(dir, dir), 0.000001);
-          let t = dot(in.uv - m.start_end.xy, dir) / len2;
-          // Feather widens the transition band symmetrically around the
-          // midpoint -- at feather=50 the pins themselves move to weight
-          // 0.25/0.75 rather than staying at 0/1, matching real Lightroom's
-          // own gradient-feather model (separate outer feather lines beyond
-          // the pins), not a corner-only softening.
-          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
-          weight = clamp((t + softness) / (1.0 + 2.0 * softness), 0.0, 1.0);
-          if (m.params.y > 0.5) { weight = 1.0 - weight; }
-        } else if (kind < 1.5) {
-          // Radial: start_end.xy = center, start_end.zw = (radiusX,
-          // radiusY). d is 0 at center, 1 at the ellipse boundary. At
-          // feather=0 the transition band is d in [0.999, 1.0] (width
-          // 0.001, sitting just inside the boundary, not symmetric around
-          // it); widens to roughly d in [0.001,1.999] as feather
-          // approaches 100. insideWeight is ~1 at/near the center
-          // regardless of feather.
-          let dx = (in.uv.x - m.start_end.x) / m.start_end.z;
-          let dy = (in.uv.y - m.start_end.y) / m.start_end.w;
-          let d = sqrt(dx * dx + dy * dy);
-          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
-          let denom = max(2.0 * softness, 0.001);
-          let insideWeight = clamp((1.0 + softness - d) / denom, 0.0, 1.0);
-          // Default (invert=false) applies the effect OUTSIDE the ellipse
-          // -- real Lightroom's own Radial Filter convention (its classic
-          // vignette use case); invert=true applies it inside (spotlight/
-          // subject use case).
-          weight = select(1.0 - insideWeight, insideWeight, m.params.y > 0.5);
-        } else if (kind < 2.5) {
-          // Brush: rasterized CPU-side into this mask's own texture-array
-          // layer, luminance-as-weight (see DevelopCanvas.svelte's
-          // rasterizeDab/syncBrushRasterization and develop_engine.rs's
-          // dab_falloff/brush_mask_weight for the exact accumulation
-          // formula both renderers agree on).
-          let layer = i32(m.params.w);
-          weight = textureSampleLevel(brushMasks, srcSampler, in.uv, layer, 0.0).r;
-          if (m.params.y > 0.5) { weight = 1.0 - weight; }
-        } else if (kind < 3.5) {
-          // Luminance range: the first kind whose weight depends on pixel
-          // VALUE, not position -- reads rgb as already graded by every
-          // PRECEDING mask in the stack (this is a mutating accumulator,
-          // see develop_engine.rs's Mask::weight doc comment for why this
-          // order-dependence is the correct WYSIWYG behavior, not a bug).
-          // Trapezoidal falloff, raw-then-clamp-once (same style as the
-          // linear/radial formulas above) -- start_end.x/y hold
-          // rangeMin/rangeMax (0-100, same scale as feather).
-          let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-          let range_min = m.start_end.x / 100.0;
-          let range_max = m.start_end.y / 100.0;
-          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
-          let feather_width = softness * 0.5;
-          let denom = max(feather_width, 0.001);
-          let rising = (luma - (range_min - feather_width)) / denom;
-          let falling = (range_max + feather_width - luma) / denom;
-          weight = clamp(min(rising, falling), 0.0, 1.0);
-          if (m.params.y > 0.5) { weight = 1.0 - weight; }
-        } else if (kind < 4.5) {
-          // Color range (4): also reads the mutating rgb accumulator,
-          // same order-dependence as luminance range. One reference color
-          // and one tolerance rather than two edges, so this is a
-          // SINGLE-sided falloff (closer to radial's inside/outside
-          // shape, but in RGB-distance space) rather than luminance's
-          // two-sided min(rising,falling) band. start_end.xyz holds
-          // refColor (0-1, matching this shader's own texture-sample
-          // convention), start_end.w holds range (0-100).
-          //
-          // The exact-match pixel must get weight=1 regardless of how
-          // small feather is -- an earlier draft blended feather_width
-          // into the numerator alongside threshold, which meant the same
-          // denom floor meant to prevent divide-by-zero at feather=0 also
-          // diluted that term, so dist=0 could evaluate to LESS than full
-          // weight at low feather (see develop_engine.rs's
-          // color_mask_weight doc comment for the full derivation). Fixed
-          // here the same way: denom is the transition width added AFTER
-          // threshold via the "+ 1.0", never blended into the numerator.
-          let dist = distance(rgb, m.start_end.xyz);
-          let max_dist = sqrt(3.0);
-          let threshold = clamp(m.start_end.w / 100.0, 0.0, 1.0) * max_dist;
-          let softness = clamp(m.params.x / 100.0, 0.0, 0.999);
-          let feather_width = softness * max_dist * 0.5;
-          let denom = max(feather_width, 0.001);
-          weight = clamp((threshold - dist) / denom + 1.0, 0.0, 1.0);
-          if (m.params.y > 0.5) { weight = 1.0 - weight; }
+        if (kind < 4.5) {
+          // Kinds 0-4: the base shape's weight (see component_weight above),
+          // then fold this mask's modifiers in listed order (RFC-0025). Each
+          // modifier is evaluated against the SAME rgb the mask entered
+          // with, and the fold is the product family of masks.rs's
+          // Combine::fold: add w+c-wc, subtract w(1-c), intersect wc.
+          weight = component_weight(m.start_end, m.params, kind, rgb, in.uv);
+          let mod_first = i32(m.mods.x);
+          let mod_count = i32(m.mods.y);
+          for (var j = 0; j < mod_count; j = j + 1) {
+            let md = mods[mod_first + j];
+            let c = component_weight(md.start_end, md.params, md.params.z, rgb, in.uv);
+            if (md.combine.x < 0.5) {
+              weight = weight + c - weight * c;
+            } else if (md.combine.x < 1.5) {
+              weight = weight * (1.0 - c);
+            } else {
+              weight = weight * c;
+            }
+            weight = clamp(weight, 0.0, 1.0);
+          }
         } else if (kind < 5.5) {
           // Spot (5, M4 Slice 1/2, Healing/Clone brush): structurally
           // unlike every kind above -- it doesn't gate a parametric
@@ -233,7 +268,7 @@ export const mask = `    // Final pass: reads preMaskTex (this pass's own predec
         // correct (pre-this-mask) rgb state -- so no separate
         // re-sample-and-re-invert step is needed regardless of kind,
         // unlike the brush-only texture-based mechanism this replaces.
-        if (kind > 1.5 && kind < 4.5 && i == i32(adj.selected_mask_index)) {
+        if (kind < 4.5 && (kind > 1.5 || m.mods.y > 0.5) && i == i32(adj.selected_mask_index)) {
           rgb = mix(rgb, vec3<f32>(1.0, 0.24, 0.24), weight * 0.55);
         }
       }

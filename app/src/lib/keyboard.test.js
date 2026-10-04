@@ -40,6 +40,7 @@ function makeCtx(over = {}) {
     showMaskOverlay: false,
     maskOverlaysVisible: true,
     showOriginal: false,
+    requestZoom: vi.fn(),
     selectedIds: new Set(/** @type {number[]} */ ([])),
     selectedId: /** @type {number | null} */ (null),
     filteredImages: [{ version_id: 11 }, { version_id: 12 }],
@@ -342,6 +343,35 @@ describe("develop module", () => {
     expect(ctx.showOriginal).toBe(false);
     press("h");
     expect(ctx.maskOverlaysVisible).toBe(false);
+  });
+
+  it("Z toggles Fit/100% (not on auto-repeat); Cmd/Ctrl +/-/0/1 step, fit and 100%", () => {
+    const ctx = dev();
+    const { press } = setup(ctx);
+    press("z");
+    expect(ctx.requestZoom).toHaveBeenLastCalledWith({ type: "toggle" });
+    press("z", { repeat: true });
+    expect(ctx.requestZoom).toHaveBeenCalledTimes(1);
+    const meta = press("=", { metaKey: true });
+    expect(ctx.requestZoom).toHaveBeenLastCalledWith({ type: "step", dir: 1 });
+    expect(meta.preventDefault).toHaveBeenCalled();
+    press("+", { ctrlKey: true, shiftKey: true });
+    expect(ctx.requestZoom).toHaveBeenLastCalledWith({ type: "step", dir: 1 });
+    press("-", { metaKey: true });
+    expect(ctx.requestZoom).toHaveBeenLastCalledWith({ type: "step", dir: -1 });
+    press("0", { metaKey: true });
+    expect(ctx.requestZoom).toHaveBeenLastCalledWith({ type: "fit" });
+    press("1", { ctrlKey: true });
+    expect(ctx.requestZoom).toHaveBeenLastCalledWith({ type: "actual" });
+  });
+
+  it("zoom shortcuts are inert in Library and while a dialog is open", () => {
+    const lib = makeCtx();
+    setup(lib).press("=", { metaKey: true });
+    expect(lib.requestZoom).not.toHaveBeenCalled();
+    const open = dev({ settingsOpen: true });
+    setup(open).press("z");
+    expect(open.requestZoom).not.toHaveBeenCalled();
   });
 
   it("O toggles the mask overlay only for overlay-capable mask ops", () => {

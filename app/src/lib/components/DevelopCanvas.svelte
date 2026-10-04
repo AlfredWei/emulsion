@@ -6,7 +6,7 @@
   import { applyBitmapToGpu as applyBitmapToGpuImpl } from "$lib/gpu/sourceTexture.js";
   import { buildAtmLightChainSizes } from "$lib/gpu/atmChain.js";
   import { rasterizeDab, rasterizeSpotDab } from "$lib/gpu/brushRaster.js";
-  import { tick, flushSync } from "svelte";
+  import { tick, flushSync, untrack } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
   import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
@@ -80,6 +80,7 @@
    *   onCropChange: (patch: Partial<{x: number, y: number, width: number, height: number, angle: number}>) => void,
    *   cropAspectLock: number | null,
    *   onSourceDimensions?: (width: number, height: number) => void,
+   *   zoomRequest?: { action: import('$lib/zoomMath.js').ZoomAction } | null,
    *   nativeWidth?: number | null,
    *   nativeHeight?: number | null,
    *   onHistogramUpdate?: (data: {r: Uint32Array, g: Uint32Array, b: Uint32Array}) => void,
@@ -141,6 +142,7 @@
     onCropChange,
     cropAspectLock,
     onSourceDimensions,
+    zoomRequest = null,
     nativeWidth = null,
     nativeHeight = null,
     onHistogramUpdate,
@@ -1557,6 +1559,16 @@
     syncScrollPos();
   }
 
+  // Keyboard zoom: DevelopModule forwards `develop.zoomRequest`; each new
+  // request object is applied once, about the viewport centre.
+  $effect(() => {
+    const req = zoomRequest;
+    if (!req) return;
+    untrack(() => {
+      if (status === "ready") applyZoom(req.action);
+    });
+  });
+
   /** Scroll so image point `focus` (normalized, content space) lands at
    * viewport point `at`. Reads the post-change `viewOffset`/`contentCss`. */
   function setScrollForFocus(/** @type {{x:number,y:number}} */ focus, /** @type {{x:number,y:number}} */ at) {
@@ -1681,31 +1693,6 @@
       }}
     ></canvas>
   </div>
-  {#if softProofEnabled && softProofPreviewUrl}
-    <!-- M4 Soft Proofing: a static, fit-to-view simulation of the CURRENT
-         edit rendered against the target ICC profile (see soft_proof.rs),
-         computed CPU-side and re-fetched debounced on every edit/settings
-         change by +page.svelte -- not the live WGSL canvas, and
-         deliberately doesn't track the canvas's own pan/zoom/crop-preview
-         transforms (`object-fit: contain` over the whole `.canvas-wrap`
-         instead): this is a periodic "how will this look on the target
-         device" check, not a second fully-interactive view. `pointer-
-         events: none` so it never blocks the tool strip/hotkeys. -->
-    <img class="soft-proof-overlay" src={softProofPreviewUrl} alt="Soft proof preview" draggable="false" />
-  {/if}
-  {#if softProofEnabled}
-    <div class="soft-proof-badge" title="Simulating: {softProofProfileLabel}">
-      Soft Proof — {softProofProfileLabel}{softProofLoading ? "…" : ""}
-    </div>
-  {/if}
-  {#if beforeAfterLabelVisible}
-    <!-- M4 Slice 3: transient before/after badge -- see the effect that
-         drives `beforeAfterLabelVisible` for why this is timed, not
-         persistent. Rendered as a `.canvas-wrap` sibling (not inside
-         `.crop-clip`) so it stays in a fixed screen position regardless of
-         `showCommittedCropPreview`'s own rotate/clip transform. -->
-    <div class="before-after-label">{showOriginal ? "Original" : "Edited"}</div>
-  {/if}
   {#if status === "ready" && !showCommittedCropPreview}
     <!-- M3 Slice 5: a sibling of canvas, NOT a child of a sizing wrapper
          (see the fix note near syncOverlayPosition) -- its left/top/width/
@@ -1975,6 +1962,43 @@
       {/if}
     </div>
   {/if}
+  {#if status === "cpu-fallback" && cpuFallbackPreviewUrl}
+    <!-- A padded flex item of the wrap (centred via margin:auto), unlike
+         the overlays below, so it stays in the wrap; it never zooms. -->
+    <img class="cpu-fallback-image" src={cpuFallbackPreviewUrl} alt="Preview (GPU unavailable)" draggable="false" />
+  {/if}
+</div>
+<!-- Everything below is a sibling of the scroller, not a child: absolutely
+     positioned children of `.canvas-wrap` scroll away with the photo once it
+     becomes `overflow: auto` (the bug the zoom HUD was moved out for). These
+     are viewport-fixed overlays, so they belong to the non-scrolling stage.
+     Only the mask overlay stays inside the scroller -- it is positioned
+     against the canvas's own box and must scroll with it. -->
+  {#if softProofEnabled && softProofPreviewUrl}
+    <!-- M4 Soft Proofing: a static, fit-to-view simulation of the CURRENT
+         edit rendered against the target ICC profile (see soft_proof.rs),
+         computed CPU-side and re-fetched debounced on every edit/settings
+         change by +page.svelte -- not the live WGSL canvas, and
+         deliberately doesn't track the canvas's own pan/zoom/crop-preview
+         transforms (`object-fit: contain` over the whole `.canvas-wrap`
+         instead): this is a periodic "how will this look on the target
+         device" check, not a second fully-interactive view. `pointer-
+         events: none` so it never blocks the tool strip/hotkeys. -->
+    <img class="soft-proof-overlay" src={softProofPreviewUrl} alt="Soft proof preview" draggable="false" />
+  {/if}
+  {#if softProofEnabled}
+    <div class="soft-proof-badge" title="Simulating: {softProofProfileLabel}">
+      Soft Proof — {softProofProfileLabel}{softProofLoading ? "…" : ""}
+    </div>
+  {/if}
+  {#if beforeAfterLabelVisible}
+    <!-- M4 Slice 3: transient before/after badge -- see the effect that
+         drives `beforeAfterLabelVisible` for why this is timed, not
+         persistent. Rendered as a `.canvas-wrap` sibling (not inside
+         `.crop-clip`) so it stays in a fixed screen position regardless of
+         `showCommittedCropPreview`'s own rotate/clip transform. -->
+    <div class="before-after-label">{showOriginal ? "Original" : "Edited"}</div>
+  {/if}
   {#if status === "ready" && isSmartPreview}
     <div
       class="smart-preview-badge"
@@ -1995,16 +2019,13 @@
          via `previewEditStack`, mirroring how `softProofPreviewUrl` is
          already computed there) rather than by this component, since only
          +page.svelte holds the full `EditStack` object this needs. -->
-    {#if cpuFallbackPreviewUrl}
-      <img class="cpu-fallback-image" src={cpuFallbackPreviewUrl} alt="Preview (GPU unavailable)" draggable="false" />
-    {:else}
+    {#if !cpuFallbackPreviewUrl}
       <div class="overlay">Rendering preview…</div>
     {/if}
     <div class="cpu-fallback-badge" title={fallbackInfo?.message ?? ""}>
       ⚠ GPU acceleration unavailable — preview updates after you stop adjusting, not live while dragging
     </div>
   {/if}
-</div>
 {#if status === "ready"}
   <DevelopZoomHud
     {scale}

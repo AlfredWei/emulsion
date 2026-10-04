@@ -96,6 +96,7 @@
     onCropChange={handleCropChange}
     cropAspectLock={develop.cropAspectLock}
     onSourceDimensions={handleSourceDimensions}
+    zoomRequest={develop.zoomRequest}
     nativeWidth={develop.imageNativeWidth}
     nativeHeight={develop.imageNativeHeight}
     onHistogramUpdate={handleHistogramUpdate}

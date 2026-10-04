@@ -2,6 +2,10 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 1b (composable masking UI): interactive UX mock (2026-10-04)
+
+User asked what the multi-mask UX flow is; only a text sketch existed (RFC-0025 §3.4), so a mock was built before any UI code, as for the grain picker. **Docs only**, nothing in the app changed. [composable-masking-mockup.html](docs/ux/mockups/composable-masking-mockup.html): the floating mask panel with a new *Shapes* section (base row, per-shape combine select and delete, *Add shape* mode switch + five-shape list, caps shown), a canvas whose red fill is computed with the engine's real fold, five walkthrough steps. **A design finding from building it**: the flat three-mode-by-five-shape menu is 15 entries and overflows the 210 px panel; replaced by a mode switch plus one list. Open for 1b (RFC §3.4 "Mock"): brush arming, colour-range click, reordering, an enable eye (needs an `enabled` field in the model), an Invert-result toggle. Viewed only as a static snapshot in the Browser pane (scripts ran, real clicks did not), driven through its own buttons via script; not tried at the app's real panel width inside the app.
+
 ## M6 slice 1a (composable masking engine, no UI): RFC-0025 (2026-10-04)
 
 RFC merged in #206; this is the engine slice. A weight-producing mask (linear, radial, brush, luminance range, colour range) can now carry an ordered `modifiers[]`, each `{id, combine: add|subtract|intersect, shape}`; the weight is folded `add w+c−wc`, `subtract w(1−c)`, `intersect wc` (product family, clamped), every modifier evaluated against the `rgb` the mask entered with. A mask without `modifiers` is unchanged (no migration). **No UI yet** — nothing in the app creates a modifier until slice 1b.

@@ -62,8 +62,22 @@ export const common = `    struct VertexOut {
       start_end: vec4<f32>,   // xy = start, zw = end (normalized image space); luminance range: x=rangeMin, y=rangeMax (both 0-100); color range: xyz=refColor (0-1), w=range (0-100); spot: xy=sourceOffset(dx,dy), zw=dabs centroid (for heal-ring sampling only); red eye: xy=center, zw=(radiusX,radiusY), same as radial
       params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1 (unused for brush/spot; spot repurposes this for dabs' average radius, also for heal-ring sampling; red eye repurposes this for pupilSize 0-100), z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range, 5=spot, 6=red eye), w = texture-array layer (brush AND spot)
       adjustments: vec4<f32>, // x = exposure_ev (spot: mode, 0=clone/1=heal), y = contrast (unused for spot/red eye), z = saturation (unused for spot/red eye), w unused (red eye repurposes this for darken 0-100)
+      mods: vec4<f32>,        // x = index of this mask's first modifier in mods, y = modifier count (RFC-0025; 0 for spot/red eye and for any mask without modifiers)
     };
     const MAX_MASKS = 8;
+
+    // Composable masking (RFC-0025): one further weight-producing shape
+    // folded into a mask's weight. start_end/params use the SAME layout as
+    // Mask's own (kinds 0-4 only; params.w = brush texture-array layer),
+    // so one component_weight function serves both. combine.x: 0 = add,
+    // 1 = subtract, 2 = intersect. Modifiers of all masks are flattened
+    // into one array in mask order; each Mask carries first/count.
+    struct Modifier {
+      start_end: vec4<f32>,
+      params: vec4<f32>,
+      combine: vec4<f32>,
+    };
+    const MAX_MODS = 16;
 
     @group(0) @binding(0) var srcSampler: sampler;
     @group(0) @binding(1) var srcTexture: texture_2d<f32>;
@@ -85,6 +99,7 @@ export const common = `    struct VertexOut {
 
     @group(0) @binding(2) var<uniform> adj: Adjustments;
     @group(0) @binding(3) var<uniform> masks: array<Mask, MAX_MASKS>;
+    @group(0) @binding(63) var<uniform> mods: array<Modifier, MAX_MODS>;
     // Brush masks rasterize CPU-side (OffscreenCanvas, luminance-as-weight)
     // rather than computing an analytic formula here -- one array layer per
     // active brush mask. Sampled via textureSampleLevel (not textureSample)

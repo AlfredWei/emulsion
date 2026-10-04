@@ -4,6 +4,12 @@
 // and hands it to the functions in pipelines.js, sourceTexture.js and renderFrame.js.
 
 export const MAX_MASKS = 8;
+/** Composable masking (RFC-0025): total modifiers across the image (the `mods` uniform array). */
+export const MAX_MODIFIERS = 16;
+/** f32s per mask record in the `masks` uniform: 4 x vec4 (the 4th, `mods`, carries first/count into the modifier array). */
+export const MASK_STRIDE = 16;
+/** f32s per modifier record in the `mods` uniform: 3 x vec4 (start_end, params, combine). */
+export const MOD_STRIDE = 12;
 
 // Histogram: a fixed 256x256 target, device-scoped (created once in
 // initGpu, unlike every per-image texture above) since a histogram is a
@@ -29,6 +35,7 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUTexture | null} sourceTexture
  * @property {GPUBuffer | null} uniformBuffer
  * @property {GPUBuffer | null} masksBuffer
+ * @property {GPUBuffer | null} modsBuffer
  * @property {GPUBuffer | null} curveLutBuffer
  * @property {GPUBuffer | null} hslBandsBuffer
  * @property {GPUBuffer | null} splitToningBuffer
@@ -324,6 +331,7 @@ export function createGpuHandles() {
     sourceTexture: null,
     uniformBuffer: null,
     masksBuffer: null,
+    modsBuffer: null,
     // Tone Curve (M3): device-scoped like uniformBuffer/masksBuffer above
     // (created once in initGpu, rewritten via writeBuffer whenever the curve
     // changes) -- NOT recreated per image/tier-swap the way sourceTexture/

@@ -79,7 +79,7 @@ src-tauri/
 │   │                        images, merge_sources, culling, geo, faces, keywords, collections, backup, edit_stack,
 │   │                        presets, export_plugins (each with its own tests; test_support.rs = shared fixtures)
 │   ├── develop_engine/      CPU edit-stack interpreter (the reference the GPU shaders must match): pipeline.rs
-│   │                        (`apply_edit_stack`), color, tone, hsl_split, effects, detail, masks, crop, lens,
+│   │                        (`apply_edit_stack`), color, tone, hsl_split, effects, detail, masks (incl. composable-mask modifiers), crop, lens,
 │   │                        perspective; tests/ = per-area tests + shared support
 │   ├── import.rs            Import pipeline: scan a folder, hash, dedupe, thumbnail
 │   ├── raw_decode.rs         LibRaw (via `rsraw`) wrapper for decoding RAW files
@@ -126,7 +126,8 @@ src/
 │   │                        TextPromptDialog, SmartCollectionDialog, CopySettingsDialog, BackupPromptDialog
 │   ├── gpu/                 Develop WebGPU code, split out of DevelopCanvas: gpuHandles.js (handle object +
 │   │                        types), pipelines.js (init), sourceTexture.js (upload), renderFrame.js (per-frame
-│   │                        render/histogram), atmChain.js + brushRaster.js (pure helpers), shaders/*.js (the
+│   │                        render/histogram), atmChain.js + brushRaster.js + maskPack.js (pure helpers; maskPack packs the
+│   │                        mask and modifier uniform arrays), shaders/*.js (the
 │   │                        WGSL sections, assembled by shaders/index.js)
 │   ├── maskGeometry.js, cropMath.js, stepMath.js, histogramMath.js   Pure geometry/math helpers (with tests)
 │   ├── zoomMath.js          Develop's zoom model: 50–200% range, Fit as a mode, one `reduceZoom` for every input

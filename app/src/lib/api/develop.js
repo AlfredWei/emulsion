@@ -30,6 +30,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} exposure
  * @property {number} contrast
  * @property {number} saturation
+ * @property {Modifier[]=} modifiers - composable masking (RFC-0025); absent = none
  */
 
 /**
@@ -44,6 +45,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} exposure
  * @property {number} contrast
  * @property {number} saturation
+ * @property {Modifier[]=} modifiers - composable masking (RFC-0025); absent = none
  */
 
 /**
@@ -71,6 +73,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} exposure
  * @property {number} contrast
  * @property {number} saturation
+ * @property {Modifier[]=} modifiers - composable masking (RFC-0025); absent = none
  */
 
 /**
@@ -88,6 +91,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} exposure
  * @property {number} contrast
  * @property {number} saturation
+ * @property {Modifier[]=} modifiers - composable masking (RFC-0025); absent = none
  */
 
 /**
@@ -109,6 +113,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} exposure
  * @property {number} contrast
  * @property {number} saturation
+ * @property {Modifier[]=} modifiers - composable masking (RFC-0025); absent = none
  */
 
 /**
@@ -175,6 +180,18 @@ import { invoke } from "@tauri-apps/api/core";
  * same reasoning as `SpotMask`: this mask doesn't gate a parametric
  * adjustment, its effect is fixed (redness-selective desaturate+darken)
  * and there's no outside-the-oval use case to invert into.
+ */
+
+/** @typedef {"add" | "subtract" | "intersect"} Combine */
+
+/** @typedef {Omit<LinearGradientMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<RadialGradientMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<BrushMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<LuminanceRangeMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<ColorRangeMask, "id" | "exposure" | "contrast" | "saturation">} ModifierShape */
+
+/**
+ * A further shape folded into a mask's weight (RFC-0025). `id` keys a brush modifier's raster layer.
+ * @typedef {Object} Modifier
+ * @property {string} id
+ * @property {Combine} combine
+ * @property {ModifierShape} shape
  */
 
 /** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask | SpotMask | RedEyeMask} Mask */
@@ -1731,6 +1748,124 @@ export function updateMask(
 /** @returns {EditStack} */
 export function removeMask(/** @type {EditStack} */ stack, /** @type {string} */ id) {
   const ops = stack.ops.filter((o) => !(MASK_OP_NAMES.includes(o.op) && /** @type {any} */ (o).id === id));
+  return { ...stack, ops };
+}
+
+// Composable masking (RFC-0025). A weight-producing mask (linear, radial, brush, luminance range,
+// colour range) may carry an ordered `modifiers` array; each entry folds one more shape into the
+// mask's weight with Add / Subtract / Intersect (see `Combine::fold` in masks.rs and the
+// `component_weight` loop in the WGSL mask pass, which must agree). A mask without `modifiers`
+// is exactly the pre-RFC-0025 mask. Adjustments stay on the base mask; a modifier's shape never
+// carries any. Spot and red-eye are not weight-gated adjustments and neither take nor serve as one.
+
+/** Total modifiers across the image: the size of the GPU `mods` uniform array. */
+export const MAX_MODIFIERS = 16;
+
+/** @type {readonly Combine[]} */
+export const COMBINE_MODES = Object.freeze(/** @type {Combine[]} */ (["add", "subtract", "intersect"]));
+
+/** Mask ops that can be a base shape or a modifier shape. */
+export const MODIFIABLE_MASK_OPS = Object.freeze([
+  "linear_gradient_mask",
+  "radial_gradient_mask",
+  "brush_mask",
+  "luminance_range_mask",
+  "color_range_mask",
+]);
+
+/** @param {string} op */
+export function isModifiableOp(op) {
+  return MODIFIABLE_MASK_OPS.includes(op);
+}
+
+/** A modifier's shape: the stand-alone mask minus its identity and adjustments.
+ * @param {Mask} mask
+ * @returns {ModifierShape} */
+export function toModifierShape(mask) {
+  const { id: _id, exposure: _e, contrast: _c, saturation: _s, ...shape } = /** @type {any} */ (mask);
+  return /** @type {any} */ (shape);
+}
+
+/** @param {Combine} combine @param {Mask} mask a freshly created weight-kind mask (createXMask)
+ * @param {string=} id
+ * @returns {Modifier} */
+export function createModifier(combine, mask, id) {
+  return { id: id ?? crypto.randomUUID(), combine, shape: toModifierShape(mask) };
+}
+
+/** @param {Mask} mask @returns {Modifier[]} */
+export function listModifiers(mask) {
+  return /** @type {any} */ (mask).modifiers ?? [];
+}
+
+/** Modifiers across every mask in the stack (the GPU `mods` budget).
+ * @param {EditStack} stack */
+export function countModifiers(stack) {
+  return listMasks(stack).reduce((n, m) => n + listModifiers(m).length, 0);
+}
+
+/** Brush raster layers in use: brush and spot masks plus brush modifiers. They share the GPU's
+ * layer array (size MAX_MASKS), so a brush modifier consumes a layer a mask could have used.
+ * @param {EditStack} stack */
+export function countBrushLayers(stack) {
+  let n = 0;
+  for (const m of listMasks(stack)) {
+    if (m.op === "brush_mask" || m.op === "spot_mask") n += 1;
+    n += listModifiers(m).filter((x) => x.shape.op === "brush_mask").length;
+  }
+  return n;
+}
+
+/** Why a modifier of `shapeOp` cannot be added to `maskId`, or null when it can.
+ * @param {EditStack} stack @param {string} maskId @param {string} shapeOp
+ * @returns {string | null} */
+export function modifierBlockedReason(stack, maskId, shapeOp) {
+  const base = listMasks(stack).find((m) => m.id === maskId);
+  if (!base) return "Mask not found";
+  if (!isModifiableOp(base.op)) return "This mask kind cannot be combined";
+  if (!isModifiableOp(shapeOp)) return "This shape cannot be combined";
+  if (countModifiers(stack) >= MAX_MODIFIERS) return `Maximum ${MAX_MODIFIERS} combined shapes reached`;
+  if (shapeOp === "brush_mask" && countBrushLayers(stack) >= MAX_MASKS) {
+    return `Brush layers exhausted (${MAX_MASKS} shared by brush masks, spot masks and brush shapes)`;
+  }
+  return null;
+}
+
+/** Appends `modifier` to the mask's list; returns the stack unchanged when blocked.
+ * @param {EditStack} stack @param {string} maskId @param {Modifier} modifier
+ * @returns {EditStack} */
+export function addModifier(stack, maskId, modifier) {
+  if (modifierBlockedReason(stack, maskId, modifier.shape.op) !== null) return stack;
+  return updateMask(stack, maskId, /** @type {any} */ ({ modifiers: [...listModifiers(/** @type {any} */ (listMasks(stack).find((m) => m.id === maskId))), modifier] }));
+}
+
+/** Shallow-merges `patch` into one modifier; `patch.shape` is merged into its shape, not replaced.
+ * @param {EditStack} stack @param {string} maskId @param {string} modifierId
+ * @param {{combine?: Combine, shape?: Partial<ModifierShape>}} patch
+ * @returns {EditStack} */
+export function updateModifier(stack, maskId, modifierId, patch) {
+  const base = listMasks(stack).find((m) => m.id === maskId);
+  if (!base) return stack;
+  const modifiers = listModifiers(base).map((x) =>
+    x.id === modifierId
+      ? /** @type {Modifier} */ ({ ...x, ...(patch.combine ? { combine: patch.combine } : {}), shape: { ...x.shape, ...(patch.shape ?? {}) } })
+      : x,
+  );
+  return updateMask(stack, maskId, /** @type {any} */ ({ modifiers }));
+}
+
+/** Removes one modifier; drops the `modifiers` key when it was the last (a mask with none stores nothing).
+ * @param {EditStack} stack @param {string} maskId @param {string} modifierId
+ * @returns {EditStack} */
+export function removeModifier(stack, maskId, modifierId) {
+  const base = listMasks(stack).find((m) => m.id === maskId);
+  if (!base) return stack;
+  const modifiers = listModifiers(base).filter((x) => x.id !== modifierId);
+  const ops = stack.ops.map((o) => {
+    if (!(MASK_OP_NAMES.includes(o.op) && /** @type {any} */ (o).id === maskId)) return o;
+    const { modifiers: _drop, ...rest } = /** @type {any} */ (o);
+    return modifiers.length > 0 ? { ...rest, modifiers } : rest;
+  });
   return { ...stack, ops };
 }
 

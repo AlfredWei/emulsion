@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 1a (composable masking engine, no UI): RFC-0025 (2026-10-04)
+
+RFC merged in #206; this is the engine slice. A weight-producing mask (linear, radial, brush, luminance range, colour range) can now carry an ordered `modifiers[]`, each `{id, combine: add|subtract|intersect, shape}`; the weight is folded `add w+c−wc`, `subtract w(1−c)`, `intersect wc` (product family, clamped), every modifier evaluated against the `rgb` the mask entered with. A mask without `modifiers` is unchanged (no migration). **No UI yet** — nothing in the app creates a modifier until slice 1b.
+
+- **Rust** (`masks.rs`): `Combine`/`Shape`/`Modifier`, `parse_modifiers`, `fold_modifiers`; the five weight structs gained `modifiers`, set by `parse_masks` only. **WGSL** (`mask.js`, `common.js`): kinds 0-4 extracted unchanged into `component_weight`, a modifier loop over a second uniform array (`@binding(63)`), `Mask` record 12→16 floats, overlay uses the combined weight. **JS**: `develop.js` model (`addModifier`/`updateModifier`/`removeModifier`, `modifierBlockedReason`, caps `MAX_MODIFIERS = 16` and brush layers shared with brush/spot masks), `gpu/maskPack.js` (pure packing + `rasterTargets`), brush modifiers rasterize into the shared layers keyed by modifier id.
+- **Verified**: `cargo test --lib` 468 passed / 10 ignored (+13 tests: hand-value fold on soft weights, order, hard-weight set algebra, every kind as base, luminance/colour/brush modifiers, invalid/ineligible/nested modifiers skipped, spot/red-eye ignore the array, no-modifiers pixel-identical; +1 ignored reference dump); `vitest` 745 passed (+17: model, caps, packing layout, WGSL array sizes agree); `svelte-check` 0 errors. **Real GPU** (Apple / Metal 3): the shipped `fs_mask` equals the CPU path with max difference 0/255 on four modifier scenes. Real `DevelopCanvas` ran the new wiring in a throwaway browser harness (deleted) without WebGPU errors.
+- **A finding, not caused by this slice**: a stand-alone **hard-edged brush mask** (hardness 100) differs between CPU and GPU (max 54/255 on 84 of 12288 channels at the dab's edge: analytic formula vs Canvas2D rasterizer); hardness 50 is within 1. Brush-modifier scenes show the identical numbers. Not fixed; recorded in RFC-0025.
+- **Two WGSL/JS traps hit on the way**: a backtick inside a WGSL comment ends the JS template literal (caught by the shader test); `mod` is a reserved WGSL word (avoided: `mods`, `mod_first`).
+- **Not verified**: e2e parity scenario (not run, `tauri-driver` missing), one GPU, nested-loop timing, `MAX_MODIFIERS` sizing, and RFC §7's product-vs-min/max question (no photo comparison yet).
+
 ## M6 slice 1 (composable masking): RFC-0025 drafted (2026-10-04)
 
 Slice 0 closed (#205); user chose **composable masking** as the first M6 build slice (no model needed). Design only, **no product code changed**, nothing prototyped or measured.

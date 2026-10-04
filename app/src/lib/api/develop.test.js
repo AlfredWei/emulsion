@@ -23,6 +23,24 @@ import {
   togglePanelVisibility,
   resetPanel,
   effectiveEditStack,
+  MAX_MASKS,
+  MAX_MODIFIERS,
+  addMask,
+  removeMask,
+  listMasks,
+  createRadialGradientMask,
+  createBrushMask,
+  createLuminanceRangeMask,
+  createSpotMask,
+  toModifierShape,
+  createModifier,
+  listModifiers,
+  countModifiers,
+  countBrushLayers,
+  modifierBlockedReason,
+  addModifier,
+  updateModifier,
+  removeModifier,
 } from "./develop.js";
 
 // Fixtures here model real op shapes (vignette/crop/hsl/masks) that the
@@ -493,5 +511,77 @@ describe("Grain film stocks (RFC-0022 slice 4)", () => {
   test("`stock` never reaches the GPU uniform (still 8 floats from the five values)", () => {
     const g = getGrain(upsertGrain(/** @type {any} */ ({ schema_version: 1, ops: [] }), { ...grainStockValues("portra400"), stock: "portra400" }));
     expect(Array.from(buildGrainUniformData(g))).toEqual([40, 17, 20, 50, 80, 0, 0, 0]);
+  });
+});
+
+describe("Composable masking model (RFC-0025)", () => {
+  /** @returns {any} */
+  const stack = (/** @type {any[]} */ ...ops) => ({ schema_version: 1, ops });
+  const radial = (/** @type {string} */ id) => ({ ...createRadialGradientMask({ x: 0.5, y: 0.5 }, 0.2, 0.2), id });
+
+  test("toModifierShape drops identity and adjustments, keeps geometry", () => {
+    const shape = /** @type {any} */ (toModifierShape(radial("a")));
+    expect(shape.op).toBe("radial_gradient_mask");
+    expect(shape.center).toEqual({ x: 0.5, y: 0.5 });
+    for (const k of ["id", "exposure", "contrast", "saturation"]) expect(k in shape).toBe(false);
+  });
+
+  test("addModifier appends in order and leaves the input stack untouched", () => {
+    const s0 = stack(radial("a"));
+    const m1 = createModifier("subtract", createBrushMask(), "m1");
+    const m2 = createModifier("intersect", createLuminanceRangeMask(), "m2");
+    const s2 = addModifier(addModifier(s0, "a", m1), "a", m2);
+    expect(listModifiers(/** @type {any} */ (listMasks(s2)[0])).map((m) => m.id)).toEqual(["m1", "m2"]);
+    expect("modifiers" in s0.ops[0]).toBe(false);
+  });
+
+  test("spot and red-eye can neither take nor be a modifier", () => {
+    const spot = createSpotMask({ x: 0.5, y: 0.5, radius: 0.05 }, "s");
+    const s = stack(spot, radial("a"));
+    expect(modifierBlockedReason(s, "s", "radial_gradient_mask")).not.toBeNull();
+    expect(modifierBlockedReason(s, "a", "spot_mask")).not.toBeNull();
+    expect(modifierBlockedReason(s, "a", "red_eye_mask")).not.toBeNull();
+    expect(modifierBlockedReason(s, "a", "linear_gradient_mask")).toBeNull();
+    expect(modifierBlockedReason(s, "nope", "linear_gradient_mask")).not.toBeNull();
+  });
+
+  test("total modifier cap is enforced across masks", () => {
+    let s = stack(radial("a"), radial("b"));
+    for (let i = 0; i < MAX_MODIFIERS; i++) {
+      s = addModifier(s, i % 2 ? "a" : "b", createModifier("add", radial("x"), `m${i}`));
+    }
+    expect(countModifiers(s)).toBe(MAX_MODIFIERS);
+    expect(modifierBlockedReason(s, "a", "radial_gradient_mask")).toMatch(/Maximum/);
+    expect(addModifier(s, "a", createModifier("add", radial("x"))))
+      .toBe(s);
+  });
+
+  test("brush modifiers share the brush-layer budget with brush and spot masks", () => {
+    let s = stack(radial("a"));
+    for (let i = 0; i < MAX_MASKS - 1; i++) s = addMask(s, createBrushMask(`b${i}`));
+    expect(countBrushLayers(s)).toBe(MAX_MASKS - 1);
+    s = addModifier(s, "a", createModifier("subtract", createBrushMask(), "mb"));
+    expect(countBrushLayers(s)).toBe(MAX_MASKS);
+    expect(modifierBlockedReason(s, "a", "brush_mask")).toMatch(/Brush layers/);
+    // a non-brush shape is still allowed
+    expect(modifierBlockedReason(s, "a", "linear_gradient_mask")).toBeNull();
+  });
+
+  test("updateModifier merges into the shape; removeModifier drops the key when empty", () => {
+    let s = addModifier(stack(radial("a")), "a", createModifier("add", radial("x"), "m1"));
+    s = updateModifier(s, "a", "m1", { combine: "subtract", shape: { feather: 77 } });
+    const m = listModifiers(/** @type {any} */ (listMasks(s)[0]))[0];
+    expect(m.combine).toBe("subtract");
+    expect(/** @type {any} */ (m.shape).feather).toBe(77);
+    expect(/** @type {any} */ (m.shape).radiusX).toBe(0.2);
+    s = removeModifier(s, "a", "m1");
+    expect("modifiers" in s.ops[0]).toBe(false);
+  });
+
+  test("removeMask takes its modifiers with it; unrelated masks are untouched", () => {
+    const s = addModifier(stack(radial("a"), radial("b")), "a", createModifier("add", radial("x"), "m1"));
+    const r = removeMask(s, "a");
+    expect(listMasks(r).map((m) => m.id)).toEqual(["b"]);
+    expect(countModifiers(r)).toBe(0);
   });
 });

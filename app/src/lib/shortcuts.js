@@ -38,6 +38,7 @@ export const DEFAULT_SHORTCUTS = {
   toggleOriginal: "\\",
   toggleMaskOverlay: "o",
   toggleMaskChrome: "h",
+  toggleZoom: "z",
 };
 
 /**
@@ -84,6 +85,7 @@ export const SHORTCUT_DEFINITIONS = [
   { id: "toggleOriginal", label: "Before / After Toggle", category: "Develop", defaultKey: "\\" },
   { id: "toggleMaskOverlay", label: "Mask Overlay Toggle", category: "Develop", defaultKey: "o" },
   { id: "toggleMaskChrome", label: "Hide / Show Mask Pins", category: "Develop", defaultKey: "h" },
+  { id: "toggleZoom", label: "Zoom: Fit / 100%", category: "Develop", defaultKey: "z" },
 ];
 
 const STORAGE_KEY = "emulsion_shortcuts_v1";

@@ -135,6 +135,9 @@ All rebindable in Settings → Shortcuts; these are the defaults.
 | `U` | Unflag |
 | `6` / `7` / `8` / `9` | Red / Yellow / Green / Blue color label |
 | `\` | Before/After toggle (Develop) |
+| `Z` | Zoom Fit / 100% (Develop) |
+| `Cmd/Ctrl` + `+` / `-` | Zoom in / out through 50–200% (Develop) |
+| `Cmd/Ctrl` + `0` / `1` | Zoom to Fit / 100% (Develop) |
 | `O` | Mask overlay toggle (Develop) |
 | `H` | Hide/show mask pins (Develop) |
 

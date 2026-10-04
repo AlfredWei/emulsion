@@ -220,6 +220,9 @@
     set showMaskOverlay(value) {
       masks.showMaskOverlay = value;
     },
+    requestZoom(/** @type {import('$lib/zoomMath.js').ZoomAction} */ action) {
+      develop.zoomRequest = { action };
+    },
     get showOriginal() {
       return develop.showOriginal;
     },

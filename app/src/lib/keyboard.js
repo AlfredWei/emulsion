@@ -27,6 +27,7 @@ import { OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
  * @property {boolean} showMaskOverlay
  * @property {boolean} maskOverlaysVisible
  * @property {boolean} showOriginal
+ * @property {(action: import('$lib/zoomMath.js').ZoomAction) => void} requestZoom
  * @property {Set<number>} selectedIds
  * @property {number | null} selectedId
  * @property {{ version_id: number }[]} filteredImages
@@ -100,6 +101,24 @@ export function createKeyboardHandlers(ctx) {
         return;
       }
 
+      // Zoom: Cmd/Ctrl + / - step the ladder (50-200%), Cmd/Ctrl+0 is Fit,
+      // Cmd/Ctrl+1 is 100%. Handled here (not rebindable) because they are
+      // modifier combos, which the key-only shortcut table can't express;
+      // preventDefault also stops the webview's own page zoom.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+        /** @type {import('$lib/zoomMath.js').ZoomAction | null} */
+        let zoomAction = null;
+        if (rawKey === "=" || rawKey === "+") zoomAction = { type: "step", dir: 1 };
+        else if (rawKey === "-" || rawKey === "_") zoomAction = { type: "step", dir: -1 };
+        else if (rawKey === "0") zoomAction = { type: "fit" };
+        else if (rawKey === "1") zoomAction = { type: "actual" };
+        if (zoomAction) {
+          e.preventDefault();
+          ctx.requestZoom(zoomAction);
+          return;
+        }
+      }
+
       // Arrow navigation in Develop: navigate to previous / next photo
       if (!e.metaKey && !e.ctrlKey && !e.altKey) {
         if (rawKey === ctx.shortcuts.nextImage || rawKey === ctx.shortcuts.gridDown || rawKey === "ArrowRight") {
@@ -138,6 +157,11 @@ export function createKeyboardHandlers(ctx) {
       ) {
         e.preventDefault();
         ctx.showMaskOverlay = !ctx.showMaskOverlay;
+        return;
+      }
+      if (key === ctx.shortcuts.toggleZoom?.toLowerCase()) {
+        e.preventDefault();
+        if (!e.repeat) ctx.requestZoom({ type: "toggle" });
         return;
       }
       if (key === ctx.shortcuts.toggleMaskChrome?.toLowerCase()) {

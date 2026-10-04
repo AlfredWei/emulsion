@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Develop zoom follow-up: keyboard shortcuts + overlays that no longer scroll (2026-10-04)
+
+Closes two of the gaps listed in the entry below (PR #203).
+
+- **Keyboard**: `Z` toggles Fit/100% (rebindable, `toggleZoom` in Settings); `Cmd/Ctrl` + `+`/`-` step the ladder, `Cmd/Ctrl+0` Fit, `Cmd/Ctrl+1` 100% (fixed: modifier combos aren't expressible in the key-only shortcut table; `preventDefault` also stops the webview's page zoom). Routed as a one-shot `develop.zoomRequest` (a fresh object per press) that `DevelopCanvas` applies about the viewport centre; inert in Library, while a dialog is open, and `Z` ignores auto-repeat. +2 keyboard tests (728 total).
+- **Overlays**: before/after label, soft-proof overlay + badge, Smart Preview banner, loading/error/CPU-fallback banners moved from `.canvas-wrap` (the scroller) to `.canvas-stage`, so they stay in place when zoomed. The mask overlay stays in the scroller (positioned against the canvas box); the CPU-fallback image stays too (a padded flex item; it never zooms).
+- **Verified** in the browser harness (real canvas, deleted before commit): zoom requests step/actual/toggle/fit; label, soft-proof badge/overlay and HUD rects are unchanged after scrolling 500/400 px and none are inside the scroller.
+- **Still open**: real Tauri window + real WKWebView pinch and the e2e suite not run; Retina `100%` is CSS px (a product decision, left alone); Library Loupe/Compare keep their own zoom ranges.
+
 ## Develop zoom: scalar model, 50–200% range, corner HUD + navigator (2026-10-04)
 
 User report: zooming in made the "100%" badge appear *on the photo*; wanted it in the bottom-right corner, a Lightroom-style small reference rect showing the region being viewed, a 50%–200% range, and a mechanism for the zoom scalar.

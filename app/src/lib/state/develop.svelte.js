@@ -199,6 +199,10 @@ export class DevelopStore {
   // a press-and-hold -- simpler and more reliable to implement correctly,
   // and matches Lightroom's own default behavior for this exact key.
   showOriginal = $state(false);
+  // One-shot zoom command from the keyboard (see keyboard.js). A fresh object
+  // per request so repeating the same action still re-triggers DevelopCanvas's
+  // effect; the canvas owns the zoom state itself.
+  zoomRequest = $state(/** @type {{ action: import('$lib/zoomMath.js').ZoomAction } | null} */ (null));
 
   // M4 Slice 3: holding Space temporarily overrides whatever tool is
   // active so the user can pan a zoomed-in view without switching tools --

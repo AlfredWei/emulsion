@@ -181,10 +181,23 @@ SCUNet beat the blur baseline on every photo at every level (+6 to +13 dB over t
 
 **Super-resolution (Real-ESRGAN `realesr-general-x4v3`):** the reference downscaled 4× (bicubic), then upscaled 4× by the model and by bicubic. Means: bicubic **26.1 dB / 0.788**, Real-ESRGAN **24.8 / 0.791**. Real-ESRGAN had *lower* PSNR than bicubic on 8 of 8 photos and higher SSIM on 4 of 8. This is the expected behaviour of a perceptually-tuned model, so the numbers cannot decide; **by eye** it is clearly crisper than bicubic but **invents detail and over-sharpens**: balcony railings become hard black stripes, conifer needles turn painterly, thin wires get heavier. 0.37 s for a 250×156 input (1000×624 output); full-size cost was not measured.
 
+**Real camera noise (added the same day):** the Natural Image Noise Dataset (NIND, Trougnouf, CC BY 4.0, Wikimedia Commons) shoots the same scene at ISO 200 and ISO 6400, so real noise comes with a reference. Six scenes (`stairs`, `tree1`, `fruits`, `Leonidas`, `directions`, `chapel`; sources and credits in `quality-real-noise-sources.json`), a 1024×1024 crop each at or near native resolution (the files were already aligned: phase-correlation shift 0,0 in all six), per-channel gain/offset tone match of the ISO 6400 shot to the reference, scored against the ISO 200 file, which still has its own (lower) noise, so absolute PSNR is a lower bound for all methods (`quality_real_noise.py`, `quality-real-noise-results.json`, crops `quality-real-noise-crops.jpg`). Means over 6 scenes:
+
+| | PSNR / SSIM vs ISO 200 |
+|---|---|
+| ISO 6400 as shot | 26.5 dB / 0.731 |
+| Gaussian blur σ 1.2 | 29.6 / 0.859 |
+| Gaussian blur σ 2.0 | 29.3 / 0.801 |
+| **SCUNet** | **32.7 / 0.886** |
+
+SCUNet has the best PSNR in all six scenes (+6.2 dB over the noisy shot, +3 dB over the best blur); its SSIM is higher than both blurs in four scenes and lower in two (`stairs`, `Leonidas`, where a plain blur scores higher). About 16 s per 1 MP crop. **By eye** it behaves well on edges and detail (a logo's contours stay sharp, foliage keeps its structure where blur destroys it), but on **flat, finely textured surfaces (stone, plaster) it replaces the real grain with a waxy smoothness** that the ISO 200 reference does not have, and it shifts tone/colour slightly (a greyer, lighter wall in `stairs`, a warmer wall in `chapel`; magnitude not measured). So the synthetic-noise result carries over to real sensor noise, with the caveat that it is an aggressive smoother: the product needs a strength/blend control, and 'preserve texture' will matter to photographers.
+
+**Still not covered by real files:** RAW-domain noise (these are JPEGs after the dataset's own processing), very high ISO beyond 6400, long-exposure/hot-pixel noise, and more than six scenes.
+
 **What this does and does not establish:**
 
-1. **SCUNet is a strong denoiser on Gaussian-like, signal-dependent noise** and clearly better than plain smoothing. This supports §5.3 (explicit action with a crop preview), not a live slider.
-2. **Not established: real camera noise.** The noise here is synthetic and close to what SCUNet's training degradations contain; real high-ISO files (chroma blotches, banding, hot pixels, RAW-domain noise) were not tested. Likewise 'bicubic ×4 of a clean photo' is an idealised degradation for super-resolution. Both need real files before any claim of product quality.
+1. **SCUNet is a strong denoiser on synthetic and on real (NIND ISO 6400) noise** and clearly better than plain smoothing. This supports §5.3 (explicit action with a crop preview), not a live slider.
+2. **Partly established: real camera noise** (six NIND scenes at ISO 6400, above). The synthetic-noise table alone was optimistic: on real noise the gain over a blur is +3 dB, not +6 to +13, and texture is smoothed. RAW-domain noise and hot pixels remain untested. 'Bicubic ×4 of a clean photo' is an idealised degradation for super-resolution; real low-resolution or soft files were not tested.
 3. **Real-ESRGAN's hallucinated detail is a product risk for a photo editor** (it changes what the photograph shows). If offered, it needs an explicit 'enhance' framing, a before/after view, and its weights licence resolved (§5.4); a subtle strength blend with bicubic is worth testing.
 4. Single machine, eight photos, one noise realisation per level, no perceptual metric (LPIPS needs more weights to be fetched), no raters.
 

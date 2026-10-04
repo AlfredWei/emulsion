@@ -1,0 +1,134 @@
+[
+ {
+  "file": "noise_photos/stairs_ISO200_native.jpg",
+  "title": "File:NIND stairs ISO200.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_stairs_ISO200.jpg",
+  "bytes": 7061064,
+  "sha256": "a8d936e3b8a8f93214b51f7825db75ef4b7533c94ec17fefa5d7637286c760a9",
+  "mode": "native",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/stairs_ISO6400_native.jpg",
+  "title": "File:NIND stairs ISO6400.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_stairs_ISO6400.jpg",
+  "bytes": 11568096,
+  "sha256": "4f15bbc2652fd7ab0b81dc1141d690979a720b7e67a18e2aaa10368f46aa461e",
+  "mode": "native",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/tree1_ISO200_native.jpg",
+  "title": "File:NIND tree1 ISO200.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_tree1_ISO200.jpg",
+  "bytes": 11015146,
+  "sha256": "fd2719d182fe513a9331a2b265aa357fa1815aa1bbfcbfde5991e4bdb4e47e29",
+  "mode": "native",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/tree1_ISO6400_native.jpg",
+  "title": "File:NIND tree1 ISO6400.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_tree1_ISO6400.jpg",
+  "bytes": 13115437,
+  "sha256": "65479ead11d6010eef0dbdf4b5ae0bef8ef36850d30b9732318bc2386cc88f10",
+  "mode": "native",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/fruits_ISO200_2000.jpg",
+  "title": "File:NIND fruits ISO200.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_fruits_ISO200.jpg",
+  "bytes": 9798729,
+  "sha256": "3330f954d94e626326c31fbc7d50634c703f0149c72431670ad7e9cb34c86a15",
+  "mode": "thumb2000",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/fruits_ISO6400_2000.jpg",
+  "title": "File:NIND fruits ISO6400.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_fruits_ISO6400.jpg",
+  "bytes": 18940382,
+  "sha256": "1e09970582c6c0f147891a370da85891af6e81da5133053cedaf575a5dd7dd52",
+  "mode": "thumb2000",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/Leonidas_ISO200_2000.jpg",
+  "title": "File:NIND Leonidas ISO200.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_Leonidas_ISO200.jpg",
+  "bytes": 10129691,
+  "sha256": "8bc8eee534ffbbb655114dce9a11cd3791a4cf52edf3d1dcb9e32b92488cad53",
+  "mode": "thumb2000",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/Leonidas_ISO6400_2000.jpg",
+  "title": "File:NIND Leonidas ISO6400.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_Leonidas_ISO6400.jpg",
+  "bytes": 16586831,
+  "sha256": "007e0ef6a583e7edb79e8ff48e0f575d0e2df9ed396ae36c38f0cee78b4032f0",
+  "mode": "thumb2000",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/directions_ISO200_2000.jpg",
+  "title": "File:NIND directions ISO200.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_directions_ISO200.jpg",
+  "bytes": 2829188,
+  "sha256": "9699b9f87ed18bd9e619d496d057135c680aae418ea54df57d23b21bc2a98894",
+  "mode": "thumb2000",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/directions_ISO6400_2000.jpg",
+  "title": "File:NIND directions ISO6400.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_directions_ISO6400.jpg",
+  "bytes": 4270230,
+  "sha256": "7beff209d19bc3caf45c105e093e6b767c68bd3acdf94c2e1e6e312fe612e601",
+  "mode": "thumb2000",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/chapel_ISO200_2000.jpg",
+  "title": "File:NIND chapel ISO200.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_chapel_ISO200.jpg",
+  "bytes": 1977398,
+  "sha256": "0fb8de2f78dd8cf4932c60e652f40a131a563f767b8f56b4f0a4bf4ba71aee75",
+  "mode": "thumb2000",
+  "credit": "Own work"
+ },
+ {
+  "file": "noise_photos/chapel_ISO6400_2000.jpg",
+  "title": "File:NIND chapel ISO6400.jpg",
+  "license": "CC BY 4.0",
+  "author": "Trougnouf",
+  "page": "https://commons.wikimedia.org/wiki/File:NIND_chapel_ISO6400.jpg",
+  "bytes": 3506300,
+  "sha256": "b22557bf07d96834e75c58f473b4d4497ea80cac699153026a9343e6b47dc245",
+  "mode": "thumb2000",
+  "credit": "Own work"
+ }
+]

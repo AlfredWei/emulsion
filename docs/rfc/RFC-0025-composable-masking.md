@@ -1,6 +1,6 @@
 # RFC-0025: Composable masking — add / subtract / intersect within one mask (M6 slice 1)
 
-- Status: Slice 1a (engine) implemented; 1b (UI) and 1c not started. See "Corrected during implementation" below.
+- Status: Slices 1a (engine), 1b (UI) and 1c (polish) implemented; verification round done, see the end of this file. See "Corrected during implementation" below.
 - Date: 2026-10-04
 - Relates to: [PRD MILESTONES §M6](../../PRD/MILESTONES.md) ("Composable masking: add/subtract/intersect multiple masks (AI-generated or manual) in one edit"), [RFC-0023](RFC-0023-on-device-ai-inference.md) §5.5 ("no model; mask-engine work in M6's own scope"), [RFC-0009](RFC-0009-page-svelte-state-design.md) (mask store), M3 mask slices 5–7, M4 spot/red-eye
 
@@ -121,7 +121,7 @@ No prototype, no timing (CPU per-pixel cost of the fold, GPU cost of the nested 
 - **Packing moved** out of `renderFrame.js` into a pure `gpu/maskPack.js` (unit-tested without a GPU), plus `rasterTargets` for brush modifiers' raster layers (keyed by modifier id).
 - **Verified on a real GPU** ([gpu_mask_probe.js](RFC-0025-appendix/gpu_mask_probe.js); Apple / Metal 3; the shipped `fs_mask` rendered over a 64x64 image and compared with the CPU path's pixels, five modifier scenes): **max difference 0 of 255** for radial; linear + intersect luminance + add radial; colour minus linear; and a two-mask stack where the second mask's range modifier reads the first mask's result. **The scenes with a brush differ**: max 54, 84 of 12288 channels over 2, but a *stand-alone* hard-edged brush mask (hardness 100) shows the identical numbers, so this is the existing CPU-formula vs Canvas2D-rasterizer difference at a hard dab edge, **not caused by modifiers** (hardness 50: max 1). It was not previously recorded. *Re-measured at 512 px in slice 1c: 744 of 786k channels, all on the 1-px edge ring; judged immaterial and not fixed — see "Slice 1c" below.*
 - **Real app wiring** (a throwaway browser harness mounting the real `DevelopCanvas`, deleted before commit): `initGpu`, bind group with the new buffer, per-frame packing and brush-modifier rasterization ran without a WebGPU validation error and drew the expected result (radial, minus a brush disc, intersected with a left-to-right gradient; the selected-mask fill follows the *combined* weight).
-- **Product-vs-min/max (§7.1) is still open**: nothing here compares the formula families on a photograph.
+- **Product-vs-min/max (§7.1)**: open here; resolved in the verification round below.
 - **Not done / not verified**: no UI (1b); e2e parity scenario not run (`tauri-driver` missing, CI first); only one GPU; no timing of the nested loop; `MAX_MODIFIERS = 16` unmeasured; presets still exclude masks so there is no preset surface; an older build ignoring `modifiers` (§5.4) is unchanged.
 
 ## Corrected during implementation (slice 1b, 2026-10-05)
@@ -137,3 +137,12 @@ No prototype, no timing (CPU per-pixel cost of the fold, GPU cost of the nested 
 - **§5.5 does not apply**: presets, Copy Settings and Paste exclude all mask kinds, so shape ids cannot collide across images; snapshots and the catalog keep the stack as opaque JSON and round-trip it (tests added).
 - **The hard-brush difference is a 1-px edge ring** (512 px probe: 744 of 786k channels, max 58; all other scenes max 1/255) from Canvas2D's 0.5 px ramp vs the analytic step. It does not grow with image size and is **not fixed**.
 - **Open and tracked** in PROGRESS "Milestone-end verification backlog": real window, e2e, keyboard-only, range-shape click-through, 8 brush layers, second GPU and timing, product-vs-min/max, older-build behaviour, undo/redo. Per-shape eye and reordering are later slices.
+
+## Verification round (2026-10-05, after slice 1c)
+
+- **§7.1 resolved: the product family stays.** Both families rendered on a real photograph (Field-corn) with a soft radial and a soft gradient overlapping, subtract and intersect: max |Δweight| 0.25, mean ~0.048. The min/max family leaves a visible crease where the two edges cross; the product family is smooth. Cheap to change only before many stored edits exist, so this closes it unless the user objects.
+- **§5.4 confirmed by reading the pre-1a parser**: `parse_masks` reads each field with `Value::get`, so an older build ignores `modifiers` and renders the base mask alone (never an error, never a crash); the catalog and snapshots store the stack as opaque JSON, so the shapes survive a round trip through an older build that does not edit that mask. **No schema bump.** (Editing that mask in the older build spreads the old fields back, so it keeps `modifiers` only if the older frontend spreads the op; not relied on.)
+- **Timing on a real GPU** ([gpu_mask_timing.js](RFC-0025-appendix/gpu_mask_timing.js), Apple / Metal 3, 2048x1365): worst case (8 masks x 16 modifiers) 3.2-3.3 ms per frame vs a 1.8 ms baseline; far inside the 100 ms budget.
+- **Keyboard-only flow** found two real defects, both fixed: focus was lost after choosing a menu item or removing a shape (now returns to *Add shape*), and the panel overflowed at 16 shapes (now `max-height` with scroll).
+- **e2e in the real Tauri window** (`develop-mask-shapes.e2e.js`, Apple / Metal, WKWebView): a mask with subtract + add + intersect shapes renders within 4/255 of the CPU path at a mid-weight patch, and the Shapes UI add / change-combine / remove flow persists the expected stack each step. CI runners have no WebGPU, so both scenarios skip there. First attempt failed on a `$`-based wait (5 s window-focus tax per call) and a combine label that carries a symbol prefix; fixed.
+- **Still open** (PROGRESS backlog): a second GPU, a visual look at the native `<select>` popup and panel width, and undo/redo through shape ops in the real app.

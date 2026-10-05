@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDevelopFor, clickEl } from "../helpers.js";
+import { openDevelopFor } from "../helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(__dirname, "../../../test_image/Field-corn-Liechtenstein-landscape.jpg");
@@ -29,6 +29,9 @@ const ROAD_PATCH = { u: 0.15, v: 0.96 };
  *    (docs/rfc/RFC-0025-appendix/gpu_mask_probe.js), not here.
  * 2. The Shapes UI: add a subtract luminance-range shape, change it to
  *    intersect, remove it, checking the persisted edit stack each time.
+ *
+ * Both need WebGPU (the mask tools are disabled without it), so both skip on
+ * a runner that has none -- CI's runners have none, so run them locally.
  *
  * Both start from a known stack written with `set_edit_stack` BEFORE Develop
  * opens (see develop-cpu-gpu-parity.e2e.js for why the order matters).
@@ -83,6 +86,31 @@ describe("Develop mask shapes (composable masking)", () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     throw new Error(`${what}: persisted stack never matched within 8s; last = ${JSON.stringify(last)}`);
+  }
+
+  /** Clicks the first element matching `selector` (optionally also matching `text`), via `execute`. */
+  async function domClick(/** @type {string} */ selector, /** @type {RegExp | null} */ text = null) {
+    const ok = await browser.execute(
+      (sel, src) => {
+        const re = src ? new RegExp(src, "i") : null;
+        const el = Array.from(document.querySelectorAll(sel)).find((e) => !re || re.test(e.textContent ?? ""));
+        if (!el) return false;
+        /** @type {HTMLElement} */ (el).click();
+        return true;
+      },
+      selector,
+      text ? text.source : null,
+    );
+    if (!ok) throw new Error(`nothing to click for ${selector}${text ? ` / ${text}` : ""}`);
+  }
+
+  async function waitForDom(/** @type {() => boolean} */ pred, /** @type {string} */ what) {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      if (await browser.execute(pred)) return;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    throw new Error(`${what}: never appeared within 15s`);
   }
 
   async function readCpuPixel(/** @type {string} */ previewPath, /** @type {number} */ u, /** @type {number} */ v) {
@@ -201,33 +229,28 @@ describe("Develop mask shapes (composable masking)", () => {
     expect(Math.abs(cpuBare.r - cpu.r) + Math.abs(cpuBare.g - cpu.g) + Math.abs(cpuBare.b - cpu.b)).toBeGreaterThan(12);
   });
 
-  it("Shapes UI: add a subtract shape, change it to intersect, remove it", async () => {
+  it("Shapes UI: add a subtract shape, change it to intersect, remove it", async function () {
+    // The mask tools are disabled while WebGPU is unavailable (develop-gpu-fallback.e2e.js), as on CI runners.
+    if (!gpuAvailable) this.skip();
     const stack = baseStack();
     delete stack.ops[0].modifiers; // a plain mask: the UI adds the shapes itself
     await openWithStack(stack);
 
     // The tool strip's Luminance Range button creates a mask at once and selects
-    // it, which opens the panel (no canvas gesture needed).
-    const strip = await $('[aria-label="Luminance Range"]');
-    await strip.waitForExist({ timeout: 20000 });
-    await clickEl(strip);
-    const panel = await $('[role="dialog"][aria-label$="adjustments"]');
-    await panel.waitForExist({ timeout: 10000 });
+    // it, which opens the panel (no canvas gesture needed). DOM work goes through
+    // `execute` (not `$`): every `$` pays the service's 5 s window-focus tax.
+    await waitForDom(() => !!document.querySelector('[aria-label="Luminance Range"]'), "tool strip");
+    await domClick('[aria-label="Luminance Range"]');
+    await waitForDom(() => !!document.querySelector('[role="dialog"][aria-label$="adjustments"]'), "mask panel");
 
     const countMasks = (/** @type {any} */ s) => s.ops.filter((/** @type {any} */ o) => String(o.op).endsWith("_mask")).length;
     const afterCreate = await waitForStack((s) => countMasks(s) === 2, "luminance mask created");
     const lumaId = afterCreate.ops.find((/** @type {any} */ o) => o.op === "luminance_range_mask").id;
 
     // Add shape > Subtract > Luminance range (the one shape created without a canvas gesture).
-    await clickEl(await $(".addbtn .add"));
-    await browser.execute(() => {
-      const seg = Array.from(document.querySelectorAll(".addbtn .seg button")).find((b) => b.textContent.trim().toLowerCase().startsWith("subtract"));
-      /** @type {HTMLElement} */ (seg).click();
-    });
-    await browser.execute(() => {
-      const opt = Array.from(document.querySelectorAll('.addbtn [role="menuitem"]')).find((b) => /luminance/i.test(b.textContent));
-      /** @type {HTMLElement} */ (opt).click();
-    });
+    await domClick(".addbtn .add");
+    await domClick(".addbtn .seg button", /subtract/i);
+    await domClick('.addbtn [role="menuitem"]', /luminance/i);
     let s = await waitForStack(
       (st) => (st.ops.find((/** @type {any} */ o) => o.id === lumaId)?.modifiers ?? []).length === 1,
       "shape added",
@@ -249,7 +272,7 @@ describe("Develop mask shapes (composable masking)", () => {
     expect(s.ops.find((/** @type {any} */ o) => o.id === lumaId).modifiers[0].id).toBe(mod.id);
 
     // Remove it: the mask keeps no `modifiers` key at all.
-    await clickEl(await $('.shapes button[aria-label="Remove shape"]'));
+    await domClick('.shapes button[aria-label="Remove shape"]');
     s = await waitForStack((st) => st.ops.find((/** @type {any} */ o) => o.id === lumaId)?.modifiers === undefined, "shape removed");
     expect(Object.hasOwn(s.ops.find((/** @type {any} */ o) => o.id === lumaId), "modifiers")).toBe(false);
   });

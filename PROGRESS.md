@@ -15,15 +15,17 @@ Closes the planned composable-masking slices (1a engine #207, 1b UI #209; the pe
 
 Per the user (2026-10-05): merge with these unverified, but verify them all at the milestone end.
 
-1. **Real Tauri window** for the Shapes UI (panel at its real width, long shape names, native `<select>` popup, the canvas at real zoom) — 1b.
-2. **e2e**: a CPU/GPU parity scenario with a subtract and an intersect shape (extend `develop-cpu-gpu-parity.e2e.js`, run on CI) and one UI scenario (add a shape, change combine, remove) — 1a/1b; `tauri-driver` is missing locally.
-3. **Keyboard-only use** of the Add-shape menu and the Shapes rows (Tab order, Esc, focus return), and the new Esc/focus-out handling in a browser — 1b/1c.
-4. **Colour-range and luminance-range shapes** clicked through in the real UI (place, re-sample on a shape) — action-tested only so far — 1b.
-5. **Eight brush layers in use** (mask + shape budget; native-resolution memory on the largest frame) and the **16-modifier cap** end to end — 1a/1b.
-6. **A second GPU** (Windows/D3D, an Intel/AMD part) for `gpu_mask_probe.js`, plus timing of the nested modifier loop (8 masks x 16 modifiers) vs the 100 ms budget — 1a.
-7. **Product vs min/max** fold formulas compared on a real photograph with two soft edges overlapping (RFC-0025 §7.1; cheap to change only before many stored edits exist) — 1a.
-8. **Older builds ignore `modifiers`** (RFC §5.4): confirm the behaviour and decide whether a catalog schema bump is wanted — 1a.
-9. Undo/redo through shape add/remove/combine changes and snapshot restore in the real app (history labels `Add Shape`, `Edit Mask Shape`, `Remove Mask Shape`) — 1b.
+Status after the 2026-10-05 verification round:
+
+1. **Real Tauri window** for the Shapes UI — PARTLY DONE: the e2e spec in 2 drives the real window (WKWebView, real GPU) and passes. Still OPEN: a *visual* look at the real panel width and the native `<select>` popup.
+2. **e2e** — `app/e2e/specs/develop-mask-shapes.e2e.js` written (CPU/GPU parity with subtract + add + intersect shapes; Shapes UI add / change combine / remove). **Both need WebGPU, which CI runners lack (they skip there), so they only run locally** (`npx wdio run ./e2e/wdio.conf.js --spec ./e2e/specs/develop-mask-shapes.e2e.js` after `npm run test:e2e`'s build step). DONE: both pass locally in the real Tauri window on Apple/Metal (parity within 4/255 at a mid-weight patch, and the stripped-modifiers render differs by >12 levels). They write the dev catalog's fixture row like the parity spec does.
+3. **Keyboard-only use** — DONE in the browser; found and fixed two defects (focus return, panel overflow). The native `<select>` popup in WKWebView stays with item 1.
+4. **Colour-range and luminance-range shapes clicked through** — DONE in the browser harness (place, re-sample on a shape).
+5. **Eight brush layers and the 16-modifier cap** — DONE in the browser harness, no WebGPU errors.
+6. **Second GPU** — OPEN, impossible locally (Apple only; CI has no WebGPU). **Timing** — DONE: 3.2-3.3 ms worst case (8 masks x 16 modifiers) vs 1.8 ms baseline at 2048x1365.
+7. **Product vs min/max** — DONE: product family kept (RFC-0025 verification round).
+8. **Older builds ignore `modifiers`** — DONE by reading the pre-1a parser (`Value::get`, unknown fields ignored); no schema bump.
+9. **Undo/redo and snapshot restore through shape ops in the real app** — OPEN (covered by action and persistence tests only).
 
 ## M6 slice 1b (composable masking UI): the Shapes list, per RFC-0025 (2026-10-05)
 

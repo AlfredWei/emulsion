@@ -1,5 +1,5 @@
 <script>
-  import { OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
+  import { OVERLAY_CAPABLE_MASK_OPS, MAX_MASKS, MAX_MODIFIERS, COMBINE_MODES, isModifiableOp, listModifiers } from "$lib/api/develop.js";
   import { nudgeValue } from "$lib/stepMath.js";
 
   /**
@@ -19,9 +19,75 @@
    *   onShowOverlayChange: (value: boolean) => void,
    *   isResamplingColor: boolean,
    *   onResampleColor: () => void,
+   *   selectedShapeId?: string | null,
+   *   onSelectShape?: (id: string | null) => void,
+   *   onShapeChange?: (id: string, patch: Record<string, unknown>) => void,
+   *   onShapeCombine?: (id: string, combine: import('$lib/api/develop.js').Combine) => void,
+   *   onRemoveShape?: (id: string) => void,
+   *   onAddShape?: (combine: import('$lib/api/develop.js').Combine, shapeOp: any) => void,
+   *   shapeBlockedReason?: (shapeOp: string) => string | null,
+   *   armedShape?: { combine: import('$lib/api/develop.js').Combine, tool: string } | null,
+   *   modifierCount?: number,
+   *   brushLayers?: number,
    * }}
    */
-  let { mask, onChange, onDelete, onClose, showMaskOverlay, onShowOverlayChange, isResamplingColor, onResampleColor } = $props();
+  let {
+    mask,
+    onChange,
+    onDelete,
+    onClose,
+    showMaskOverlay,
+    onShowOverlayChange,
+    isResamplingColor,
+    onResampleColor,
+    selectedShapeId = null,
+    onSelectShape = () => {},
+    onShapeChange = () => {},
+    onShapeCombine = () => {},
+    onRemoveShape = () => {},
+    onAddShape = () => {},
+    shapeBlockedReason = () => null,
+    armedShape = null,
+    modifierCount = 0,
+    brushLayers = 0,
+  } = $props();
+
+  // Composable masking (RFC-0025): the mask's adjustments always live on the mask itself; the
+  // shape controls below (Feather, ranges, colour, Invert) edit the SELECTED shape -- the base
+  // shape (the mask's own fields) or one of its modifiers.
+  const SHAPE_NAMES = /** @type {Record<string, string>} */ ({
+    linear_gradient_mask: "Linear gradient",
+    radial_gradient_mask: "Radial",
+    brush_mask: "Brush",
+    luminance_range_mask: "Luminance range",
+    color_range_mask: "Colour range",
+  });
+  const SHAPE_ICONS = /** @type {Record<string, string>} */ ({
+    linear_gradient_mask: "▭",
+    radial_gradient_mask: "◔",
+    brush_mask: "✎",
+    luminance_range_mask: "◐",
+    color_range_mask: "◍",
+  });
+  const COMBINE_LABELS = /** @type {Record<string, string>} */ ({ add: "+ Add", subtract: "− Subtract", intersect: "∩ Intersect" });
+  const ARM_HINTS = /** @type {Record<string, string>} */ ({
+    linear_gradient: "Drag on the image to place the gradient.",
+    radial_gradient: "Drag on the image to place the ellipse.",
+    brush: "Paint on the image to draw the shape.",
+    color_range: "Click a colour on the image.",
+  });
+  let shapes = $derived(listModifiers(mask));
+  let editShape = $derived(shapes.find((x) => x.id === selectedShapeId) ?? null);
+  /** Fields of the shape being edited (the mask itself for the base shape). */
+  let edit = $derived(/** @type {any} */ (editShape ? editShape.shape : mask));
+  /** @param {Record<string, unknown>} patch */
+  function onEdit(patch) {
+    if (editShape) onShapeChange(editShape.id, patch);
+    else onChange(patch);
+  }
+  let menuOpen = $state(false);
+  let addMode = $state(/** @type {import('$lib/api/develop.js').Combine} */ ("subtract"));
+  const SHAPE_ORDER = ["radial_gradient_mask", "linear_gradient_mask", "brush_mask", "luminance_range_mask", "color_range_mask"];
 
   // A REAL per-kind branch, not a free ride -- unlike linear vs. radial
   // (where every field below is common to both kinds), brush masks have
@@ -162,7 +228,69 @@
       {@render stepButtons(mask.saturation, 1, -100, 100, (v) => onChange({ saturation: v }))}
     </div>
   {/if}
-  {#if mask.op !== "brush_mask" && mask.op !== "luminance_range_mask" && mask.op !== "color_range_mask"}
+  {#if isModifiableOp(mask.op)}
+    <!-- Composable masking (RFC-0025): what selects the pixels. The base shape first, then each
+         modifier in evaluation order; the rows pick which shape the controls below edit. -->
+    <div class="sep"></div>
+    <div class="sec"><span>Shapes</span><span class="n">{modifierCount} / {MAX_MODIFIERS} · brush {brushLayers} / {MAX_MASKS}</span></div>
+    <div class="shapes">
+      <div class="shape" class:sel={editShape === null}>
+        <button type="button" class="pick" onclick={() => onSelectShape(null)}>
+          <span class="ico">{SHAPE_ICONS[mask.op]}</span><span class="nm">{SHAPE_NAMES[mask.op]}</span>
+        </button>
+        <span class="base">base</span>
+      </div>
+      {#each shapes as shape (shape.id)}
+        <div class="shape" class:sel={shape.id === selectedShapeId}>
+          <button type="button" class="pick" onclick={() => onSelectShape(shape.id)}>
+            <span class="ico">{SHAPE_ICONS[shape.shape.op]}</span><span class="nm">{SHAPE_NAMES[shape.shape.op]}</span>
+          </button>
+          <select
+            class="combine {shape.combine}"
+            aria-label="Combine mode"
+            value={shape.combine}
+            onchange={(e) => onShapeCombine(shape.id, /** @type {any} */ (e.currentTarget.value))}
+          >
+            {#each COMBINE_MODES as m (m)}<option value={m}>{COMBINE_LABELS[m]}</option>{/each}
+          </select>
+          <button type="button" class="x" title="Remove shape" aria-label="Remove shape" onclick={() => onRemoveShape(shape.id)}>×</button>
+        </div>
+      {/each}
+    </div>
+    {#if armedShape}
+      <div class="hint">{COMBINE_LABELS[armedShape.combine]}: {ARM_HINTS[armedShape.tool] ?? ""}</div>
+    {/if}
+    <div class="addbtn">
+      <button type="button" class="add" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>＋ Add shape ▾</button>
+      {#if menuOpen}
+        <div class="menu" role="menu">
+          <div class="seg">
+            {#each COMBINE_MODES as m (m)}
+              <button type="button" class:on={addMode === m} onclick={() => (addMode = m)}>{COMBINE_LABELS[m]}</button>
+            {/each}
+          </div>
+          {#each SHAPE_ORDER as op (op)}
+            {@const why = shapeBlockedReason(op)}
+            <button
+              type="button"
+              role="menuitem"
+              class="opt"
+              disabled={why !== null}
+              title={why ?? ""}
+              onclick={() => {
+                menuOpen = false;
+                onAddShape(addMode, op);
+              }}
+            >{SHAPE_NAMES[op]}{#if why}<span class="why">{why}</span>{/if}</button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    {#if shapes.length > 0}
+      <div class="sec"><span>Editing: {SHAPE_NAMES[edit.op]}</span></div>
+    {/if}
+  {/if}
+  {#if edit.op !== "brush_mask" && edit.op !== "luminance_range_mask" && edit.op !== "color_range_mask"}
     <div class="row">
       <label for="mask-feather">Feather</label>
       <input
@@ -171,15 +299,15 @@
         min="0"
         max="100"
         step="1"
-        value={mask.feather}
-        oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
+        value={edit.feather}
+        oninput={(e) => onEdit({ feather: Number(e.currentTarget.value) })}
       />
-      <span class="val">{mask.feather}</span>
-      {@render stepButtons(mask.feather, 1, 0, 100, (v) => onChange({ feather: v }))}
+      <span class="val">{edit.feather}</span>
+      {@render stepButtons(edit.feather, 1, 0, 100, (v) => onEdit({ feather: v }))}
     </div>
   {/if}
 
-  {#if mask.op === "luminance_range_mask"}
+  {#if edit.op === "luminance_range_mask"}
     <!-- Min/Max/Feather, not the shared Feather row above -- this kind's
          `feather` means a band WIDTH around two edges, a different
          concept from every other kind's single-boundary feather. The
@@ -196,11 +324,11 @@
         min="0"
         max="100"
         step="1"
-        value={mask.rangeMin}
-        oninput={(e) => onChange({ rangeMin: Number(e.currentTarget.value) })}
+        value={edit.rangeMin}
+        oninput={(e) => onEdit({ rangeMin: Number(e.currentTarget.value) })}
       />
-      <span class="val">{mask.rangeMin}</span>
-      {@render stepButtons(mask.rangeMin, 1, 0, 100, (v) => onChange({ rangeMin: v }))}
+      <span class="val">{edit.rangeMin}</span>
+      {@render stepButtons(edit.rangeMin, 1, 0, 100, (v) => onEdit({ rangeMin: v }))}
     </div>
     <div class="row">
       <label for="mask-range-max">Max</label>
@@ -211,11 +339,11 @@
         min="0"
         max="100"
         step="1"
-        value={mask.rangeMax}
-        oninput={(e) => onChange({ rangeMax: Number(e.currentTarget.value) })}
+        value={edit.rangeMax}
+        oninput={(e) => onEdit({ rangeMax: Number(e.currentTarget.value) })}
       />
-      <span class="val">{mask.rangeMax}</span>
-      {@render stepButtons(mask.rangeMax, 1, 0, 100, (v) => onChange({ rangeMax: v }))}
+      <span class="val">{edit.rangeMax}</span>
+      {@render stepButtons(edit.rangeMax, 1, 0, 100, (v) => onEdit({ rangeMax: v }))}
     </div>
     <div class="row">
       <label for="mask-range-feather">Feather</label>
@@ -225,15 +353,15 @@
         min="0"
         max="100"
         step="1"
-        value={mask.feather}
-        oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
+        value={edit.feather}
+        oninput={(e) => onEdit({ feather: Number(e.currentTarget.value) })}
       />
-      <span class="val">{mask.feather}</span>
-      {@render stepButtons(mask.feather, 1, 0, 100, (v) => onChange({ feather: v }))}
+      <span class="val">{edit.feather}</span>
+      {@render stepButtons(edit.feather, 1, 0, 100, (v) => onEdit({ feather: v }))}
     </div>
   {/if}
 
-  {#if mask.op === "color_range_mask"}
+  {#if edit.op === "color_range_mask"}
     <!-- Swatch + Range/Feather, not the shared Feather row above -- same
          reasoning as luminance range's own dedicated block: this kind's
          `feather` means a transition band beyond a color-distance
@@ -248,7 +376,7 @@
       <div
         id="mask-color-swatch"
         class="color-swatch"
-        style="background: rgb({Math.round(mask.refColor.r * 255)}, {Math.round(mask.refColor.g * 255)}, {Math.round(mask.refColor.b * 255)})"
+        style="background: rgb({Math.round(edit.refColor.r * 255)}, {Math.round(edit.refColor.g * 255)}, {Math.round(edit.refColor.b * 255)})"
       ></div>
       <button
         class="resample"
@@ -273,11 +401,11 @@
         min="0"
         max="100"
         step="1"
-        value={mask.range}
-        oninput={(e) => onChange({ range: Number(e.currentTarget.value) })}
+        value={edit.range}
+        oninput={(e) => onEdit({ range: Number(e.currentTarget.value) })}
       />
-      <span class="val">{mask.range}</span>
-      {@render stepButtons(mask.range, 1, 0, 100, (v) => onChange({ range: v }))}
+      <span class="val">{edit.range}</span>
+      {@render stepButtons(edit.range, 1, 0, 100, (v) => onEdit({ range: v }))}
     </div>
     <div class="row">
       <label for="mask-color-feather">Feather</label>
@@ -287,11 +415,11 @@
         min="0"
         max="100"
         step="1"
-        value={mask.feather}
-        oninput={(e) => onChange({ feather: Number(e.currentTarget.value) })}
+        value={edit.feather}
+        oninput={(e) => onEdit({ feather: Number(e.currentTarget.value) })}
       />
-      <span class="val">{mask.feather}</span>
-      {@render stepButtons(mask.feather, 1, 0, 100, (v) => onChange({ feather: v }))}
+      <span class="val">{edit.feather}</span>
+      {@render stepButtons(edit.feather, 1, 0, 100, (v) => onEdit({ feather: v }))}
     </div>
   {/if}
 
@@ -330,7 +458,7 @@
     </div>
   {/if}
 
-  {#if OVERLAY_CAPABLE_MASK_OPS.includes(mask.op)}
+  {#if OVERLAY_CAPABLE_MASK_OPS.includes(mask.op) || shapes.length > 0}
     <!-- Soft colored overlay showing exactly what's selected -- brush,
          luminance-range, and color-range masks are otherwise invisible
          until a nonzero adjustment is set (unlike linear/radial, which
@@ -356,7 +484,7 @@
          correcting everywhere EXCEPT the oval is nonsensical for the same
          reason. -->
     <label class="invert-row">
-      <input type="checkbox" checked={mask.invert} onchange={(e) => onChange({ invert: e.currentTarget.checked })} />
+      <input type="checkbox" checked={edit.invert} onchange={(e) => onEdit({ invert: e.currentTarget.checked })} />
       <span>Invert</span>
     </label>
   {/if}
@@ -541,5 +669,187 @@
   }
   .delete:hover {
     border-color: var(--label-red);
+  }
+  .sep {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 0 -2px;
+  }
+  .sec {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    font-weight: 600;
+  }
+  .sec .n {
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 400;
+  }
+  .shapes {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0 -4px;
+  }
+  .shape {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 4px;
+    border-radius: var(--radius-s);
+    border: 1px solid transparent;
+    font-size: 11px;
+  }
+  .shape:hover {
+    background: var(--bg-hover);
+  }
+  .shape.sel {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+  .shape .pick {
+    all: unset;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+    cursor: pointer;
+    padding: 2px 0;
+  }
+  .shape .pick:focus-visible {
+    outline: 1px solid var(--accent);
+  }
+  .shape .ico {
+    width: 16px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 10px;
+  }
+  .shape .nm {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .shape .base {
+    font-size: 10px;
+    color: var(--text-tertiary);
+  }
+  .shape .combine {
+    appearance: none;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    color: var(--text-primary);
+    font: 10px var(--font-ui);
+    padding: 1px 4px;
+    cursor: pointer;
+  }
+  .shape .combine.add {
+    color: #8fd19e;
+  }
+  .shape .combine.subtract {
+    color: #e88;
+  }
+  .shape .combine.intersect {
+    color: #8ab4f0;
+  }
+  .shape .x {
+    all: unset;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    padding: 0 3px;
+    font-size: 12px;
+  }
+  .shape .x:hover {
+    color: var(--text-primary);
+  }
+  .hint {
+    font-size: 10px;
+    line-height: 1.35;
+    color: var(--text-tertiary);
+  }
+  .addbtn {
+    position: relative;
+  }
+  .addbtn .add {
+    width: 100%;
+    appearance: none;
+    background: var(--bg-panel-raised);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-s);
+    color: var(--text-secondary);
+    font: 11px var(--font-ui);
+    padding: 5px;
+    cursor: pointer;
+  }
+  .addbtn .add:hover {
+    color: var(--accent-strong);
+    border-color: var(--accent);
+  }
+  .menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 30px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-m);
+    box-shadow: var(--shadow-soft);
+    padding: 4px 0;
+    z-index: 5;
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+  }
+  .menu .seg {
+    display: flex;
+    gap: 3px;
+    padding: 4px 6px 6px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 3px;
+  }
+  .menu .seg button {
+    flex: 1;
+    appearance: none;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    color: var(--text-secondary);
+    font: 10px var(--font-ui);
+    padding: 3px 0;
+    cursor: pointer;
+  }
+  .menu .seg button.on {
+    border-color: var(--accent);
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+  }
+  .menu .opt {
+    all: unset;
+    padding: 4px 10px;
+    cursor: pointer;
+    color: var(--text-primary);
+  }
+  .menu .opt:hover:not(:disabled),
+  .menu .opt:focus-visible {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+  }
+  .menu .opt:disabled {
+    color: var(--text-tertiary);
+    cursor: not-allowed;
+  }
+  .menu .why {
+    font-size: 9.5px;
+    margin-left: 6px;
   }
 </style>

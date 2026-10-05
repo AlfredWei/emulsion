@@ -32,6 +32,9 @@
    *   masks: import('$lib/api/develop.js').Mask[],
    *   activeTool: string | null,
    *   selectedMaskId: string | null,
+   *   selectedShapeId?: string | null,
+   *   overlayShape?: import('$lib/api/develop.js').Mask | null,
+   *   shapeArmed?: boolean,
    *   brushSize: number,
    *   brushHardness: number,
    *   brushFlow: number,
@@ -109,6 +112,12 @@
     masks,
     activeTool,
     selectedMaskId,
+    // Composable masking (RFC-0025): the shape being edited (its own id), that shape as a
+    // mask-shaped object for the overlay and brush painting only (never rendered by the GPU), and
+    // whether the next placement/stroke creates a SHAPE rather than a mask.
+    selectedShapeId = null,
+    overlayShape = null,
+    shapeArmed = false,
     brushSize,
     brushHardness,
     brushFlow,
@@ -437,6 +446,10 @@
   // "New Spot" tool-strip buttons achieve "start fresh" simply by
   // deselecting (selectedMaskId = null) -- no separate reset signal needs
   // to reach this component at all.
+  // Masks plus the shape being edited (mask-shaped, own id): what the overlay draws handles for and
+  // where a brush stroke can append. The GPU render reads `masks` only.
+  const paintTargets = $derived(overlayShape ? [...masks, overlayShape] : masks);
+  const editingId = $derived(selectedShapeId ?? selectedMaskId);
   /** @type {string | null} */
   let paintingMaskId = null;
   /** @type {(import('$lib/api/develop.js').Dab | import('$lib/api/develop.js').SpotDab)[]} */
@@ -731,9 +744,12 @@
       // Re-derive the paint target fresh on every stroke, from the
       // CURRENT selection -- see the brush-state doc comment above for
       // why this is deliberately transient, not tracked persistently.
-      const existing = masks.find((m) => m.id === selectedMaskId && m.op === "brush_mask");
+      // Painting continues into the edited shape when one is selected, and never into an
+      // existing brush MASK while a new shape is armed (that stroke creates the shape).
+      const paintId = selectedShapeId ?? selectedMaskId;
+      const existing = shapeArmed ? undefined : paintTargets.find((m) => m.id === paintId && m.op === "brush_mask");
       if (existing) {
-        paintingMaskId = selectedMaskId;
+        paintingMaskId = paintId;
         strokeDabs = [.../** @type {any} */ (existing).dabs];
       } else {
         const newId = crypto.randomUUID();
@@ -1710,10 +1726,10 @@
            gate the crop grid below (a different tool's own overlay, shown
            only while actively cropping, not a persistent mask pin). -->
       {#if maskOverlaysVisible}
-      {#each masks as mask (mask.id)}
+      {#each paintTargets as mask (mask.id)}
         {#if mask.op === "linear_gradient_mask"}
           {@const fl = linearFeatherLines(mask)}
-          <svg class="mask-line" class:selected={mask.id === selectedMaskId}>
+          <svg class="mask-line" class:selected={mask.id === editingId}>
             <line x1="{mask.start.x * 100}%" y1="{mask.start.y * 100}%" x2="{mask.end.x * 100}%" y2="{mask.end.y * 100}%" />
           </svg>
           {#if fl}
@@ -1734,7 +1750,7 @@
           {/if}
           <button
             class="mask-handle"
-            class:selected={mask.id === selectedMaskId}
+            class:selected={mask.id === editingId}
             style="left:{mask.start.x * 100}%; top:{mask.start.y * 100}%"
             aria-label="Gradient start"
             onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "start")}
@@ -1743,7 +1759,7 @@
           ></button>
           <button
             class="mask-handle"
-            class:selected={mask.id === selectedMaskId}
+            class:selected={mask.id === editingId}
             style="left:{mask.end.x * 100}%; top:{mask.end.y * 100}%"
             aria-label="Gradient end"
             onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "end")}
@@ -1758,7 +1774,7 @@
                to correctly match this component's normalized (x=width-
                fraction, y=height-fraction) coordinate convention. -->
           {@const fr = radialFeatherRadii(mask)}
-          <svg class="mask-ellipse" class:selected={mask.id === selectedMaskId}>
+          <svg class="mask-ellipse" class:selected={mask.id === editingId}>
             {#if fr}
               <!-- Feather range indicators: inner (fully-inside boundary)
                    + outer (fully-outside boundary) ellipses, only when
@@ -1776,7 +1792,7 @@
           </svg>
           <button
             class="mask-handle"
-            class:selected={mask.id === selectedMaskId}
+            class:selected={mask.id === editingId}
             style="left:{mask.center.x * 100}%; top:{mask.center.y * 100}%"
             aria-label="Radial center"
             onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "center")}
@@ -1785,7 +1801,7 @@
           ></button>
           <button
             class="mask-handle"
-            class:selected={mask.id === selectedMaskId}
+            class:selected={mask.id === editingId}
             style="left:{(mask.center.x + mask.radiusX) * 100}%; top:{mask.center.y * 100}%"
             aria-label="Radial radius"
             onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "radius", mask.center)}
@@ -1801,12 +1817,12 @@
                oversight: red eye's own "how strict is red detection"
                control is Pupil Size, not spatial feather width, so a
                feather-boundary visualization would be misleading here). -->
-          <svg class="mask-ellipse" class:selected={mask.id === selectedMaskId}>
+          <svg class="mask-ellipse" class:selected={mask.id === editingId}>
             <ellipse cx="{mask.center.x * 100}%" cy="{mask.center.y * 100}%" rx="{mask.radiusX * 100}%" ry="{mask.radiusY * 100}%" />
           </svg>
           <button
             class="mask-handle"
-            class:selected={mask.id === selectedMaskId}
+            class:selected={mask.id === editingId}
             style="left:{mask.center.x * 100}%; top:{mask.center.y * 100}%"
             aria-label="Red eye center"
             onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "center")}
@@ -1815,7 +1831,7 @@
           ></button>
           <button
             class="mask-handle"
-            class:selected={mask.id === selectedMaskId}
+            class:selected={mask.id === editingId}
             style="left:{(mask.center.x + mask.radiusX) * 100}%; top:{mask.center.y * 100}%"
             aria-label="Red eye radius"
             onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "radius", mask.center)}
@@ -1838,13 +1854,13 @@
           {@const c = spotCentroidAndRadius(mask.dabs)}
           {@const sx = c.x + mask.sourceOffset.dx}
           {@const sy = c.y + mask.sourceOffset.dy}
-          <svg class="mask-ellipse spot" class:selected={mask.id === selectedMaskId}>
+          <svg class="mask-ellipse spot" class:selected={mask.id === editingId}>
             <line x1="{c.x * 100}%" y1="{c.y * 100}%" x2="{sx * 100}%" y2="{sy * 100}%" class="spot-link" />
             <ellipse cx="{sx * 100}%" cy="{sy * 100}%" rx="{c.avgRadius * 100}%" ry="{spotRyPercent(c.avgRadius)}%" class="spot-source" />
           </svg>
           <button
             class="mask-handle spot-move-handle"
-            class:selected={mask.id === selectedMaskId}
+            class:selected={mask.id === editingId}
             style="left:{c.x * 100}%; top:{c.y * 100}%"
             aria-label="Move spot"
             onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "spot_move", { x: c.x, y: c.y }, mask.dabs)}
@@ -1853,7 +1869,7 @@
           ></button>
           <button
             class="mask-handle spot-source-handle"
-            class:selected={mask.id === selectedMaskId}
+            class:selected={mask.id === editingId}
             style="left:{sx * 100}%; top:{sy * 100}%"
             aria-label="Spot source"
             onpointerdown={(e) => handleMaskHandlePointerDown(e, mask.id, "spot_source_offset", { x: c.x, y: c.y })}

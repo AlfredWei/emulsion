@@ -9,7 +9,8 @@
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
   import { developView } from "$lib/state/developView.svelte.js";
   import { masks } from "$lib/state/masks.svelte.js";
-  import { handleMaskCreated, handleMaskUpdated, handleColorRangeResampled, handleEyedropperSampled, handleGpuFallback, handleMaskDeleted, handleResampleColorToggle, isEyedropperActive, handleEyedropperToggle, handleCreateLuminanceRangeMask } from "$lib/actions/maskActions.js";
+  import { countModifiers, countBrushLayers, modifierBlockedReason } from "$lib/api/develop.js";
+  import { handleMaskCreated, handleMaskUpdated, handleMaskSelected, handleAddShape, handleShapeCombineChanged, handleShapeRemoved, handleShapeSelected, handleColorRangeResampled, handleEyedropperSampled, handleGpuFallback, handleMaskDeleted, handleResampleColorToggle, isEyedropperActive, handleEyedropperToggle, handleCreateLuminanceRangeMask } from "$lib/actions/maskActions.js";
   import { softProof } from "$lib/state/softProof.svelte.js";
   import MaskEditorPanel from "$lib/components/MaskEditorPanel.svelte";
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
@@ -63,6 +64,9 @@
     masks={masks.list}
     activeTool={masks.activeTool}
     selectedMaskId={masks.selectedMaskId}
+    selectedShapeId={masks.selectedShapeId}
+    overlayShape={masks.overlayShape}
+    shapeArmed={masks.shapeTarget !== null}
     brushSize={masks.brushSize}
     brushHardness={masks.brushHardness}
     brushFlow={masks.brushFlow}
@@ -75,7 +79,7 @@
     onSpotBrushSizeChange={(v) => (masks.spotBrushSize = v)}
     onMaskCreated={handleMaskCreated}
     onMaskUpdated={handleMaskUpdated}
-    onMaskSelected={(id) => (masks.selectedMaskId = id)}
+    onMaskSelected={handleMaskSelected}
     colorRangeResampleId={masks.colorRangeResampleTarget}
     onColorRangeResampled={handleColorRangeResampled}
     onEyedropperSampled={handleEyedropperSampled}
@@ -119,6 +123,16 @@
       onShowOverlayChange={(v) => (masks.showMaskOverlay = v)}
       isResamplingColor={masks.isResamplingColor}
       onResampleColor={handleResampleColorToggle}
+      selectedShapeId={masks.selectedShapeId}
+      onSelectShape={handleShapeSelected}
+      onShapeChange={handleMaskUpdated}
+      onShapeCombine={handleShapeCombineChanged}
+      onRemoveShape={handleShapeRemoved}
+      onAddShape={handleAddShape}
+      shapeBlockedReason={(op) => modifierBlockedReason(develop.editStack, masks.selectedMask?.id ?? "", op)}
+      armedShape={masks.shapeTarget}
+      modifierCount={countModifiers(develop.editStack)}
+      brushLayers={countBrushLayers(develop.editStack)}
     />
   {/if}
   <div

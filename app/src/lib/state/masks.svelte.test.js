@@ -3,7 +3,7 @@ import { flushSync } from "svelte";
 import { MaskStore, createMaskStore } from "./masks.svelte.js";
 import { DevelopStore } from "./develop.svelte.js";
 import { createLibraryStore } from "./library.svelte.js";
-import { addMask, removeMask, createLinearGradientMask, upsertOp } from "$lib/api/develop.js";
+import { addMask, removeMask, createLinearGradientMask, upsertOp, createRadialGradientMask, createModifier, addModifier, removeModifier } from "$lib/api/develop.js";
 
 function setup() {
   const develop = new DevelopStore(createLibraryStore());
@@ -173,5 +173,71 @@ describe("MaskStore.install: self-cleaning targets", () => {
     masks.eyedropperTarget = "hsl_band";
     flushSync();
     expect([masks.colorRangeResampleTarget, masks.eyedropperTarget]).toEqual(["a", "hsl_band"]);
+  });
+});
+
+describe("MaskStore: composable-masking shape selection (RFC-0025)", () => {
+  function withShape() {
+    const { develop, masks } = setup();
+    const m = createRadialGradientMask({ x: 0.5, y: 0.5 }, 0.2, 0.2);
+    const lin = createLinearGradientMask({ x: 0, y: 0 }, { x: 1, y: 1 });
+    develop.editStack = addMask(addMask(develop.editStack, m), lin);
+    develop.editStack = addModifier(develop.editStack, m.id, createModifier("subtract", createLinearGradientMask({ x: 0.1, y: 0 }, { x: 0.9, y: 1 }), "s1"));
+    masks.selectedMaskId = m.id;
+    return { develop, masks, m, lin };
+  }
+
+  it("derives the selected shape, an overlay shape with the shape's own id, and the editing id", () => {
+    const { masks, m } = withShape();
+    expect(masks.selectedShape).toBeNull();
+    expect(masks.overlayShape).toBeNull();
+    expect(masks.editingId).toBe(m.id);
+    masks.selectedShapeId = "s1";
+    expect(masks.selectedShape?.id).toBe("s1");
+    expect(masks.overlayShape).toMatchObject({ op: "linear_gradient_mask", id: "s1", start: { x: 0.1, y: 0 } });
+    expect(masks.editingId).toBe("s1");
+    expect(masks.isResamplingColor).toBe(false);
+  });
+
+  it("clears the shape selection when another mask is selected or the shape is removed", () => {
+    const { develop, masks, m, lin } = withShape();
+    const stop = installed(masks);
+    masks.selectedShapeId = "s1";
+    flushSync();
+    expect(masks.selectedShapeId).toBe("s1");
+    masks.selectedMaskId = lin.id;
+    flushSync();
+    expect(masks.selectedShapeId).toBeNull();
+    masks.selectedMaskId = m.id;
+    masks.selectedShapeId = "s1";
+    flushSync();
+    develop.editStack = removeModifier(develop.editStack, m.id, "s1");
+    flushSync();
+    expect(masks.selectedShapeId).toBeNull();
+    stop();
+  });
+
+  it("drops a shape-placement arming when its tool changes, the tool is cleared, or another mask is selected", () => {
+    const { masks, m, lin } = withShape();
+    const stop = installed(masks);
+    const arm = () => {
+      masks.activeTool = "radial_gradient";
+      masks.shapeTarget = { maskId: m.id, combine: "add", tool: "radial_gradient" };
+      flushSync();
+    };
+    arm();
+    expect(masks.shapeTarget).not.toBeNull();
+    masks.activeTool = "brush";
+    flushSync();
+    expect(masks.shapeTarget).toBeNull();
+    arm();
+    masks.activeTool = null;
+    flushSync();
+    expect(masks.shapeTarget).toBeNull();
+    arm();
+    masks.selectedMaskId = lin.id;
+    flushSync();
+    expect(masks.shapeTarget).toBeNull();
+    stop();
   });
 });

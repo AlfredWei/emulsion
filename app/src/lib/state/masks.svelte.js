@@ -10,7 +10,7 @@
 // cannot be created at module load. Workflows that also write the edit stack (mask create/delete/
 // update, re-sample commit, eyedropper routing) are actions, not methods here.
 
-import { listMasks } from "$lib/api/develop.js";
+import { listMasks, listModifiers } from "$lib/api/develop.js";
 import { develop } from "./develop.svelte.js";
 
 export class MaskStore {
@@ -29,6 +29,24 @@ export class MaskStore {
   activeTool = $state(/** @type {string | null} */ (null));
   selectedMaskId = $state(/** @type {string | null} */ (null));
   selectedMask = $derived(this.list.find((m) => m.id === this.selectedMaskId) ?? null);
+
+  // Composable masking (RFC-0025 slice 1b). `selectedShapeId` is the modifier ("shape") of the
+  // selected mask being edited, or null for the base shape; it is view state like the selection
+  // above, and self-cleans when the mask changes or the shape is removed (see install()).
+  // `shapeTarget` is the "next placement creates a shape, not a mask" arming: set by Add shape
+  // with the tool for the chosen kind, consumed by the next placement (handleMaskCreated).
+  selectedShapeId = $state(/** @type {string | null} */ (null));
+  shapeTarget = $state(/** @type {{ maskId: string, combine: import('$lib/api/develop.js').Combine, tool: string } | null} */ (null));
+  selectedShape = $derived(
+    this.selectedMask && this.selectedShapeId !== null
+      ? (listModifiers(this.selectedMask).find((x) => x.id === this.selectedShapeId) ?? null)
+      : null,
+  );
+  /** The selected shape as a mask-shaped object (its own id), for the canvas overlay only: the
+   * handles and brush painting treat it like any mask. Never rendered by the GPU. */
+  overlayShape = $derived(this.selectedShape ? /** @type {any} */ ({ ...this.selectedShape.shape, id: this.selectedShape.id }) : null);
+  /** What the canvas highlights and paints into: the shape when one is selected, else the mask. */
+  editingId = $derived(this.selectedShapeId ?? this.selectedMaskId);
 
   // M3 Slice 7: brush TOOL options -- unlike a mask's own exposure/
   // contrast/saturation (edited per-mask via MaskEditorPanel), these are
@@ -79,7 +97,7 @@ export class MaskStore {
   // existing-mask mode, targeting THIS mask" apart from "the tool is
   // active to place a brand new mask."
   colorRangeResampleTarget = $state(/** @type {string | null} */ (null));
-  isResamplingColor = $derived(this.colorRangeResampleTarget !== null && this.colorRangeResampleTarget === this.selectedMaskId);
+  isResamplingColor = $derived(this.colorRangeResampleTarget !== null && this.colorRangeResampleTarget === this.editingId);
 
   // Eyedropper pickers (M3): Tone Curve point-insert, HSL band-identify,
   // Split Toning zone-tint all share ONE click-to-sample canvas gesture
@@ -107,8 +125,18 @@ export class MaskStore {
     // target is still the selected mask -- the instant either goes false,
     // there is no correct target left to resample into.
     $effect(() => {
-      if (this.colorRangeResampleTarget !== null && (this.activeTool !== "color_range" || this.selectedMaskId !== this.colorRangeResampleTarget)) {
+      if (this.colorRangeResampleTarget !== null && (this.activeTool !== "color_range" || this.editingId !== this.colorRangeResampleTarget)) {
         this.colorRangeResampleTarget = null;
+      }
+    });
+    // A selected shape is only valid while it is still one of the selected mask's modifiers; a
+    // shape-placement arming only while ITS tool is the active one and its mask is still selected.
+    $effect(() => {
+      if (this.selectedShapeId !== null && this.selectedShape === null) this.selectedShapeId = null;
+    });
+    $effect(() => {
+      if (this.shapeTarget !== null && (this.activeTool !== this.shapeTarget.tool || this.selectedMaskId !== this.shapeTarget.maskId)) {
+        this.shapeTarget = null;
       }
     });
     // Self-cleaning, same reasoning as colorRangeResampleTarget's own effect

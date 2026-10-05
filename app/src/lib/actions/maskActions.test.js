@@ -24,6 +24,8 @@ beforeEach(() => {
   develop.highlightedHslBand = null;
   masks.activeTool = null;
   masks.selectedMaskId = null;
+  masks.selectedShapeId = null;
+  masks.shapeTarget = null;
   masks.colorRangeResampleTarget = null;
   masks.eyedropperTarget = null;
 });
@@ -278,5 +280,136 @@ describe("handleEyedropperSampled", () => {
     expect(develop.editStack).toBe(before);
     expect(schedule).not.toHaveBeenCalled();
     expect([masks.activeTool, masks.eyedropperTarget]).toEqual([null, null]);
+  });
+});
+
+describe("composable masking: shapes (RFC-0025 slice 1b)", () => {
+  const radial = { kind: "radial_gradient", center: { x: 0.5, y: 0.5 }, radiusX: 0.3, radiusY: 0.3 };
+  const owner = () => /** @type {any} */ (develop.editStack.ops[0]);
+
+  /** One radial mask, selected. */
+  function oneMask() {
+    A.handleMaskCreated(/** @type {any} */ (radial));
+    schedule.mockClear();
+  }
+
+  it("Add shape arms the placement tool for the chosen kind and mask, without touching the stack", () => {
+    oneMask();
+    const before = develop.editStack;
+    A.handleAddShape("subtract", "radial_gradient_mask");
+    expect(masks.activeTool).toBe("radial_gradient");
+    expect(masks.shapeTarget).toEqual({ maskId: owner().id, combine: "subtract", tool: "radial_gradient" });
+    expect(develop.editStack).toBe(before);
+    for (const [op, tool] of /** @type {const} */ ([["linear_gradient_mask", "linear_gradient"], ["brush_mask", "brush"], ["color_range_mask", "color_range"]])) {
+      A.handleAddShape("add", op);
+      expect([masks.activeTool, masks.shapeTarget?.tool]).toEqual([tool, tool]);
+    }
+  });
+
+  it("the next placement becomes a shape of that mask: selected, one flush, no new mask, tool released", () => {
+    oneMask();
+    A.handleAddShape("intersect", "linear_gradient_mask");
+    A.handleMaskCreated({ kind: "linear_gradient", start: { x: 0.1, y: 0.5 }, end: { x: 0.9, y: 0.5 } });
+    expect(develop.editStack.ops).toHaveLength(1);
+    const mods = owner().modifiers;
+    expect(mods).toHaveLength(1);
+    expect(mods[0]).toMatchObject({ combine: "intersect", shape: { op: "linear_gradient_mask", start: { x: 0.1, y: 0.5 } } });
+    expect("exposure" in mods[0].shape).toBe(false); // a shape carries no adjustments
+    expect(masks.selectedMaskId).toBe(owner().id);
+    expect(masks.selectedShapeId).toBe(mods[0].id);
+    expect(masks.shapeTarget).toBeNull();
+    expect(masks.activeTool).toBeNull();
+    expect(labels()).toEqual(["Add Shape"]);
+  });
+
+  it("a brush shape keeps the Brush tool, uses the canvas's id, and later strokes patch the shape", () => {
+    oneMask();
+    A.handleAddShape("subtract", "brush_mask");
+    A.handleMaskCreated({ kind: "brush", id: "sb1" });
+    expect(masks.activeTool).toBe("brush");
+    expect(masks.shapeTarget).toBeNull();
+    expect(masks.selectedShapeId).toBe("sb1");
+    A.handleMaskUpdated("sb1", { dabs: [{ x: 0.5, y: 0.5, radius: 0.1, hardness: 70, flow: 1, mode: "add" }] });
+    expect(owner().modifiers[0].shape.dabs).toHaveLength(1);
+    expect(owner().modifiers[0].shape.op).toBe("brush_mask");
+    expect(labels()).toEqual(["Add Shape", "Edit Mask Shape"]);
+    expect(develop.editStack.ops).toHaveLength(1);
+  });
+
+  it("a colour-range shape takes the clicked colour; luminance range is created at once with no tool", () => {
+    oneMask();
+    A.handleAddShape("add", "color_range_mask");
+    A.handleMaskCreated({ kind: "color_range", refColor: { r: 0.1, g: 0.2, b: 0.3 } });
+    expect(owner().modifiers[0].shape.refColor).toEqual({ r: 0.1, g: 0.2, b: 0.3 });
+    masks.activeTool = null;
+    A.handleAddShape("subtract", "luminance_range_mask");
+    expect(masks.activeTool).toBeNull();
+    expect(masks.shapeTarget).toBeNull();
+    expect(owner().modifiers.map((/** @type {any} */ m) => [m.combine, m.shape.op])).toEqual([
+      ["add", "color_range_mask"],
+      ["subtract", "luminance_range_mask"],
+    ]);
+  });
+
+  it("with nothing selected Add shape does nothing; an ineligible placement is refused and the arming consumed", () => {
+    A.handleAddShape("add", "radial_gradient_mask");
+    expect([masks.activeTool, masks.shapeTarget]).toEqual([null, null]);
+    oneMask();
+    masks.activeTool = null;
+    // a spot placement is not an eligible shape
+    A.handleMaskCreated({ kind: "spot", id: "s", initialDab: { x: 0.5, y: 0.5, radius: 0.05 } });
+    masks.selectedMaskId = owner().id;
+    masks.shapeTarget = { maskId: owner().id, combine: "add", tool: "brush" };
+    masks.activeTool = "brush";
+    A.handleMaskCreated({ kind: "spot", id: "s2", initialDab: { x: 0.5, y: 0.5, radius: 0.05 } });
+    expect(owner().modifiers).toBeUndefined();
+    expect(masks.shapeTarget).toBeNull();
+  });
+
+  it("edits to a shape go to the shape (sliders, handles, re-sample); the mask is untouched", () => {
+    oneMask();
+    A.handleAddShape("add", "linear_gradient_mask");
+    A.handleMaskCreated({ kind: "linear_gradient", start: { x: 0, y: 0 }, end: { x: 1, y: 1 } });
+    const sid = /** @type {string} */ (masks.selectedShapeId);
+    schedule.mockClear();
+    A.handleMaskUpdated(sid, { feather: 33 });
+    expect(owner().modifiers[0].shape.feather).toBe(33);
+    expect(owner().feather).not.toBe(33);
+    expect(labels()).toEqual(["Edit Mask Shape"]);
+    A.handleMaskUpdated(owner().id, { exposure: 1.1 });
+    expect(owner().exposure).toBe(1.1);
+    expect(labels()).toEqual(["Edit Mask Shape", "Edit Mask"]);
+  });
+
+  it("combine change, selection by id, and removal", () => {
+    oneMask();
+    A.handleAddShape("add", "linear_gradient_mask");
+    A.handleMaskCreated({ kind: "linear_gradient", start: { x: 0, y: 0 }, end: { x: 1, y: 1 } });
+    const sid = /** @type {string} */ (masks.selectedShapeId);
+    A.handleShapeCombineChanged(sid, "subtract");
+    expect(owner().modifiers[0].combine).toBe("subtract");
+    A.handleShapeSelected(null);
+    expect(masks.selectedShapeId).toBeNull();
+    A.handleMaskSelected(sid); // a click on the shape's handle selects the shape under its owner
+    expect([masks.selectedMaskId, masks.selectedShapeId]).toEqual([owner().id, sid]);
+    A.handleMaskSelected(owner().id); // a click on the mask's own handle selects the base shape
+    expect([masks.selectedMaskId, masks.selectedShapeId]).toEqual([owner().id, null]);
+    masks.selectedShapeId = sid;
+    A.handleShapeRemoved(sid);
+    expect(owner().modifiers).toBeUndefined();
+    expect(masks.selectedShapeId).toBeNull();
+    expect(flush).toHaveBeenCalledWith("Remove Mask Shape");
+  });
+
+  it("re-sampling a colour shape patches the shape and exits resample mode", () => {
+    oneMask();
+    A.handleAddShape("add", "color_range_mask");
+    A.handleMaskCreated({ kind: "color_range", refColor: { r: 0, g: 0, b: 0 } });
+    const sid = /** @type {string} */ (masks.selectedShapeId);
+    A.handleResampleColorToggle();
+    expect(masks.colorRangeResampleTarget).toBe(sid); // the shape, not its mask
+    A.handleColorRangeResampled(sid, { r: 0.9, g: 0.8, b: 0.7 });
+    expect(owner().modifiers[0].shape.refColor).toEqual({ r: 0.9, g: 0.8, b: 0.7 });
+    expect([masks.colorRangeResampleTarget, masks.activeTool]).toEqual([null, null]);
   });
 });

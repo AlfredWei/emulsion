@@ -52,6 +52,7 @@ Open any photo into Develop (`D`, or double-click). Every edit is non-destructiv
 
 - **Global tone**: White Balance (+ eyedropper, + one-click Auto WB), Exposure, Contrast, Highlights/Shadows/Whites/Blacks, one-click Auto Tone, Vibrance/Saturation, Tone Curve, HSL/Color Mixer, Split Toning, Dehaze, Clarity/Texture, Vignette, Grain, camera/creative color profiles.
 - **Local adjustments**: linear gradient, radial gradient, and adjustment brush (with auto-mask) — all composable, plus color-range and luminance-range masking.
+- **Combining shapes in one mask**: a linear, radial, brush, luminance-range or color-range mask has a **Shapes** list in its panel. *Add shape* ▾ lets you **Add**, **Subtract** or **Intersect** another shape (place it on the image, or paint it for a brush); the red overlay shows the combined selection, and the mask's Exposure/Contrast/Saturation apply to it. Click a row to edit that shape; change its combine mode or remove it from its row. Up to 16 extra shapes per image (brush shapes share the 8 brush layers with brush and spot masks). Reordering and a per-shape on/off switch are not available yet.
 - **Geometry**: Crop, straighten, rotate/flip, manual perspective/upright correction, profile-based lens corrections (distortion, vignette, chromatic aberration).
 - **Retouching**: healing/clone brush, spot removal, red-eye removal.
 - **Sharpening & noise reduction**: separate luminance/color noise reduction, sharpening.

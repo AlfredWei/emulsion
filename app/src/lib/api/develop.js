@@ -1816,6 +1816,16 @@ export function countBrushLayers(stack) {
   return n;
 }
 
+/** The id of the mask that owns modifier `modifierId`, or null.
+ * @param {EditStack} stack @param {string} modifierId
+ * @returns {string | null} */
+export function findModifierOwner(stack, modifierId) {
+  for (const m of listMasks(stack)) {
+    if (listModifiers(m).some((x) => x.id === modifierId)) return m.id;
+  }
+  return null;
+}
+
 /** Why a modifier of `shapeOp` cannot be added to `maskId`, or null when it can.
  * @param {EditStack} stack @param {string} maskId @param {string} shapeOp
  * @returns {string | null} */

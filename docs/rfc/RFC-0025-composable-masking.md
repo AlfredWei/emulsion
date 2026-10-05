@@ -73,6 +73,14 @@ M6 slice 0 closed with the sky model falling back to the non-ML range mask (RFC-
 
 `MaskEditorPanel` gets a **Components** list under the selected mask: the base shape first, then each modifier as a row (kind icon, combine chip Add/Subtract/Intersect, eye-toggle, delete), plus an **Add component ▾** menu offering `Add / Subtract / Intersect with →` {Linear, Radial, Brush, Luminance range, Colour range}. Selecting a row selects that *component* for editing: its handles/brush/range controls appear exactly as for a stand-alone mask today. The selection becomes `(maskId, componentId | null)`; `MaskStore.selectedMask` keeps returning the mask, a new `selectedComponent` returns the component. This is the largest piece of UI work and is its own slice.
 
+Mock: [composable-masking-mockup.html](../ux/mockups/composable-masking-mockup.html) (interactive; open in a browser). It uses the app's real tokens and the floating panel's real geometry (210 px, top-left), and draws the selected-mask fill with the engine's real fold, so subtract/intersect show what slice 1a renders. Walkthrough: Radial → *Add shape* → Subtract brush → Intersect gradient → pick another row. Decisions the mock fixes (review should confirm or change):
+
+1. **A "Shapes" section in the existing floating panel**, not a new panel: base shape row (labelled *base*, no combine chip, not deletable), then one row per modifier with an inline combine select (+ Add / − Subtract / ∩ Intersect, colour-coded) and ×. Mask-level Exposure/Contrast/Saturation stay above and apply to the combined selection.
+2. **Add shape = mode switch + one short list.** A flat grouped menu (3 modes × 5 shapes = 15 entries) was tried first and overflows the panel; the segmented mode (remembered between uses) above five shapes fits and is two small decisions.
+3. **One shape is edited at a time**: the selected row's own controls appear under the list and only its handles are drawn on the canvas; the rest stay quiet.
+4. **Caps are visible** in the section header (`n / 16 · brush n / 8`) and Add entries grey out with the reason.
+5. **Left out of the mock, to decide in 1b:** painting/arming a brush shape, the colour-range click, handle dragging, reordering (row order is evaluation order; no drag yet), an enable/disable eye per row (the §3.4 sketch above lists one but the 1a data model has no `enabled` field), and an *Invert result* toggle (§7.2).
+
 ## 4. Slice plan
 
 | Slice | Content | Verifiable how |

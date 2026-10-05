@@ -197,18 +197,42 @@ fn weights_stay_in_unit_range_for_arbitrary_stacks() {
     assert!((0.0..=1.0).contains(&v));
 }
 
+/// The catalog stores an edit stack as opaque JSON text (`EditStack.ops: Vec<Value>`), so a mask's
+/// `modifiers` must survive serialize -> parse unchanged and render the same afterwards.
+#[test]
+fn modifiers_survive_the_catalog_json_round_trip_and_render_identically() {
+    let op = with_mods(
+        full(),
+        vec![
+            ("subtract", json!({ "op": "brush_mask", "invert": false, "dabs": [
+                { "x": 0.5, "y": 0.5, "radius": 0.2, "hardness": 100.0, "flow": 1.0, "mode": "add" } ] })),
+            ("intersect", linear(0.2, 0.8)),
+        ],
+    );
+    let stack = EditStack { schema_version: 1, ops: vec![op] };
+    let text = serde_json::to_string(&stack).unwrap();
+    let back: EditStack = serde_json::from_str(&text).unwrap();
+    assert_eq!(back, stack);
+    let render = |s: &EditStack| {
+        let mut image = RgbImage::from_pixel(8, 8, image::Rgb([100, 100, 100]));
+        apply_edit_stack(&mut image, s);
+        image.into_raw()
+    };
+    assert_eq!(render(&back), render(&stack));
+}
+
 // ---------------------------------------------------------------------------
 // Reference dump for the real-GPU probe (docs/rfc/RFC-0025-appendix/gpu_mask_probe.js).
-// The probe renders the shipped `fs_mask` on a real GPU over the same 64x64
+// The probe renders the shipped `fs_mask` on a real GPU over the same NxN
 // image and compares it with these CPU pixels. Run:
 //   COMPOSABLE_MASK_DUMP=/path/out.json cargo test --lib composable_mask_reference_dump -- --ignored
 // ---------------------------------------------------------------------------
 
-const DUMP_SIZE: u32 = 64;
+const DUMP_SIZE: u32 = 512;
 
 fn dump_image() -> RgbImage {
     RgbImage::from_fn(DUMP_SIZE, DUMP_SIZE, |x, y| {
-        image::Rgb([(x * 4) as u8, (y * 4) as u8, ((x + y) * 2) as u8])
+        image::Rgb([(x * 255 / (DUMP_SIZE - 1)) as u8, (y * 255 / (DUMP_SIZE - 1)) as u8, ((x + y) * 255 / (2 * (DUMP_SIZE - 1))) as u8])
     })
 }
 

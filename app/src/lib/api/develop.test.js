@@ -592,4 +592,15 @@ describe("Composable masking model (RFC-0025)", () => {
     expect(findModifierOwner(s, "nope")).toBeNull();
     expect(findModifierOwner(s, "a")).toBeNull(); // a mask id is not a modifier id
   });
+
+  test("shapes ride with their mask: presets and copy/paste exclude them, snapshots/JSON keep them", () => {
+    const withShape = addModifier(stack(radial("a")), "a", createModifier("subtract", createBrushMask(), "m1"));
+    // presets and Copy Settings never carry masks, so no shape (or shape id) can be pasted onto another image
+    expect(presetEligibleOps(withShape).ops).toEqual([]);
+    expect(copySettingsOps(withShape, ["basic_tone", "effects"]).ops).toEqual([]);
+    // snapshots and the catalog store the stack as JSON
+    const restored = JSON.parse(JSON.stringify(withShape));
+    expect(restored).toEqual(withShape);
+    expect(listModifiers(/** @type {any} */ (listMasks(restored)[0])).map((m) => m.id)).toEqual(["m1"]);
+  });
 });

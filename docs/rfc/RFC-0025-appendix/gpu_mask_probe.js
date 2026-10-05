@@ -46,7 +46,7 @@
   const src = new Uint8Array(N * N * 4);
   for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
     const i = (y * N + x) * 4;
-    src[i] = x * 4; src[i + 1] = y * 4; src[i + 2] = (x + y) * 2; src[i + 3] = 255;
+    src[i] = Math.floor(x * 255 / (N - 1)); src[i + 1] = Math.floor(y * 255 / (N - 1)); src[i + 2] = Math.floor((x + y) * 255 / (2 * (N - 1))); src[i + 3] = 255;
   }
   device.queue.writeTexture({ texture: preTex }, src, { bytesPerRow: N * 4 }, { width: N, height: N });
 

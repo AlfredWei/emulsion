@@ -260,7 +260,21 @@
     {#if armedShape}
       <div class="hint">{COMBINE_LABELS[armedShape.combine]}: {ARM_HINTS[armedShape.tool] ?? ""}</div>
     {/if}
-    <div class="addbtn">
+    <!-- Esc closes the menu and returns focus to its button; tabbing out of it closes it too. -->
+    <div
+      class="addbtn"
+      role="presentation"
+      onkeydown={(e) => {
+        if (e.key === "Escape" && menuOpen) {
+          e.stopPropagation();
+          menuOpen = false;
+          /** @type {HTMLElement | null} */ (e.currentTarget.querySelector(".add"))?.focus();
+        }
+      }}
+      onfocusout={(e) => {
+        if (menuOpen && !e.currentTarget.contains(/** @type {Node | null} */ (e.relatedTarget))) menuOpen = false;
+      }}
+    >
       <button type="button" class="add" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>＋ Add shape ▾</button>
       {#if menuOpen}
         <div class="menu" role="menu">

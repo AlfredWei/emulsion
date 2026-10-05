@@ -2,6 +2,29 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 1c (composable masking polish) + the milestone-end verification backlog (2026-10-05)
+
+Closes the planned composable-masking slices (1a engine #207, 1b UI #209; the per-shape eye and reordering are deliberately left to a later slice).
+
+- **Findings that made scope smaller**: presets, Copy Settings and Paste exclude every mask kind (`PRESET_EXCLUDED_OP_NAMES`), so shapes can never be pasted onto another image and RFC §5.5's id-uniqueness worry does not exist; snapshots and the catalog store the stack as opaque JSON (`EditStack.ops: Vec<Value>`). Both are now pinned by tests (+1 Rust: JSON round-trip renders identically; +1 vitest: presets/copy exclude shapes, JSON round-trip keeps them).
+- **Hard-brush CPU/GPU difference re-measured at 512 px and downgraded**: 744 of 786k channels over 2/255 (max 58) on a hardness-100 dab, **all on the 1-px edge ring** (every other scene max 1/255, hardness 50 max 1). It is Canvas2D's 0.5 px edge ramp vs the analytic step, a sub-pixel antialiasing difference that does not grow with image size; not fixed (would mean plumbing the pixel width through every weight call). The probe and the Rust dump now use 512 px (`DUMP_SIZE`).
+- **Add-shape menu keyboard**: Esc closes it and returns focus to its button; tabbing out closes it.
+- **Verified**: `cargo test --lib composable` 14 passed + 1 ignored; vitest 758; svelte-check 0 errors.
+
+### Milestone-end verification backlog (M6 composable masking) — verify before closing M6
+
+Per the user (2026-10-05): merge with these unverified, but verify them all at the milestone end.
+
+1. **Real Tauri window** for the Shapes UI (panel at its real width, long shape names, native `<select>` popup, the canvas at real zoom) — 1b.
+2. **e2e**: a CPU/GPU parity scenario with a subtract and an intersect shape (extend `develop-cpu-gpu-parity.e2e.js`, run on CI) and one UI scenario (add a shape, change combine, remove) — 1a/1b; `tauri-driver` is missing locally.
+3. **Keyboard-only use** of the Add-shape menu and the Shapes rows (Tab order, Esc, focus return), and the new Esc/focus-out handling in a browser — 1b/1c.
+4. **Colour-range and luminance-range shapes** clicked through in the real UI (place, re-sample on a shape) — action-tested only so far — 1b.
+5. **Eight brush layers in use** (mask + shape budget; native-resolution memory on the largest frame) and the **16-modifier cap** end to end — 1a/1b.
+6. **A second GPU** (Windows/D3D, an Intel/AMD part) for `gpu_mask_probe.js`, plus timing of the nested modifier loop (8 masks x 16 modifiers) vs the 100 ms budget — 1a.
+7. **Product vs min/max** fold formulas compared on a real photograph with two soft edges overlapping (RFC-0025 §7.1; cheap to change only before many stored edits exist) — 1a.
+8. **Older builds ignore `modifiers`** (RFC §5.4): confirm the behaviour and decide whether a catalog schema bump is wanted — 1a.
+9. Undo/redo through shape add/remove/combine changes and snapshot restore in the real app (history labels `Add Shape`, `Edit Mask Shape`, `Remove Mask Shape`) — 1b.
+
 ## M6 slice 1b (composable masking UI): the Shapes list, per RFC-0025 (2026-10-05)
 
 Builds the mock's flow (docs/ux/mockups/composable-masking-mockup.html) into the real panel. Per the user, the per-shape enable eye and reordering are **left to a later slice**.

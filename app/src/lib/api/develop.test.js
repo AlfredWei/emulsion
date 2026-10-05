@@ -41,6 +41,7 @@ import {
   addModifier,
   updateModifier,
   removeModifier,
+  findModifierOwner,
 } from "./develop.js";
 
 // Fixtures here model real op shapes (vignette/crop/hsl/masks) that the
@@ -583,5 +584,12 @@ describe("Composable masking model (RFC-0025)", () => {
     const r = removeMask(s, "a");
     expect(listMasks(r).map((m) => m.id)).toEqual(["b"]);
     expect(countModifiers(r)).toBe(0);
+  });
+
+  test("findModifierOwner finds the owning mask, or null", () => {
+    const s = addModifier(stack(radial("a"), radial("b")), "b", createModifier("add", radial("x"), "m1"));
+    expect(findModifierOwner(s, "m1")).toBe("b");
+    expect(findModifierOwner(s, "nope")).toBeNull();
+    expect(findModifierOwner(s, "a")).toBeNull(); // a mask id is not a modifier id
   });
 });

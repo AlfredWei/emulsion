@@ -5,7 +5,7 @@
 
 import { develop } from "$lib/state/develop.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
-import { updateMask, createRadialGradientMask, createBrushMask, createColorRangeMask, createSpotMask, createRedEyeMask, createLinearGradientMask, addMask, createLuminanceRangeMask, removeMask, rgbToHsl, upsertSplitToningZone, nearestHslBand, computeEyedropperWhiteBalance, upsertOp, sampleCurveLut, buildToneCurveLut, insertToneCurvePoint, upsertToneCurve } from "$lib/api/develop.js";
+import { updateMask, findModifierOwner, createModifier, addModifier, updateModifier, removeModifier, modifierBlockedReason, createRadialGradientMask, createBrushMask, createColorRangeMask, createSpotMask, createRedEyeMask, createLinearGradientMask, addMask, createLuminanceRangeMask, removeMask, rgbToHsl, upsertSplitToningZone, nearestHslBand, computeEyedropperWhiteBalance, upsertOp, sampleCurveLut, buildToneCurveLut, insertToneCurvePoint, upsertToneCurve } from "$lib/api/develop.js";
 import { developView } from "$lib/state/developView.svelte.js";
 
 // HSL band-jump eyedropper's transient navigation target -- NOT persisted
@@ -35,9 +35,9 @@ export function handleResampleColorToggle() {
     masks.colorRangeResampleTarget = null;
     return;
   }
-  if (masks.selectedMaskId === null) return;
+  if (masks.editingId === null) return;
   masks.activeTool = "color_range";
-  masks.colorRangeResampleTarget = masks.selectedMaskId;
+  masks.colorRangeResampleTarget = masks.editingId;
 }
 
 /** Commit path for a re-sample click -- patches the EXISTING mask
@@ -50,7 +50,7 @@ export function handleColorRangeResampled(
   /** @type {string} */ id,
   /** @type {{r: number, g: number, b: number}} */ refColor,
 ) {
-  develop.editStack = updateMask(develop.editStack, id, { refColor });
+  develop.editStack = patchMaskOrShape(develop.editStack, id, { refColor });
   masks.colorRangeResampleTarget = null;
   masks.activeTool = null;
   develop.scheduleFlush("Adjust Color Range");
@@ -89,6 +89,7 @@ export function handleMaskCreated(
   // (DevelopCanvas.svelte's mask-packing loop); a color-range placement
   // has no `.start`/`.end` at all, so hitting this fallback by mistake
   // would construct a broken linear mask and crash later.
+  const target = masks.shapeTarget;
   const mask =
     placement.kind === "radial_gradient"
       ? createRadialGradientMask(placement.center, placement.radiusX, placement.radiusY)
@@ -101,6 +102,10 @@ export function handleMaskCreated(
             : placement.kind === "red_eye"
               ? createRedEyeMask(placement.center, placement.radiusX, placement.radiusY)
               : createLinearGradientMask(placement.start, placement.end);
+  if (target !== null) {
+    placeShape(target, mask, placement.kind);
+    return;
+  }
   develop.editStack = addMask(develop.editStack, mask);
   masks.selectedMaskId = mask.id;
   // Real Lightroom drops back to selection after placing a gradient, but
@@ -137,9 +142,101 @@ export function handleCreateLuminanceRangeMask() {
   develop.scheduleFlush("Add Luminance Range Mask");
 }
 
+/** Patches the mask `id`, or -- when `id` is a composable-masking shape (RFC-0025) -- that shape
+ * inside the mask that owns it. The canvas and panel address both by id, so every edit path
+ * (sliders, handle drags, brush strokes, colour re-sample) funnels through here.
+ * @param {import('$lib/api/develop.js').EditStack} stack
+ * @param {string} id @param {Record<string, unknown>} patch */
+function patchMaskOrShape(stack, id, patch) {
+  const owner = findModifierOwner(stack, id);
+  return owner !== null
+    ? updateModifier(stack, owner, id, { shape: /** @type {any} */ (patch) })
+    : updateMask(stack, id, /** @type {any} */ (patch));
+}
+
 export function handleMaskUpdated(/** @type {string} */ id, /** @type {Record<string, unknown>} */ patch) {
-  develop.editStack = updateMask(develop.editStack, id, patch);
-  develop.scheduleFlush("Edit Mask");
+  const isShape = findModifierOwner(develop.editStack, id) !== null;
+  develop.editStack = patchMaskOrShape(develop.editStack, id, patch);
+  develop.scheduleFlush(isShape ? "Edit Mask Shape" : "Edit Mask");
+}
+
+// ---------------------------------------------------------------------------
+// Composable masking (RFC-0025 slice 1b): shapes (modifiers) of the selected mask.
+// ---------------------------------------------------------------------------
+
+/** Tool each shape kind arms for its placement; luminance range needs none. */
+const SHAPE_TOOL = /** @type {const} */ ({
+  linear_gradient_mask: "linear_gradient",
+  radial_gradient_mask: "radial_gradient",
+  brush_mask: "brush",
+  color_range_mask: "color_range",
+});
+
+/** Appends `mask` (a freshly created weight mask) to `target.maskId` as a shape and selects it. A
+ * brush shape keeps the Brush tool active (painting is multi-stroke); the rest are one-shot. The
+ * arming is consumed either way: later strokes find the selected brush shape by its id.
+ * @param {{ maskId: string, combine: import('$lib/api/develop.js').Combine }} target
+ * @param {import('$lib/api/develop.js').Mask} mask @param {string} placementKind */
+function placeShape(target, mask, placementKind) {
+  masks.shapeTarget = null;
+  const next = addModifier(develop.editStack, target.maskId, createModifier(target.combine, mask, mask.id));
+  if (next === develop.editStack) {
+    masks.activeTool = null;
+    return;
+  }
+  develop.editStack = next;
+  masks.selectedShapeId = mask.id;
+  if (placementKind !== "brush") masks.activeTool = null;
+  develop.scheduleFlush("Add Shape");
+}
+
+/** Add shape ▾ in the panel. Luminance range is created at once; the others arm their placement
+ * tool on the canvas (a drag, a click or a stroke) and the next `handleMaskCreated` consumes it.
+ * @param {import('$lib/api/develop.js').Combine} combine
+ * @param {"linear_gradient_mask" | "radial_gradient_mask" | "brush_mask" | "luminance_range_mask" | "color_range_mask"} shapeOp */
+export function handleAddShape(combine, shapeOp) {
+  const maskId = masks.selectedMaskId;
+  if (maskId === null || modifierBlockedReason(develop.editStack, maskId, shapeOp) !== null) return;
+  if (shapeOp === "luminance_range_mask") {
+    const mask = createLuminanceRangeMask();
+    placeShape({ maskId, combine }, mask, "luminance_range");
+    return;
+  }
+  const tool = SHAPE_TOOL[shapeOp];
+  masks.activeTool = tool;
+  masks.shapeTarget = { maskId, combine, tool };
+}
+
+export function handleShapeCombineChanged(/** @type {string} */ id, /** @type {import('$lib/api/develop.js').Combine} */ combine) {
+  const owner = findModifierOwner(develop.editStack, id);
+  if (owner === null) return;
+  develop.editStack = updateModifier(develop.editStack, owner, id, { combine });
+  develop.scheduleFlush("Edit Mask Shape");
+}
+
+export function handleShapeRemoved(/** @type {string} */ id) {
+  const owner = findModifierOwner(develop.editStack, id);
+  if (owner === null) return;
+  develop.editStack = removeModifier(develop.editStack, owner, id);
+  if (masks.selectedShapeId === id) masks.selectedShapeId = null;
+  develop.flushEditStack("Remove Mask Shape");
+}
+
+/** `null` selects the base shape of the selected mask. */
+export function handleShapeSelected(/** @type {string | null} */ id) {
+  masks.selectedShapeId = id;
+}
+
+/** The canvas reports a click on a mask's or a shape's handle by id. */
+export function handleMaskSelected(/** @type {string} */ id) {
+  const owner = findModifierOwner(develop.editStack, id);
+  if (owner !== null) {
+    masks.selectedMaskId = owner;
+    masks.selectedShapeId = id;
+    return;
+  }
+  masks.selectedMaskId = id;
+  masks.selectedShapeId = null;
 }
 
 export function handleMaskDeleted() {

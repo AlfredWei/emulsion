@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 1b (composable masking UI): the Shapes list, per RFC-0025 (2026-10-05)
+
+Builds the mock's flow (docs/ux/mockups/composable-masking-mockup.html) into the real panel. Per the user, the per-shape enable eye and reordering are **left to a later slice**.
+
+- **What shipped**: *Shapes* section in `MaskEditorPanel` (base row, combine select + × per shape, caps shown), *Add shape ▾* (mode switch + five shapes; entries disabled with the reason at a cap), the selected shape's controls (Feather, ranges, colour, Invert) under the list. Placement reuses the canvas gestures: *Add shape* arms the tool and the next placement becomes a shape (`placeShape`); luminance range is immediate; a brush shape keeps the Brush tool. `MaskStore`: `selectedShapeId`, `shapeTarget`, `overlayShape`, `editingId`, both self-cleaning. Canvas: props `selectedShapeId`, `overlayShape`, `shapeArmed` only. Edits route through `patchMaskOrShape`. History labels `Add Shape` / `Edit Mask Shape` / `Remove Mask Shape`. USER_GUIDE updated.
+- **Verified**: vitest 757 (+12), svelte-check 0 errors, plus the real `DevelopModule` in a throwaway browser harness (mocked IPC, real GPU, deleted): subtract-brush by painting, intersect-gradient by dragging, handle drag edits the shape only, combine change, base selection, removal; no console/WebGPU errors.
+- **Not verified**: real Tauri window, e2e (no new scenario), keyboard-only use, colour-range shape and re-sample click-through (action-tested only), 8 brush layers. The CPU/GPU hard-brush difference found in 1a is still open.
+
 ## M6 slice 1b (composable masking UI): interactive UX mock (2026-10-04)
 
 User asked what the multi-mask UX flow is; only a text sketch existed (RFC-0025 §3.4), so a mock was built before any UI code, as for the grain picker. **Docs only**, nothing in the app changed. [composable-masking-mockup.html](docs/ux/mockups/composable-masking-mockup.html): the floating mask panel with a new *Shapes* section (base row, per-shape combine select and delete, *Add shape* mode switch + five-shape list, caps shown), a canvas whose red fill is computed with the engine's real fold, five walkthrough steps. **A design finding from building it**: the flat three-mode-by-five-shape menu is 15 entries and overflows the 210 px panel; replaced by a mode switch plus one list. Open for 1b (RFC §3.4 "Mock"): brush arming, colour-range click, reordering, an enable eye (needs an `enabled` field in the model), an Invert-result toggle. Viewed only as a static snapshot in the Browser pane (scripts ran, real clicks did not), driven through its own buttons via script; not tried at the app's real panel width inside the app.

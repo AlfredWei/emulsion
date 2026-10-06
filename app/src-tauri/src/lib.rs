@@ -22,6 +22,9 @@ mod metadata;
 mod metadata_writer;
 mod panorama_merge;
 mod preview_cache;
+mod ai;
+mod segment_commands;
+mod segment_models;
 mod print;
 mod raw_decode;
 mod soft_proof;
@@ -2000,6 +2003,11 @@ pub fn run() {
                 import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir);
             });
 
+            // AI helper process (RFC-0026 §3.1): spawned lazily on the first AI request, not here.
+            app.manage(Arc::new(ai::supervisor::AiHelper::new(
+                ai::supervisor::AiHelper::default_exe(),
+                ai::supervisor::AiHelper::idle_secs_from_env(),
+            )));
             app.manage(AppState {
                 catalog,
                 face_detection_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2008,6 +2016,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            segment_commands::segment_model_status,
+            segment_commands::segment_download_models,
+            segment_commands::segment_import_model_files,
+            segment_commands::segment_prepare,
+            segment_commands::segment_decode,
+            segment_commands::segment_release,
+            segment_commands::ai_helper_info,
             report_spike_result,
             import_folder,
             import_files,

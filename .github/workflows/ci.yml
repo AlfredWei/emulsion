@@ -115,9 +115,10 @@ jobs:
         shell: bash
         run: echo "EMULSION_TEST_HDR_BRACKET_DIR=${{ github.workspace }}/test_image/hdr-bracket-cc-by" >> "$GITHUB_ENV"
 
-      - name: cargo test --lib
+      - name: cargo test --lib --bins --tests
         shell: bash
-        run: cargo test --lib --verbose
+        # --bins/--tests: the emulsion-ai helper's own unit tests and tests/ai_helper.rs (spawns the real helper binary).
+        run: cargo test --lib --bins --tests --verbose
 
   frontend-check:
     name: Frontend type-check

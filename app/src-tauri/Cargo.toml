@@ -5,6 +5,8 @@ description = "Local-first photo library and RAW editor — Rust core (catalog, 
 authors = ["Alfred Wei"]
 edition = "2021"
 license = "MIT"
+# Two binaries: the app and the AI helper process (src/bin/emulsion-ai). `tauri dev`/`cargo run` start the app.
+default-run = "emulsion"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -37,7 +39,12 @@ bytemuck = "1.25"
 printpdf = { version = "0.12.7", default-features = false }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tract-onnx = "0.23.7"
+# M6 click-select (RFC-0026, ADR-0009): CPU inference for SAM 2 Tiny, used only by the `emulsion-ai` helper binary
+# (the app process does not reference it, so it does not link or load ONNX Runtime). Pinned exactly (no stable 2.0 yet).
+# Same feature set as the link probe of RFC-0023 §4.4 point 5 (green on macOS and Windows CI).
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native", "copy-dylibs"] }
 sha2 = "0.11.0"
+base64 = "0.22"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "query"] }
 
 [features]

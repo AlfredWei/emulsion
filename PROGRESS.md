@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 2a (click-select runtime, no UI): `ort` in the app, SAM 2 Tiny through Rust (2026-10-06)
+
+RFC-0026 merged (#211). This slice puts `ort =2.0.0-rc.13` (CPU provider) in the app crate and builds everything below the UI.
+
+- **What shipped**: `segment_models.rs` (status, streaming download with SHA-256 while writing, manual import by name + checksum; URLs pinned to HF commit `071f580`), `segment.rs` (`Segmenter`: lazy sessions, one cached embedding, pure pre/post-processing, candidates best-IoU first as quantised-logit PNGs), `segment_commands.rs` (six Tauri commands, progress event), idle thread dropping sessions after 5 min. **Re-host licence checked: Apache-2.0** (model card), hashes equal the recorded ones, pinned URLs HEAD-verified. The 155 MB download itself was not re-run.
+- **Verified**: `cargo test --lib` 480 passed (12 new: coordinate/quantisation/PNG maths, checksum and import rejection); **the real model through the Rust path reproduces Python onnxruntime on the six RFC-0023 clicks** (mask IoU >= 0.968 for rated candidates, most >= 0.99); first prepare 1.3-1.9 s, decode 23-64 ms (M1 Pro, release). e2e `segment-model.e2e.js` (model-absent path).
+- **Memory finding and the decision (user, 2026-10-06)**: peak RSS **1.15-1.44 GB** during encode, and releasing the sessions does not give it back on macOS. Decided: a **separate long-lived `emulsion-ai` helper process**, spawned lazily on first AI use, serving one request at a time over JSON lines on stdin/stdout, extensible to denoise/super-resolution, **exiting after an idle period (default 15 min) to return the memory**. Built in this slice: `src/ai/{protocol,supervisor}.rs`, `src/bin/emulsion-ai/`, `ai_helper_info`. **Measured**: app process 2 MB, helper ~984 MB, gone after idle exit; prepare round trip 2.1 s incl. spawn + load, decode 23 ms. `with_memory_pattern(false)` saves ~300 MB. CI now runs `cargo test --lib --bins --tests` (the integration test spawns the real helper).
+- **Not verified**: Windows (CPU speed, memory, helper spawn/kill paths), the live 155 MB download through the app, **bundling the helper into an installer** (`bundle.externalBin`, signing/notarization). Added to the milestone-end backlog below.
+
 ## M6 slice 2 (click-select, SAM 2 Tiny): RFC-0026 drafted (2026-10-06)
 
 #210 merged (composable masking closed, verification backlog mostly done); user chose **SAM 2 click-select** as the next M6 slice. Design only, **no product code changed, nothing measured** (all numbers are RFC-0023's).
@@ -34,6 +43,7 @@ Status after the 2026-10-05 verification round:
 7. **Product vs min/max** — DONE: product family kept (RFC-0025 verification round).
 8. **Older builds ignore `modifiers`** — DONE by reading the pre-1a parser (`Value::get`, unknown fields ignored); no schema bump.
 9. **Undo/redo and snapshot restore through shape ops in the real app** — OPEN (covered by action and persistence tests only).
+10. **Click-select 2a (RFC-0026 §7)** — OPEN: SAM 2 CPU speed and memory on a real Windows machine; the live 155 MB download through `segment_download_models` (only HEAD-verified so far); **installer bundling and signing of the `emulsion-ai` helper** on both platforms.
 
 ## M6 slice 1b (composable masking UI): the Shapes list, per RFC-0025 (2026-10-05)
 

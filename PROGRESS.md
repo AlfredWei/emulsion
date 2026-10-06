@@ -2,6 +2,31 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 1c (composable masking polish) + the milestone-end verification backlog (2026-10-05)
+
+Closes the planned composable-masking slices (1a engine #207, 1b UI #209; the per-shape eye and reordering are deliberately left to a later slice).
+
+- **Findings that made scope smaller**: presets, Copy Settings and Paste exclude every mask kind (`PRESET_EXCLUDED_OP_NAMES`), so shapes can never be pasted onto another image and RFC §5.5's id-uniqueness worry does not exist; snapshots and the catalog store the stack as opaque JSON (`EditStack.ops: Vec<Value>`). Both are now pinned by tests (+1 Rust: JSON round-trip renders identically; +1 vitest: presets/copy exclude shapes, JSON round-trip keeps them).
+- **Hard-brush CPU/GPU difference re-measured at 512 px and downgraded**: 744 of 786k channels over 2/255 (max 58) on a hardness-100 dab, **all on the 1-px edge ring** (every other scene max 1/255, hardness 50 max 1). It is Canvas2D's 0.5 px edge ramp vs the analytic step, a sub-pixel antialiasing difference that does not grow with image size; not fixed (would mean plumbing the pixel width through every weight call). The probe and the Rust dump now use 512 px (`DUMP_SIZE`).
+- **Add-shape menu keyboard**: Esc closes it and returns focus to its button; tabbing out closes it.
+- **Verified**: `cargo test --lib composable` 14 passed + 1 ignored; vitest 758; svelte-check 0 errors.
+
+### Milestone-end verification backlog (M6 composable masking) — verify before closing M6
+
+Per the user (2026-10-05): merge with these unverified, but verify them all at the milestone end.
+
+Status after the 2026-10-05 verification round:
+
+1. **Real Tauri window** for the Shapes UI — PARTLY DONE: the e2e spec in 2 drives the real window (WKWebView, real GPU) and passes. Still OPEN: a *visual* look at the real panel width and the native `<select>` popup.
+2. **e2e** — `app/e2e/specs/develop-mask-shapes.e2e.js` written (CPU/GPU parity with subtract + add + intersect shapes; Shapes UI add / change combine / remove). **Both need WebGPU, which CI runners lack (they skip there), so they only run locally** (`npx wdio run ./e2e/wdio.conf.js --spec ./e2e/specs/develop-mask-shapes.e2e.js` after `npm run test:e2e`'s build step). DONE: both pass locally in the real Tauri window on Apple/Metal (parity within 4/255 at a mid-weight patch, and the stripped-modifiers render differs by >12 levels). They write the dev catalog's fixture row like the parity spec does.
+3. **Keyboard-only use** — DONE in the browser; found and fixed two defects (focus return, panel overflow). The native `<select>` popup in WKWebView stays with item 1.
+4. **Colour-range and luminance-range shapes clicked through** — DONE in the browser harness (place, re-sample on a shape).
+5. **Eight brush layers and the 16-modifier cap** — DONE in the browser harness, no WebGPU errors.
+6. **Second GPU** — OPEN, impossible locally (Apple only; CI has no WebGPU). **Timing** — DONE: 3.2-3.3 ms worst case (8 masks x 16 modifiers) vs 1.8 ms baseline at 2048x1365.
+7. **Product vs min/max** — DONE: product family kept (RFC-0025 verification round).
+8. **Older builds ignore `modifiers`** — DONE by reading the pre-1a parser (`Value::get`, unknown fields ignored); no schema bump.
+9. **Undo/redo and snapshot restore through shape ops in the real app** — OPEN (covered by action and persistence tests only).
+
 ## M6 slice 1b (composable masking UI): the Shapes list, per RFC-0025 (2026-10-05)
 
 Builds the mock's flow (docs/ux/mockups/composable-masking-mockup.html) into the real panel. Per the user, the per-shape enable eye and reordering are **left to a later slice**.

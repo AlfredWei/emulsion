@@ -86,6 +86,8 @@
     else onChange(patch);
   }
   let menuOpen = $state(false);
+  /** @type {HTMLButtonElement | null} */
+  let addBtn = $state(null);
   let addMode = $state(/** @type {import('$lib/api/develop.js').Combine} */ ("subtract"));
   const SHAPE_ORDER = ["radial_gradient_mask", "linear_gradient_mask", "brush_mask", "luminance_range_mask", "color_range_mask"];
 
@@ -253,15 +255,33 @@
           >
             {#each COMBINE_MODES as m (m)}<option value={m}>{COMBINE_LABELS[m]}</option>{/each}
           </select>
-          <button type="button" class="x" title="Remove shape" aria-label="Remove shape" onclick={() => onRemoveShape(shape.id)}>×</button>
+          <button type="button" class="x" title="Remove shape" aria-label="Remove shape" onclick={() => {
+              onRemoveShape(shape.id);
+              // The row (and this button) unmount; keep keyboard focus inside the panel.
+              addBtn?.focus();
+            }}>×</button>
         </div>
       {/each}
     </div>
     {#if armedShape}
       <div class="hint">{COMBINE_LABELS[armedShape.combine]}: {ARM_HINTS[armedShape.tool] ?? ""}</div>
     {/if}
-    <div class="addbtn">
-      <button type="button" class="add" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>＋ Add shape ▾</button>
+    <!-- Esc closes the menu and returns focus to its button; tabbing out of it closes it too. -->
+    <div
+      class="addbtn"
+      role="presentation"
+      onkeydown={(e) => {
+        if (e.key === "Escape" && menuOpen) {
+          e.stopPropagation();
+          menuOpen = false;
+          /** @type {HTMLElement | null} */ (e.currentTarget.querySelector(".add"))?.focus();
+        }
+      }}
+      onfocusout={(e) => {
+        if (menuOpen && !e.currentTarget.contains(/** @type {Node | null} */ (e.relatedTarget))) menuOpen = false;
+      }}
+    >
+      <button type="button" class="add" bind:this={addBtn} aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>＋ Add shape ▾</button>
       {#if menuOpen}
         <div class="menu" role="menu">
           <div class="seg">
@@ -279,6 +299,8 @@
               title={why ?? ""}
               onclick={() => {
                 menuOpen = false;
+                // The menu unmounts with focus inside it; hand focus back so keyboard users keep their place.
+                addBtn?.focus();
                 onAddShape(addMode, op);
               }}
             >{SHAPE_NAMES[op]}{#if why}<span class="why">{why}</span>{/if}</button>
@@ -498,6 +520,10 @@
     top: 14px;
     left: 14px;
     width: 210px;
+    /* 16 shapes make the panel taller than a laptop-height canvas: scroll inside it instead of
+       overflowing past the canvas. */
+    max-height: calc(100% - 28px);
+    overflow-y: auto;
     z-index: 2;
     display: flex;
     flex-direction: column;

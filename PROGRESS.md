@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 2 (click-select, SAM 2 Tiny): RFC-0026 drafted (2026-10-06)
+
+#210 merged (composable masking closed, verification backlog mostly done); user chose **SAM 2 click-select** as the next M6 slice. Design only, **no product code changed, nothing measured** (all numbers are RFC-0023's).
+
+- **Decided in the RFC (for review)**: a Rust `ml` module on `ort =2.0.0-rc.13`, **CPU provider only** (CoreML is pathological for the SAM 2 encoder), sessions loaded lazily when the tool is armed, one embedding (~16 MB) cached in memory for the current image only. A new mask kind **`segment_mask`** stores the decoder's **256x256 logits quantised to 8-bit PNG** (plus the prompts), not prompts-only, so an edit renders with no model present; weight = `sigmoid(k * (logit - grow))` on both CPU and WGSL twins, making Feather/Grow non-destructive; it rides the existing brush raster layers (shares the 8-layer cap) and works as a base mask or an RFC-0025 modifier. UX: Select Subject tool, click / Alt-click, **the three candidates exposed**, accept creates the mask.
+- **Needs the user's sign-off**: the 155 MB weights are fetched on first use (SHA-256 pinned, ADR-0007 pattern) — an explicit, scoped exception to "no network", with a manual-files path for offline machines; and the re-host's own licence must be re-read before 2a ships.
+- **Slices**: 2a runtime (no UI), 2b engine, 2c UI, 2d polish; open risks (first-click latency, memory, raster size budget, soft edges) listed in the RFC.
+
 ## M6 slice 1c (composable masking polish) + the milestone-end verification backlog (2026-10-05)
 
 Closes the planned composable-masking slices (1a engine #207, 1b UI #209; the per-shape eye and reordering are deliberately left to a later slice).

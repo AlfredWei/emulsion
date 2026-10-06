@@ -1,9 +1,10 @@
-//! Click-to-select inference (M6 slice 2a, RFC-0026): SAM 2 Hiera-Tiny on the
+//! Click-to-select inference, run inside the `emulsion-ai` helper process (M6 slice 2a, RFC-0026): SAM 2 Hiera-Tiny on the
 //! ONNX Runtime CPU provider (CoreML is pathological for this encoder, RFC-0023
 //! §4). Two pieces of state, both lazy and both droppable:
 //!
 //! - the two `ort` sessions (≈ 155 MB of weights), created on first use and
-//!   dropped after an idle period (`drop_if_idle`);
+//!   dropped on `release()` (the helper process itself exits when idle, which is
+//!   what actually returns the memory to the OS);
 //! - **one** image embedding (≈ 16 MB), keyed by content hash, for the image
 //!   currently being edited. Never persisted (RFC-0026 §3.1).
 //!
@@ -20,12 +21,11 @@
 
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::TensorRef;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use crate::segment_models::SegmentModelPaths;
+use crate::protocol::{Candidate, ModelPaths, Prompt};
 
 /// Side of the square the model sees.
 pub const MODEL_SIZE: usize = 1024;
@@ -44,8 +44,6 @@ const HR1_SHAPE: [usize; 4] = [1, 64, 128, 128];
 
 #[derive(Debug, thiserror::Error)]
 pub enum SegmentError {
-    #[error("the click-select model is not installed")]
-    ModelsMissing,
     #[error("no image is prepared for {0}; prepare it first")]
     NotPrepared(String),
     #[error("inference failed: {0}")]
@@ -62,25 +60,6 @@ impl<T> From<ort::Error<T>> for SegmentError {
     fn from(e: ort::Error<T>) -> Self {
         SegmentError::Ort(e.to_string())
     }
-}
-
-/// One click, normalized to the full image (0..1 on both axes).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Prompt {
-    pub x: f32,
-    pub y: f32,
-    /// `true` = "this is part of it", `false` = "this is not".
-    pub positive: bool,
-}
-
-/// One decoder candidate: the 256x256 logits as a quantised grayscale PNG,
-/// the model's own IoU estimate, and the candidate's index in model order.
-#[derive(Debug, Clone, Serialize)]
-pub struct Candidate {
-    pub index: usize,
-    pub iou: f32,
-    /// Base64 of an 8-bit grayscale PNG: `0..255` <-> logit `-8..8`.
-    pub logits_png: String,
 }
 
 // ---- pure helpers ---------------------------------------------------------
@@ -197,7 +176,7 @@ impl Segmenter {
     /// Runs the encoder for `img` unless its embedding is cached. Returns the
     /// milliseconds the encoder took (0 on a cache hit) for status/telemetry.
     /// Blocking and CPU-heavy: call from `spawn_blocking`.
-    pub fn prepare(&self, paths: &SegmentModelPaths, content_hash: &str, img: &image::RgbImage) -> Result<u128, SegmentError> {
+    pub fn prepare(&self, paths: &ModelPaths, content_hash: &str, img: &image::RgbImage) -> Result<u128, SegmentError> {
         if self.has_embedding(content_hash) {
             self.touch();
             return Ok(0);
@@ -234,7 +213,7 @@ impl Segmenter {
     /// candidate's `logits_png` for a refinement click.
     pub fn decode(
         &self,
-        paths: &SegmentModelPaths,
+        paths: &ModelPaths,
         content_hash: &str,
         prompts: &[Prompt],
         refine: Option<&str>,
@@ -277,7 +256,7 @@ impl Segmenter {
         Ok(out)
     }
 
-    fn ensure_loaded<'a>(slot: &'a mut Option<Loaded>, paths: &SegmentModelPaths) -> Result<&'a mut Loaded, SegmentError> {
+    fn ensure_loaded<'a>(slot: &'a mut Option<Loaded>, paths: &ModelPaths) -> Result<&'a mut Loaded, SegmentError> {
         if slot.is_none() {
             *slot = Some(Loaded { encoder: build_session(&paths.encoder)?, decoder: build_session(&paths.decoder)?, last_used: Instant::now() });
         }
@@ -290,17 +269,6 @@ impl Segmenter {
                 l.last_used = Instant::now();
             }
         }
-    }
-
-    /// Drops the sessions (not the embedding) after `max_idle` without use.
-    /// Returns whether it dropped them.
-    pub fn drop_if_idle(&self, max_idle: Duration) -> bool {
-        let Ok(mut g) = self.loaded.lock() else { return false };
-        if g.as_ref().is_some_and(|l| l.last_used.elapsed() >= max_idle) {
-            *g = None;
-            return true;
-        }
-        false
     }
 
     /// Drops everything (sessions and embedding), e.g. when the tool is released.
@@ -371,11 +339,10 @@ mod tests {
     }
 
     #[test]
-    fn decode_without_prepare_says_so_and_idle_drop_is_a_no_op_when_nothing_is_loaded() {
+    fn decode_without_prepare_says_so() {
         let seg = Segmenter::default();
         assert!(!seg.has_embedding("abc"));
-        assert!(!seg.drop_if_idle(Duration::from_secs(0)));
-        let paths = SegmentModelPaths { encoder: "e".into(), decoder: "d".into() };
+        let paths = ModelPaths { encoder: "e".into(), decoder: "d".into() };
         assert!(matches!(seg.decode(&paths, "abc", &[], None), Err(SegmentError::NotPrepared(_))));
     }
 
@@ -395,7 +362,7 @@ mod tests {
     fn segment_matches_the_python_reference_on_the_six_rfc_0023_clicks() {
         let models = std::path::PathBuf::from(std::env::var("SEGMENT_MODELS_DIR").expect("SEGMENT_MODELS_DIR"));
         let refs = std::path::PathBuf::from(std::env::var("SEGMENT_REF_DIR").expect("SEGMENT_REF_DIR"));
-        let paths = SegmentModelPaths { encoder: models.join("sam2_hiera_tiny.encoder.onnx"), decoder: models.join("sam2_hiera_tiny.decoder.onnx") };
+        let paths = ModelPaths { encoder: models.join("sam2_hiera_tiny.encoder.onnx"), decoder: models.join("sam2_hiera_tiny.decoder.onnx") };
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test_image");
         let cases = [
             ("Field-corn-Liechtenstein-landscape.jpg", 0.5, 0.75),

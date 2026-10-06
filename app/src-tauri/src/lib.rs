@@ -22,7 +22,7 @@ mod metadata;
 mod metadata_writer;
 mod panorama_merge;
 mod preview_cache;
-mod segment;
+mod ai;
 mod segment_commands;
 mod segment_models;
 mod print;
@@ -2003,14 +2003,11 @@ pub fn run() {
                 import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir);
             });
 
-            // Click-select (RFC-0026): lazy sessions + one embedding; sessions are dropped after 5 idle minutes.
-            let segmenter = Arc::new(segment::Segmenter::default());
-            let idle_segmenter = segmenter.clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(60));
-                idle_segmenter.drop_if_idle(std::time::Duration::from_secs(5 * 60));
-            });
-            app.manage(segmenter);
+            // AI helper process (RFC-0026 §3.1): spawned lazily on the first AI request, not here.
+            app.manage(Arc::new(ai::supervisor::AiHelper::new(
+                ai::supervisor::AiHelper::default_exe(),
+                ai::supervisor::AiHelper::idle_secs_from_env(),
+            )));
             app.manage(AppState {
                 catalog,
                 face_detection_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2025,6 +2022,7 @@ pub fn run() {
             segment_commands::segment_prepare,
             segment_commands::segment_decode,
             segment_commands::segment_release,
+            segment_commands::ai_helper_info,
             report_spike_result,
             import_folder,
             import_files,

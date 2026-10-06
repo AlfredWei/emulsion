@@ -28,7 +28,7 @@ M6 names an "architecture decision required before scoping in detail": on-device
 - **No accuracy was measured.** Model choices in RFC-0023 §5 are baselines to be judged on real photographs, not decisions. Two have unresolved *license* questions that block shipping: `skyseg` (undocumented training data, third-party re-host) and Real-ESRGAN weights (no stated weight license).
 - Only an M1 Pro was measured; M6's minimum-hardware spec is undefined.
 
-- **Update 2026-10-06 (M6 slice 2a):** `ort` is now in the app crate and runs SAM 2 Tiny on the CPU provider through the app's own Rust path, reproducing Python onnxruntime's masks (RFC-0026 §7). **Memory is a new finding:** ~1.1-1.4 GB peak resident during the encoder, not returned when the sessions are dropped (macOS). Still Proposed: no Windows GPU/DirectML run, no signing story.
+- **Update 2026-10-06 (M6 slice 2a):** `ort` is now in the app crate and runs SAM 2 Tiny on the CPU provider through the app's own Rust path, reproducing Python onnxruntime's masks (RFC-0026 §7). **Memory is a new finding:** ~1.1-1.4 GB peak resident during the encoder, not returned when the sessions are dropped (macOS). **Consequence for this ADR: `ort` is linked only into a separate, long-lived `emulsion-ai` helper process** (RFC-0026 §3.1), spawned lazily and exiting after an idle period; the app process never loads it, which also contains model crashes. Still Proposed: no Windows GPU/DirectML run, no signing story.
 
 ## Alternatives considered
 

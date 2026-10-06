@@ -1,5 +1,5 @@
 /**
- * RFC-0026 slice 2a: the click-select commands are registered and behave
+ * RFC-0026 slice 2a: the click-select commands and the AI helper binary are registered and behave
  * correctly **without the model files** (the CI-safe path; the 155 MB weights
  * are never downloaded here). The real-model checks are the Rust `--ignored`
  * test (`segment_matches_the_python_reference_...`).
@@ -17,6 +17,14 @@ describe("Click-select model commands", () => {
       cmd,
       args,
     );
+
+  it("finds the AI helper binary next to the app executable, and does not start it", async () => {
+    const r = await invoke("ai_helper_info");
+    expect(r.err).toBeUndefined();
+    expect(r.ok.exists).toBe(true);
+    expect(r.ok.path).toMatch(/emulsion-ai(\.exe)?$/);
+    expect(r.ok.running).toBe(false);
+  });
 
   it("reports the model status with the download size and host", async () => {
     const r = await invoke("segment_model_status");

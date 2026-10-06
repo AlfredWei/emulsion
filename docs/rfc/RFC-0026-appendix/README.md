@@ -5,7 +5,9 @@
 
 ```
 SEGMENT_MODELS_DIR=<folder with the two .onnx files> SEGMENT_REF_DIR=<dump folder> \
-  cargo test --lib --release -- --ignored --nocapture segment_matches
+  cargo test --release --bin emulsion-ai -- --ignored --nocapture segment_matches
 ```
 
 Nothing here is committed besides the script; weights and dumps stay outside the repo.
+
+Memory split (needs the weights): `SEGMENT_MODELS_DIR=<dir> cargo test --release --test ai_helper -- --ignored --nocapture real_model` prints the app process's and the helper process's RSS and shows the helper idling out.

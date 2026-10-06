@@ -92,6 +92,7 @@ src-tauri/
 │   ├── export.rs / export_plugin.rs   Export pipeline / the v0 export-plugin hook
 │   ├── hdr_merge.rs / panorama_merge.rs   HDR bracket merge / feature-based panorama stitch
 │   ├── face_detect.rs, face_cluster.rs, face_models.rs, face_pipeline.rs   Face detection, clustering, model cache, orchestration
+│   ├── segment.rs, segment_models.rs, segment_commands.rs   Click-select (RFC-0026): SAM 2 Tiny on `ort` (CPU), model fetch/verify/import, Tauri commands
 │   ├── lens_profile.rs          Lens-profile matching for Lens Corrections
 │   ├── soft_proof.rs / print.rs   Soft proofing / Print module output
 │   └── storage.rs               User-configurable cache location (Settings > Storage)

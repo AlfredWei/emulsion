@@ -22,6 +22,9 @@ mod metadata;
 mod metadata_writer;
 mod panorama_merge;
 mod preview_cache;
+mod segment;
+mod segment_commands;
+mod segment_models;
 mod print;
 mod raw_decode;
 mod soft_proof;
@@ -2000,6 +2003,14 @@ pub fn run() {
                 import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir);
             });
 
+            // Click-select (RFC-0026): lazy sessions + one embedding; sessions are dropped after 5 idle minutes.
+            let segmenter = Arc::new(segment::Segmenter::default());
+            let idle_segmenter = segmenter.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                idle_segmenter.drop_if_idle(std::time::Duration::from_secs(5 * 60));
+            });
+            app.manage(segmenter);
             app.manage(AppState {
                 catalog,
                 face_detection_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2008,6 +2019,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            segment_commands::segment_model_status,
+            segment_commands::segment_download_models,
+            segment_commands::segment_import_model_files,
+            segment_commands::segment_prepare,
+            segment_commands::segment_decode,
+            segment_commands::segment_release,
             report_spike_result,
             import_folder,
             import_files,

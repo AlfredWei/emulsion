@@ -1,8 +1,8 @@
 // The fs_mask pass: local adjustments composited over the graded image.
 // Part of the WGSL source, split out of DevelopCanvas.svelte; see index.js for the
 // concatenation order, which must not change.
-export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4: linear, radial,
-    // brush, luminance range, colour range) -- the body of what used to be
+export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4 and 7: linear, radial,
+    // brush, luminance range, colour range, segment) -- the body of what used to be
     // inlined in fs_mask's mask loop, extracted unchanged (only m.start_end
     // / m.params / in.uv became se / pr / uv) so a composable-
     // masking modifier (RFC-0025) is evaluated by exactly the code a
@@ -99,6 +99,22 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4: lin
           let denom = max(feather_width, 0.001);
           weight = clamp((threshold - dist) / denom + 1.0, 0.0, 1.0);
           if (pr.y > 0.5) { weight = 1.0 - weight; }
+        } else if (kind > 6.5) {
+          // Segment (7, RFC-0026): a click-selected region stored as the
+          // model's 256x256 logit field. It rides this mask's own
+          // texture-array layer like Brush, but the layer holds the field
+          // upscaled (bilinear, CPU-side canvas) rather than dabs, byte
+          // q <-> logit q/255*8 - 4 (v is already q/255). se.x = grow
+          // (-100..100) shifts the threshold by up to 3 logits; pr.x =
+          // feather sets the ramp half-width h = 0.25 + 3.45*feather/100.
+          // Mirrors develop_engine/masks.rs's segment_mask_weight: a
+          // linear ramp, not a sigmoid, so it reaches exactly 0 and 1.
+          let layer = i32(pr.w);
+          let v = textureSampleLevel(brushMasks, srcSampler, uv, layer, 0.0).r;
+          let logit = v * 8.0 - 4.0 + se.x * 3.0 / 100.0;
+          let h = 0.25 + 3.45 * clamp(pr.x / 100.0, 0.0, 1.0);
+          weight = clamp(0.5 + logit / (2.0 * h), 0.0, 1.0);
+          if (pr.y > 0.5) { weight = 1.0 - weight; }
         }
         return weight;
     }
@@ -138,8 +154,11 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4: lin
         // brush branch). Each else-if here bounds exactly one kind, so a
         // future 5th kind just needs one more band inserted before the
         // final else, not a re-audit of the whole chain's ordering.
-        if (kind < 4.5) {
-          // Kinds 0-4: the base shape's weight (see component_weight above),
+        // Kinds 0-4 and 7 produce a weight from component_weight; 5 (spot)
+        // and 6 (red eye) have their own branches below.
+        let weighted = kind < 4.5 || kind > 6.5;
+        if (weighted) {
+          // Kinds 0-4 and 7: the base shape's weight (see component_weight above),
           // then fold this mask's modifiers in listed order (RFC-0025). Each
           // modifier is evaluated against the SAME rgb the mask entered
           // with, and the fold is the product family of masks.rs's
@@ -249,7 +268,7 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4: lin
           let corrected = luma * (1.0 - darkenAmt * 0.6);
           rgb = mix(rgb, vec3<f32>(corrected, corrected, corrected), weight);
         }
-        if (kind < 4.5) {
+        if (weighted) {
           rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
         }
 
@@ -268,7 +287,7 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4: lin
         // correct (pre-this-mask) rgb state -- so no separate
         // re-sample-and-re-invert step is needed regardless of kind,
         // unlike the brush-only texture-based mechanism this replaces.
-        if (kind < 4.5 && (kind > 1.5 || m.mods.y > 0.5) && i == i32(adj.selected_mask_index)) {
+        if (weighted && (kind > 1.5 || m.mods.y > 0.5) && i == i32(adj.selected_mask_index)) {
           rgb = mix(rgb, vec3<f32>(1.0, 0.24, 0.24), weight * 0.55);
         }
       }

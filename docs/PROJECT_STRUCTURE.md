@@ -129,8 +129,8 @@ src/
 │   │                        TextPromptDialog, SmartCollectionDialog, CopySettingsDialog, BackupPromptDialog
 │   ├── gpu/                 Develop WebGPU code, split out of DevelopCanvas: gpuHandles.js (handle object +
 │   │                        types), pipelines.js (init), sourceTexture.js (upload), renderFrame.js (per-frame
-│   │                        render/histogram), atmChain.js + brushRaster.js + maskPack.js (pure helpers; maskPack packs the
-│   │                        mask and modifier uniform arrays), shaders/*.js (the
+│   │                        render/histogram), atmChain.js + brushRaster.js + segmentRaster.js + maskPack.js (pure helpers; maskPack packs the
+│   │                        mask and modifier uniform arrays; segmentRaster decodes a segment mask's logit PNG), shaders/*.js (the
 │   │                        WGSL sections, assembled by shaders/index.js)
 │   ├── maskGeometry.js, cropMath.js, stepMath.js, histogramMath.js   Pure geometry/math helpers (with tests)
 │   ├── zoomMath.js          Develop's zoom model: 50–200% range, Fit as a mode, one `reduceZoom` for every input

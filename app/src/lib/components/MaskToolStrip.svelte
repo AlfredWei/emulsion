@@ -106,6 +106,7 @@
     let brushCount = 0;
     let rangeCount = 0;
     let colorCount = 0;
+    let segmentCount = 0;
     let spotCount = 0;
     let redEyeCount = 0;
     return new Map(
@@ -114,6 +115,7 @@
         if (mask.op === "brush_mask") return [mask.id, `Brush ${++brushCount}`];
         if (mask.op === "luminance_range_mask") return [mask.id, `Range ${++rangeCount}`];
         if (mask.op === "color_range_mask") return [mask.id, `Color ${++colorCount}`];
+        if (mask.op === "segment_mask") return [mask.id, `Subject ${++segmentCount}`];
         if (mask.op === "spot_mask") return [mask.id, `Spot ${++spotCount}`];
         if (mask.op === "red_eye_mask") return [mask.id, `Red Eye ${++redEyeCount}`];
         return [mask.id, `Gradient ${++gradientCount}`];

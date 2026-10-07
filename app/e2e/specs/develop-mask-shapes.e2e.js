@@ -36,7 +36,11 @@ const ROAD_PATCH = { u: 0.15, v: 0.96 };
  * Both start from a known stack written with `set_edit_stack` BEFORE Develop
  * opens (see develop-cpu-gpu-parity.e2e.js for why the order matters).
  */
-describe("Develop mask shapes (composable masking)", () => {
+describe("Develop mask shapes (composable masking)", function () {
+  // Each scenario reopens Develop and renders on the CPU path several times in a debug build, which
+  // alone takes 50-75 s; the suite-wide 120 s is too close when they run back to back.
+  this.timeout(240000);
+
   let versionId;
   let contentHash;
   let gpuAvailable = false;
@@ -218,6 +222,89 @@ describe("Develop mask shapes (composable masking)", () => {
     // The modifiers must actually change the pixel: the same mask with the
     // modifiers stripped (weight 0.5) renders differently on the CPU path.
     const bare = baseStack();
+    delete bare.ops[0].modifiers;
+    const barePreview = await browser.execute(
+      (p, hash, s) => window.__TAURI__.core.invoke("preview_edit_stack", { path: p, contentHash: hash, stack: s }),
+      FIXTURE_PATH,
+      contentHash,
+      bare,
+    );
+    const cpuBare = await readCpuPixel(barePreview.path, ROAD_PATCH.u, ROAD_PATCH.v);
+    expect(Math.abs(cpuBare.r - cpu.r) + Math.abs(cpuBare.g - cpu.g) + Math.abs(cpuBare.b - cpu.b)).toBeGreaterThan(12);
+  });
+
+  /** A 256x256 8-bit gray PNG (base64) whose byte at (x, y) is `fn(x, y)`, made in the page like
+   * the helper's: the stored form of a segment mask's logit field (RFC-0026). */
+  async function logitField(/** @type {(x: number, y: number) => number} */ fn) {
+    const bytes = [];
+    for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) bytes.push(Math.max(0, Math.min(255, Math.round(fn(x, y)))));
+    return browser.execute(async (data) => {
+      const canvas = new OffscreenCanvas(256, 256);
+      const ctx = canvas.getContext("2d");
+      const img = ctx.createImageData(256, 256);
+      for (let i = 0; i < data.length; i++) img.data.set([data[i], data[i], data[i], 255], i * 4);
+      ctx.putImageData(img, 0, 0);
+      const buf = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+      return btoa(bin);
+    }, bytes);
+  }
+
+  // RFC-0026 slice 2b: the segment kind end to end. The fields are smooth ramps with the ROAD_PATCH
+  // at a mid weight, so a dropped grow/feather, a mis-scaled byte-to-logit step or a missing layer
+  // upload moves the pixel by tens of levels, while 1-texel sampling differences stay far below
+  // TOLERANCE. Hand-derived weights at the patch: base ramp byte 128 at texel x = 38.4 (u = 0.15)
+  // -> logit 0.016, + grow 20 (0.6) -> 0.616, feather 100 (h = 3.7) -> w = 0.583; the subtract
+  // segment shape is byte 128 at texel y = 245.76 (v = 0.96) -> w = 0.502 -> 0.583 * (1 - 0.502).
+  it("CPU and GPU agree on a segment mask with a subtract segment shape", async function () {
+    if (!gpuAvailable) this.skip();
+    await browser.execute((vid) => window.__TAURI__.core.invoke("set_edit_stack", { versionId: vid, stack: { schema_version: 1, ops: [] } }), versionId);
+    const baseField = await logitField((x) => 128 + (x - 38.4) * 3);
+    const shapeField = await logitField((_x, y) => 128 + (y - 245.76) * 3);
+    const stack = {
+      schema_version: 1,
+      ops: [
+        {
+          op: "segment_mask",
+          id: "e2e-seg",
+          logits: baseField,
+          feather: 100,
+          grow: 20,
+          invert: false,
+          exposure: 2,
+          contrast: 0,
+          saturation: 0,
+          modifiers: [{ id: "e2e-seg-sub", combine: "subtract", shape: { op: "segment_mask", logits: shapeField, feather: 100, grow: 0, invert: false } }],
+        },
+      ],
+    };
+    await openWithStack(stack);
+    const canvasEl = await $(".canvas-wrap canvas");
+    await canvasEl.waitForExist({ timeout: 20000 });
+
+    const persisted = await getEditStack();
+    expect(persisted.ops[0].op).toBe("segment_mask");
+    expect(persisted.ops[0].modifiers[0].shape.logits).toBe(shapeField);
+
+    const preview = await browser.execute(
+      (p, hash, s) => window.__TAURI__.core.invoke("preview_edit_stack", { path: p, contentHash: hash, stack: s }),
+      FIXTURE_PATH,
+      contentHash,
+      persisted,
+    );
+    const cpu = await readCpuPixel(preview.path, ROAD_PATCH.u, ROAD_PATCH.v);
+    const gpu = await readGpuPixel(canvasEl, ROAD_PATCH.u, ROAD_PATCH.v);
+    if (gpu === null) throw new Error("GPU hover-pixel readback never stabilized");
+    for (const ch of /** @type {const} */ (["r", "g", "b"])) {
+      const diff = Math.abs(cpu[ch] - gpu[ch]);
+      if (diff > TOLERANCE) {
+        throw new Error(`segment mask channel ${ch}: CPU=${cpu[ch]} GPU=${gpu[ch]} diff=${diff} exceeds ${TOLERANCE} | cpu=${JSON.stringify(cpu)} gpu=${JSON.stringify(gpu)}`);
+      }
+    }
+
+    // Not a vacuous pass: the same mask without its subtract shape (weight 0.583, not 0.29) renders differently.
+    const bare = JSON.parse(JSON.stringify(persisted));
     delete bare.ops[0].modifiers;
     const barePreview = await browser.execute(
       (p, hash, s) => window.__TAURI__.core.invoke("preview_edit_stack", { path: p, contentHash: hash, stack: s }),

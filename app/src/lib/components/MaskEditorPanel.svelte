@@ -61,6 +61,7 @@
     brush_mask: "Brush",
     luminance_range_mask: "Luminance range",
     color_range_mask: "Colour range",
+    segment_mask: "Subject",
   });
   const SHAPE_ICONS = /** @type {Record<string, string>} */ ({
     linear_gradient_mask: "▭",
@@ -68,6 +69,7 @@
     brush_mask: "✎",
     luminance_range_mask: "◐",
     color_range_mask: "◍",
+    segment_mask: "◉",
   });
   const COMBINE_LABELS = /** @type {Record<string, string>} */ ({ add: "+ Add", subtract: "− Subtract", intersect: "∩ Intersect" });
   const ARM_HINTS = /** @type {Record<string, string>} */ ({
@@ -113,11 +115,13 @@
           ? "Luminance Range"
           : mask.op === "color_range_mask"
             ? "Color Range"
-            : mask.op === "spot_mask"
-              ? "Spot Removal"
-              : mask.op === "red_eye_mask"
-                ? "Red Eye Correction"
-                : "Linear Gradient",
+            : mask.op === "segment_mask"
+              ? "Subject"
+              : mask.op === "spot_mask"
+                ? "Spot Removal"
+                : mask.op === "red_eye_mask"
+                  ? "Red Eye Correction"
+                  : "Linear Gradient",
   );
 </script>
 

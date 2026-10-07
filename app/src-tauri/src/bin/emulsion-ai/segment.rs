@@ -31,8 +31,14 @@ use crate::protocol::{Candidate, ModelPaths, Prompt};
 pub const MODEL_SIZE: usize = 1024;
 /// Side of the decoder's mask output (logits), covering the whole frame.
 pub const MASK_SIZE: usize = 256;
-/// Logits are stored as 8-bit over this symmetric range (RFC-0026 §3.2).
-pub const LOGIT_RANGE: f32 = 8.0;
+/// Logits are stored over this symmetric range (RFC-0026 §3.2, revised in slice 2b): beyond ±4
+/// the edge no longer moves, and clipping there is what keeps the PNG small.
+pub const LOGIT_RANGE: f32 = 4.0;
+/// ... in this many 0.5-logit steps per side of zero: a *mid-rise* quantiser (16 levels, centres
+/// at ±0.25 ... ±3.75, none at 0), so the sign of every logit survives coding exactly, stored
+/// scaled onto 0..255. Measured on the RFC-0023 clicks: 0.6-17 KB of base64 per mask against
+/// 26-64 KB at full 8-bit over ±8.
+pub const LOGIT_STEPS: f32 = 8.0;
 
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
@@ -94,11 +100,17 @@ pub fn pack_prompts(prompts: &[Prompt]) -> (Vec<f32>, Vec<f32>) {
     (coords, labels)
 }
 
-/// Logits -> 8-bit: `-8..8` mapped linearly onto `0..255`, clamped.
+/// Logits -> bytes: each logit goes to the centre of its 0.5-wide step (clamped to the outermost
+/// steps), scaled onto `0..255`.
 pub fn quantise_logits(logits: &[f32]) -> Vec<u8> {
     logits
         .iter()
-        .map(|&l| (((l.clamp(-LOGIT_RANGE, LOGIT_RANGE) + LOGIT_RANGE) / (2.0 * LOGIT_RANGE)) * 255.0).round() as u8)
+        .map(|&l| {
+            let step = LOGIT_RANGE / LOGIT_STEPS;
+            let k = (l / step).floor().clamp(-LOGIT_STEPS, LOGIT_STEPS - 1.0);
+            let centre = (k + 0.5) * step;
+            ((centre + LOGIT_RANGE) / (2.0 * LOGIT_RANGE) * 255.0).round() as u8
+        })
         .collect()
 }
 
@@ -110,7 +122,8 @@ pub fn dequantise_logits(bytes: &[u8]) -> Vec<f32> {
 pub fn encode_logits_png(quantised: &[u8]) -> Result<Vec<u8>, SegmentError> {
     use image::ImageEncoder;
     let mut out = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut out)
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    PngEncoder::new_with_quality(&mut out, CompressionType::Best, FilterType::Sub)
         .write_image(quantised, MASK_SIZE as u32, MASK_SIZE as u32, image::ExtendedColorType::L8)
         .map_err(|e| SegmentError::Image(e.to_string()))?;
     Ok(out)
@@ -310,20 +323,21 @@ mod tests {
     }
 
     #[test]
-    fn logit_quantisation_hits_the_ends_and_the_middle_and_round_trips_within_half_a_step() {
-        assert_eq!(quantise_logits(&[-20.0, -8.0, 0.0, 8.0, 20.0]), vec![0, 0, 128, 255, 255]);
-        let step = 2.0 * LOGIT_RANGE / 255.0;
-        for l in [-7.9f32, -3.3, -0.1, 0.0, 0.07, 2.5, 7.9] {
+    fn logit_quantisation_keeps_every_sign_and_stays_within_half_a_step() {
+        let step = LOGIT_RANGE / LOGIT_STEPS; // 0.5 logit
+        // The ends clamp to the outermost step centres (±3.75), symmetrically.
+        let ends = dequantise_logits(&quantise_logits(&[-20.0, 20.0]));
+        assert!((ends[0] + ends[1]).abs() < 1e-3 && ends[1] > 3.7 && ends[1] <= LOGIT_RANGE);
+        for l in [-3.7f32, -2.3, -0.4, -0.01, 0.01, 0.07, 1.6, 3.7] {
             let back = dequantise_logits(&quantise_logits(&[l]))[0];
-            assert!((back - l).abs() <= step / 2.0 + 1e-5, "{l} -> {back}");
+            assert!((back - l).abs() <= step / 2.0 + 0.03, "{l} -> {back}");
+            assert_eq!(back > 0.0, l > 0.0, "the sign of {l} must survive coding (got {back})");
         }
-        // The sign (inside/outside) is never lost to quantisation away from zero.
-        assert!(dequantise_logits(&quantise_logits(&[0.2]))[0] > 0.0 && dequantise_logits(&quantise_logits(&[-0.2]))[0] < 0.0);
     }
 
     #[test]
     fn a_logit_field_survives_png_and_base64() {
-        let logits: Vec<f32> = (0..MASK_SIZE * MASK_SIZE).map(|i| ((i % 256) as f32 - 128.0) / 16.0).collect();
+        let logits: Vec<f32> = (0..MASK_SIZE * MASK_SIZE).map(|i| ((i % 256) as f32 - 128.0) / 32.0).collect();
         let q = quantise_logits(&logits);
         let png = encode_logits_png(&q).unwrap();
         let again = decode_logits_png(&unb64(&b64(&png)).unwrap()).unwrap();
@@ -412,5 +426,44 @@ mod tests {
         seg.release();
         println!("rss after release(): {} MB", rss_mb());
         println!("worst mask IoU over all candidates: {worst:.4}");
+    }
+
+    /// Size check for RFC-0026 §3.2's per-mask budget, on real SAM logits (the RFC-0023 dump), coded
+    /// exactly as the helper ships them.
+    /// `SEGMENT_REF_DIR=... cargo test --release --bin emulsion-ai -- --ignored --nocapture png_sizes`
+    #[test]
+    #[ignore]
+    fn png_sizes_of_real_logit_fields() {
+        let refs = std::path::PathBuf::from(std::env::var("SEGMENT_REF_DIR").expect("SEGMENT_REF_DIR"));
+        let read_f32 = |p: std::path::PathBuf| -> Vec<f32> { std::fs::read(p).unwrap().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect() };
+        let mut worst = 0;
+        for i in 0..6 {
+            let logits = read_f32(refs.join(format!("case{i}.logits.f32")));
+            let ious = read_f32(refs.join(format!("case{i}.iou.f32")));
+            for k in 0..3 {
+                let l = &logits[k * MASK_SIZE * MASK_SIZE..(k + 1) * MASK_SIZE * MASK_SIZE];
+                let size = b64(&encode_logits_png(&quantise_logits(l)).unwrap()).len();
+                // What the coding costs in selection accuracy: mask IoU of (logit > 0) before vs after.
+                let after = dequantise_logits(&quantise_logits(l));
+                let (mut inter, mut uni) = (0usize, 0usize);
+                for (a, b) in l.iter().zip(&after) {
+                    let (a, b) = (*a > 0.0, *b > 0.0);
+                    inter += (a && b) as usize;
+                    uni += (a || b) as usize;
+                }
+                let iou = if uni == 0 { 1.0 } else { inter as f32 / uni as f32 };
+                // Ambiguous fields (logits near 0 over large areas) flip more under any coarse coding; the
+                // candidates the model is confident about must keep their selection.
+                if ious[k] >= 0.3 {
+                    assert!(iou >= 0.995, "case {i} candidate {k}: coding changed the selection (IoU {iou})");
+                }
+                println!("case {i} candidate {k} pred_iou {:.2}: {size} bytes of base64, selection IoU after coding {iou:.4}", ious[k]);
+                if ious[k] >= 0.3 {
+                    worst = worst.max(size);
+                }
+            }
+        }
+        println!("largest rated candidate: {worst} bytes");
+        assert!(worst <= 30_000, "per-mask budget of RFC-0026 §3.2 exceeded: {worst}");
     }
 }

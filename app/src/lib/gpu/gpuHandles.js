@@ -257,6 +257,8 @@ export const HISTOGRAM_SIZE = 256;
  * @property {GPUTexture | null} brushTextureArray
  * @property {Map<any, any>} brushRasterState
  * @property {number[]} freeBrushLayers
+ * @property {(() => void) | null} requestRender - set by the canvas; called when something the render
+ *   depends on finished asynchronously (a decoded segment-mask field), so it can draw again
  * @property {OffscreenCanvas | null} sourceSampleCanvas
  * @property {OffscreenCanvasRenderingContext2D | null} sourceSampleCtx
  */
@@ -684,6 +686,7 @@ export function createGpuHandles() {
      * @type {Map<string, { canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D, layer: number, dabsDrawn: number, featherDrawn: number, firstDabX: number, firstDabY: number }>} */
     brushRasterState: new Map(),
     freeBrushLayers: [],
+    requestRender: null,
     // M3 Slice 8: retained sampleable pixel data, drawn once per image load
     // (see loadImage) into a persistent 2D OffscreenCanvas -- the decoded
     // ImageBitmap itself is discarded right after its one-time

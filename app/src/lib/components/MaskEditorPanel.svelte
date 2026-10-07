@@ -29,6 +29,7 @@
    *   armedShape?: { combine: import('$lib/api/develop.js').Combine, tool: string } | null,
    *   modifierCount?: number,
    *   brushLayers?: number,
+   *   onRefineSubject?: () => void,
    * }}
    */
   let {
@@ -50,6 +51,7 @@
     armedShape = null,
     modifierCount = 0,
     brushLayers = 0,
+    onRefineSubject = () => {},
   } = $props();
 
   // Composable masking (RFC-0025): the mask's adjustments always live on the mask itself; the
@@ -350,6 +352,10 @@
       <span class="val">{edit.grow >= 0 ? "+" : ""}{edit.grow}</span>
       {@render stepButtons(edit.grow, 1, -100, 100, (v) => onEdit({ grow: v }))}
     </div>
+    {#if Array.isArray(edit.prompts) && edit.prompts.length > 0}
+      <!-- Resumes the saved clicks: the next click adds to / removes from this selection. -->
+      <button type="button" class="refine" title="Click the image to add to or remove from this selection" onclick={onRefineSubject}>Refine with clicks…</button>
+    {/if}
   {/if}
 
   {#if edit.op === "luminance_range_mask"}
@@ -695,6 +701,21 @@
     color: var(--text-tertiary);
     opacity: 0.3;
     cursor: default;
+  }
+  .refine {
+    all: unset;
+    cursor: pointer;
+    align-self: flex-start;
+    margin: 0 0 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+  }
+  .refine:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
   }
   .invert-row {
     display: flex;

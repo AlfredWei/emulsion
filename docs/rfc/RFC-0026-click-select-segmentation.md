@@ -142,5 +142,13 @@ The engine for `segment_mask` is in (CPU, WGSL, layer upload, base and modifier)
 - **Model dialog** (§3.5): consent text with the host and size from `segment_model_status`, *Download*, *I have the files* (native file picker, backend checks name + checksum), progress, failure with *Try again*. **A running download cannot be cancelled** (no abort handle yet): the dialog says so and hides Cancel meanwhile.
 - **Keys** (Develop, tool armed, no modifier): Enter keeps, Esc discards, Tab cycles candidates. **Alt/Option-click** is the negative point.
 - **Helper lifetime in the UI**: the embedding is released when the open image changes; leaving Develop relies on the helper's idle exit (§3.1).
-- **Verified / not verified**: see PROGRESS (slice 2c). In short, the flow was driven in the real component tree on a real GPU with a stub decoder and in the real window without the model, but **never with the real model through the UI**.
+- **Verified / not verified**: see PROGRESS (slice 2c; slice 2d adds the first real-model session, §10). In short, the flow was driven in the real component tree on a real GPU with a stub decoder and in the real window without the model, but **never with the real model through the UI**.
+
+## 10. Corrected during implementation (slice 2d, 2026-10-07)
+
+- **First real-model session through the UI**, in the real window (Apple M1 Pro, debug build, one 1779x2848 portrait): arm -> ready 3.1 s cold (helper spawn + session load + encoder); a click -> persisted mask in about 0.5 s; stored field 5.4 KB base64; Tab, Alt-click, Enter and resume all work. The numbers are one machine, one photo, a debug build; the release build's decode is 23-64 ms (§7).
+- **Downloads can be cancelled** (`segment_cancel_download`; the partial file is deleted, a completed file is kept so the next attempt resumes at the missing one). The dialog's Esc and a *Cancel download* button use it.
+- **A saved mask can be re-opened for refinement**: *Refine with clicks...* seeds the session from the stored `prompts` and the stored `logits` (used as the decoder's `mask_input`, so no live candidates exist until the next click). Cancel restores the saved selection. This closes §3.4's "resume refinement from its stored prompts/candidate".
+- **Helper release**: embeddings are released on image change and on leaving Develop; the helper process itself exits by its idle timer (§3.1).
+- **Still open**: Windows; quality across many photos; tuning of History rows per click; a user setting for the helper's idle time.
 

@@ -2022,6 +2022,7 @@ pub fn run() {
             segment_commands::segment_prepare,
             segment_commands::segment_decode,
             segment_commands::segment_release,
+            segment_commands::segment_cancel_download,
             segment_commands::ai_helper_info,
             report_spike_result,
             import_folder,

@@ -18,7 +18,7 @@
   import MaskToolStrip from "$lib/components/MaskToolStrip.svelte";
   import SegmentModelDialog from "$lib/components/SegmentModelDialog.svelte";
   import { segment } from "$lib/state/segment.svelte.js";
-  import { handleSegmentToolToggle, handleAddSegmentShape, handleSegmentClick, handleSegmentCandidate, handleSegmentAccept, handleSegmentCancel, handleSegmentDownload, handleSegmentImport, handleSegmentDialogCancel, handleSegmentDialogRetry } from "$lib/actions/segmentActions.js";
+  import { handleSegmentToolToggle, handleAddSegmentShape, handleSegmentClick, handleSegmentCandidate, handleSegmentAccept, handleSegmentCancel, handleSegmentDownload, handleSegmentImport, handleSegmentDialogCancel, handleSegmentDialogRetry, handleSegmentRefine } from "$lib/actions/segmentActions.js";
 </script>
 
 <div class="develop-body">
@@ -138,6 +138,7 @@
       armedShape={masks.shapeTarget}
       modifierCount={countModifiers(develop.editStack)}
       brushLayers={countBrushLayers(develop.editStack)}
+      onRefineSubject={handleSegmentRefine}
     />
   {/if}
   <div

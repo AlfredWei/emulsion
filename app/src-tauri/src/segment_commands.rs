@@ -9,6 +9,7 @@ use crate::segment_models::{self, ModelStatus};
 use crate::{preview_cache, resolve_cache_root, AppState};
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -34,14 +35,26 @@ pub async fn segment_model_status(app: AppHandle, state: State<'_, AppState>) ->
     tauri::async_runtime::spawn_blocking(move || segment_models::status(&dir)).await.map_err(|e| e.to_string())
 }
 
+/// Set by `segment_cancel_download`, reset when a download starts. One download at a time is all the
+/// dialog allows, so one flag is enough (same assumption as the face-detection cancel flag).
+static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Stops a running `segment_download_models` (it then fails with "download cancelled"). A no-op
+/// when nothing is downloading.
+#[tauri::command]
+pub fn segment_cancel_download() {
+    DOWNLOAD_CANCEL.store(true, Ordering::Relaxed);
+}
+
 /// Fetches the model files after the user consented (the UI's dialog, slice 2c).
 /// Emits `"segment-model-progress"` `{downloaded, total}` at most every ~250 ms.
 #[tauri::command]
 pub async fn segment_download_models(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
     let dir = models_dir(&app, &state)?;
+    DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
     let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
     let progress_app = app.clone();
-    segment_models::ensure_models(&dir, move |downloaded, total| {
+    segment_models::ensure_models(&dir, &DOWNLOAD_CANCEL, move |downloaded, total| {
         if downloaded == total || last_emit.elapsed() >= std::time::Duration::from_millis(250) {
             last_emit = std::time::Instant::now();
             let _ = progress_app.emit("segment-model-progress", ModelProgress { downloaded, total });

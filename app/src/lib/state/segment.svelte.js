@@ -11,12 +11,14 @@
 import { segmentRelease } from "$lib/api/segment.js";
 import { masks } from "./masks.svelte.js";
 import { develop } from "./develop.svelte.js";
+import { shell } from "./shell.svelte.js";
 
 export class SegmentStore {
-  /** @param {import('./masks.svelte.js').MaskStore} masks @param {import('./develop.svelte.js').DevelopStore} develop */
-  constructor(masks, develop) {
+  /** @param {import('./masks.svelte.js').MaskStore} masks @param {import('./develop.svelte.js').DevelopStore} develop @param {{ activeModule: string }} shell */
+  constructor(masks, develop, shell) {
     this.masks = masks;
     this.develop = develop;
+    this.shell = shell;
   }
 
   /** `checking` model files -> `preparing` (encoder) -> `ready` for clicks -> `deciding` (a click is
@@ -31,6 +33,15 @@ export class SegmentStore {
   candidateIndex = $state(0);
   /** The mask (or shape) this session created and keeps refining; null until the first click lands. */
   maskId = $state(/** @type {string | null} */ (null));
+  /** Refining a SAVED mask: the mask/shape to resume, applied once the image is prepared. Its
+   * stored prompts and logits seed the first click (there are no live candidates yet), and
+   * `original` is what Cancel restores.
+   * @type {null | { id: string, prompts: import('$lib/api/develop.js').SegmentPrompt[], logits: string, candidate: number | undefined }} */
+  seed = null;
+  /** @type {string | null} */
+  seedLogits = null;
+  /** @type {null | { logits: string, prompts: import('$lib/api/develop.js').SegmentPrompt[], candidate: number | undefined }} */
+  original = null;
   /** Content hash the helper currently holds an embedding for (so it can be released on image change). */
   preparedHash = /** @type {string | null} */ (null);
   /** Bumped on every reset so an answer for an abandoned session is ignored. */
@@ -55,6 +66,9 @@ export class SegmentStore {
     this.candidates = [];
     this.candidateIndex = 0;
     this.maskId = null;
+    this.seed = null;
+    this.seedLogits = null;
+    this.original = null;
   }
 
   install() {
@@ -70,12 +84,20 @@ export class SegmentStore {
         segmentRelease().catch(() => {});
       }
     });
+    // Leaving Develop gives the helper's embedding back at once (its idle exit then returns the rest).
+    $effect(() => {
+      if (this.shell.activeModule !== "develop" && this.preparedHash !== null) {
+        this.preparedHash = null;
+        this.reset();
+        segmentRelease().catch(() => {});
+      }
+    });
   }
 }
 
-/** @param {import('./masks.svelte.js').MaskStore} m @param {import('./develop.svelte.js').DevelopStore} d */
-export function createSegmentStore(m, d) {
-  return new SegmentStore(m, d);
+/** @param {import('./masks.svelte.js').MaskStore} m @param {import('./develop.svelte.js').DevelopStore} d @param {{ activeModule: string }} sh */
+export function createSegmentStore(m, d, sh) {
+  return new SegmentStore(m, d, sh);
 }
 
-export const segment = createSegmentStore(masks, develop);
+export const segment = createSegmentStore(masks, develop, shell);

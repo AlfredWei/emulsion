@@ -31,6 +31,12 @@ export function segmentDownloadModels() {
   return invoke("segment_download_models");
 }
 
+/** Stops a running download; it then rejects with "download cancelled". A no-op otherwise.
+ * @returns {Promise<void>} */
+export function segmentCancelDownload() {
+  return invoke("segment_cancel_download");
+}
+
 /** The offline path: verify and install user-chosen model files.
  * @param {string[]} paths @returns {Promise<SegmentModelStatus>} */
 export function segmentImportModelFiles(paths) {
@@ -62,6 +68,12 @@ export function segmentRelease() {
  * @param {(p: { downloaded: number, total: number }) => void} handler */
 export function onSegmentModelProgress(handler) {
   return listen("segment-model-progress", (/** @type {{ payload: { downloaded: number, total: number } }} */ e) => handler(e.payload));
+}
+
+/** True for the rejection a cancelled download ends with.
+ * @param {unknown} err */
+export function isCancelled(err) {
+  return String(err).includes("download cancelled");
 }
 
 /** True for the decoder's "the helper restarted, prepare again" failure.

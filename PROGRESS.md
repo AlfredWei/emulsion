@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 2d (click-select polish + the first real-model session) (2026-10-07)
+
+- **Real model through the real window (first time)**: with the user's go-ahead the two SAM 2 Tiny files were fetched to the scratchpad (SHA-256 equal to the pinned values), installed through the app's own *I have the files* command (214 ms, checksum-verified), and a session driven in the real Tauri window on Apple/Metal by the local-only spec `develop-select-subject-real-model.e2e.js` (needs `SEGMENT_MODELS_DIR`; skipped otherwise). Measured, M1 Pro **debug** build, 1779x2848 portrait: arm -> ready (helper spawn + session load + encoder) **3.1 s**; click 1 (pink shirt) -> mask persisted **0.49 s**; the stored field is **5.4 KB** base64 (budget 30 KB), coverage 21.9%, the clicked point selected; **Tab** switches candidate (3 offered); click 2 (+face) 0.50 s, coverage 49.6%, face and shirt in, background out; Alt-click sent `positive:false` and persisted (3 prompts); **Enter** kept one mask; **Refine with clicks** resumed the saved mask (same id, 4 prompts). The screenshot shows the red overlay on the person, green/red click dots, 1/2/3, Done/Cancel and the panel. Not asserted: that the mask is "good" (one photo, judged by eye only).
+- **Cancellable download**: `segment_cancel_download` (a flag polled per chunk; the partial file is removed, finished files stay), a *Cancel download* button and Esc in the dialog; the Cancelled ending closes the dialog quietly. Rust test: cancel before the request makes no network call and leaves nothing.
+- **Refine a saved mask**: the panel's *Refine with clicks...* (for a Subject mask or shape with stored clicks) arms the tool seeded with the stored prompts and logits (asks for the model first if absent); the next click edits the same mask/shape; **Cancel restores the saved selection** (or changes nothing if no click landed).
+- **Release on leaving Develop**: the helper's embedding is released when the module changes, as it already was when the image changes (store effect, tested).
+- **Verified**: vitest (store effects, 7 refine/cancel tests, download cancel), `cargo test` incl. the cancel test, svelte-check. **Not verified** (backlog 12, reduced): Windows (Alt-click, helper spawn/kill, speed), the live *download* button path (the fetch itself; install via import was real), narrow-window strip, History rows per click not tuned, quality over many photos.
+
 ## M6 slice 2c (click-select UI): the Select Subject tool (2026-10-07)
 
 The user-facing flow on top of 2a (helper) and 2b (engine). RFC-0026 §9 has the detail.
@@ -62,7 +70,7 @@ Status after the 2026-10-05 verification round:
 9. **Undo/redo and snapshot restore through shape ops in the real app** — OPEN (covered by action and persistence tests only).
 10. **Click-select 2a (RFC-0026 §7)** — OPEN: SAM 2 CPU speed and memory on a real Windows machine; the live 155 MB download through `segment_download_models` (only HEAD-verified so far); **installer bundling and signing of the `emulsion-ai` helper** on both platforms.
 11. **Click-select 2b (RFC-0026 §8)** — OPEN: segment masks on a second GPU (Windows/D3D), with all 8 raster layers in use and at the native-resolution tier, and a real export timing of the CPU path.
-12. **Click-select 2c (RFC-0026 §9)** — OPEN: a real-model Select Subject session through the UI on a real photo (first click latency, candidates, Alt-click, Add shape ▸ Subject), the live 155 MB download through the dialog, Alt-click on Windows, a narrow window's tool strip, a cancellable download, and resuming refinement of a saved mask.
+12. **Click-select 2c/2d (RFC-0026 §9, §10)** — mostly DONE (a real-model session through the UI, cancellable download and resume-refine were verified in 2d). Still OPEN: Windows (Alt-click, helper spawn/kill, CPU speed, memory), the live *Download button* fetch of 155 MB through the dialog (install by import was real), a narrow window's tool strip, Add shape ▸ Subject with the real model, and quality over a range of photos.
 
 ## M6 slice 1b (composable masking UI): the Shapes list, per RFC-0025 (2026-10-05)
 

@@ -5,12 +5,14 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("$lib/api/segment.js", () => ({
   segmentModelStatus: vi.fn(),
   segmentDownloadModels: vi.fn(),
+  segmentCancelDownload: vi.fn(async () => {}),
   segmentImportModelFiles: vi.fn(),
   segmentPrepare: vi.fn(),
   segmentDecode: vi.fn(),
   segmentRelease: vi.fn(async () => {}),
   onSegmentModelProgress: vi.fn(async () => () => {}),
   isNotPrepared: (/** @type {unknown} */ e) => String(e).includes("not_prepared"),
+  isCancelled: (/** @type {unknown} */ e) => String(e).includes("download cancelled"),
 }));
 
 import * as A from "./segmentActions.js";
@@ -20,7 +22,7 @@ import { develop } from "$lib/state/develop.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
 import { segment } from "$lib/state/segment.svelte.js";
-import { addMask, createRadialGradientMask, listModifiers } from "$lib/api/develop.js";
+import { addMask, createRadialGradientMask, createSegmentMask, createModifier, addModifier, listModifiers } from "$lib/api/develop.js";
 
 const m = /** @type {Record<string, import('vitest').Mock>} */ (/** @type {any} */ (api));
 const READY = { state: "ready", download_bytes: 0, host: "huggingface.co" };
@@ -306,14 +308,116 @@ describe("the model dialog", () => {
     expect(segment.dialog).toBe("consent");
   });
 
-  it("Cancel closes the dialog and leaves the tool; it cannot interrupt a running download", () => {
-    segment.dialog = "downloading";
-    A.handleSegmentDialogCancel();
-    expect(segment.dialog).toBe("downloading");
-    expect(masks.activeTool).toBe("segment");
+  it("Cancel closes the dialog and leaves the tool", () => {
     segment.dialog = "consent";
     A.handleSegmentDialogCancel();
     expect(segment.dialog).toBeNull();
     expect(masks.activeTool).toBeNull();
+  });
+
+  it("Cancel during a download asks the backend to stop it; the download ending 'cancelled' then closes the dialog quietly", async () => {
+    /** @type {(e: any) => void} */
+    let fail = () => {};
+    m.segmentDownloadModels.mockReturnValue(new Promise((_r, rej) => (fail = rej)));
+    const running = A.handleSegmentDownload();
+    await vi.waitFor(() => expect(segment.dialog).toBe("downloading"));
+    A.handleSegmentDialogCancel();
+    expect(m.segmentCancelDownload).toHaveBeenCalledTimes(1);
+    expect(segment.dialog).toBe("downloading"); // closes only when the download itself ends
+    fail("download cancelled");
+    await running;
+    expect(segment.dialog).toBeNull();
+    expect(segment.dialogError).toBe("");
+    expect(masks.activeTool).toBeNull();
+  });
+});
+
+describe("refining a saved Subject mask", () => {
+  const prompts = [{ x: 0.3, y: 0.4, positive: true }];
+  const saved = () => ({ ...createSegmentMask("SAVED", prompts, 1, "seg-1"), feather: 10, grow: 5 });
+
+  beforeEach(() => {
+    develop.editStack = addMask(develop.editStack, saved());
+    masks.selectedMaskId = "seg-1";
+  });
+
+  it("resumes the saved clicks: the next click refines from the stored logits and edits the same mask", async () => {
+    await A.handleSegmentRefine();
+    expect(masks.activeTool).toBe("segment");
+    expect(segment.phase).toBe("ready");
+    expect(segment.prompts).toEqual(prompts);
+    expect(segment.maskId).toBe("seg-1");
+    m.segmentDecode.mockResolvedValue([cand(0, "REFINED")]);
+    await A.handleSegmentClick({ x: 0.6, y: 0.4, positive: false });
+    expect(m.segmentDecode).toHaveBeenCalledWith(
+      "hash-a",
+      [
+        { x: 0.3, y: 0.4, positive: true },
+        { x: 0.6, y: 0.4, positive: false },
+      ],
+      "SAVED",
+    );
+    const masksNow = /** @type {any[]} */ (stackMasks());
+    expect(masksNow).toHaveLength(1);
+    expect(masksNow[0]).toMatchObject({ id: "seg-1", logits: "REFINED", candidate: 0, feather: 10, grow: 5 });
+    expect(masksNow[0].prompts).toHaveLength(2);
+  });
+
+  it("Cancel after a refining click puts the saved selection back and keeps the mask", async () => {
+    await A.handleSegmentRefine();
+    m.segmentDecode.mockResolvedValue([cand(0, "REFINED")]);
+    await A.handleSegmentClick({ x: 0.6, y: 0.4, positive: false });
+    A.handleSegmentCancel();
+    expect(masks.activeTool).toBeNull();
+    expect(stackMasks()).toHaveLength(1);
+    expect(/** @type {any} */ (stackMasks()[0])).toMatchObject({ logits: "SAVED", candidate: 1, prompts });
+  });
+
+  it("Cancel before any click changes nothing", async () => {
+    await A.handleSegmentRefine();
+    const before = develop.editStack;
+    A.handleSegmentCancel();
+    expect(develop.editStack).toBe(before);
+  });
+
+  it("refines a Subject SHAPE of the selected mask, addressed by the shape's id", async () => {
+    develop.editStack = { schema_version: 1, ops: [] };
+    const base = createRadialGradientMask({ x: 0.5, y: 0.5 }, 0.3, 0.3);
+    const seg = saved();
+    develop.editStack = addMask(develop.editStack, base);
+    develop.editStack = addModifier(develop.editStack, base.id, createModifier("subtract", seg, "shape-1"));
+    masks.selectedMaskId = base.id;
+    masks.selectedShapeId = "shape-1";
+    await A.handleSegmentRefine();
+    expect(segment.maskId).toBe("shape-1");
+    m.segmentDecode.mockResolvedValue([cand(2, "SHAPE-REFINED")]);
+    await A.handleSegmentClick({ x: 0.2, y: 0.2, positive: true });
+    const owner = /** @type {any} */ (develop.editStack.ops[0]);
+    expect(listModifiers(owner)[0].shape).toMatchObject({ logits: "SHAPE-REFINED", candidate: 2 });
+  });
+
+  it("with the model missing it asks first, and resumes the saved clicks once the model is installed", async () => {
+    m.segmentModelStatus.mockResolvedValue(MISSING);
+    await A.handleSegmentRefine();
+    expect(segment.dialog).toBe("consent");
+    m.segmentDownloadModels.mockResolvedValue(READY);
+    await A.handleSegmentDownload();
+    expect(segment.phase).toBe("ready");
+    expect(segment.maskId).toBe("seg-1");
+    expect(segment.prompts).toEqual(prompts);
+  });
+
+  it("does nothing for a mask with no stored clicks, or any other kind of mask", async () => {
+    develop.editStack = { schema_version: 1, ops: [] };
+    develop.editStack = addMask(develop.editStack, createSegmentMask("NOPROMPTS", undefined, undefined, "seg-2"));
+    masks.selectedMaskId = "seg-2";
+    await A.handleSegmentRefine();
+    expect(masks.activeTool).toBeNull();
+    const radial = createRadialGradientMask({ x: 0.5, y: 0.5 }, 0.3, 0.3);
+    develop.editStack = addMask(develop.editStack, radial);
+    masks.selectedMaskId = radial.id;
+    await A.handleSegmentRefine();
+    expect(masks.activeTool).toBeNull();
+    expect(m.segmentModelStatus).not.toHaveBeenCalled();
   });
 });

@@ -15,11 +15,13 @@ import { segment } from "$lib/state/segment.svelte.js";
 import {
   segmentModelStatus,
   segmentDownloadModels,
+  segmentCancelDownload,
   segmentImportModelFiles,
   segmentPrepare,
   segmentDecode,
   onSegmentModelProgress,
   isNotPrepared,
+  isCancelled,
 } from "$lib/api/segment.js";
 import { createSegmentMask, findModifierOwner, updateMask, updateModifier } from "$lib/api/develop.js";
 import { handleMaskCreated, handleAddShape, handleShapeRemoved, handleMaskDeleted } from "./maskActions.js";
@@ -49,9 +51,23 @@ export async function handleAddSegmentShape(/** @type {import('$lib/api/develop.
   await startSegmentSession();
 }
 
-/** Checks the model files and, when they are there, prepares the current image. */
-export async function startSegmentSession() {
+/** Refine with clicks, in the mask panel: resumes the selected Subject mask (or shape) from its stored
+ * clicks. The next click adds to / removes from them; Cancel puts the saved mask back. */
+export async function handleSegmentRefine() {
+  const target = masks.selectedShape ? { id: masks.selectedShape.id, shape: /** @type {any} */ (masks.selectedShape.shape) } : masks.selectedMask ? { id: masks.selectedMask.id, shape: /** @type {any} */ (masks.selectedMask) } : null;
+  if (!target || target.shape.op !== "segment_mask" || !Array.isArray(target.shape.prompts) || target.shape.prompts.length === 0) return;
+  if (develop.gpuFallbackActive) return;
+  masks.shapeTarget = null;
+  masks.activeTool = "segment";
+  await startSegmentSession({ id: target.id, prompts: target.shape.prompts, logits: target.shape.logits, candidate: target.shape.candidate });
+}
+
+/** Checks the model files and, when they are there, prepares the current image.
+ * @param {{ id: string, prompts: import('$lib/api/develop.js').SegmentPrompt[], logits: string, candidate: number | undefined } | null} seed
+ *   a saved mask to resume once the image is prepared */
+export async function startSegmentSession(seed = null) {
   segment.reset();
+  segment.seed = seed;
   const gen = segment.generation;
   segment.phase = "checking";
   try {
@@ -91,6 +107,13 @@ async function prepareSegmentImage(gen) {
   }
   if (gen !== segment.generation) return false;
   segment.preparedHash = hash;
+  const seed = segment.seed;
+  if (seed && segment.maskId === null) {
+    segment.maskId = seed.id;
+    segment.prompts = seed.prompts.map((p) => ({ ...p }));
+    segment.seedLogits = seed.logits;
+    segment.original = { logits: seed.logits, prompts: seed.prompts.map((p) => ({ ...p })), candidate: seed.candidate };
+  }
   segment.phase = "ready";
   return true;
 }
@@ -110,7 +133,7 @@ export async function handleSegmentClick(click) {
   const hash = develop.imageContentHash;
   if (!hash) return;
   const prompts = [...segment.prompts, { x: click.x, y: click.y, positive: click.positive }];
-  const refine = segment.candidates[segment.candidateIndex]?.logits_png ?? null;
+  const refine = segment.candidates[segment.candidateIndex]?.logits_png ?? segment.seedLogits;
   segment.phase = "deciding";
   segment.error = "";
   /** @type {import('$lib/api/segment.js').SegmentCandidate[]} */
@@ -158,8 +181,12 @@ function writeCandidate() {
     handleMaskCreated({ kind: "segment", mask });
     return;
   }
-  const id = segment.maskId;
-  const patch = { logits: c.logits_png, prompts, candidate: c.index };
+  patchSegment(segment.maskId, { logits: c.logits_png, prompts, candidate: c.index });
+}
+
+/** Patches the segment mask `id`, or the shape it is, and schedules the write.
+ * @param {string} id @param {Record<string, unknown>} patch */
+function patchSegment(id, patch) {
   const owner = findModifierOwner(develop.editStack, id);
   develop.editStack =
     owner !== null
@@ -187,12 +214,19 @@ export function handleSegmentAccept() {
   masks.shapeTarget = null;
 }
 
-/** Esc: remove what this session made and leave the tool. */
+/** Esc: remove what this session made (or, when it was refining a saved mask, put the saved mask
+ * back) and leave the tool. */
 export function handleSegmentCancel() {
   const id = segment.maskId;
+  const original = segment.original;
   masks.activeTool = null;
   masks.shapeTarget = null;
   if (id === null) return;
+  if (original) {
+    // Nothing was changed if no click landed; otherwise restore the saved selection.
+    if (segment.candidates.length > 0) patchSegment(id, { logits: original.logits, prompts: original.prompts, ...(original.candidate !== undefined ? { candidate: original.candidate } : {}) });
+    return;
+  }
   if (findModifierOwner(develop.editStack, id) !== null) {
     handleShapeRemoved(id);
   } else if (masks.selectedMaskId === id) {
@@ -217,8 +251,15 @@ export async function handleSegmentDownload() {
     segment.modelStatus = status;
     await modelsInstalled(status);
   } catch (e) {
-    segment.dialog = "failed";
-    segment.dialogError = message(e);
+    if (isCancelled(e)) {
+      // The user's own Cancel: back out quietly, the tool off.
+      segment.dialog = null;
+      masks.activeTool = null;
+      masks.shapeTarget = null;
+    } else {
+      segment.dialog = "failed";
+      segment.dialogError = message(e);
+    }
   } finally {
     unlisten?.();
   }
@@ -253,9 +294,13 @@ async function modelsInstalled(status) {
   if (masks.activeTool === "segment") await prepareSegmentImage(segment.generation);
 }
 
-/** Cancel / Esc / Not now: closes the dialog and leaves the tool (nothing was downloaded). */
+/** Cancel / Esc / Not now: closes the dialog and leaves the tool. While a download runs it stops the
+ * download instead (the download call then finishes with "download cancelled" and closes the dialog). */
 export function handleSegmentDialogCancel() {
-  if (segment.dialog === "downloading") return; // the download cannot be interrupted yet
+  if (segment.dialog === "downloading") {
+    segmentCancelDownload().catch(() => {});
+    return;
+  }
   segment.dialog = null;
   segment.dialogError = "";
   masks.activeTool = null;

@@ -81,6 +81,8 @@ pub enum SegmentModelError {
     UnexpectedFile(String, &'static str, &'static str),
     #[error("could not read {0}: {1}")]
     Read(PathBuf, std::io::Error),
+    #[error("download cancelled")]
+    Cancelled,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -143,10 +145,16 @@ fn url_for(spec: &ModelSpec) -> String {
 /// `on_progress(downloaded_so_far, total_to_download)` is called per chunk
 /// (the caller throttles what it emits). Safe to call when everything is
 /// already cached: no request is made.
+///
+/// `cancel` is polled before each request and after each chunk; once set, the partial
+/// file is removed and the call fails with [`SegmentModelError::Cancelled`] (files that
+/// finished and verified before the cancel stay, so a later download resumes at the next).
 pub async fn ensure_models(
     cache_dir: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
     mut on_progress: impl FnMut(u64, u64),
 ) -> Result<SegmentModelPaths, SegmentModelError> {
+    use std::sync::atomic::Ordering;
     std::fs::create_dir_all(cache_dir).map_err(|e| SegmentModelError::CreateDir(cache_dir.to_path_buf(), e))?;
     let total: u64 = SPECS.iter().filter(|s| !is_valid_cache(&cache_dir.join(s.filename), s)).map(|s| s.size).sum();
     let mut done: u64 = 0;
@@ -156,6 +164,9 @@ pub async fn ensure_models(
         let dest = cache_dir.join(spec.filename);
         if is_valid_cache(&dest, spec) {
             continue;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(SegmentModelError::Cancelled);
         }
         let name = spec.filename.to_string();
         let mut response = client
@@ -174,6 +185,11 @@ pub async fn ensure_models(
             file.write_all(&chunk).map_err(|e| SegmentModelError::Write(tmp.clone(), e))?;
             done += chunk.len() as u64;
             on_progress(done, total);
+            if cancel.load(Ordering::Relaxed) {
+                drop(file);
+                let _ = std::fs::remove_file(&tmp);
+                return Err(SegmentModelError::Cancelled);
+            }
         }
         drop(file);
         let actual = hex(&hasher.finalize());
@@ -237,6 +253,16 @@ mod tests {
         assert!(ready_paths(&test_dir("empty2")).is_none());
     }
 
+    #[tokio::test]
+    async fn a_download_cancelled_before_it_starts_makes_no_request_and_leaves_nothing_behind() {
+        let dir = test_dir("cancelled");
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let err = ensure_models(&dir, &cancel, |_, _| panic!("no progress without a request")).await.unwrap_err();
+        assert!(matches!(err, SegmentModelError::Cancelled), "{err}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert_eq!(status(&dir).download_bytes, ENCODER.size + DECODER.size);
+    }
+
     #[test]
     fn a_right_named_file_with_the_wrong_content_does_not_count_as_cached() {
         let dir = test_dir("wrong-content");
@@ -273,7 +299,7 @@ mod tests {
     async fn segment_models_live_fetch() {
         let dir = test_dir("live");
         let mut last = 0;
-        let paths = ensure_models(&dir, |d, _| last = d).await.expect("fetch");
+        let paths = ensure_models(&dir, &std::sync::atomic::AtomicBool::new(false), |d, _| last = d).await.expect("fetch");
         assert!(paths.encoder.exists() && paths.decoder.exists());
         assert_eq!(last, ENCODER.size + DECODER.size);
         assert_eq!(status(&dir).state, ModelState::Ready);

@@ -22,7 +22,7 @@
   let percent = $derived(total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0);
 </script>
 
-<svelte:window onkeydown={(e) => dialog !== null && dialog !== "downloading" && e.key === "Escape" && onCancel()} />
+<svelte:window onkeydown={(e) => dialog !== null && e.key === "Escape" && onCancel()} />
 
 {#if dialog !== null}
   <div class="overlay">
@@ -44,7 +44,10 @@
         <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={percent}>
           <div class="fill" style="width:{percent}%"></div>
         </div>
-        <p class="message small">{mb(downloaded)} of {mb(total)} MB. This cannot be cancelled once started; it can be left running.</p>
+        <p class="message small">{mb(downloaded)} of {mb(total)} MB. Cancelling keeps nothing of the partial file; a finished file is kept.</p>
+        <div class="actions">
+          <button class="secondary" type="button" onclick={onCancel}>Cancel download</button>
+        </div>
       {:else}
         <p class="message err" role="alert">{error}</p>
         <div class="actions">

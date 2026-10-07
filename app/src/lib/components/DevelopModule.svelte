@@ -16,6 +16,9 @@
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
   import { handleChooseCustomProfile } from "$lib/actions/softProofActions.js";
   import MaskToolStrip from "$lib/components/MaskToolStrip.svelte";
+  import SegmentModelDialog from "$lib/components/SegmentModelDialog.svelte";
+  import { segment } from "$lib/state/segment.svelte.js";
+  import { handleSegmentToolToggle, handleAddSegmentShape, handleSegmentClick, handleSegmentCandidate, handleSegmentAccept, handleSegmentCancel, handleSegmentDownload, handleSegmentImport, handleSegmentDialogCancel, handleSegmentDialogRetry } from "$lib/actions/segmentActions.js";
 </script>
 
 <div class="develop-body">
@@ -78,6 +81,8 @@
     spacePanning={develop.spacePanning}
     onSpotBrushSizeChange={(v) => (masks.spotBrushSize = v)}
     onMaskCreated={handleMaskCreated}
+    segmentPrompts={segment.prompts}
+    onSegmentClick={handleSegmentClick}
     onMaskUpdated={handleMaskUpdated}
     onMaskSelected={handleMaskSelected}
     colorRangeResampleId={masks.colorRangeResampleTarget}
@@ -128,7 +133,7 @@
       onShapeChange={handleMaskUpdated}
       onShapeCombine={handleShapeCombineChanged}
       onRemoveShape={handleShapeRemoved}
-      onAddShape={handleAddShape}
+      onAddShape={(combine, op) => (op === "segment_mask" ? handleAddSegmentShape(combine) : handleAddShape(combine, op))}
       shapeBlockedReason={(op) => modifierBlockedReason(develop.editStack, masks.selectedMask?.id ?? "", op)}
       armedShape={masks.shapeTarget}
       modifierCount={countModifiers(develop.editStack)}
@@ -223,6 +228,18 @@
     onResetPanel={handleResetPanel}
   />
 </div>
+<SegmentModelDialog
+  dialog={segment.dialog}
+  host={segment.modelStatus?.host ?? ""}
+  downloadBytes={segment.modelStatus?.download_bytes ?? 0}
+  downloaded={segment.download.downloaded}
+  total={segment.download.total}
+  error={segment.dialogError}
+  onDownload={handleSegmentDownload}
+  onImport={handleSegmentImport}
+  onCancel={handleSegmentDialogCancel}
+  onRetry={handleSegmentDialogRetry}
+/>
 <MaskToolStrip
   activeTool={masks.activeTool}
   masks={masks.list}
@@ -235,6 +252,11 @@
   maskOverlaysVisible={masks.maskOverlaysVisible}
   gpuUnavailable={develop.gpuFallbackActive}
   onToolToggle={(tool) => (masks.activeTool = masks.activeTool === tool ? null : tool)}
+  segment={{ phase: segment.phase, error: segment.error, candidates: segment.candidates, candidateIndex: segment.candidateIndex, promptCount: segment.prompts.length }}
+  onSegmentToggle={handleSegmentToolToggle}
+  onSegmentCandidate={handleSegmentCandidate}
+  onSegmentAccept={handleSegmentAccept}
+  onSegmentCancel={handleSegmentCancel}
   onMaskSelect={(id) => (masks.selectedMaskId = id)}
   onBrushSizeChange={(v) => (masks.brushSize = v)}
   onBrushHardnessChange={(v) => (masks.brushHardness = v)}

@@ -34,6 +34,11 @@
    *   onBrushFlowChange: (value: number) => void,
    *   onSpotBrushSizeChange: (value: number) => void,
    *   onEraseToggle: () => void,
+   *   segment?: { phase: string, error: string, candidates: { index: number, iou: number }[], candidateIndex: number, promptCount: number },
+   *   onSegmentToggle?: () => void,
+   *   onSegmentCandidate?: (index: number) => void,
+   *   onSegmentAccept?: () => void,
+   *   onSegmentCancel?: () => void,
    *   onNewBrush: () => void,
    *   onNewSpot: () => void,
    *   onToggleMaskOverlaysVisible: () => void,
@@ -63,6 +68,11 @@
     onBrushFlowChange,
     onSpotBrushSizeChange,
     onEraseToggle,
+    segment = { phase: "idle", error: "", candidates: [], candidateIndex: 0, promptCount: 0 },
+    onSegmentToggle = () => {},
+    onSegmentCandidate = () => {},
+    onSegmentAccept = () => {},
+    onSegmentCancel = () => {},
     onNewBrush,
     onNewSpot,
     onToggleMaskOverlaysVisible,
@@ -225,6 +235,20 @@
   </button>
   <button
     class="tool icon"
+    class:active={activeTool === "segment"}
+    type="button"
+    disabled={gpuUnavailable || (atCap && activeTool !== "segment")}
+    title={gpuUnavailable ? "Select Subject -- unavailable without GPU acceleration" : atCap ? `Maximum ${MAX_MASKS} masks reached` : "Select Subject -- click an object to select it (Alt-click removes). Best for objects; use Luminance or Color Range for sky"}
+    aria-label="Select Subject"
+    onclick={onSegmentToggle}
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.6" />
+      <path d="M7 6 L7 14.5 L9.2 12.5 L11 15 L12.3 14.2 L10.6 11.7 L13.6 11.5 Z" fill="currentColor" />
+    </svg>
+  </button>
+  <button
+    class="tool icon"
     class:active={activeTool === "spot"}
     type="button"
     disabled={gpuUnavailable || (atCap && activeTool !== "spot")}
@@ -314,6 +338,45 @@
            same way) because a user reported not knowing how to "apply"
            the crop at all. -->
       <button class="tool small done" type="button" title="Done editing crop" onclick={() => onToolToggle("crop")}>Done</button>
+    </div>
+  {/if}
+
+  {#if activeTool === "segment"}
+    <div class="divider"></div>
+    <div class="brush-options" data-testid="segment-options">
+      {#if segment.phase === "checking"}
+        <span class="seg-status">Checking the selection model…</span>
+      {:else if segment.phase === "preparing"}
+        <span class="seg-status" role="status">Preparing this image… (a few seconds the first time)</span>
+      {:else if segment.phase === "failed"}
+        <span class="seg-status err" role="alert">{segment.error} Click the image to try again.</span>
+      {:else if segment.phase === "idle"}
+        <span class="seg-status">Waiting for the selection model…</span>
+      {:else}
+        {#if segment.error}
+          <span class="seg-status err" role="alert">{segment.error}</span>
+        {:else if segment.promptCount === 0}
+          <span class="seg-status">Click the subject. Alt-click removes.</span>
+        {:else}
+          <span class="seg-status" role="status">{segment.phase === "deciding" ? "Selecting…" : "Click to add, Alt-click to remove."}</span>
+        {/if}
+        {#if segment.candidates.length > 1}
+          <span class="seg-cands" role="group" aria-label="Selection candidates (Tab cycles)">
+            {#each segment.candidates as c, i (c.index)}
+              <button
+                class="tool small"
+                class:active={i === segment.candidateIndex}
+                type="button"
+                title="Candidate {i + 1}, the model's own rating {Math.round(c.iou * 100)}%"
+                aria-pressed={i === segment.candidateIndex}
+                onclick={() => onSegmentCandidate(i)}
+              >{i + 1}</button>
+            {/each}
+          </span>
+        {/if}
+        <button class="tool small done" type="button" disabled={segment.promptCount === 0} title="Keep this selection (Enter)" onclick={onSegmentAccept}>Done</button>
+        <button class="tool small" type="button" title="Discard this selection (Esc)" onclick={onSegmentCancel}>Cancel</button>
+      {/if}
     </div>
   {/if}
 
@@ -470,6 +533,20 @@
   .brush-option span {
     font-size: 10.5px;
     color: var(--text-tertiary);
+    flex: none;
+  }
+  .seg-status {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .seg-status.err {
+    color: var(--label-red);
+    white-space: normal;
+  }
+  .seg-cands {
+    display: inline-flex;
+    gap: 4px;
     flex: none;
   }
   .crop-angle-value {

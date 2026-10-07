@@ -13,6 +13,8 @@
   import { selection } from "$lib/state/selection.svelte.js";
   import { develop } from "$lib/state/develop.svelte.js";
     import { masks } from "$lib/state/masks.svelte.js";
+  import { segment } from "$lib/state/segment.svelte.js";
+  import { handleSegmentAccept, handleSegmentCancel, handleSegmentCycleCandidate } from "$lib/actions/segmentActions.js";
   import { softProof } from "$lib/state/softProof.svelte.js";
   import { presets } from "$lib/state/presets.svelte.js";
   import { exportFlow } from "$lib/state/exportFlow.svelte.js";
@@ -89,6 +91,7 @@
   softProof.install();
   develop.installCpuFallback();
   masks.install();
+  segment.install();
 
 
   // Copy/Paste Settings (M4.5): an unsaved, in-memory analog of Presets --
@@ -154,6 +157,12 @@
     get filteredImages() {
       return library.filteredImages;
     },
+    get segmentToolActive() {
+      return masks.activeTool === "segment" && segment.dialog === null;
+    },
+    handleSegmentAccept,
+    handleSegmentCancel,
+    handleSegmentCycleCandidate,
     handleColorLabelChange,
     handleCompareNextCandidate,
     handleComparePrevCandidate,

@@ -52,7 +52,10 @@
    *     | { kind: "color_range", refColor: {r: number, g: number, b: number} }
    *     | { kind: "spot", id: string, initialDab: import('$lib/api/develop.js').SpotDab }
    *     | { kind: "red_eye", center: {x: number, y: number}, radiusX: number, radiusY: number }
+   *     | { kind: "segment", mask: import('$lib/api/develop.js').SegmentMask }
    *   ) => void,
+   *   segmentPrompts?: import('$lib/api/develop.js').SegmentPrompt[],
+   *   onSegmentClick?: (click: { x: number, y: number, positive: boolean }) => void,
    *   onMaskUpdated: (id: string, patch: Partial<import('$lib/api/develop.js').Mask>) => void,
    *   onMaskSelected: (id: string) => void,
    *   colorRangeResampleId: string | null,
@@ -129,6 +132,9 @@
     spacePanning = false,
     onSpotBrushSizeChange,
     onMaskCreated,
+    // Select Subject (RFC-0026): the clicks so far (drawn as dots) and where a click goes.
+    segmentPrompts = [],
+    onSegmentClick = () => {},
     onMaskUpdated,
     onMaskSelected,
     colorRangeResampleId,
@@ -432,6 +438,10 @@
   // it never needs to know WHICH destination is waiting for it.
   /** @type {{x:number,y:number} | null} */
   let eyedropperClickStart = null;
+
+  // Select Subject (RFC-0026): same single-click gesture; Alt/Option turns it into a NEGATIVE click.
+  /** @type {{x:number,y:number} | null} */
+  let segmentClickStart = null;
 
   // M3 Slice 7 (brush) / M4 Slice 2 (spot removal, brush-like per explicit
   // user request): both tools paint a stroke the SAME way, so they share
@@ -738,6 +748,12 @@
       tryCapturePointer(e);
       return;
     }
+    if (activeTool === "segment") {
+      e.preventDefault();
+      segmentClickStart = { x: e.clientX, y: e.clientY };
+      tryCapturePointer(e);
+      return;
+    }
     if (activeTool === "brush") {
       e.preventDefault();
       const p = screenToNormalized(e.clientX, e.clientY);
@@ -943,6 +959,16 @@
             onMaskCreated({ kind: "color_range", refColor: color });
           }
         }
+      }
+      return;
+    }
+    if (segmentClickStart) {
+      const moved = Math.max(Math.abs(e.clientX - segmentClickStart.x), Math.abs(e.clientY - segmentClickStart.y));
+      segmentClickStart = null;
+      if (moved < DRAG_CLICK_THRESHOLD) {
+        const p = screenToNormalized(e.clientX, e.clientY);
+        // Outside the picture (the letterbox around a fitted image) is not a click on the subject.
+        if (p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1) onSegmentClick({ x: p.x, y: p.y, positive: !e.altKey });
       }
       return;
     }
@@ -1709,7 +1735,7 @@
       class:zoomed={isZoomed}
       class:sized={!showCommittedCropPreview && canvasCss.w > 0}
       class:cropped={showCommittedCropPreview}
-      class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper" || activeTool === "spot" || activeTool === "red_eye"}
+      class:placing={activeTool === "linear_gradient" || activeTool === "radial_gradient" || activeTool === "brush" || activeTool === "color_range" || activeTool === "eyedropper" || activeTool === "spot" || activeTool === "red_eye" || activeTool === "segment"}
       class:space-pan={spacePanning}
       class:hidden={status === "cpu-fallback"}
       style={showCommittedCropPreview
@@ -1907,6 +1933,12 @@
         <svg class="mask-ellipse placing">
           <ellipse cx="{placingMask.center.x * 100}%" cy="{placingMask.center.y * 100}%" rx="{placingMask.radiusX * 100}%" ry="{placingMask.radiusY * 100}%" />
         </svg>
+      {/if}
+      {#if activeTool === "segment"}
+        <!-- Select Subject: one dot per click, green = part of it, red = not part of it. -->
+        {#each segmentPrompts as p, i (i)}
+          <span class="seg-dot" class:neg={!p.positive} style="left:{p.x * 100}%; top:{p.y * 100}%"></span>
+        {/each}
       {/if}
       {#if activeTool === "brush" && brushCursor}
         <!-- M3 Slice 7: live brush-size cursor, shown on hover (not just
@@ -2306,6 +2338,22 @@
   }
   .brush-cursor.erasing ellipse {
     stroke: var(--label-red);
+  }
+  /* Select Subject click markers. */
+  .seg-dot {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    margin-left: -5px;
+    margin-top: -5px;
+    border-radius: 50%;
+    background: var(--label-green);
+    border: 1.5px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+  }
+  .seg-dot.neg {
+    background: var(--label-red);
   }
   .mask-handle {
     all: unset;

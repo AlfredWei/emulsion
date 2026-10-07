@@ -77,6 +77,7 @@
     radial_gradient: "Drag on the image to place the ellipse.",
     brush: "Paint on the image to draw the shape.",
     color_range: "Click a colour on the image.",
+    segment: "Click the subject on the image (Alt-click removes). Enter keeps it.",
   });
   let shapes = $derived(listModifiers(mask));
   let editShape = $derived(shapes.find((x) => x.id === selectedShapeId) ?? null);
@@ -91,7 +92,7 @@
   /** @type {HTMLButtonElement | null} */
   let addBtn = $state(null);
   let addMode = $state(/** @type {import('$lib/api/develop.js').Combine} */ ("subtract"));
-  const SHAPE_ORDER = ["radial_gradient_mask", "linear_gradient_mask", "brush_mask", "luminance_range_mask", "color_range_mask"];
+  const SHAPE_ORDER = ["radial_gradient_mask", "linear_gradient_mask", "brush_mask", "luminance_range_mask", "color_range_mask", "segment_mask"];
 
   // A REAL per-kind branch, not a free ride -- unlike linear vs. radial
   // (where every field below is common to both kinds), brush masks have
@@ -330,6 +331,24 @@
       />
       <span class="val">{edit.feather}</span>
       {@render stepButtons(edit.feather, 1, 0, 100, (v) => onEdit({ feather: v }))}
+    </div>
+  {/if}
+  {#if edit.op === "segment_mask"}
+    <!-- Grow/Shrink moves the selection edge outwards / inwards without touching the stored
+         logits (RFC-0026 §3.2); Feather above widens the edge ramp. -->
+    <div class="row">
+      <label for="mask-grow">Grow</label>
+      <input
+        id="mask-grow"
+        type="range"
+        min="-100"
+        max="100"
+        step="1"
+        value={edit.grow}
+        oninput={(e) => onEdit({ grow: Number(e.currentTarget.value) })}
+      />
+      <span class="val">{edit.grow >= 0 ? "+" : ""}{edit.grow}</span>
+      {@render stepButtons(edit.grow, 1, -100, 100, (v) => onEdit({ grow: v }))}
     </div>
   {/if}
 

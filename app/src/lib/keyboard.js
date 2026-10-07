@@ -26,6 +26,10 @@ import { OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
  * @property {{ op?: string } | null | undefined} selectedMask
  * @property {boolean} showMaskOverlay
  * @property {boolean} maskOverlaysVisible
+ * @property {boolean=} segmentToolActive - Select Subject is armed and no model dialog is open
+ * @property {(() => void)=} handleSegmentAccept
+ * @property {(() => void)=} handleSegmentCancel
+ * @property {(() => void)=} handleSegmentCycleCandidate
  * @property {boolean} showOriginal
  * @property {(action: import('$lib/zoomMath.js').ZoomAction) => void} requestZoom
  * @property {Set<number>} selectedIds
@@ -99,6 +103,26 @@ export function createKeyboardHandlers(ctx) {
         e.preventDefault();
         ctx.handleRedo();
         return;
+      }
+
+      // Select Subject (RFC-0026): Enter keeps the selection, Esc discards it, Tab cycles the model's
+      // candidates. Ahead of the navigation keys below so Tab/Enter/Esc are not taken by them.
+      if (ctx.segmentToolActive && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (rawKey === "Enter") {
+          e.preventDefault();
+          ctx.handleSegmentAccept?.();
+          return;
+        }
+        if (rawKey === "Escape") {
+          e.preventDefault();
+          ctx.handleSegmentCancel?.();
+          return;
+        }
+        if (rawKey === "Tab") {
+          e.preventDefault();
+          ctx.handleSegmentCycleCandidate?.();
+          return;
+        }
       }
 
       // Zoom: Cmd/Ctrl + / - step the ladder (50-200%), Cmd/Ctrl+0 is Fit,

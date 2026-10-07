@@ -80,6 +80,7 @@ export function handleMaskCreated(
    *   | { kind: "color_range", refColor: {r:number,g:number,b:number} }
    *   | { kind: "spot", id: string, initialDab: {x:number,y:number,radius:number} }
    *   | { kind: "red_eye", center: {x:number,y:number}, radiusX: number, radiusY: number }
+   *   | { kind: "segment", mask: import('$lib/api/develop.js').SegmentMask }
    * } */ placement,
 ) {
   // Every kind gets its own explicit branch before the final
@@ -101,7 +102,9 @@ export function handleMaskCreated(
             ? createSpotMask(placement.initialDab, placement.id)
             : placement.kind === "red_eye"
               ? createRedEyeMask(placement.center, placement.radiusX, placement.radiusY)
-              : createLinearGradientMask(placement.start, placement.end);
+              : placement.kind === "segment"
+                ? placement.mask
+                : createLinearGradientMask(placement.start, placement.end);
   if (target !== null) {
     placeShape(target, mask, placement.kind);
     return;
@@ -115,9 +118,12 @@ export function handleMaskCreated(
   // Spot removal is now also a painted stroke (M4 Slice 2), so it stays
   // active the same way; only color range and the gradients are one-shot
   // placements that fall through the `!== "brush"` reset below.
-  if (placement.kind !== "brush" && placement.kind !== "spot") masks.activeTool = null;
+  // Select Subject also stays armed: the next click refines the mask it just made (segmentActions).
+  if (placement.kind !== "brush" && placement.kind !== "spot" && placement.kind !== "segment") masks.activeTool = null;
   const label =
-    placement.kind === "radial_gradient"
+    placement.kind === "segment"
+      ? "Select Subject"
+      : placement.kind === "radial_gradient"
       ? "Add Radial Gradient"
       : placement.kind === "brush"
         ? "Add Brush Mask"
@@ -170,6 +176,7 @@ const SHAPE_TOOL = /** @type {const} */ ({
   radial_gradient_mask: "radial_gradient",
   brush_mask: "brush",
   color_range_mask: "color_range",
+  segment_mask: "segment",
 });
 
 /** Appends `mask` (a freshly created weight mask) to `target.maskId` as a shape and selects it. A
@@ -186,14 +193,14 @@ function placeShape(target, mask, placementKind) {
   }
   develop.editStack = next;
   masks.selectedShapeId = mask.id;
-  if (placementKind !== "brush") masks.activeTool = null;
+  if (placementKind !== "brush" && placementKind !== "segment") masks.activeTool = null;
   develop.scheduleFlush("Add Shape");
 }
 
 /** Add shape ▾ in the panel. Luminance range is created at once; the others arm their placement
  * tool on the canvas (a drag, a click or a stroke) and the next `handleMaskCreated` consumes it.
  * @param {import('$lib/api/develop.js').Combine} combine
- * @param {"linear_gradient_mask" | "radial_gradient_mask" | "brush_mask" | "luminance_range_mask" | "color_range_mask"} shapeOp */
+ * @param {"linear_gradient_mask" | "radial_gradient_mask" | "brush_mask" | "luminance_range_mask" | "color_range_mask" | "segment_mask"} shapeOp */
 export function handleAddShape(combine, shapeOp) {
   const maskId = masks.selectedMaskId;
   if (maskId === null || modifierBlockedReason(develop.editStack, maskId, shapeOp) !== null) return;

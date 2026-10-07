@@ -118,13 +118,13 @@ src/
 │   └── m*-spike / m*-smoke/   Throwaway diagnostic routes (see note below), not part of the app
 ├── lib/
 │   ├── api/                 Thin wrappers around invoke(): the only place that knows Tauri command names/shapes
-│   │                        (catalog, develop, export, faces, map, print, storage, backup, system)
+│   │                        (catalog, develop, export, faces, map, print, storage, backup, system, segment)
 │   ├── components/          Svelte components. App shell: AppTitlebar, AppDialogs, StatusStrip; module
 │   │                        bodies picked by +page.svelte: LibraryModule, DevelopModule, PrintModule (prop-less, import the stores/actions they use; RFC-0009 P8). Library:
 │   │                        CatalogRail, LibraryGrid/GridCell, LibraryToolbar, LibraryFilterBar, LibraryImageViewer,
 │   │                        LibraryCompareView, LibrarySurveyView, LibraryMapView (Leaflet; loaded on first open), LibraryHistogram, MetadataPanel. Develop:
 │   │                        DevelopCanvas (WebGPU), DevelopPanel, DevelopInfoBar, Filmstrip, Histogram,
-│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
+│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, SegmentModelDialog (Select Subject model consent/download), DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
 │   │                        PrintLayoutView. Dialogs: SettingsDialog, ExportDialog, ConfirmDialog,
 │   │                        TextPromptDialog, SmartCollectionDialog, CopySettingsDialog, BackupPromptDialog
 │   ├── gpu/                 Develop WebGPU code, split out of DevelopCanvas: gpuHandles.js (handle object +
@@ -144,7 +144,8 @@ src/
 │   │                        Compare pair), develop.svelte.js (open image, live edit stack, history/snapshots, preview,
 │   │                        canvas readouts, edit-stack persistence), developView.svelte.js (per-adjustment derived
 │   │                        views of the edit stack), masks.svelte.js (mask tool/selection state, brush options, resample/eyedropper
-│   │                        targets; `install()` self-cleaning effects), softProof.svelte.js (proof settings + debounced
+│   │                        targets; `install()` self-cleaning effects), segment.svelte.js (Select Subject session: phase, clicks,
+│   │                        candidates, model dialog; its `install()` ends the session with the tool), softProof.svelte.js (proof settings + debounced
 │   │                        preview effect), presets.svelte.js (preset list + Develop dialog flags), exportFlow.svelte.js (Export dialog items + what Export/Print
 │   │                        would act on); more land per RFC-0009 P7+.
 │   │                        Tested via lib/state/*.test.js
@@ -156,7 +157,8 @@ src/
 │   │                        importActions.js (import/merge runners, thumbnail regeneration + startup poll; faceActions.js
 │   │                        also holds the face-detection runners), developActions.js (adjustment/crop/WB/tone handlers,
 │   │                        readout setters, peeks, snapshots), metadataActions.js (rating/flag/label, IPTC saves);
-│   │                        libraryActions.js also holds handleRemoveConfirmed; maskActions.js (mask create/update/delete, resample,
+│   │                        libraryActions.js also holds handleRemoveConfirmed; segmentActions.js (Select Subject: arm, click, candidates, accept/cancel, model download/import),
+│   │                        maskActions.js (mask create/update/delete, resample,
 │   │                        eyedropper, GPU fallback), presetActions.js (preset list, apply/import/export, copy/paste settings),
 │   │                        historyActions.js (restore, undo/redo, snapshot restore, reset), softProofActions.js (custom
 │   │                        profile), navigation.js (openDevelop, switchModule, next/prev image, export click); more land per RFC-0009

@@ -413,3 +413,28 @@ describe("other modules", () => {
     expect(ctx.handleSelectAll).not.toHaveBeenCalled();
   });
 });
+
+describe("Select Subject keys (Develop)", () => {
+  const dev = (/** @type {object} */ o = {}) => /** @type {any} */ (makeCtx({ activeModule: "develop", ...o }));
+  it("Enter keeps, Esc discards and Tab cycles candidates while the tool is armed", () => {
+    const ctx = dev({ segmentToolActive: true, handleSegmentAccept: vi.fn(), handleSegmentCancel: vi.fn(), handleSegmentCycleCandidate: vi.fn() });
+    const { press } = setup(ctx);
+    press("Enter");
+    press("Escape");
+    press("Tab");
+    expect(ctx.handleSegmentAccept).toHaveBeenCalledTimes(1);
+    expect(ctx.handleSegmentCancel).toHaveBeenCalledTimes(1);
+    expect(ctx.handleSegmentCycleCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing special when the tool is not armed, or with a modifier held", () => {
+    const off = dev({ segmentToolActive: false, handleSegmentAccept: vi.fn(), handleSegmentCancel: vi.fn() });
+    setup(off).press("Enter");
+    setup(off).press("Escape");
+    expect(off.handleSegmentAccept).not.toHaveBeenCalled();
+    expect(off.handleSegmentCancel).not.toHaveBeenCalled();
+    const on = dev({ segmentToolActive: true, handleSegmentAccept: vi.fn() });
+    setup(on).press("Enter", { metaKey: true });
+    expect(on.handleSegmentAccept).not.toHaveBeenCalled();
+  });
+});

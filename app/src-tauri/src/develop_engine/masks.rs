@@ -662,6 +662,87 @@ pub(super) fn compute_heal_shift(
     ]
 }
 
+/// Side of a `segment_mask`'s stored logit raster (RFC-0026): the decoder's
+/// 256x256 field covering the whole, uncropped frame.
+pub(super) const SEGMENT_SIZE: usize = 256;
+/// The stored byte `0..=255` maps linearly onto a logit in `[-SEGMENT_LOGIT_RANGE, +SEGMENT_LOGIT_RANGE]`.
+const SEGMENT_LOGIT_RANGE: f32 = 4.0;
+/// `grow` (-100..100) shifts the selection threshold by up to this many logits.
+const SEGMENT_GROW_LOGITS: f32 = 3.0;
+/// Half-width (in logits) of the edge ramp at feather 0 and at feather 100.
+const SEGMENT_RAMP_MIN: f32 = 0.25;
+const SEGMENT_RAMP_MAX: f32 = 3.7; // just under the outermost stored logit (3.75), so a saturated interior reaches weight 1 even at feather 100
+
+/// A `segment_mask` (M6 slice 2b, RFC-0026): a click-selected region stored as
+/// the model's 256x256 logit field (an 8-bit grayscale PNG, base64) so it
+/// renders with no model present. Its weight at a point is the bilinearly
+/// interpolated logit, shifted by `grow` and turned into a linear ramp whose
+/// width is `feather`: `clamp(0.5 + (logit + grow*0.03) / (2*h), 0, 1)` with
+/// `h = 0.25 + 3.45 * feather/100` (a ramp, not a sigmoid: it reaches exactly 0
+/// and 1 inside the stored range, and costs no `exp` on either twin).
+/// Interpolating logits *before* thresholding is what keeps the edge smooth when
+/// 256 texels are stretched over a 6000-px frame.
+pub(super) struct SegmentMask {
+    /// Dequantised logits, row-major, `SEGMENT_SIZE * SEGMENT_SIZE` long.
+    pub(super) logits: Vec<f32>,
+    pub(super) feather: f32,
+    pub(super) grow: f32,
+    pub(super) invert: bool,
+    pub(super) exposure: f32,
+    pub(super) contrast: f32,
+    pub(super) saturation: f32,
+    /// Composable masking (RFC-0025); filled in by `parse_masks` only.
+    pub(super) modifiers: Vec<Modifier>,
+}
+
+/// Decodes the base64 8-bit grayscale PNG of a `segment_mask` into logits.
+/// `None` when it is not valid base64/PNG or not exactly 256x256, so a damaged
+/// mask is skipped like any other unparseable op instead of failing the render.
+fn decode_segment_logits(b64: &str) -> Option<Vec<f32>> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_luma8();
+    if img.width() as usize != SEGMENT_SIZE || img.height() as usize != SEGMENT_SIZE {
+        return None;
+    }
+    Some(img.as_raw().iter().map(|&q| q as f32 / 255.0 * (2.0 * SEGMENT_LOGIT_RANGE) - SEGMENT_LOGIT_RANGE).collect())
+}
+
+pub(super) fn parse_segment_mask(op: &serde_json::Value) -> Option<SegmentMask> {
+    Some(SegmentMask {
+        modifiers: Vec::new(),
+        logits: decode_segment_logits(op.get("logits")?.as_str()?)?,
+        feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        grow: op.get("grow").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
+        exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        saturation: op.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+    })
+}
+
+/// Bilinear sample of the logit field at `uv` (texel centres at `(i + 0.5) / 256`,
+/// clamped at the border), then the feathered ramp described on `SegmentMask`.
+pub(super) fn segment_mask_weight(uv: (f32, f32), mask: &SegmentMask) -> f32 {
+    let n = SEGMENT_SIZE as i64;
+    let fx = (uv.0 * SEGMENT_SIZE as f32 - 0.5).clamp(0.0, (SEGMENT_SIZE - 1) as f32);
+    let fy = (uv.1 * SEGMENT_SIZE as f32 - 0.5).clamp(0.0, (SEGMENT_SIZE - 1) as f32);
+    let (x0, y0) = (fx.floor() as i64, fy.floor() as i64);
+    let (x1, y1) = ((x0 + 1).min(n - 1), (y0 + 1).min(n - 1));
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let at = |x: i64, y: i64| mask.logits[(y * n + x) as usize];
+    let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
+    let bottom = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
+    let logit = top * (1.0 - ty) + bottom * ty + mask.grow * SEGMENT_GROW_LOGITS / 100.0;
+    let h = SEGMENT_RAMP_MIN + (SEGMENT_RAMP_MAX - SEGMENT_RAMP_MIN) * (mask.feather / 100.0).clamp(0.0, 1.0);
+    let weight = (0.5 + logit / (2.0 * h)).clamp(0.0, 1.0);
+    if mask.invert {
+        1.0 - weight
+    } else {
+        weight
+    }
+}
+
 /// How a modifier's weight `c` folds into the running weight `w` of the mask
 /// it belongs to (RFC-0025 §3.2). The product family, not max/min: smooth
 /// where two feathered edges cross, and `Subtract` is `Intersect` with the
@@ -684,7 +765,7 @@ impl Combine {
     }
 }
 
-/// The five weight-producing shapes that can serve as a modifier. Reuses the
+/// The weight-producing shapes that can serve as a modifier. Reuses the
 /// stand-alone mask structs (their adjustment fields are simply unused, and
 /// default to 0 when the JSON omits them), so a shape's weight is computed by
 /// exactly the function a stand-alone mask of that kind uses.
@@ -694,6 +775,7 @@ pub(super) enum Shape {
     Brush(BrushMask),
     LuminanceRange(LuminanceRangeMask),
     ColorRange(ColorRangeMask),
+    Segment(SegmentMask),
 }
 
 impl Shape {
@@ -704,6 +786,7 @@ impl Shape {
             Shape::Brush(m) => brush_mask_weight(uv, m, aspect),
             Shape::LuminanceRange(m) => luminance_mask_weight(rgb, m),
             Shape::ColorRange(m) => color_mask_weight(rgb, m),
+            Shape::Segment(m) => segment_mask_weight(uv, m),
         }
     }
 }
@@ -720,6 +803,7 @@ fn parse_shape(shape: &serde_json::Value) -> Option<Shape> {
         "brush_mask" => parse_brush_mask(shape).map(Shape::Brush),
         "luminance_range_mask" => parse_luminance_range_mask(shape).map(Shape::LuminanceRange),
         "color_range_mask" => parse_color_range_mask(shape).map(Shape::ColorRange),
+        "segment_mask" => parse_segment_mask(shape).map(Shape::Segment),
         _ => None,
     }
 }
@@ -776,6 +860,7 @@ pub(super) enum Mask {
     Brush(BrushMask),
     LuminanceRange(LuminanceRangeMask),
     ColorRange(ColorRangeMask),
+    Segment(SegmentMask),
     Spot(SpotMask),
     RedEye(RedEyeMask),
 }
@@ -806,6 +891,9 @@ impl Mask {
             }
             Mask::ColorRange(m) => {
                 fold_modifiers(color_mask_weight(rgb, m), &m.modifiers, uv, aspect, rgb)
+            }
+            Mask::Segment(m) => {
+                fold_modifiers(segment_mask_weight(uv, m), &m.modifiers, uv, aspect, rgb)
             }
             Mask::Spot(m) => spot_mask_weight(uv, m, aspect),
             Mask::RedEye(m) => red_eye_weight(uv, rgb, m),
@@ -852,6 +940,7 @@ impl Mask {
                     Mask::Brush(m) => (m.exposure, m.contrast, m.saturation),
                     Mask::LuminanceRange(m) => (m.exposure, m.contrast, m.saturation),
                     Mask::ColorRange(m) => (m.exposure, m.contrast, m.saturation),
+                    Mask::Segment(m) => (m.exposure, m.contrast, m.saturation),
                     Mask::Spot(_) => unreachable!(),
                     Mask::RedEye(_) => unreachable!(),
                 };
@@ -883,6 +972,10 @@ pub(super) fn parse_masks(ops: &[serde_json::Value]) -> Vec<Mask> {
             Some("color_range_mask") => parse_color_range_mask(op).map(|mut m| {
                 m.modifiers = parse_modifiers(op);
                 Mask::ColorRange(m)
+            }),
+            Some("segment_mask") => parse_segment_mask(op).map(|mut m| {
+                m.modifiers = parse_modifiers(op);
+                Mask::Segment(m)
             }),
             Some("spot_mask") => parse_spot_mask(op).map(Mask::Spot),
             Some("red_eye_mask") => parse_red_eye_mask(op).map(Mask::RedEye),

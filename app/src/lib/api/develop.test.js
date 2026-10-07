@@ -38,6 +38,8 @@ import {
   countModifiers,
   countBrushLayers,
   modifierBlockedReason,
+  createSegmentMask,
+  OVERLAY_CAPABLE_MASK_OPS,
   addModifier,
   updateModifier,
   removeModifier,
@@ -81,7 +83,7 @@ describe("presetEligibleOps", () => {
     });
   });
 
-  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 7 mask kinds plus crop, lens_correction, and perspective", () => {
+  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 8 mask kinds plus crop, lens_correction, and perspective", () => {
     expect(PRESET_EXCLUDED_OP_NAMES.sort()).toEqual(
       [
         "crop",
@@ -92,6 +94,7 @@ describe("presetEligibleOps", () => {
         "brush_mask",
         "luminance_range_mask",
         "color_range_mask",
+        "segment_mask",
         "spot_mask",
         "red_eye_mask",
       ].sort(),
@@ -544,6 +547,31 @@ describe("Composable masking model (RFC-0025)", () => {
     expect(modifierBlockedReason(s, "a", "red_eye_mask")).not.toBeNull();
     expect(modifierBlockedReason(s, "a", "linear_gradient_mask")).toBeNull();
     expect(modifierBlockedReason(s, "nope", "linear_gradient_mask")).not.toBeNull();
+  });
+
+  test("a segment mask is a base mask or a modifier shape, is overlay-capable and never travels in a preset", () => {
+    const seg = createSegmentMask("AAAA", [{ x: 0.5, y: 0.5, positive: true }], 2, "g");
+    expect(seg).toMatchObject({ op: "segment_mask", id: "g", logits: "AAAA", candidate: 2, feather: 0, grow: 0, invert: false, exposure: 0 });
+    expect("prompts" in createSegmentMask("AAAA")).toBe(false);
+    const s = stack(seg, radial("a"));
+    expect(listMasks(s).map((m) => m.id)).toEqual(["g", "a"]);
+    expect(modifierBlockedReason(s, "g", "linear_gradient_mask")).toBeNull(); // a segment can take modifiers
+    expect(modifierBlockedReason(s, "a", "segment_mask")).toBeNull(); // and be one
+    const withShape = addModifier(s, "a", createModifier("subtract", seg, "m"));
+    expect(listModifiers(/** @type {any} */ (listMasks(withShape)[1]))[0].shape).toMatchObject({ op: "segment_mask", logits: "AAAA" });
+    expect("id" in listModifiers(/** @type {any} */ (listMasks(withShape)[1]))[0].shape).toBe(false);
+    expect(OVERLAY_CAPABLE_MASK_OPS).toContain("segment_mask");
+    expect(PRESET_EXCLUDED_OP_NAMES).toContain("segment_mask");
+  });
+
+  test("segment masks and segment shapes share the raster-layer budget", () => {
+    let s = stack(...Array.from({ length: MAX_MASKS - 1 }, (_, i) => createSegmentMask("AAAA", undefined, undefined, `g${i}`)), radial("a"));
+    expect(countBrushLayers(s)).toBe(MAX_MASKS - 1);
+    s = addModifier(s, "a", createModifier("add", createSegmentMask("AAAA"), "m"));
+    expect(countBrushLayers(s)).toBe(MAX_MASKS);
+    expect(modifierBlockedReason(s, "a", "segment_mask")).toMatch(/Brush layers exhausted/);
+    expect(modifierBlockedReason(s, "a", "brush_mask")).toMatch(/Brush layers exhausted/);
+    expect(modifierBlockedReason(s, "a", "linear_gradient_mask")).toBeNull(); // layer-free shapes are unaffected
   });
 
   test("total modifier cap is enforced across masks", () => {

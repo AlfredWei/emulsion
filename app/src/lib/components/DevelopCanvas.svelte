@@ -1119,6 +1119,23 @@
 
   // GPU handles live on one plain (non-reactive) object; see lib/gpu/gpuHandles.js.
   const gpu = createGpuHandles();
+  // A segment mask's logit field decodes asynchronously (RFC-0026); render again once it has.
+  gpu.requestRender = () => {
+    if (status !== "ready") return;
+    // A histogram read-back still in flight makes the next render skip refreshing the histogram
+    // texture (see readHistogramIfIdle), and nothing renders after this late frame to make up for
+    // it -- so the histogram and the hover readout built on it would stay one frame stale. Wait
+    // for the read to finish, then render.
+    let tries = 0;
+    const go = () => {
+      if (gpu.histogramReadInFlight && tries++ < 100) {
+        setTimeout(go, 30);
+        return;
+      }
+      if (status === "ready") writeAdjustmentsAndRender();
+    };
+    go();
+  };
   // Getters, not copies: the renderer reads props through these at the same points it used to read
   // them directly, so what the render effect tracks is unchanged.
   const renderInputs = {

@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 2b (click-select engine): the `segment_mask` kind (2026-10-07)
+
+Everything between the helper's output and a rendered pixel, no creation UI. RFC-0026 §8 has the detail.
+
+- **What shipped**: Rust `SegmentMask` (decode, bilinear logit sample, ramp weight, base + modifier), WGSL kind 7 in `component_weight`/`fs_mask`, packing (`maskPack.js`), raster-layer decode/upload (`segmentRaster.js`, shared 8 layers), JS model (`createSegmentMask`, counted in the layer budget, preset-excluded, overlay-capable), explicit titles/chips so it never renders as a "linear gradient". The helper now codes logits **±4, 16 mid-rise levels** (sign preserved exactly; **0.6-16 KB base64 per mask** vs 26-64 KB at 8-bit over ±8).
+- **Verified**: `cargo test --lib --bins --tests`, vitest, svelte-check 0 errors, **real-GPU CPU/GPU parity in the real window** for a segment base with a subtract segment shape (CPU 175/169/164 vs GPU 179/169/165; the spec passes 3/3 in two consecutive full runs, about 5 min each).
+- **Found by the parity test**: a stale histogram/hover readout when a late async render lands during an in-flight histogram read-back (pre-existing limitation, exposed by the decode callback); fixed by making the canvas's `requestRender` wait for the read-back.
+- **Not verified**: Windows/second GPU (CI has no WebGPU, so the e2e scenario skips there), 8 layers with segments in use, native-resolution tier, CPU export timing of a segment mask. Backlog item 11.
+
 ## M6 slice 2a (click-select runtime, no UI): `ort` in the app, SAM 2 Tiny through Rust (2026-10-06)
 
 RFC-0026 merged (#211). This slice puts `ort =2.0.0-rc.13` (CPU provider) in the app crate and builds everything below the UI.
@@ -44,6 +53,7 @@ Status after the 2026-10-05 verification round:
 8. **Older builds ignore `modifiers`** — DONE by reading the pre-1a parser (`Value::get`, unknown fields ignored); no schema bump.
 9. **Undo/redo and snapshot restore through shape ops in the real app** — OPEN (covered by action and persistence tests only).
 10. **Click-select 2a (RFC-0026 §7)** — OPEN: SAM 2 CPU speed and memory on a real Windows machine; the live 155 MB download through `segment_download_models` (only HEAD-verified so far); **installer bundling and signing of the `emulsion-ai` helper** on both platforms.
+11. **Click-select 2b (RFC-0026 §8)** — OPEN: segment masks on a second GPU (Windows/D3D), with all 8 raster layers in use and at the native-resolution tier, and a real export timing of the CPU path.
 
 ## M6 slice 1b (composable masking UI): the Shapes list, per RFC-0025 (2026-10-05)
 

@@ -5,6 +5,7 @@ import { binHistogramPixels } from "$lib/histogramMath.js";
 import { rasterizeSpotDab, rasterizeDab } from "$lib/gpu/brushRaster.js";
 import { buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildVignetteUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData } from "$lib/api/develop.js";
 import { packMasks, rasterTargets } from "./maskPack.js";
+import { decodedLogitField, drawLogitField } from "./segmentRaster.js";
 import { HISTOGRAM_SIZE } from "./gpuHandles.js";
 
 /** One fullscreen-triangle draw into `outputView` -- the shared shape
@@ -63,7 +64,19 @@ export async function readHistogramIfIdle(/** @type {import('./gpuHandles.js').G
   }
 }
 
-/** Ensures every brush/spot mask in `masks` has a rasterized texture-
+/** Uploads one raster entry's canvas into its layer of the shared texture array. */
+function uploadLayer(/** @type {import('./gpuHandles.js').GpuHandles} */ gpu, /** @type {any} */ entry) {
+  if (!gpu.device || !gpu.brushTextureArray) return;
+  const imageData = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height);
+  gpu.device.queue.writeTexture(
+    { texture: gpu.brushTextureArray, origin: { x: 0, y: 0, z: entry.layer } },
+    imageData.data,
+    { bytesPerRow: entry.canvas.width * 4, rowsPerImage: entry.canvas.height },
+    { width: entry.canvas.width, height: entry.canvas.height },
+  );
+}
+
+/** Ensures every brush/spot/segment mask in `masks` has a rasterized texture-
  * array layer, drawing only newly-added dabs onto each mask's own
  * persistent OffscreenCanvas -- never re-rasterizing dabs already drawn,
  * which is what keeps a long stroke's per-move cost O(1) (bound by
@@ -121,8 +134,22 @@ export function syncMaskRasterization(/** @type {import('./gpuHandles.js').GpuHa
       // nothing.
       ctx.fillStyle = "black";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      entry = { canvas, ctx, layer, dabsDrawn: 0, featherDrawn: 0, firstDabX: 0, firstDabY: 0 };
+      entry = { canvas, ctx, layer, dabsDrawn: 0, featherDrawn: 0, firstDabX: 0, firstDabY: 0, segKey: null };
       gpu.brushRasterState.set(mask.id, entry);
+    }
+    if (mask.op === "segment_mask") {
+      // A segment's layer holds its stored logit field upscaled to the layer size, drawn once per
+      // distinct field (a Feather/Grow change touches only fs_mask's uniforms, not the layer).
+      const logits = /** @type {any} */ (mask).logits;
+      if (entry.segKey !== logits) {
+        const field = decodedLogitField(logits, () => gpu.requestRender?.());
+        if (field) {
+          drawLogitField(entry.ctx, field, entry.canvas.width, entry.canvas.height);
+          uploadLayer(gpu, entry);
+          entry.segKey = logits;
+        }
+      }
+      continue;
     }
     const dabs = /** @type {any} */ (mask).dabs;
     const featherChanged = isSpot && /** @type {any} */ (mask).feather !== entry.featherDrawn;
@@ -161,13 +188,7 @@ export function syncMaskRasterization(/** @type {import('./gpuHandles.js').GpuHa
     }
     if (dabs.length !== entry.dabsDrawn) {
       entry.dabsDrawn = dabs.length;
-      const imageData = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height);
-      gpu.device.queue.writeTexture(
-        { texture: gpu.brushTextureArray, origin: { x: 0, y: 0, z: entry.layer } },
-        imageData.data,
-        { bytesPerRow: entry.canvas.width * 4, rowsPerImage: entry.canvas.height },
-        { width: entry.canvas.width, height: entry.canvas.height },
-      );
+      uploadLayer(gpu, entry);
     }
   }
   for (const [id, entry] of gpu.brushRasterState) {

@@ -117,6 +117,31 @@ import { invoke } from "@tauri-apps/api/core";
  */
 
 /**
+ * @typedef {Object} SegmentPrompt
+ * @property {number} x - 0-1 of the full, uncropped image
+ * @property {number} y
+ * @property {boolean} positive
+ */
+
+/**
+ * @typedef {Object} SegmentMask
+ * @property {"segment_mask"} op
+ * @property {string} id
+ * @property {string} logits - base64 of an 8-bit grayscale 256x256 PNG: the click-select model's
+ *   logit field, byte q <-> logit q/255*8 - 4 (RFC-0026). The mask renders from this alone, with no
+ *   model present.
+ * @property {SegmentPrompt[]=} prompts - the clicks that produced it, kept so it can be refined later
+ * @property {number=} candidate - which of the model's candidates was accepted
+ * @property {number} feather - 0-100, edge ramp width (0 = crisp, 100 = very soft)
+ * @property {number} grow - -100..100, shifts the selection edge outwards / inwards
+ * @property {boolean} invert
+ * @property {number} exposure
+ * @property {number} contrast
+ * @property {number} saturation
+ * @property {Modifier[]=} modifiers - composable masking (RFC-0025); absent = none
+ */
+
+/**
  * @typedef {Object} SpotDab
  * @property {number} x
  * @property {number} y
@@ -184,7 +209,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 /** @typedef {"add" | "subtract" | "intersect"} Combine */
 
-/** @typedef {Omit<LinearGradientMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<RadialGradientMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<BrushMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<LuminanceRangeMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<ColorRangeMask, "id" | "exposure" | "contrast" | "saturation">} ModifierShape */
+/** @typedef {Omit<LinearGradientMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<RadialGradientMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<BrushMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<LuminanceRangeMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<ColorRangeMask, "id" | "exposure" | "contrast" | "saturation"> | Omit<SegmentMask, "id" | "exposure" | "contrast" | "saturation">} ModifierShape */
 
 /**
  * A further shape folded into a mask's weight (RFC-0025). `id` keys a brush modifier's raster layer.
@@ -194,7 +219,7 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {ModifierShape} shape
  */
 
-/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask | SpotMask | RedEyeMask} Mask */
+/** @typedef {LinearGradientMask | RadialGradientMask | BrushMask | LuminanceRangeMask | ColorRangeMask | SegmentMask | SpotMask | RedEyeMask} Mask */
 
 /**
  * @typedef {Object} EditStack
@@ -1539,6 +1564,7 @@ const MASK_OP_NAMES = [
   "brush_mask",
   "luminance_range_mask",
   "color_range_mask",
+  "segment_mask",
   "spot_mask",
   "red_eye_mask",
 ];
@@ -1562,7 +1588,7 @@ export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop", "lens_correct
 // (PROGRESS.md), preserved here as the single place this list lives so the
 // hotkey gate (+page.svelte) and the checkbox gate (MaskEditorPanel.svelte)
 // can't drift apart.
-export const OVERLAY_CAPABLE_MASK_OPS = ["brush_mask", "luminance_range_mask", "color_range_mask"];
+export const OVERLAY_CAPABLE_MASK_OPS = ["brush_mask", "luminance_range_mask", "color_range_mask", "segment_mask"];
 
 /** @returns {LinearGradientMask} */
 export function createLinearGradientMask(
@@ -1693,6 +1719,27 @@ export function createColorRangeMask(/** @type {{r: number, g: number, b: number
   };
 }
 
+/** M6 slice 2b (RFC-0026): a click-selected region from the helper's `logits_png`. Defaults give the
+ * crispest edge (`feather` 0, `grow` 0); `prompts`/`candidate` are kept so the mask can be refined.
+ * @param {string} logits base64 PNG, 256x256 8-bit gray
+ * @param {SegmentPrompt[]=} prompts @param {number=} candidate @param {string=} id
+ * @returns {SegmentMask} */
+export function createSegmentMask(logits, prompts, candidate, id) {
+  return {
+    op: "segment_mask",
+    id: id ?? crypto.randomUUID(),
+    logits,
+    ...(prompts ? { prompts } : {}),
+    ...(candidate !== undefined ? { candidate } : {}),
+    feather: 0,
+    grow: 0,
+    invert: false,
+    exposure: 0,
+    contrast: 0,
+    saturation: 0,
+  };
+}
+
 /** M4 Slice 1/2 (Healing/Clone brush): created from the FIRST dab of a
  * click-drag paint stroke on the canvas (see DevelopCanvas.svelte's spot
  * mask pointer handling, mirroring the Brush tool's own
@@ -1771,6 +1818,7 @@ export const MODIFIABLE_MASK_OPS = Object.freeze([
   "brush_mask",
   "luminance_range_mask",
   "color_range_mask",
+  "segment_mask",
 ]);
 
 /** @param {string} op */
@@ -1804,14 +1852,21 @@ export function countModifiers(stack) {
   return listMasks(stack).reduce((n, m) => n + listModifiers(m).length, 0);
 }
 
-/** Brush raster layers in use: brush and spot masks plus brush modifiers. They share the GPU's
- * layer array (size MAX_MASKS), so a brush modifier consumes a layer a mask could have used.
+/** Raster-backed shapes: they own a layer of the GPU's shared texture array (brush strokes, and a
+ * segment mask's logit field).
+ * @param {string} op */
+function usesRasterLayer(op) {
+  return op === "brush_mask" || op === "segment_mask";
+}
+
+/** Raster layers in use: brush, spot and segment masks plus brush / segment modifiers. They share the
+ * GPU's layer array (size MAX_MASKS), so a modifier consumes a layer a mask could have used.
  * @param {EditStack} stack */
 export function countBrushLayers(stack) {
   let n = 0;
   for (const m of listMasks(stack)) {
-    if (m.op === "brush_mask" || m.op === "spot_mask") n += 1;
-    n += listModifiers(m).filter((x) => x.shape.op === "brush_mask").length;
+    if (usesRasterLayer(m.op) || m.op === "spot_mask") n += 1;
+    n += listModifiers(m).filter((x) => usesRasterLayer(x.shape.op)).length;
   }
   return n;
 }
@@ -1835,8 +1890,8 @@ export function modifierBlockedReason(stack, maskId, shapeOp) {
   if (!isModifiableOp(base.op)) return "This mask kind cannot be combined";
   if (!isModifiableOp(shapeOp)) return "This shape cannot be combined";
   if (countModifiers(stack) >= MAX_MODIFIERS) return `Maximum ${MAX_MODIFIERS} combined shapes reached`;
-  if (shapeOp === "brush_mask" && countBrushLayers(stack) >= MAX_MASKS) {
-    return `Brush layers exhausted (${MAX_MASKS} shared by brush masks, spot masks and brush shapes)`;
+  if (usesRasterLayer(shapeOp) && countBrushLayers(stack) >= MAX_MASKS) {
+    return `Brush layers exhausted (${MAX_MASKS} shared by brush, spot and segment masks and their shapes)`;
   }
   return null;
 }

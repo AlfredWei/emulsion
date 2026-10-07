@@ -14,14 +14,16 @@ export const MASK_KIND = Object.freeze({
   color_range_mask: 4,
   spot_mask: 5,
   red_eye_mask: 6,
+  // Weight-producing like 0-4, but numbered after the two special kinds so their codes never moved (RFC-0026).
+  segment_mask: 7,
 });
 
 /** `combine.x` codes read by fs_mask. */
 export const COMBINE_CODE = Object.freeze({ add: 0, subtract: 1, intersect: 2 });
 
 /**
- * Writes one weight-producing shape (kinds 0-4) at `o`: start_end at o+0..3, feather o+4, invert
- * o+5, kind o+6, brush layer o+7. Shared by a base mask and a modifier, so both are packed (and so
+ * Writes one weight-producing shape (kinds 0-4 and 7) at `o`: start_end at o+0..3, feather o+4, invert
+ * o+5, kind o+6, raster layer o+7 (brush and segment). Shared by a base mask and a modifier, so both are packed (and so
  * evaluated by `component_weight`) identically. Returns false for any other op.
  * @param {Float32Array} data @param {number} o @param {any} shape
  * @param {number} layer texture-array layer, used by brush only
@@ -43,6 +45,12 @@ function packShape(data, o, shape, layer) {
       data[o + 4] = shape.feather;
       break;
     case "brush_mask":
+      data[o + 7] = layer;
+      break;
+    case "segment_mask":
+      // start_end.x = grow, params.x = feather, params.w = the layer holding the upscaled logit field.
+      data[o + 0] = shape.grow ?? 0;
+      data[o + 4] = shape.feather ?? 0;
       data[o + 7] = layer;
       break;
     case "luminance_range_mask":
@@ -107,7 +115,7 @@ export function packMasks(masks, brushLayerOf) {
       maskData[o + 11] = m.darken;
       return;
     }
-    // Kinds 0-4. A real bug once lived here: an unconditional catch-all `else` treated "anything
+    // Kinds 0-4 and 7. A real bug once lived here: an unconditional catch-all `else` treated "anything
     // that isn't radial or brush" as linear, so a kind with no .start/.end threw and aborted the
     // render of every mask. Unknown ops are skipped, never defaulted into a kind.
     if (!packShape(maskData, o, m, brushLayerOf(m.id) ?? 0)) return;
@@ -132,18 +140,19 @@ export function packMasks(masks, brushLayerOf) {
 }
 
 /**
- * Everything that owns a raster layer, in stack order: brush and spot masks, and brush modifiers
- * (keyed by the modifier's id, shaped like a brush mask so the rasterizer treats them alike).
+ * Everything that owns a raster layer, in stack order: brush, spot and segment masks, and brush /
+ * segment modifiers (keyed by the modifier's id, shaped like their stand-alone kind).
  * @param {any[]} masks
- * @returns {{ id: string, op: "brush_mask" | "spot_mask", dabs: any[], feather?: number }[]}
+ * @returns {{ id: string, op: "brush_mask" | "spot_mask" | "segment_mask", dabs?: any[], logits?: string, feather?: number }[]}
  */
 export function rasterTargets(masks) {
   /** @type {any[]} */
   const out = [];
   for (const m of masks) {
-    if (m.op === "brush_mask" || m.op === "spot_mask") out.push(m);
+    if (m.op === "brush_mask" || m.op === "spot_mask" || m.op === "segment_mask") out.push(m);
     for (const mod of m.modifiers ?? []) {
       if (mod.shape.op === "brush_mask") out.push({ id: mod.id, op: "brush_mask", dabs: mod.shape.dabs });
+      if (mod.shape.op === "segment_mask") out.push({ id: mod.id, op: "segment_mask", logits: mod.shape.logits });
     }
   }
   return out;

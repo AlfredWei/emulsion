@@ -102,4 +102,33 @@ describe("maskPack", () => {
     ];
     expect(rasterTargets(masks).map((t) => [t.id, t.op])).toEqual([["rb", "brush_mask"], ["s", "spot_mask"], ["b", "brush_mask"]]);
   });
+
+  test("a segment mask packs grow, feather, invert, kind 7 and its layer, with adjustments", () => {
+    const seg = { op: "segment_mask", id: "g", logits: "AAAA", feather: 35, grow: -20, invert: true, exposure: 0.5, contrast: 3, saturation: 4 };
+    const { maskData, modCount } = packMasks([seg], (id) => (id === "g" ? 5 : undefined));
+    expect(MASK_KIND.segment_mask).toBe(7);
+    expect(Array.from(maskData.slice(0, 13))).toEqual([-20, 0, 0, 0, 35, 1, 7, 5, 0.5, 3, 4, 0, 0]);
+    expect(modCount).toBe(0);
+  });
+
+  test("a segment modifier packs like a stand-alone segment and takes its layer by modifier id", () => {
+    const shape = { op: "segment_mask", logits: "BBBB", feather: 10, grow: 30, invert: false };
+    const { modData } = packMasks([radial("a", { modifiers: [{ id: "sm", combine: "subtract", shape }] })], (id) => (id === "sm" ? 3 : 0));
+    expect(Array.from(modData.slice(0, 9))).toEqual([30, 0, 0, 0, 10, 0, 7, 3, COMBINE_CODE.subtract]);
+  });
+
+  test("rasterTargets includes segment masks and segment modifiers with their logits", () => {
+    const masks = [
+      { op: "segment_mask", id: "g", logits: "AAAA", feather: 0, grow: 0, invert: false },
+      radial("r", { modifiers: [{ id: "rs", combine: "intersect", shape: { op: "segment_mask", logits: "CCCC", feather: 0, grow: 0, invert: false } }] }),
+    ];
+    expect(rasterTargets(masks).map((t) => [t.id, t.op, /** @type {any} */ (t).logits])).toEqual([["g", "segment_mask", "AAAA"], ["rs", "segment_mask", "CCCC"]]);
+  });
+
+  test("the WGSL segment branch uses the constants the Rust twin uses (masks.rs SEGMENT_*)", () => {
+    expect(WGSL).toContain("kind > 6.5");
+    expect(WGSL).toContain("v * 8.0 - 4.0 + se.x * 3.0 / 100.0"); // byte -> logit (range 4), grow 3 logits per 100
+    expect(WGSL).toContain("0.25 + 3.45 * clamp(pr.x / 100.0, 0.0, 1.0)"); // ramp half-width, feather 0..100
+    expect(WGSL).toContain("let weighted = kind < 4.5 || kind > 6.5;");
+  });
 });

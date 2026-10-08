@@ -92,3 +92,27 @@ Super-resolution (own RFC, Real-ESRGAN weights licence unresolved), a live denoi
 2. **While a denoise job runs, may Select Subject wait?** (a) it shows "Denoising, try again when done"; (b) clicks interleave between tiles (about 4 s wait, more helper work). Recommendation: (a) for 3b-3c, (b) in 3d if it matters.
 3. **Cache eviction:** an LRU cap (say 2 GB, user-visible) or keep until the photo is removed. Recommendation: LRU cap with a Settings line.
 4. **Export of an un-denoised photo:** the pre-flight prompt of §3.6, or a per-export checkbox "Denoise missing photos first". Recommendation: the prompt.
+
+## 8. Corrected after slice 3a (the bake-off, 2026-10-08)
+
+Measured on the same machine and protocol as RFC-0023 (M1 Pro, ORT CPU; [appendix](RFC-0027-appendix/README.md)). SCUNet re-measured here **reproduces RFC-0023** (real-noise mean 32.67 dB / 0.886, the same as §4.7), so the new numbers are comparable. The one lighter candidate tried was **NAFNet-SIDD-width32** (megvii-research/NAFNet, MIT; 29.2 M parameters; the checkpoint is a third-party mirror, hash recorded, not compared with the upstream file), exported to ONNX with dynamic sizes.
+
+| | SCUNet `color_real_psnr` | NAFNet-SIDD-w32 |
+|---|---|---|
+| 512x512 tile, CPU | 3.93 s | **0.84 s** |
+| 1024x1024 | 15.4 s | **3.0 s** |
+| **Peak RSS**, 512x512 | **3,842 MB** | **695 MB** |
+| Peak RSS, 1024x1024 | **9,534 MB** | 2,016 MB |
+| NIND ISO 6400, 6 scenes, PSNR / SSIM (mean) | 32.67 / 0.886 | 32.55 / **0.895** |
+| High-frequency retention (std of img - blur 2; reference ISO 200 = 7.83, noisy = 10.85) | 6.41 | 5.76 |
+| Tone shift (mean abs change of the 8-px-blurred image, 8-bit levels) | 1.75 | 1.77 |
+| Full 24 MP, **extrapolated** (about 117 tiles of 512 with a 32 px overlap, not run) | about 7.7 min | **about 100 s** |
+
+1. **SCUNet's memory is the finding RFC-0023 could not see.** 3.8 GB for one 512x512 tile (and 9.5 GB at 1024x1024) is more than three times the SAM 2 session's 1.1 GB in the same helper. It would make the helper the app's largest process and make "while a job runs, Select Subject waits" (§3.4, §7.2) the only safe behaviour, and it may not run at all on a 8 GB laptop. Not measured: Windows, or whether limiting ORT's memory arena helps.
+2. **NAFNet is 4.7x faster and uses 5.5x less memory at the same mean quality.** Per scene it is mixed: ahead on Leonidas (+3.6 dB), stairs (+0.4) and on SSIM overall; behind on tree1 (-1.8 dB, foliage, and a 3-level colour drift on that scene), chapel (-1.5) and directions (-0.9). By eye (crops in the appendix) it keeps a fine grain on flat walls and stone where SCUNet gives a smooth blotchy surface; it is a little softer on dense foliage and leaves a trace more residual noise on the flat chapel wall. Neither is clearly better to the eye on six scenes.
+3. **The proposed go criterion (§5) is met on quality (within 1 dB, here 0.12 dB) and narrowly missed on time (about 100 s per 24 MP against "about 1 min")**, an extrapolation, not a run. It is still a background job, not a slider, so §3.4 stands unchanged; only the numbers in it get better (about 100 s, with a crop preview of about 3 s per megapixel).
+4. **Decision for 3b (proposed, user to confirm): NAFNet-SIDD-width32 is the first model; SCUNet is not shipped in the first cut.** Revisit SCUNet only as an optional "stronger" model if users ask for it, and only after its memory is understood.
+5. **Caveats, not closed:** the NAFNet weights were trained on SIDD (smartphone sensor noise) and tested here on six NIND scenes (a mirrorless/DSLR dataset) and no RAW-domain noise; one 1024 crop per scene; the checkpoint came from a mirror, so a re-check against upstream is wanted before anything ships; the synthetic-noise table of RFC-0023 §4.7 was **not** repeated for NAFNet (SCUNet was trained on synthetic degradations, so that comparison would favour it); the ONNX export uses the legacy exporter and is only checked indirectly (the PSNR matches expectations), not against PyTorch output; no Windows run; NAFNet needs sizes that are a multiple of 16 (the wrapper pads to 64 for both, harmless).
+6. **Licences:** NAFNet code and checkpoint MIT upstream (LICENSE read at the pinned commit), the SIDD dataset MIT per its own page; the mirror card says "per-file". SCUNet Apache-2.0.
+
+Open questions §7.1 is answered (bake-off done, NAFNet proposed); §7.2-7.4 keep their recommendations. With NAFNet's 0.7 GB the "interleave clicks between tiles" option (§7.2b) becomes cheap in memory but is still extra helper work, so it stays a 3d candidate.

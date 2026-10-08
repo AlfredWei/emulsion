@@ -2,6 +2,12 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 3a (denoise bake-off): NAFNet-SIDD-width32 beats SCUNet on cost at equal quality (2026-10-08)
+
+Research only, **no product code changed**. New sibling project `denoise_model/` (outside this repo, own git; reuses `mask_training/venv`) holds the models and photos; scripts, results and crops are in `docs/rfc/RFC-0027-appendix/`, results in RFC-0027 §8. User approved the downloads (SCUNet 77 MB pinned commit, hashes equal RFC-0023's; NAFNet-SIDD-width32 117 MB from a third-party HF mirror, sha recorded).
+- **Measured (M1 Pro, ORT CPU)**: SCUNet 3.9 s per 512x512 tile with **3.8 GB peak RSS** (9.5 GB at 1024x1024; not known before); NAFNet-w32 **0.84 s, 0.7 GB** (3.0 s / 2.0 GB at 1024x1024). Real noise (NIND ISO 6400, 6 scenes): SCUNet 32.67 dB / 0.886 (reproduces RFC-0023), NAFNet 32.55 / 0.895; per scene mixed (NAFNet +3.6 dB on one, -1.8 on foliage). By eye NAFNet keeps natural grain on flat walls where SCUNet is smooth and blotchy. Full 24 MP **extrapolated**: about 100 s vs about 7.7 min.
+- **Proposed**: NAFNet-SIDD-width32 as the first model (RFC-0027 §8). Not verified: other cameras / RAW-domain noise (SIDD is smartphone noise), Windows, the checkpoint against the upstream file, the ONNX export against PyTorch output, a real tiled 24 MP run. Added to the backlog as item 13.
+
 ## M6 slice 3 (AI denoise): RFC-0027 drafted (2026-10-08)
 
 #215 merged (click-select closed through 2d). Next M6 feature is AI denoise (super-resolution after it). Design only, **no product code changed, nothing measured** (all numbers are RFC-0023's). Shape: an `ai_denoise {amount}` edit-stack op that blends a **cached** SCUNet result (a pre-stage before lens correction), produced by an explicit tiled helper job with a crop preview; export never silently runs the model. Slices: 3a model bake-off (research, downloads need confirmation), 3b engine, 3c UI, 3d export + polish. Four open questions for the user are in RFC-0027 §7.
@@ -75,6 +81,7 @@ Status after the 2026-10-05 verification round:
 10. **Click-select 2a (RFC-0026 §7)** — OPEN: SAM 2 CPU speed and memory on a real Windows machine; the live 155 MB download through `segment_download_models` (only HEAD-verified so far); **installer bundling and signing of the `emulsion-ai` helper** on both platforms.
 11. **Click-select 2b (RFC-0026 §8)** — OPEN: segment masks on a second GPU (Windows/D3D), with all 8 raster layers in use and at the native-resolution tier, and a real export timing of the CPU path.
 12. **Click-select 2c/2d (RFC-0026 §9, §10)** — mostly DONE (a real-model session through the UI, cancellable download and resume-refine were verified in 2d). Still OPEN: Windows (Alt-click, helper spawn/kill, CPU speed, memory), the live *Download button* fetch of 155 MB through the dialog (install by import was real), a narrow window's tool strip, Add shape ▸ Subject with the real model, and quality over a range of photos.
+13. **AI denoise 3a (RFC-0027 §8)** — OPEN: NAFNet-SIDD-width32 on other cameras and RAW-domain noise, on Windows (speed, memory), its checkpoint compared with the upstream file, the ONNX export against PyTorch output, a real tiled 24 MP run (time, seams), more than six scenes.
 
 ## M6 slice 1b (composable masking UI): the Shapes list, per RFC-0025 (2026-10-05)
 

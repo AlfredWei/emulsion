@@ -2036,6 +2036,8 @@ pub fn run() {
             segment_commands::segment_cancel_download,
             segment_commands::ai_helper_info,
             denoise_commands::denoise_model_status,
+            denoise_commands::denoise_download_model,
+            denoise_commands::denoise_cancel_download,
             denoise_commands::denoise_import_model,
             denoise_commands::denoise_cache_info,
             denoise_commands::denoise_run,

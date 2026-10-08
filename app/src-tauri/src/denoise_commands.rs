@@ -57,6 +57,41 @@ pub async fn denoise_model_status(app: AppHandle, state: State<'_, AppState>) ->
     tauri::async_runtime::spawn_blocking(move || denoise_models::status(&dir)).await.map_err(|e| e.to_string())
 }
 
+#[derive(Clone, Serialize)]
+struct ModelProgress {
+    downloaded: u64,
+    total: u64,
+}
+
+/// Set by `denoise_cancel_download`, reset when a download starts (one download at a time, as for SAM 2).
+static DOWNLOAD_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Stops a running `denoise_download_model` (it then fails with "download cancelled"). A no-op otherwise.
+#[tauri::command]
+pub fn denoise_cancel_download() {
+    DOWNLOAD_CANCEL.store(true, Ordering::Relaxed);
+}
+
+/// Fetches the model file after the user consented (the UI's dialog, slice 3c). Emits
+/// `"denoise-model-progress"` `{downloaded, total}` at most every ~250 ms. The file is verified against its
+/// pinned SHA-256 before it is kept.
+#[tauri::command]
+pub async fn denoise_download_model(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
+    let dir = models_dir(&app, &state)?;
+    DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
+    let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    let progress_app = app.clone();
+    denoise_models::ensure_model(&dir, &DOWNLOAD_CANCEL, move |downloaded, total| {
+        if downloaded == total || last_emit.elapsed() >= std::time::Duration::from_millis(250) {
+            last_emit = std::time::Instant::now();
+            let _ = progress_app.emit("denoise-model-progress", ModelProgress { downloaded, total });
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || denoise_models::status(&dir)).await.map_err(|e| e.to_string())
+}
+
 /// The offline path: verify the user-chosen model file by name and checksum and copy it in.
 #[tauri::command]
 pub async fn denoise_import_model(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<ModelStatus, String> {

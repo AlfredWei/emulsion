@@ -2,6 +2,10 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 3 (AI denoise): RFC-0027 drafted (2026-10-08)
+
+#215 merged (click-select closed through 2d). Next M6 feature is AI denoise (super-resolution after it). Design only, **no product code changed, nothing measured** (all numbers are RFC-0023's). Shape: an `ai_denoise {amount}` edit-stack op that blends a **cached** SCUNet result (a pre-stage before lens correction), produced by an explicit tiled helper job with a crop preview; export never silently runs the model. Slices: 3a model bake-off (research, downloads need confirmation), 3b engine, 3c UI, 3d export + polish. Four open questions for the user are in RFC-0027 §7.
+
 ## M6 slice 2d (click-select polish + the first real-model session) (2026-10-07)
 
 - **Real model through the real window (first time)**: with the user's go-ahead the two SAM 2 Tiny files were fetched to the scratchpad (SHA-256 equal to the pinned values), installed through the app's own *I have the files* command (214 ms, checksum-verified), and a session driven in the real Tauri window on Apple/Metal by the local-only spec `develop-select-subject-real-model.e2e.js` (needs `SEGMENT_MODELS_DIR`; skipped otherwise). Measured, M1 Pro **debug** build, 1779x2848 portrait: arm -> ready (helper spawn + session load + encoder) **3.1 s**; click 1 (pink shirt) -> mask persisted **0.49 s**; the stored field is **5.4 KB** base64 (budget 30 KB), coverage 21.9%, the clicked point selected; **Tab** switches candidate (3 offered); click 2 (+face) 0.50 s, coverage 49.6%, face and shirt in, background out; Alt-click sent `positive:false` and persisted (3 prompts); **Enter** kept one mask; **Refine with clicks** resumed the saved mask (same id, 4 prompts). The screenshot shows the red overlay on the person, green/red click dots, 1/2/3, Done/Cancel and the panel. Not asserted: that the mask is "good" (one photo, judged by eye only).

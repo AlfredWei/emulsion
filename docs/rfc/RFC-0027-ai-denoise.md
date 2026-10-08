@@ -2,7 +2,7 @@
 
 - Status: Draft for review
 - Date: 2026-10-08
-- Relates to: [RFC-0023](RFC-0023-on-device-ai-inference.md) (§4.1, §4.7, §5.3: the numbers and the recommendation), [RFC-0026](RFC-0026-click-select-segmentation.md) (the `emulsion-ai` helper, the model consent flow), [ADR-0009](../adr/ADR-0009-ml-inference-runtime.md) (`ort`, Proposed), [ADR-0004](../adr/ADR-0004-develop-pipeline.md) (Develop's pipeline), [RFC-0012](RFC-0012-guided-filter-luminance-nr.md) (the existing deterministic NR)
+- Relates to: [RFC-0023](RFC-0023-on-device-ai-inference.md) (§4.1, §4.7, §5.3: the numbers and the recommendation), [RFC-0026](RFC-0026-click-select-segmentation.md) (the `emulsion-ai` helper, the model consent flow), [ADR-0009](../adr/ADR-0009-ml-inference-runtime.md) (`ort`, Proposed), [ADR-0004](../adr/ADR-0004-rendering-and-color-management.md) (Develop's pipeline), [RFC-0012](RFC-0012-luma-nr-guided-filter.md) (the existing deterministic NR)
 
 ## 0. Process note
 

@@ -71,8 +71,12 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn is_valid(path: &Path) -> bool {
+    is_valid_with(path, SHA256, SIZE)
+}
+
+fn is_valid_with(path: &Path, sha256: &str, size: u64) -> bool {
     match std::fs::metadata(path) {
-        Ok(m) if m.len() == SIZE => sha256_file(path).map(|h| h == SHA256).unwrap_or(false),
+        Ok(m) if m.len() == size => sha256_file(path).map(|h| h == sha256).unwrap_or(false),
         _ => false,
     }
 }
@@ -94,39 +98,80 @@ pub fn status(dir: &Path) -> ModelStatus {
 /// `nafnet_sidd_w32.onnx.part` while hashing, verifying, then renaming into place.
 /// `on_progress(downloaded, total)` is called per chunk (the caller throttles what it emits).
 ///
-/// `cancel` is polled before the request and after each chunk; once set, the partial file is removed and the
-/// call fails with [`DenoiseModelError::Cancelled`].
-pub async fn ensure_model(dir: &Path, cancel: &AtomicBool, mut on_progress: impl FnMut(u64, u64)) -> Result<PathBuf, DenoiseModelError> {
-    if let Some(p) = ready_path(dir) {
-        return Ok(p);
+/// **Resumable**: a `.part` left by a dropped connection or a cancel is continued with a `Range` request (its
+/// bytes are re-hashed first); a server that ignores the range restarts the file. Only a checksum failure
+/// removes the partial file (so a damaged partial costs one retry). `cancel` is polled before the request and after each chunk.
+pub async fn ensure_model(dir: &Path, cancel: &AtomicBool, on_progress: impl FnMut(u64, u64)) -> Result<PathBuf, DenoiseModelError> {
+    fetch(&url(), dir, SHA256, SIZE, cancel, on_progress).await
+}
+
+async fn fetch(
+    url: &str,
+    dir: &Path,
+    sha256: &str,
+    size: u64,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<PathBuf, DenoiseModelError> {
+    let dest = dir.join(FILENAME);
+    if is_valid_with(&dest, sha256, size) {
+        return Ok(dest);
     }
     std::fs::create_dir_all(dir).map_err(|e| DenoiseModelError::CreateDir(dir.to_path_buf(), e))?;
     if cancel.load(Ordering::Relaxed) {
         return Err(DenoiseModelError::Cancelled);
     }
-    let mut response = reqwest::Client::new().get(url()).send().await.map_err(DenoiseModelError::Download)?;
-    if !response.status().is_success() {
-        return Err(DenoiseModelError::HttpStatus(response.status().as_u16()));
-    }
     let tmp = dir.join(format!("{FILENAME}.part"));
-    let dest = dir.join(FILENAME);
-    let mut file = std::fs::File::create(&tmp).map_err(|e| DenoiseModelError::Write(tmp.clone(), e))?;
+    // A partial file at or past the full size is useless (a complete one would have been renamed): start over.
+    let have = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0).min(size);
+    let have = if have == size { 0 } else { have };
+    let mut request = reqwest::Client::new().get(url);
+    if have > 0 {
+        request = request.header(reqwest::header::RANGE, format!("bytes={have}-"));
+    }
+    let mut response = request.send().await.map_err(DenoiseModelError::Download)?;
+    let status = response.status().as_u16();
+    // 206 continues the file; 200 is the whole file again (range ignored); anything else is a failure.
+    let resumed = have > 0 && status == 206;
+    if !(status == 200 || resumed) {
+        if have > 0 && status == 416 {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return Err(DenoiseModelError::HttpStatus(status));
+    }
     let mut hasher = Sha256::new();
     let mut done = 0u64;
+    let mut file = if resumed {
+        let mut prefix = std::fs::File::open(&tmp).map_err(|e| DenoiseModelError::Read(tmp.clone(), e))?;
+        let mut buf = vec![0u8; 1 << 20];
+        let mut left = have;
+        while left > 0 {
+            let want = left.min(buf.len() as u64) as usize;
+            let n = std::io::Read::read(&mut prefix, &mut buf[..want]).map_err(|e| DenoiseModelError::Read(tmp.clone(), e))?;
+            if n == 0 {
+                return Err(DenoiseModelError::Read(tmp.clone(), std::io::ErrorKind::UnexpectedEof.into()));
+            }
+            hasher.update(&buf[..n]);
+            left -= n as u64;
+        }
+        done = have;
+        // Append after the hashed bytes. A damaged partial is caught by the final checksum, which removes it.
+        std::fs::OpenOptions::new().append(true).open(&tmp).map_err(|e| DenoiseModelError::Write(tmp.clone(), e))?
+    } else {
+        std::fs::File::create(&tmp).map_err(|e| DenoiseModelError::Write(tmp.clone(), e))?
+    };
     while let Some(chunk) = response.chunk().await.map_err(DenoiseModelError::Download)? {
         hasher.update(&chunk);
         file.write_all(&chunk).map_err(|e| DenoiseModelError::Write(tmp.clone(), e))?;
         done += chunk.len() as u64;
-        on_progress(done, SIZE);
+        on_progress(done, size);
         if cancel.load(Ordering::Relaxed) {
-            drop(file);
-            let _ = std::fs::remove_file(&tmp);
-            return Err(DenoiseModelError::Cancelled);
+            return Err(DenoiseModelError::Cancelled); // the partial file stays, to be resumed
         }
     }
     drop(file);
     let actual = hex(&hasher.finalize());
-    if actual != SHA256 {
+    if actual != sha256 {
         let _ = std::fs::remove_file(&tmp);
         return Err(DenoiseModelError::ChecksumMismatch(FILENAME.to_string(), actual));
     }
@@ -194,6 +239,108 @@ mod tests {
         let err = ensure_model(&dir, &cancel, |_, _| panic!("no progress without a request")).await.unwrap_err();
         assert!(matches!(err, DenoiseModelError::Cancelled), "{err}");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    }
+
+    /// A one-file HTTP/1.1 server on localhost: serves `body`, honouring `Range: bytes=N-` unless `ignore_range`,
+    /// and records the Range header of each request.
+    fn serve(body: Vec<u8>, ignore_range: bool, requests: u32) -> (String, std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>) {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/file", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for _ in 0..requests {
+                let (mut conn, _) = listener.accept().unwrap();
+                let mut head = Vec::new();
+                let mut b = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if conn.read(&mut b).unwrap() == 0 {
+                        break;
+                    }
+                    head.push(b[0]);
+                }
+                let text = String::from_utf8_lossy(&head).to_string();
+                let range = text.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("range: bytes=").map(|r| r.trim_end_matches('-').to_string()));
+                log.lock().unwrap().push(range.clone());
+                let (status, slice) = match range.and_then(|r| r.parse::<usize>().ok()).filter(|_| !ignore_range) {
+                    Some(from) => ("206 Partial Content", &body[from..]),
+                    None => ("200 OK", &body[..]),
+                };
+                let _ = write!(conn, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", slice.len());
+                let _ = conn.write_all(slice);
+            }
+        });
+        (url, seen)
+    }
+
+    fn sample() -> (Vec<u8>, String) {
+        let body: Vec<u8> = (0..300_000u32).map(|i| (i * 31 % 251) as u8).collect();
+        let sha = hex(&Sha256::digest(&body));
+        (body, sha)
+    }
+
+    #[tokio::test]
+    async fn a_download_is_verified_and_a_partial_file_is_resumed_with_a_range_request() {
+        let (body, sha) = sample();
+        let size = body.len() as u64;
+        // Fresh.
+        let (url, seen) = serve(body.clone(), false, 1);
+        let dir = test_dir("fetch-fresh");
+        let mut last = 0;
+        let path = fetch(&url, &dir, &sha, size, &AtomicBool::new(false), |d, t| {
+            assert_eq!(t, size);
+            last = d;
+        })
+        .await
+        .unwrap();
+        assert_eq!((last, std::fs::read(&path).unwrap()), (size, body.clone()));
+        assert_eq!(seen.lock().unwrap().as_slice(), &[None]);
+        assert!(!dir.join(format!("{FILENAME}.part")).exists());
+
+        // Resume: the first 100 000 bytes are already there, as after a dropped connection.
+        let (url, seen) = serve(body.clone(), false, 1);
+        let dir = test_dir("fetch-resume");
+        std::fs::write(dir.join(format!("{FILENAME}.part")), &body[..100_000]).unwrap();
+        let mut first = None;
+        let path = fetch(&url, &dir, &sha, size, &AtomicBool::new(false), |d, _| {
+            first.get_or_insert(d);
+        })
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), body, "resumed file must equal the original");
+        assert_eq!(seen.lock().unwrap().as_slice(), &[Some("100000".to_string())]);
+        assert!(first.unwrap() > 100_000, "progress continues from the resumed offset");
+
+        // A damaged partial is resumed, then fails the checksum and is removed (the retry starts clean).
+        let (url, _) = serve(body.clone(), false, 1);
+        let dir = test_dir("fetch-damaged-partial");
+        let mut bad = body[..100_000].to_vec();
+        bad[10] ^= 0xff;
+        std::fs::write(dir.join(format!("{FILENAME}.part")), &bad).unwrap();
+        let err = fetch(&url, &dir, &sha, size, &AtomicBool::new(false), |_, _| {}).await.unwrap_err();
+        assert!(matches!(err, DenoiseModelError::ChecksumMismatch(..)), "{err}");
+        assert!(!dir.join(format!("{FILENAME}.part")).exists());
+    }
+
+    #[tokio::test]
+    async fn a_server_that_ignores_the_range_restarts_the_file_and_a_bad_body_is_rejected() {
+        let (body, sha) = sample();
+        let size = body.len() as u64;
+        let (url, _) = serve(body.clone(), true, 1);
+        let dir = test_dir("fetch-ignore-range");
+        std::fs::write(dir.join(format!("{FILENAME}.part")), &body[..50_000]).unwrap();
+        let path = fetch(&url, &dir, &sha, size, &AtomicBool::new(false), |_, _| {}).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), body);
+
+        // The wrong bytes under the right size: checksum failure, nothing kept.
+        let mut wrong = body.clone();
+        wrong[1000] ^= 1;
+        let (url, _) = serve(wrong, false, 1);
+        let dir = test_dir("fetch-wrong");
+        let err = fetch(&url, &dir, &sha, size, &AtomicBool::new(false), |_, _| {}).await.unwrap_err();
+        assert!(matches!(err, DenoiseModelError::ChecksumMismatch(..)), "{err}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a failed checksum leaves neither file");
     }
 
     #[test]

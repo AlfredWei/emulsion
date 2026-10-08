@@ -23,6 +23,9 @@ mod metadata_writer;
 mod panorama_merge;
 mod preview_cache;
 mod ai;
+mod denoise_cache;
+mod denoise_commands;
+mod denoise_models;
 mod segment_commands;
 mod segment_models;
 mod print;
@@ -73,6 +76,11 @@ fn resolve_cache_root(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<
 
 fn resolve_thumbnail_dir(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<PathBuf, String> {
     Ok(resolve_cache_root(app, catalog)?.join("thumbnails"))
+}
+
+/// Finished AI-denoise results (RFC-0027), under the same Settings > Storage root as previews.
+fn resolve_denoise_dir(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<PathBuf, String> {
+    Ok(resolve_cache_root(app, catalog)?.join("denoise_cache"))
 }
 
 fn resolve_previews_dir(app: &AppHandle, catalog: &Arc<Mutex<Catalog>>) -> Result<PathBuf, String> {
@@ -1606,11 +1614,14 @@ struct ExportItem {
 /// selection) elsewhere in the app.
 #[tauri::command]
 async fn export_images(
+    app: AppHandle,
     state: State<'_, AppState>,
     items: Vec<ExportItem>,
     options: ExportOptions,
 ) -> Result<Vec<ExportResult>, String> {
     let catalog = state.catalog.clone();
+    // Where finished AI-denoise results live (RFC-0027): read only, never created by an export.
+    let denoise_dir = resolve_denoise_dir(&app, &state.catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let (resolved, plugin) = {
@@ -1644,7 +1655,7 @@ async fn export_images(
             };
             (resolved, plugin)
         };
-        Ok::<_, String>(export::export_batch(resolved, &options, plugin.as_ref()))
+        Ok::<_, String>(export::export_batch(resolved, &options, plugin.as_ref(), Some(&denoise_dir)))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2024,6 +2035,12 @@ pub fn run() {
             segment_commands::segment_release,
             segment_commands::segment_cancel_download,
             segment_commands::ai_helper_info,
+            denoise_commands::denoise_model_status,
+            denoise_commands::denoise_import_model,
+            denoise_commands::denoise_cache_info,
+            denoise_commands::denoise_run,
+            denoise_commands::denoise_cancel,
+            denoise_commands::denoise_remove_cache,
             report_spike_result,
             import_folder,
             import_files,

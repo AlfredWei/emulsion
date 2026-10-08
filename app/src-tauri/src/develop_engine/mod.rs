@@ -32,6 +32,7 @@
 use crate::catalog::EditStack;
 use image::RgbImage;
 
+mod ai_denoise;
 mod color;
 mod tone;
 mod hsl_split;
@@ -53,6 +54,7 @@ use detail::*;
 use masks::*;
 use crop::*;
 
+pub(crate) use ai_denoise::{ai_denoise_amount, blend_denoised};
 pub(crate) use crop::apply_crop;
 pub(crate) use lens::apply_lens_correction;
 pub(crate) use perspective::apply_perspective;

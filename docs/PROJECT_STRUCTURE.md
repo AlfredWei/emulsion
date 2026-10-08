@@ -93,8 +93,9 @@ src-tauri/
 │   ├── hdr_merge.rs / panorama_merge.rs   HDR bracket merge / feature-based panorama stitch
 │   ├── face_detect.rs, face_cluster.rs, face_models.rs, face_pipeline.rs   Face detection, clustering, model cache, orchestration
 │   ├── segment_models.rs, segment_commands.rs   Click-select (RFC-0026): model fetch/verify/import, Tauri commands
-│   ├── ai/                      AI helper process, app side: protocol.rs (JSON-lines wire types, shared with the helper), supervisor.rs (lazy spawn, retry, idle respawn)
-│   ├── bin/emulsion-ai/         The long-lived AI helper binary: main.rs (request loop, idle exit), segment.rs (SAM 2 Tiny on `ort`, CPU) -- the only code that links ONNX Runtime
+│   ├── denoise_models.rs, denoise_cache.rs, denoise_commands.rs   AI denoise (RFC-0027): the model file (import only for now), the cache of finished results, Tauri commands (model status/import, run/cancel job, cache info/remove)
+│   ├── ai/                      AI helper process, app side: protocol.rs (JSON-lines wire types, shared with the helper), supervisor.rs (lazy spawn, retry, idle respawn, progress streaming, cancel), tiling.rs (overlapping-tile inference and feathered blend, shared with the helper)
+│   ├── bin/emulsion-ai/         The long-lived AI helper binary: main.rs (request loop with a stdin reader thread, idle exit), segment.rs (SAM 2 Tiny on `ort`, CPU), denoise.rs (tiled NAFNet denoise) -- the only code that links ONNX Runtime
 │   ├── lens_profile.rs          Lens-profile matching for Lens Corrections
 │   ├── soft_proof.rs / print.rs   Soft proofing / Print module output
 │   └── storage.rs               User-configurable cache location (Settings > Storage)

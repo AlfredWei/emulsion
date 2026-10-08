@@ -82,7 +82,7 @@ fn color_management_cache_key(color: &PrintColorManagement) -> Result<String, Pr
 /// proofing, always with `gamut_warning` forced off (not meaningful for a
 /// buffer that's about to be printed, not displayed with an alarm color).
 fn render_print_ready_image(source_path: &Path, stack: &EditStack, color: &PrintColorManagement) -> Result<image::RgbImage, PrintError> {
-    let mut image = export::render_full_resolution(source_path, stack)?;
+    let mut image = export::render_full_resolution(source_path, stack, None)?;
     if let Some(settings) = &color.profile {
         let settings = SoftProofSettings { gamut_warning: false, ..settings.clone() };
         soft_proof::apply_soft_proof(&mut image, &settings)?;

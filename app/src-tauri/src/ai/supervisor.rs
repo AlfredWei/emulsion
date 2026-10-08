@@ -9,8 +9,11 @@
 //! the helper itself reports (`not_prepared`, `inference`, ...) is returned as
 //! is. Concurrent callers are fine: each waits on its own channel and the
 //! helper serves them in order.
+//!
+//! A long request (denoise, RFC-0027) streams interim `progress` lines; each one resets the timeout, so the
+//! timeout bounds the time between signs of life, not the length of the job.
 
-use super::protocol::{Request, Response};
+use super::protocol::{Progress, Request, Response};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -81,7 +84,9 @@ impl Conn {
                 for line in BufReader::new(stdout).lines() {
                     let Ok(line) = line else { break };
                     if let Ok(resp) = serde_json::from_str::<Response>(&line) {
-                        if let Some(tx) = pending.lock().ok().and_then(|mut p| p.remove(&resp.id)) {
+                        // An interim line leaves the request pending; only the final answer removes it.
+                        let tx = pending.lock().ok().and_then(|mut p| if resp.progress.is_some() { p.get(&resp.id).cloned() } else { p.remove(&resp.id) });
+                        if let Some(tx) = tx {
                             let _ = tx.send(resp);
                         }
                     }
@@ -100,7 +105,7 @@ impl Conn {
         Ok(Arc::new(Conn { child, stdin: Mutex::new(stdin), pending, alive }))
     }
 
-    fn round_trip(&self, id: u64, req: &Request, timeout: Duration) -> Result<serde_json::Value, AiError> {
+    fn round_trip(&self, id: u64, req: &Request, timeout: Duration, on_progress: &mut dyn FnMut(Progress)) -> Result<serde_json::Value, AiError> {
         let (tx, rx) = channel();
         self.pending.lock().map_err(|_| AiError::HelperExited)?.insert(id, tx);
         let line = serde_json::to_string(&super::protocol::Frame { id, request: req.clone() }).map_err(|e| AiError::Protocol(e.to_string()))?;
@@ -112,17 +117,25 @@ impl Conn {
             self.forget(id);
             return Err(AiError::HelperExited);
         }
-        match rx.recv_timeout(timeout) {
-            Ok(resp) => match (resp.ok, resp.err) {
-                (_, Some(e)) => Err(AiError::Remote { code: e.code, message: e.message }),
-                (Some(v), None) => Ok(v),
-                (None, None) => Err(AiError::Protocol("response has neither ok nor err".into())),
-            },
-            Err(RecvTimeoutError::Timeout) => {
-                self.forget(id);
-                Err(AiError::Timeout)
+        loop {
+            match rx.recv_timeout(timeout) {
+                Ok(resp) => {
+                    if let Some(p) = resp.progress {
+                        on_progress(p);
+                        continue;
+                    }
+                    return match (resp.ok, resp.err) {
+                        (_, Some(e)) => Err(AiError::Remote { code: e.code, message: e.message }),
+                        (Some(v), None) => Ok(v),
+                        (None, None) => Err(AiError::Protocol("response has neither ok nor err".into())),
+                    };
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    self.forget(id);
+                    return Err(AiError::Timeout);
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err(AiError::HelperExited),
             }
-            Err(RecvTimeoutError::Disconnected) => Err(AiError::HelperExited),
         }
     }
 
@@ -193,11 +206,33 @@ impl AiHelper {
 
     /// Sends `req`, spawning the helper if needed. See the module doc for the failure policy.
     pub fn request(&self, req: Request, timeout: Duration) -> Result<serde_json::Value, AiError> {
+        self.request_with_progress(req, timeout, |_| {})
+    }
+
+    /// Like `request`, calling `on_progress` for every interim line the helper streams (on the caller's thread).
+    /// A retry after a helper crash starts the job over, so the count may restart from zero.
+    pub fn request_with_progress(&self, req: Request, timeout: Duration, on_progress: impl FnMut(Progress)) -> Result<serde_json::Value, AiError> {
+        self.request_with_id(self.reserve_id(), req, timeout, on_progress)
+    }
+
+    /// An id for a request the caller will send with [`request_with_id`](Self::request_with_id), so it can name
+    /// the request in a `cancel` while it is still running.
+    pub fn reserve_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// Asks the helper to stop request `target` at its next tile boundary. Never starts a helper; `Ok(())`
+    /// whether or not `target` is still running.
+    pub fn cancel(&self, target: u64) -> Result<(), AiError> {
+        self.request_if_running(Request::Cancel { target }, Duration::from_secs(30)).map(|_| ())
+    }
+
+    /// [`request_with_progress`](Self::request_with_progress) under an id from [`reserve_id`](Self::reserve_id).
+    pub fn request_with_id(&self, id: u64, req: Request, timeout: Duration, mut on_progress: impl FnMut(Progress)) -> Result<serde_json::Value, AiError> {
         let mut last = AiError::HelperExited;
         for _attempt in 0..2 {
             let conn = self.connection()?;
-            let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-            match conn.round_trip(id, &req, timeout) {
+            match conn.round_trip(id, &req, timeout, &mut on_progress) {
                 Err(AiError::HelperExited) => {
                     self.discard(&conn);
                     last = AiError::HelperExited;

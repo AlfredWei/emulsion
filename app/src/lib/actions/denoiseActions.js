@@ -117,7 +117,8 @@ async function startJob(kind) {
   await runJob(kind, hash, path);
 }
 
-/** @param {"crop" | "whole"} kind @param {string} hash @param {string} path */
+/** @param {"crop" | "whole"} kind @param {string} hash @param {string} path
+ * @returns {Promise<"done" | "stopped" | "failed">} */
 async function runJob(kind, hash, path) {
   const label = baseName(path);
   denoise.job = { kind, hash, label, done: 0, total: 0 };
@@ -137,17 +138,54 @@ async function runJob(kind, hash, path) {
     } else {
       await wholePhotoDone(hash, label, r.ms);
     }
+    return "done";
   } catch (e) {
     if (isJobCancelled(e)) {
       shell.notify("Denoise stopped.");
-    } else {
-      if (hash === develop.imageContentHash) denoise.error = message(e);
-      shell.notify(`Denoise failed: ${message(e)}`);
+      return "stopped";
     }
+    if (hash === develop.imageContentHash) denoise.error = message(e);
+    shell.notify(`Denoise failed: ${message(e)}`);
+    return "failed";
   } finally {
     unlisten?.();
     denoise.job = null;
   }
+}
+
+/** The Export dialog's "Denoise these first" (RFC-0027 §3.6): whole-photo jobs for the photos an export would
+ * otherwise do without the effect, one after another, each an ordinary job (progress, Stop, a status line).
+ * Stops at the first one that is stopped or fails. Resolves to how it ended; "no-model" means the model is
+ * not installed (the download dialog lives in Develop, so the caller says where to get it).
+ * @param {{ path: string, content_hash: string }[]} photos
+ * @returns {Promise<"done" | "stopped" | "failed" | "no-model" | "busy">} */
+export async function handleDenoiseBatch(photos) {
+  if (denoise.job !== null || denoise.batch !== null) return "busy";
+  try {
+    const status = await denoiseModelStatus();
+    denoise.modelStatus = status;
+    if (status.state !== "ready") return "no-model";
+  } catch {
+    return "failed";
+  }
+  denoise.batch = { index: 0, total: photos.length, stopped: false };
+  try {
+    for (const [i, p] of photos.entries()) {
+      denoise.batch.index = i + 1;
+      const outcome = await runJob("whole", p.content_hash, p.path);
+      if (outcome !== "done") return outcome;
+      if (denoise.batch.stopped) return "stopped";
+    }
+    return "done";
+  } finally {
+    denoise.batch = null;
+  }
+}
+
+/** Stop in the Export dialog: ends the running job at its next tile and skips the photos still waiting. */
+export function handleDenoiseBatchStop() {
+  if (denoise.batch) denoise.batch.stopped = true;
+  handleDenoiseCancel();
 }
 
 /** @param {string} hash @param {string} label @param {number} ms */

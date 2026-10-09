@@ -16,10 +16,33 @@
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
   import { handleChooseCustomProfile } from "$lib/actions/softProofActions.js";
   import MaskToolStrip from "$lib/components/MaskToolStrip.svelte";
-  import SegmentModelDialog from "$lib/components/SegmentModelDialog.svelte";
+  import ModelDownloadDialog from "$lib/components/ModelDownloadDialog.svelte";
   import { segment } from "$lib/state/segment.svelte.js";
+  import AiDenoiseControls from "$lib/components/AiDenoiseControls.svelte";
+  import { denoise } from "$lib/state/denoise.svelte.js";
+  import { handleAiDenoiseAmountChange, handleDenoisePreviewCrop, handleDenoiseWhole, handleDenoiseCancel, handleDenoiseRemove, handleDenoiseDismissCrop, handleDenoiseDownload, handleDenoiseImport, handleDenoiseDialogCancel, handleDenoiseDialogRetry } from "$lib/actions/denoiseActions.js";
   import { handleSegmentToolToggle, handleAddSegmentShape, handleSegmentClick, handleSegmentCandidate, handleSegmentAccept, handleSegmentCancel, handleSegmentDownload, handleSegmentImport, handleSegmentDialogCancel, handleSegmentDialogRetry, handleSegmentRefine } from "$lib/actions/segmentActions.js";
 </script>
+
+{#snippet aiDenoiseSection()}
+  <AiDenoiseControls
+    amount={developView.aiDenoise.amount}
+    hasResult={denoise.hasResult}
+    model={denoise.cache?.model ?? null}
+    size={denoise.cache ? { width: denoise.cache.width, height: denoise.cache.height } : null}
+    job={denoise.job}
+    jobHere={denoise.jobHere}
+    crop={denoise.crop ? { before: denoise.crop.before, after: denoise.crop.after, width: denoise.crop.region.w, height: denoise.crop.region.h, ms: denoise.crop.ms } : null}
+    error={denoise.error}
+    gpuUnavailable={develop.gpuFallbackActive}
+    onAmountChange={handleAiDenoiseAmountChange}
+    onPreviewCrop={handleDenoisePreviewCrop}
+    onDenoiseWhole={handleDenoiseWhole}
+    onCancel={handleDenoiseCancel}
+    onRemove={handleDenoiseRemove}
+    onDismissCrop={handleDenoiseDismissCrop}
+  />
+{/snippet}
 
 <div class="develop-body">
   <HistoryPanel
@@ -55,6 +78,8 @@
   <DevelopCanvas
     imagePath={develop.imagePath}
     imageContentHash={develop.imageContentHash}
+    aiDenoiseAmount={denoise.hasResult ? developView.renderAiDenoise.amount : 0}
+    denoiseVersion={denoise.cacheVersion}
     exposure={developView.renderExposure}
     contrast={developView.renderContrast}
     saturation={developView.renderSaturation}
@@ -211,6 +236,7 @@
     onLumaNRChange={handleLumaNRChange}
     colorNR={developView.colorNR}
     onColorNRChange={handleColorNRChange}
+    {aiDenoiseSection}
     softProofEnabled={softProof.enabled}
     softProofTarget={softProof.target}
     softProofCustomProfilePath={softProof.customProfilePath}
@@ -229,7 +255,7 @@
     onResetPanel={handleResetPanel}
   />
 </div>
-<SegmentModelDialog
+<ModelDownloadDialog
   dialog={segment.dialog}
   host={segment.modelStatus?.host ?? ""}
   downloadBytes={segment.modelStatus?.download_bytes ?? 0}
@@ -240,6 +266,26 @@
   onImport={handleSegmentImport}
   onCancel={handleSegmentDialogCancel}
   onRetry={handleSegmentDialogRetry}
+/>
+<ModelDownloadDialog
+  dialog={denoise.dialog}
+  host={denoise.modelStatus?.host ?? ""}
+  downloadBytes={denoise.modelStatus?.download_bytes ?? 0}
+  downloaded={denoise.download.downloaded}
+  total={denoise.download.total}
+  error={denoise.dialogError}
+  onDownload={handleDenoiseDownload}
+  onImport={handleDenoiseImport}
+  onCancel={handleDenoiseDialogCancel}
+  onRetry={handleDenoiseDialogRetry}
+  title="AI Denoise needs a one-time download"
+  ariaLabel="AI Denoise model"
+  testId="denoise-model-dialog"
+  what="denoising model"
+  offlineNote="Nothing about your photos is sent, and denoising itself runs entirely on this computer."
+  importLabel="I have the file"
+  importTitle="Choose the nafnet_sidd_w32.onnx model file you already have"
+  cancelNote="Cancelling keeps what has arrived, and the next download carries on from there."
 />
 <MaskToolStrip
   activeTool={masks.activeTool}

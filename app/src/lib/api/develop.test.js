@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   PRESET_EXCLUDED_OP_NAMES,
   presetEligibleOps,
@@ -9,6 +11,9 @@ import {
   computeEyedropperWhiteBalance,
   computeAutoTone,
   PANEL_OP_NAMES,
+  getAiDenoise,
+  upsertAiDenoise,
+  IDENTITY_AI_DENOISE,
   getGrain,
   getGrainStock,
   upsertGrain,
@@ -83,7 +88,7 @@ describe("presetEligibleOps", () => {
     });
   });
 
-  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 8 mask kinds plus crop, lens_correction, and perspective", () => {
+  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 8 mask kinds plus crop, lens_correction, perspective and ai_denoise", () => {
     expect(PRESET_EXCLUDED_OP_NAMES.sort()).toEqual(
       [
         "crop",
@@ -97,6 +102,7 @@ describe("presetEligibleOps", () => {
         "segment_mask",
         "spot_mask",
         "red_eye_mask",
+        "ai_denoise",
       ].sort(),
     );
   });
@@ -630,5 +636,54 @@ describe("Composable masking model (RFC-0025)", () => {
     const restored = JSON.parse(JSON.stringify(withShape));
     expect(restored).toEqual(withShape);
     expect(listModifiers(/** @type {any} */ (listMasks(restored)[0])).map((m) => m.id)).toEqual(["m1"]);
+  });
+});
+
+// RFC-0027 slice 3c: the ai_denoise op is the Noise Reduction panel's third op.
+describe("AI Denoise op", () => {
+  test("reads as amount 0 when absent, and clamps and rounds what is stored", () => {
+    const empty = /** @type {EditStack} */ ({ schema_version: 1, ops: [] });
+    expect(getAiDenoise(empty)).toEqual({ amount: 0 });
+    expect(getAiDenoise(empty, IDENTITY_AI_DENOISE)).toBe(IDENTITY_AI_DENOISE);
+    const stored = (/** @type {unknown} */ amount) => /** @type {EditStack} */ (/** @type {any} */ ({ schema_version: 1, ops: [{ op: "ai_denoise", amount }] }));
+    expect(getAiDenoise(stored(35)).amount).toBe(35);
+    expect(getAiDenoise(stored(250)).amount).toBe(100);
+    expect(getAiDenoise(stored(-4)).amount).toBe(0);
+    expect(getAiDenoise(stored(12.6)).amount).toBe(13);
+    expect(getAiDenoise(stored("lots")).amount).toBe(0);
+  });
+
+  test("upsert keeps one op, replaces the amount and leaves the rest of the stack alone", () => {
+    const stack = /** @type {EditStack} */ ({ schema_version: 1, ops: [{ op: "exposure", value: 0.5 }] });
+    const once = upsertAiDenoise(stack, { amount: 70 });
+    const twice = upsertAiDenoise(once, { amount: 40.4 });
+    expect(twice.ops.filter((o) => o.op === "ai_denoise")).toEqual([{ op: "ai_denoise", amount: 40 }]);
+    expect(twice.ops).toContainEqual({ op: "exposure", value: 0.5 });
+    expect(upsertAiDenoise(stack, { amount: 900 }).ops).toContainEqual({ op: "ai_denoise", amount: 100 });
+    expect(stack.ops).toHaveLength(1); // the input is not mutated
+  });
+
+  test("hiding Noise Reduction switches it off, reset removes it, presets and Copy Settings never carry it", () => {
+    const stack = upsertAiDenoise(/** @type {EditStack} */ (/** @type {any} */ ({ schema_version: 1, ops: [{ op: "luma_nr", amount: 30 }] })), { amount: 60 });
+    const hidden = togglePanelVisibility(stack, "noise_reduction");
+    expect(getAiDenoise(effectiveEditStack(hidden)).amount).toBe(0);
+    expect(getAiDenoise(hidden).amount).toBe(60); // the stored value stays showing
+    expect(resetPanel(stack, "noise_reduction").ops.map((o) => o.op)).toEqual([]);
+    expect(presetEligibleOps(stack).ops.map((o) => o.op)).toEqual(["luma_nr"]);
+    expect(copySettingsOps(stack, OP_GROUPS.map((g) => g.id)).ops.map((o) => o.op)).toEqual(["luma_nr"]);
+  });
+
+  // The JS table is a hand-kept twin of the Rust one; a drift here is silent (a hidden panel would still
+  // render the effect on one side only). Read the Rust source and compare name by name.
+  test("PANEL_OP_NAMES matches the Rust table in develop_engine/pipeline.rs", () => {
+    const rust = readFileSync(fileURLToPath(new URL("../../../src-tauri/src/develop_engine/pipeline.rs", import.meta.url)), "utf8");
+    const table = rust.slice(rust.indexOf("const PANEL_OP_NAMES"), rust.indexOf("];", rust.indexOf("const PANEL_OP_NAMES")));
+    /** @type {Record<string, string[]>} */
+    const fromRust = {};
+    for (const m of table.matchAll(/\(\s*"(\w+)",\s*&\[([^\]]*)\]/g)) {
+      fromRust[m[1]] = [...m[2].matchAll(/"(\w+)"/g)].map((n) => n[1]);
+    }
+    expect(Object.keys(fromRust).length).toBe(12);
+    expect(fromRust).toEqual(Object.fromEntries(Object.entries(PANEL_OP_NAMES).map(([k, v]) => [k, [...v]])));
   });
 });

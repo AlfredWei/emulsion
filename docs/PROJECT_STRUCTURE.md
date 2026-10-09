@@ -93,7 +93,7 @@ src-tauri/
 │   ├── hdr_merge.rs / panorama_merge.rs   HDR bracket merge / feature-based panorama stitch
 │   ├── face_detect.rs, face_cluster.rs, face_models.rs, face_pipeline.rs   Face detection, clustering, model cache, orchestration
 │   ├── segment_models.rs, segment_commands.rs   Click-select (RFC-0026): model fetch/verify/import, Tauri commands
-│   ├── denoise_models.rs, denoise_cache.rs, denoise_commands.rs   AI denoise (RFC-0027): the model file (import only for now), the cache of finished results, Tauri commands (model status/import, run/cancel job, cache info/remove)
+│   ├── denoise_models.rs, denoise_cache.rs, denoise_commands.rs, denoise_preview.rs   AI denoise (RFC-0027): the model file (verified resumable download, or import), the cache of finished results, Tauri commands (model status/download/import, run/cancel job, cache info/remove, the Develop preview blend), and the blend of a preview with the kept copy
 │   ├── ai/                      AI helper process, app side: protocol.rs (JSON-lines wire types, shared with the helper), supervisor.rs (lazy spawn, retry, idle respawn, progress streaming, cancel), tiling.rs (overlapping-tile inference and feathered blend, shared with the helper)
 │   ├── bin/emulsion-ai/         The long-lived AI helper binary: main.rs (request loop with a stdin reader thread, idle exit), segment.rs (SAM 2 Tiny on `ort`, CPU), denoise.rs (tiled NAFNet denoise) -- the only code that links ONNX Runtime
 │   ├── lens_profile.rs          Lens-profile matching for Lens Corrections
@@ -119,13 +119,13 @@ src/
 │   └── m*-spike / m*-smoke/   Throwaway diagnostic routes (see note below), not part of the app
 ├── lib/
 │   ├── api/                 Thin wrappers around invoke(): the only place that knows Tauri command names/shapes
-│   │                        (catalog, develop, export, faces, map, print, storage, backup, system, segment)
+│   │                        (catalog, develop, export, faces, map, print, storage, backup, system, segment, denoise)
 │   ├── components/          Svelte components. App shell: AppTitlebar, AppDialogs, StatusStrip; module
 │   │                        bodies picked by +page.svelte: LibraryModule, DevelopModule, PrintModule (prop-less, import the stores/actions they use; RFC-0009 P8). Library:
 │   │                        CatalogRail, LibraryGrid/GridCell, LibraryToolbar, LibraryFilterBar, LibraryImageViewer,
 │   │                        LibraryCompareView, LibrarySurveyView, LibraryMapView (Leaflet; loaded on first open), LibraryHistogram, MetadataPanel. Develop:
 │   │                        DevelopCanvas (WebGPU), DevelopPanel, DevelopInfoBar, Filmstrip, Histogram,
-│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, SegmentModelDialog (Select Subject model consent/download), DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
+│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, ModelDownloadDialog (AI model consent/download/import, wording per feature: Select Subject, AI Denoise), AiDenoiseControls + AiDenoiseCompare (the AI Denoise block of the Noise Reduction panel and its before/after crop view), DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
 │   │                        PrintLayoutView. Dialogs: SettingsDialog, ExportDialog, ConfirmDialog,
 │   │                        TextPromptDialog, SmartCollectionDialog, CopySettingsDialog, BackupPromptDialog
 │   ├── gpu/                 Develop WebGPU code, split out of DevelopCanvas: gpuHandles.js (handle object +
@@ -146,7 +146,7 @@ src/
 │   │                        canvas readouts, edit-stack persistence), developView.svelte.js (per-adjustment derived
 │   │                        views of the edit stack), masks.svelte.js (mask tool/selection state, brush options, resample/eyedropper
 │   │                        targets; `install()` self-cleaning effects), segment.svelte.js (Select Subject session: phase, clicks,
-│   │                        candidates, model dialog; its `install()` ends the session with the tool), softProof.svelte.js (proof settings + debounced
+│   │                        candidates, model dialog; its `install()` ends the session with the tool), denoise.svelte.js (AI Denoise: model dialog, the open photo's kept copy, the running job, the crop preview; its `install()` follows the open photo), softProof.svelte.js (proof settings + debounced
 │   │                        preview effect), presets.svelte.js (preset list + Develop dialog flags), exportFlow.svelte.js (Export dialog items + what Export/Print
 │   │                        would act on); more land per RFC-0009 P7+.
 │   │                        Tested via lib/state/*.test.js
@@ -158,7 +158,7 @@ src/
 │   │                        importActions.js (import/merge runners, thumbnail regeneration + startup poll; faceActions.js
 │   │                        also holds the face-detection runners), developActions.js (adjustment/crop/WB/tone handlers,
 │   │                        readout setters, peeks, snapshots), metadataActions.js (rating/flag/label, IPTC saves);
-│   │                        libraryActions.js also holds handleRemoveConfirmed; segmentActions.js (Select Subject: arm, click, candidates, accept/cancel, model download/import),
+│   │                        libraryActions.js also holds handleRemoveConfirmed; segmentActions.js (Select Subject: arm, click, candidates, accept/cancel, model download/import), denoiseActions.js (AI Denoise: Amount, crop preview, whole-photo job, remove, model download/import),
 │   │                        maskActions.js (mask create/update/delete, resample,
 │   │                        eyedropper, GPU fallback), presetActions.js (preset list, apply/import/export, copy/paste settings),
 │   │                        historyActions.js (restore, undo/redo, snapshot restore, reset), softProofActions.js (custom

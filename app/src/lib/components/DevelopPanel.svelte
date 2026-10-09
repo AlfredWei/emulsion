@@ -80,6 +80,7 @@
    *   onLumaNRChange: (patch: Partial<{amount: number, detail: number, contrast: number}>) => void,
    *   colorNR: {amount: number, detail: number},
    *   onColorNRChange: (patch: Partial<{amount: number, detail: number}>) => void,
+   *   aiDenoiseSection?: import('svelte').Snippet,
    *   softProofEnabled?: boolean,
    *   softProofTarget?: "srgb" | "adobe-rgb" | "prophoto-rgb" | "custom",
    *   softProofCustomProfilePath?: string | null,
@@ -159,6 +160,7 @@
     onLumaNRChange,
     colorNR,
     onColorNRChange,
+    aiDenoiseSection,
     softProofEnabled = false,
     softProofTarget = "srgb",
     softProofCustomProfilePath = null,
@@ -907,6 +909,10 @@
   <details class="section" class:panel-hidden={isPanelHidden("noise_reduction")}>
     <summary>{@render panelHeader("Noise Reduction", "noise_reduction")}</summary>
     <div class="sub-body">
+      {#if aiDenoiseSection}
+        <div class="subsection-label">AI Denoise</div>
+        {@render aiDenoiseSection()}
+      {/if}
       <div class="subsection-label">Luminance</div>
       <div class="row">
         <label for="luma-nr-amount">Amount</label>

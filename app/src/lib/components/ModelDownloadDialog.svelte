@@ -1,8 +1,9 @@
 <script>
   /**
-   * First-use consent for Select Subject's model files (RFC-0026 §3.5): the one scoped network use
-   * of an otherwise offline app. Same overlay/dialog shell and Escape idiom as ConfirmDialog.
-   * Stateless: the store's dialog state arrives as props, choices leave as callbacks.
+   * First-use consent for an AI model's files (RFC-0026 §3.5 Select Subject, RFC-0027 AI Denoise): the one
+   * scoped network use of an otherwise offline app. Same overlay/dialog shell and Escape idiom as
+   * ConfirmDialog. Stateless: the store's dialog state arrives as props, choices leave as callbacks. The
+   * wording that differs per feature is a prop; the defaults are Select Subject's.
    * @type {{
    *   dialog: null | "consent" | "downloading" | "failed",
    *   host: string,
@@ -14,9 +15,36 @@
    *   onImport: () => void,
    *   onCancel: () => void,
    *   onRetry: () => void,
+   *   title?: string,
+   *   ariaLabel?: string,
+   *   testId?: string,
+   *   what?: string,
+   *   offlineNote?: string,
+   *   importLabel?: string,
+   *   importTitle?: string,
+   *   cancelNote?: string,
    * }}
    */
-  let { dialog, host, downloadBytes, downloaded, total, error, onDownload, onImport, onCancel, onRetry } = $props();
+  let {
+    dialog,
+    host,
+    downloadBytes,
+    downloaded,
+    total,
+    error,
+    onDownload,
+    onImport,
+    onCancel,
+    onRetry,
+    title = "Select Subject needs a one-time download",
+    ariaLabel = "Select Subject model",
+    testId = "segment-model-dialog",
+    what = "selection model",
+    offlineNote = "Nothing about your photos is sent, and selection itself runs entirely offline.",
+    importLabel = "I have the files",
+    importTitle = "Choose the two .onnx model files you already have",
+    cancelNote = "Cancelling keeps nothing of the partial file; a finished file is kept.",
+  } = $props();
 
   const mb = (/** @type {number} */ b) => Math.round(b / 1_000_000);
   let percent = $derived(total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0);
@@ -26,25 +54,25 @@
 
 {#if dialog !== null}
   <div class="overlay">
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Select Subject model" data-testid="segment-model-dialog">
-      <h2>Select Subject needs a one-time download</h2>
+    <div class="dialog" role="dialog" aria-modal="true" aria-label={ariaLabel} data-testid={testId}>
+      <h2>{title}</h2>
       {#if dialog === "consent"}
         <p class="message">
-          The selection model is about {mb(downloadBytes)} MB and is fetched once from <strong>{host}</strong>, then kept on this
-          computer. Nothing about your photos is sent, and selection itself runs entirely offline.
+          The {what} is about {mb(downloadBytes)} MB and is fetched once from <strong>{host}</strong>, then kept on this
+          computer. {offlineNote}
         </p>
         {#if error}<p class="message err" role="alert">{error}</p>{/if}
         <div class="actions">
           <button class="secondary" type="button" onclick={onCancel}>Cancel</button>
-          <button class="secondary" type="button" onclick={onImport} title="Choose the two .onnx model files you already have">I have the files</button>
+          <button class="secondary" type="button" onclick={onImport} title={importTitle}>{importLabel}</button>
           <button class="primary" type="button" onclick={onDownload}>Download</button>
         </div>
       {:else if dialog === "downloading"}
-        <p class="message">Downloading the selection model from {host}…</p>
+        <p class="message">Downloading the {what} from {host}…</p>
         <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={percent}>
           <div class="fill" style="width:{percent}%"></div>
         </div>
-        <p class="message small">{mb(downloaded)} of {mb(total)} MB. Cancelling keeps nothing of the partial file; a finished file is kept.</p>
+        <p class="message small">{mb(downloaded)} of {mb(total)} MB. {cancelNote}</p>
         <div class="actions">
           <button class="secondary" type="button" onclick={onCancel}>Cancel download</button>
         </div>

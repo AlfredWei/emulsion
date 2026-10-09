@@ -14,6 +14,7 @@
   import { develop } from "$lib/state/develop.svelte.js";
     import { masks } from "$lib/state/masks.svelte.js";
   import { segment } from "$lib/state/segment.svelte.js";
+  import { denoise } from "$lib/state/denoise.svelte.js";
   import { handleSegmentAccept, handleSegmentCancel, handleSegmentCycleCandidate } from "$lib/actions/segmentActions.js";
   import { softProof } from "$lib/state/softProof.svelte.js";
   import { presets } from "$lib/state/presets.svelte.js";
@@ -92,6 +93,7 @@
   develop.installCpuFallback();
   masks.install();
   segment.install();
+  denoise.install();
 
 
   // Copy/Paste Settings (M4.5): an unsaved, in-memory analog of Presets --

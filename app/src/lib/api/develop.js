@@ -559,7 +559,7 @@ export const PANEL_OP_NAMES = /** @type {const} */ ({
   texture_clarity: ["texture", "clarity"],
   dehaze: ["dehaze"],
   sharpening: ["sharpen"],
-  noise_reduction: ["luma_nr", "color_nr"],
+  noise_reduction: ["luma_nr", "color_nr", "ai_denoise"],
   vignette: ["vignette"],
   grain: ["grain"],
   lens_corrections: ["lens_correction"],
@@ -1394,6 +1394,34 @@ export function buildColorNrUniformData(
   return new Float32Array([n.amount, n.detail, 0, 0]);
 }
 
+// AI Denoise (M6, RFC-0027): only the amount lives in the stack. The denoised photo itself is a separate,
+// explicit job whose result is kept per photo (api/denoise.js); the render mixes it in by this amount, ahead
+// of everything else. There is no GPU uniform: Develop's source texture is the mix (DevelopCanvas.svelte).
+export const IDENTITY_AI_DENOISE = Object.freeze({ amount: 0 });
+
+/** @returns {{amount: number}} */
+export function getAiDenoise(
+  /** @type {EditStack} */ stack,
+  /** @type {typeof IDENTITY_AI_DENOISE} */ fallback = IDENTITY_AI_DENOISE,
+) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "ai_denoise"));
+  if (!op) return fallback;
+  const amount = Number(op.amount);
+  return { amount: Number.isFinite(amount) ? Math.min(100, Math.max(0, Math.round(amount))) : 0 };
+}
+
+/** @returns {EditStack} */
+export function upsertAiDenoise(
+  /** @type {EditStack} */ stack,
+  /** @type {Partial<{amount: number}>} */ patch,
+) {
+  const next = { ...getAiDenoise(stack), ...patch };
+  const amount = Math.min(100, Math.max(0, Math.round(Number(next.amount) || 0)));
+  const ops = stack.ops.filter((o) => o.op !== "ai_denoise");
+  ops.push(/** @type {any} */ ({ op: "ai_denoise", amount }));
+  return { ...stack, ops };
+}
+
 // Crop & Straighten (M3): a flat, non-nested payload -- same shape as
 // every other structured op above. UNLIKE every other op, this has no
 // WGSL uniform/buffer twin at all -- it's deliberately kept out of the
@@ -1579,7 +1607,9 @@ const MASK_OP_NAMES = [
 // all, actually as portable as the global ops below -- excluded anyway
 // for v1 scope simplicity (one exclusion list, not "masks except this
 // one"), not because it's tied to the source image like the other four.
-export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop", "lens_correction", "perspective"];
+// `ai_denoise` is excluded because its amount only means something for a photo that has its own denoised
+// copy (a separate per-photo job); pasted onto others it would read "Not denoised yet" everywhere.
+export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop", "lens_correction", "perspective", "ai_denoise"];
 
 // Mask kinds with no on-canvas geometry to show (brush's painted region,
 // luminance range's pixel-value-based selection) get a toggleable colored

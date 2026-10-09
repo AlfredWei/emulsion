@@ -23,6 +23,8 @@ import {
   IDENTITY_LUMA_NR,
   getColorNr,
   IDENTITY_COLOR_NR,
+  getAiDenoise,
+  IDENTITY_AI_DENOISE,
   getCrop,
   IDENTITY_CROP,
   getLensCorrection,
@@ -96,6 +98,8 @@ export class DevelopView {
   sharpen = $derived(getSharpen(this.develop.editStack, IDENTITY_SHARPEN));
   lumaNR = $derived(getLumaNr(this.develop.editStack, IDENTITY_LUMA_NR));
   colorNR = $derived(getColorNr(this.develop.editStack, IDENTITY_COLOR_NR));
+  // AI Denoise (M6, RFC-0027): the amount only; the result it mixes in is a per-photo job (denoise store).
+  aiDenoise = $derived(getAiDenoise(this.develop.editStack, IDENTITY_AI_DENOISE));
   // Crop & Straighten (M3): same structured, own-getter/handler shape as
   // every other multi-field op above -- see develop_engine.rs's own
   // `apply_crop` doc comment for why this one has no WGSL/uniform twin.
@@ -142,6 +146,8 @@ export class DevelopView {
   renderSharpen = $derived(getSharpen(this.effectiveEditStack, IDENTITY_SHARPEN));
   renderLumaNR = $derived(getLumaNr(this.effectiveEditStack, IDENTITY_LUMA_NR));
   renderColorNR = $derived(getColorNr(this.effectiveEditStack, IDENTITY_COLOR_NR));
+  // Hidden Noise Reduction panel => amount 0 => DevelopCanvas shows the plain preview, as the render does.
+  renderAiDenoise = $derived(getAiDenoise(this.effectiveEditStack, IDENTITY_AI_DENOISE));
   // Crop has no render* counterpart -- out of scope for panel visibility
   // (RFC-0013 §2), so DevelopCanvas keeps reading the plain `crop` field.
 }

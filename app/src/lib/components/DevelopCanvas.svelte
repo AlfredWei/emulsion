@@ -1768,6 +1768,18 @@
            MaskToolStrip's eye button or the H hotkey. Deliberately doesn't
            gate the crop grid below (a different tool's own overlay, shown
            only while actively cropping, not a persistent mask pin). -->
+      <!-- While the Crop tool straightens, the canvas gets a live CSS rotate
+           (see its inline style) but this overlay's own box never does, so
+           mask pins/lines/rings (Red Eye, Spot, gradients, brush shapes...)
+           stayed at their unrotated screen positions while the photo
+           turned under them -- a reported bug. Rotating this wrapper with
+           the SAME angle about the SAME center (it fills the overlay,
+           which is exactly the canvas's layout box) keeps every mask
+           anchored to the photo content. Only the mask chrome rotates:
+           the crop rect, dimming and handles below stay fixed, and no
+           mask is edited while the Crop tool is the active tool, so no
+           pointer math ever runs through the rotated space. -->
+      <div class="mask-rotor" style={activeTool === "crop" && crop.angle ? `transform: rotate(${crop.angle}deg);` : ""}>
       {#if maskOverlaysVisible}
       {#each paintTargets as mask (mask.id)}
         {#if mask.op === "linear_gradient_mask"}
@@ -1958,6 +1970,7 @@
         </svg>
       {/if}
       {/if}
+      </div>
       {#if activeTool === "crop"}
         <!-- Crop & Straighten (M3): the canvas's own LAYOUT box (offsetLeft/
              Top/Width/Height, which syncOverlayPosition and this overlay's
@@ -2262,6 +2275,11 @@
   }
   .mask-overlay {
     position: absolute;
+    pointer-events: none;
+  }
+  .mask-rotor {
+    position: absolute;
+    inset: 0;
     pointer-events: none;
   }
   .mask-line {

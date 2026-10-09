@@ -1106,6 +1106,7 @@ async fn get_graded_develop_preview(
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let (source, stack) = {
@@ -1120,6 +1121,7 @@ async fn get_graded_develop_preview(
             source.content_hash.as_deref().unwrap_or(""),
             &stack,
             &previews_dir,
+            Some(&denoise_dir),
         )
         .map_err(|e| e.user_message())
     })
@@ -1144,6 +1146,7 @@ async fn get_soft_proof_preview(
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let (source, stack) = {
@@ -1159,6 +1162,7 @@ async fn get_soft_proof_preview(
             &stack,
             &settings,
             &previews_dir,
+            Some(&denoise_dir),
         )
         .map_err(|e| e.user_message())
     })
@@ -1273,6 +1277,7 @@ async fn preview_history_entry(
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let stack = {
@@ -1284,6 +1289,7 @@ async fn preview_history_entry(
             content_hash.as_deref().unwrap_or(""),
             &stack,
             &previews_dir,
+            Some(&denoise_dir),
         )
         .map_err(|e| e.user_message())
     })
@@ -1304,6 +1310,7 @@ async fn preview_snapshot(
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let stack = {
@@ -1315,6 +1322,7 @@ async fn preview_snapshot(
             content_hash.as_deref().unwrap_or(""),
             &stack,
             &previews_dir,
+            Some(&denoise_dir),
         )
         .map_err(|e| e.user_message())
     })
@@ -1338,6 +1346,7 @@ async fn preview_edit_stack(
     stack: EditStack,
 ) -> Result<DevelopPreviewInfo, String> {
     let previews_dir = resolve_previews_dir(&app, &state.catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &state.catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         preview_cache::ensure_graded_preview_for_hash(
@@ -1345,6 +1354,7 @@ async fn preview_edit_stack(
             content_hash.as_deref().unwrap_or(""),
             &stack,
             &previews_dir,
+            Some(&denoise_dir),
         )
         .map_err(|e| e.user_message())
     })

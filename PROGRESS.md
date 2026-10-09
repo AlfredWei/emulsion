@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 3d, part 1 (AI denoise): graded previews show `ai_denoise` (2026-10-09)
+
+Branch `feature/ai-denoise-3d`, stacked on 3c (#222); open the PR when #222 is merged.
+- **What**: `ensure_graded_preview_for_hash` / `ensure_soft_proof_preview_for_hash` take the denoise directory and build from the preview mixed with the kept copy at the stack's effective amount, so the **Loupe view, soft proof, History / Snapshot / preset hover previews and the no-WebGPU Develop preview** now show the effect. The file name carries `_dn<amount>-<copy mtime>` (empty when there is no effective amount or copy), so a preview made before a copy existed or from an older one is never reused; a hidden Noise Reduction panel switches it off.
+- **Verified**: new tests (`graded_tag`; a graded preview made after a copy appears is a different file and equals the copy at amount 100; no directory or a hidden panel = off); `cargo test --lib` 515+ pass.
+- **Not verified**: the Loupe / CPU-fallback views in the real window with the real model. A Loupe already open does not refresh by itself when a job finishes (reopen it); the no-WebGPU Develop preview refreshes when the stack changes, not when only the copy appears.
+- **Still open for 3d**: grid thumbnails (`import.rs` regeneration), Print, the export pre-flight prompt, cache eviction (LRU cap), stale `input-*.png` sweeper.
+
 ## M6 slice 3c (AI denoise UI): the AI Denoise block, crop preview, whole-photo job, preview blend (2026-10-09)
 
 Per RFC-0027 §10. Branch `feature/ai-denoise-ui-3c` (rebased on `main` with the NR fix #219).

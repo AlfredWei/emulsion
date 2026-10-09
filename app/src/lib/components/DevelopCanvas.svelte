@@ -1768,6 +1768,18 @@
            MaskToolStrip's eye button or the H hotkey. Deliberately doesn't
            gate the crop grid below (a different tool's own overlay, shown
            only while actively cropping, not a persistent mask pin). -->
+      <!-- While the Crop tool straightens, the canvas gets a live CSS rotate
+           (see its inline style) but this overlay's own box never does, so
+           mask pins/lines/rings (Red Eye, Spot, gradients, brush shapes...)
+           stayed at their unrotated screen positions while the photo
+           turned under them -- a reported bug. Rotating this wrapper with
+           the SAME angle about the SAME center (it fills the overlay,
+           which is exactly the canvas's layout box) keeps every mask
+           anchored to the photo content. Only the mask chrome rotates:
+           the crop rect, dimming and handles below stay fixed, and no
+           mask is edited while the Crop tool is the active tool, so no
+           pointer math ever runs through the rotated space. -->
+      <div class="mask-rotor" style={activeTool === "crop" && crop.angle ? `transform: rotate(${crop.angle}deg);` : ""}>
       {#if maskOverlaysVisible}
       {#each paintTargets as mask (mask.id)}
         {#if mask.op === "linear_gradient_mask"}
@@ -1958,6 +1970,7 @@
         </svg>
       {/if}
       {/if}
+      </div>
       {#if activeTool === "crop"}
         <!-- Crop & Straighten (M3): the canvas's own LAYOUT box (offsetLeft/
              Top/Width/Height, which syncOverlayPosition and this overlay's
@@ -1978,13 +1991,19 @@
              the right space, `getBoundingClientRect()`'s rotated width/
              height/left/top were simply the wrong numbers to read for a
              space that never rotated -- not something that needed
-             "un-rotating." Four darkened bands (not a single clip-path/mask shape)
-             spotlight the crop rect -- simplest way to dim the
-             outside-of-crop area without extra CSS feature requirements. -->
-        <div class="crop-dim" style="left:0; top:0; width:100%; height:{crop.y * 100}%"></div>
-        <div class="crop-dim" style="left:0; top:{(crop.y + crop.height) * 100}%; width:100%; height:{(1 - crop.y - crop.height) * 100}%"></div>
-        <div class="crop-dim" style="left:0; top:{crop.y * 100}%; width:{crop.x * 100}%; height:{crop.height * 100}%"></div>
-        <div class="crop-dim" style="left:{(crop.x + crop.width) * 100}%; top:{crop.y * 100}%; width:{(1 - crop.x - crop.width) * 100}%; height:{crop.height * 100}%"></div>
+             "un-rotating." The outside-of-crop dimming is ONE spotlight
+             element (a huge box-shadow spread around the crop rect), not
+             four bands tiling the canvas's layout box: the rotated photo
+             sticks out past that layout box at its corners while a
+             straighten angle is applied (and the bands, being layout-box
+             geometry, never followed it), leaving those corners undimmed
+             -- a reported bug. The spread reaches everything the wrap
+             clips to, so the whole rotated photo is dimmed outside the
+             crop rect. -->
+        <div
+          class="crop-dim"
+          style="left:{crop.x * 100}%; top:{crop.y * 100}%; width:{crop.width * 100}%; height:{crop.height * 100}%"
+        ></div>
         <div
           class="crop-rect"
           style="left:{crop.x * 100}%; top:{crop.y * 100}%; width:{crop.width * 100}%; height:{crop.height * 100}%"
@@ -2258,6 +2277,11 @@
     position: absolute;
     pointer-events: none;
   }
+  .mask-rotor {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
   .mask-line {
     position: absolute;
     inset: 0;
@@ -2391,7 +2415,12 @@
   }
   .crop-dim {
     position: absolute;
-    background: rgba(0, 0, 0, 0.55);
+    box-sizing: border-box;
+    /* Spotlight: the element IS the crop rect (left undimmed); the spread
+       shadow dims everything around it, including a straightened photo's
+       corners outside the canvas's own layout box. `.canvas-wrap`'s
+       overflow:hidden clips it to the viewport. */
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55);
     pointer-events: none;
   }
   .crop-rect {

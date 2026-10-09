@@ -4,7 +4,10 @@
   "description": "Local-first, non-destructive photo library and RAW editor",
   "type": "module",
   "scripts": {
+    "prepare": "svelte-kit sync || echo ''",
+    "predev": "svelte-kit sync",
     "dev": "vite dev",
+    "prebuild": "svelte-kit sync",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",

@@ -7,14 +7,23 @@
 //! Lifetime: it exits when stdin closes (the app quit or died), on `Shutdown`,
 //! or after `--idle-secs` (default 900, 0 = never) without a request, which is
 //! what hands the memory back to the OS; the app respawns it on next use.
-//! Requests are served strictly one at a time in arrival order.
+//! Requests are served strictly one at a time in arrival order. A reader thread takes lines off stdin so a
+//! running denoise job can see a `cancel` that arrives behind it (checked between tiles); every other request
+//! that arrives meanwhile waits in order for the job to finish (RFC-0027 §3.4).
 
+mod denoise;
 #[path = "../../ai/protocol.rs"]
 mod protocol;
 mod segment;
+#[path = "../../ai/tiling.rs"]
+mod tiling;
 
-use protocol::{Candidate, ErrorBody, Frame, HelloResult, ModelPaths, PrepareResult, Prompt, Request, Response, PROTOCOL_VERSION};
+use denoise::{DenoiseError, Denoiser};
+use protocol::{
+    Candidate, ErrorBody, Frame, HelloResult, ModelPaths, PrepareResult, Progress, Prompt, Region, Request, Response, PROTOCOL_VERSION,
+};
 use segment::{SegmentError, Segmenter};
+use std::collections::VecDeque;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -32,11 +41,11 @@ fn error_code(e: &SegmentError) -> &'static str {
 }
 
 fn fail(id: u64, code: &str, message: String) -> Response {
-    Response { id, ok: None, err: Some(ErrorBody { code: code.to_string(), message }) }
+    Response { id, ok: None, err: Some(ErrorBody { code: code.to_string(), message }), progress: None }
 }
 
 fn ok<T: serde::Serialize>(id: u64, value: &T) -> Response {
-    Response { id, ok: Some(serde_json::to_value(value).expect("serialisable result")), err: None }
+    Response { id, ok: Some(serde_json::to_value(value).expect("serialisable result")), err: None, progress: None }
 }
 
 fn segment_prepare(seg: &Segmenter, id: u64, models: &ModelPaths, content_hash: &str, image_path: &std::path::Path) -> Response {
@@ -57,6 +66,51 @@ fn segment_decode(seg: &Segmenter, id: u64, models: &ModelPaths, content_hash: &
     match seg.decode(models, content_hash, prompts, refine) {
         Ok(c) => ok::<Vec<Candidate>>(id, &c),
         Err(e) => fail(id, error_code(&e), e.to_string()),
+    }
+}
+
+fn write_response(response: &Response) -> bool {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    writeln!(out, "{}", serde_json::to_string(response).expect("serialisable response")).and_then(|_| out.flush()).is_ok()
+}
+
+fn denoise_error_code(e: &DenoiseError) -> &'static str {
+    match e {
+        DenoiseError::Ort(_) | DenoiseError::BadOutput(_) => "inference",
+        DenoiseError::Image(_) => "image",
+        DenoiseError::Cancelled => "cancelled",
+        DenoiseError::Poisoned => "internal",
+    }
+}
+
+/// Runs one denoise job. Between tiles it reports progress and looks at what has arrived on stdin: a `cancel`
+/// naming this job stops it (and is answered here); anything else is parked in `backlog` for the main loop.
+fn denoise_run(
+    den: &Denoiser,
+    id: u64,
+    request: (&std::path::Path, &std::path::Path, &std::path::Path, Option<Region>),
+    rx: &std::sync::mpsc::Receiver<String>,
+    backlog: &mut VecDeque<String>,
+) -> Response {
+    let (model, image_path, out_path, region) = request;
+    let mut cancelled = false;
+    let result = den.run(model, image_path, out_path, region, |done, total| {
+        let _ = write_response(&Response { id, ok: None, err: None, progress: Some(Progress { done: done as u32, total: total as u32 }) });
+        while let Ok(line) = rx.try_recv() {
+            match serde_json::from_str::<Frame>(&line) {
+                Ok(Frame { id: cancel_id, request: Request::Cancel { target } }) if target == id => {
+                    cancelled = true;
+                    let _ = write_response(&ok(cancel_id, &serde_json::json!({})));
+                }
+                _ => backlog.push_back(line),
+            }
+        }
+        !cancelled
+    });
+    match result {
+        Ok(r) => ok(id, &r),
+        Err(e) => fail(id, denoise_error_code(&e), e.to_string()),
     }
 }
 
@@ -83,10 +137,20 @@ fn main() {
     }
 
     let seg = Segmenter::default();
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
+    let den = Denoiser::default();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+        // EOF: dropping `tx` ends the main loop once the backlog is served.
+    });
+    let mut backlog: VecDeque<String> = VecDeque::new();
+    loop {
+        let Some(line) = backlog.pop_front().or_else(|| rx.recv().ok()) else { break };
         if line.trim().is_empty() {
             continue;
         }
@@ -100,8 +164,12 @@ fn main() {
                 Request::SegmentDecode { models, content_hash, prompts, refine } => {
                     segment_decode(&seg, id, &models, &content_hash, &prompts, refine.as_deref())
                 }
+                Request::DenoiseRun { model, image_path, out_path, region } => denoise_run(&den, id, (&model, &image_path, &out_path, region), &rx, &mut backlog),
+                // A cancel that finds nothing running: harmless (the job it named already finished).
+                Request::Cancel { .. } => ok(id, &serde_json::json!({})),
                 Request::Release => {
                     seg.release();
+                    den.release();
                     ok(id, &serde_json::json!({}))
                 }
                 Request::Shutdown => {
@@ -110,11 +178,9 @@ fn main() {
                 }
             },
         };
-        let mut out = stdout.lock();
-        if writeln!(out, "{}", serde_json::to_string(&response).expect("serialisable response")).and_then(|_| out.flush()).is_err() {
+        if !write_response(&response) {
             break; // the app is gone
         }
-        drop(out);
         last_activity_ms.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
         busy.store(false, Ordering::Relaxed);
         if shutdown {

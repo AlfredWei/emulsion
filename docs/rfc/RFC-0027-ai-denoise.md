@@ -140,3 +140,11 @@ The UI is in. What changed or was settled while building it:
 - **Amount (§6.2).** After a whole-photo job on the open photo, Amount is set to **70** if the photo had none (a starting point to judge by eye, not a measured optimum); Amount is disabled until the photo has a kept copy. `ai_denoise` is **not** carried by presets or Copy Settings.
 - **Model dialog (§3.5).** The Select Subject dialog became `ModelDownloadDialog`, with the wording per feature as props. The denoise one names the host (`github.com`) and the size, and says that cancelling keeps the partial file (the next download resumes it).
 - **Jobs.** One at a time; they survive opening another photo (the status line says when one ends, and the edit stack of the photo is touched only if it is still the open one). A job asked before the model is installed starts when the install ends, for the photo it was asked on.
+
+## 11. Slice 3d decisions (2026-10-09)
+
+- **Print honours `ai_denoise`.** `generate_print_ready_image`, the batch and `export_pdf` take the denoise directory and render through `render_full_resolution` with it; the raster's file name carries the same `_dn<amount>-<copy mtime>` tag as the graded previews, so a raster made before a copy existed is never reused (this was the stale-cache risk noted in §9).
+- **Export (§3.6): a notice, not the full prompt.** `denoise_missing_for_export` lists the photos that would export without the effect; the dialog shows them when it opens. The "run the missing jobs first" batch is not built; the default stays "export without".
+- **Cache cap (§7.3): 2 GB, oldest first, no setting yet.** After each whole-photo job, whole-photo entries are removed oldest-written first until the total is within `CAP_BYTES` (never the one just made). "Oldest" is the write time, not the last use, because a preview blend is rebuilt when it is older than its entry. A Settings line for the cap is not built.
+- **Stale files.** A job start removes `input-*.png` hand-off files and `.part` files older than an hour.
+- **Open:** Library grid thumbnails (`import.rs`) still ignore `ai_denoise`.

@@ -179,6 +179,8 @@ fn run_job(
 ) -> Result<DenoiseJobResult, String> {
     let model = denoise_models::ready_path(models).ok_or_else(|| "the denoise model is not installed".to_string())?;
     std::fs::create_dir_all(cache).map_err(|e| format!("could not create {}: {e}", cache.display()))?;
+    // What a crash or a killed app left behind from an earlier run (only one job runs at a time).
+    denoise_cache::sweep_stale(cache, std::time::Duration::from_secs(3600));
     let decoded = source_decode::decode_preview(source).map_err(|e| e.to_string())?;
     let image = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb).ok_or_else(|| "decoded image has the wrong size".to_string())?;
     let input = cache.join(format!("input-{id}.png"));
@@ -218,6 +220,10 @@ fn run_job(
         }
     };
     let r: DenoiseResult = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    if region.is_none() {
+        // A whole-photo result just landed: keep the cache within its cap by dropping the oldest others.
+        denoise_cache::evict_over_cap(cache, denoise_cache::CAP_BYTES, &out);
+    }
     Ok(DenoiseJobResult {
         path: out.to_string_lossy().to_string(),
         width: r.width,

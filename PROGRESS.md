@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 3d, part 3 (AI denoise): Print, the cache cap, the stale-file sweeper (2026-10-09)
+
+Branch `feature/ai-denoise-3d-print`; RFC-0027 §11.
+- **Print honours `ai_denoise`**: the print raster and PDF export render with the denoise directory, and the raster's file name carries the `_dn<amount>-<mtime>` tag (no stale reuse). **Cache cap**: 2 GB (`denoise_cache::CAP_BYTES`), oldest-written whole-photo entries removed after each whole-photo job, never the new one; no Settings line yet. **Sweeper**: `input-*.png` and `.part` files older than an hour are removed at job start.
+- **Verified**: Rust tests for the print raster (copy appears later => new file and the mix; no directory => plain), eviction (oldest first, keeps the new one, leaves hand-off/crop/blend files), and the sweep; `cargo test --lib` 520 pass.
+- **Not verified**: Print in the real window with the real model; eviction against a real full cache; Windows.
+- **Still open for 3d**: Library grid thumbnails, a "denoise missing photos first" batch in the Export dialog, a Settings line for the cap.
+
 ## M6 slice 3d, part 1 (AI denoise): graded previews show `ai_denoise` (2026-10-09)
 
 Branch `feature/ai-denoise-3d`, stacked on 3c (#222); open the PR when #222 is merged.
@@ -136,7 +144,7 @@ Status after the 2026-10-05 verification round:
 11. **Click-select 2b (RFC-0026 §8)** — OPEN: segment masks on a second GPU (Windows/D3D), with all 8 raster layers in use and at the native-resolution tier, and a real export timing of the CPU path.
 12. **Click-select 2c/2d (RFC-0026 §9, §10)** — mostly DONE (a real-model session through the UI, cancellable download and resume-refine were verified in 2d). Still OPEN: Windows (Alt-click, helper spawn/kill, CPU speed, memory), the live *Download button* fetch of 155 MB through the dialog (install by import was real), a narrow window's tool strip, Add shape ▸ Subject with the real model, and quality over a range of photos.
 13. **AI denoise 3a (RFC-0027 §8)** — OPEN: NAFNet-SIDD-width32 on other cameras and RAW-domain noise, on Windows (speed, memory), its checkpoint compared with the upstream file, the ONNX export against PyTorch output, a real tiled 24 MP run (time, seams), more than six scenes.
-14. **AI denoise 3b (RFC-0027 §9)** — OPEN: the real model on Windows, peak memory at 24 MP and the memory-pattern setting, stale hand-off files after a crash, Print honouring `ai_denoise` (3d).
+14. **AI denoise 3b (RFC-0027 §9)** — OPEN: the real model on Windows, peak memory at 24 MP and the memory-pattern setting, stale hand-off files after a crash, Print honouring `ai_denoise` (done in 3d part 3).
 15. **FIXED 2026-10-09 (PR #219; GPU parity for NR still unverified) -- Bug, user-reported 2026-10-08**: "the noise reduction seems not working" / "the effect pipeline is broken, fix it later". Not reproduced. To investigate: Develop's Noise Reduction (Luminance, Color) and the effects pipeline on high-ISO photos such as `test_image/nind-iso6400/`, preview (GPU) vs export (CPU).
 16. **AI denoise 3c (RFC-0027 §10)** — OPEN: Windows (UI, helper, speed); graded previews (Library thumbnails, Loupe, soft proof) and the no-WebGPU Develop preview do not show `ai_denoise`; the crop preview follows the photo's middle, not the view; default Amount 70 untuned; a 24 MP whole-photo job through the UI; a visual check of the block at narrow panel widths; the dialog's live Download click.
 

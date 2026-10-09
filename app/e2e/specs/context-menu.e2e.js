@@ -128,14 +128,20 @@ describe("Library photo context menu", function () {
       const label = Array.from(document.querySelectorAll(".file-name")).find((el) => el.textContent?.includes(name));
       label.closest("[data-ctx-photo]").focus();
     }, FIXTURE_NAME);
-    await key("F10", { shiftKey: true });
+    const trace = [];
+    const step = async (label, fn) => {
+      await fn();
+      trace.push(`${label}:${await browser.execute(() => `${document.querySelector("[data-ctx-grid]") ? "grid" : "NO-GRID"}/${document.querySelector('[data-testid="context-menu"]') ? "menu" : "no-menu"}`)}`);
+    };
+    await step("F10", () => key("F10", { shiftKey: true }));
     await browser.waitUntil(menuOpen, { timeout: 10000, timeoutMsg: "Shift+F10 did not open the menu" });
     // Highlight starts on the first row; walk down to Flag with the keys (Open in Develop, Open in Loupe, Rating, Flag).
-    for (let i = 0; i < 3; i++) await key("ArrowDown");
+    for (let i = 0; i < 3; i++) await step(`Down${i}`, () => key("ArrowDown"));
     const onFlag = await browser.execute(() => document.querySelector('[data-testid="context-menu"] .hl')?.getAttribute("data-menu-id"));
     expect(onFlag).toBe("flag");
-    await key("ArrowRight");
-    await key("Enter"); // the submenu's first row: Pick
+    await step("Right", () => key("ArrowRight"));
+    await step("Enter", () => key("Enter")); // the submenu's first row: Pick
+    console.log("KEY-TRACE:", trace.join(" "));
     await browser.waitUntil(async () => (await cellState()).flag === "pick", { timeout: 10000, timeoutMsg: "flag was not saved" });
     expect(await menuOpen()).toBe(false);
     await browser

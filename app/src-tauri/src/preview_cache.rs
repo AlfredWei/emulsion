@@ -763,6 +763,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch_dir);
     }
 
+    /// Timing of the Loupe view's first open (a cold graded preview) against a repeat (warm), on a real photo with
+    /// a typical edit, and with a kept AI-denoised copy of the photo's size. Run in release mode:
+    /// `LOUPE_IMAGE=/path/photo.jpg cargo test --release --lib loupe_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn loupe_timing_cold_vs_warm_graded_preview() {
+        let Ok(image_path) = std::env::var("LOUPE_IMAGE") else { return };
+        let source_path = std::path::PathBuf::from(&image_path);
+        let previews_dir = temp_previews_dir("loupe-timing-previews");
+        let denoise_dir = temp_previews_dir("loupe-timing-denoise");
+        let hash = blake3::hash(&std::fs::read(&source_path).unwrap()).to_hex().to_string();
+        let ms = |t: std::time::Instant| t.elapsed().as_secs_f64() * 1000.0;
+        let stack = |extra: Vec<serde_json::Value>| {
+            let mut ops = vec![
+                serde_json::json!({"op": "exposure", "value": 0.5}),
+                serde_json::json!({"op": "contrast", "value": 10.0}),
+                serde_json::json!({"op": "highlights", "value": -30.0}),
+                serde_json::json!({"op": "shadows", "value": 20.0}),
+                serde_json::json!({"op": "clarity", "value": 30.0}),
+                serde_json::json!({"op": "texture", "value": 20.0}),
+                serde_json::json!({"op": "dehaze", "value": 15.0}),
+                serde_json::json!({"op": "sharpen", "amount": 40.0, "radius": 1.0, "detail": 25.0, "masking": 0.0}),
+                serde_json::json!({"op": "luma_nr", "amount": 40.0, "detail": 50.0, "contrast": 0.0}),
+                serde_json::json!({"op": "color_nr", "amount": 30.0, "detail": 50.0}),
+            ];
+            ops.extend(extra);
+            EditStack { schema_version: 1, ops }
+        };
+
+        let t = std::time::Instant::now();
+        let draft = ensure_develop_preview_for_hash(&source_path, &hash, &previews_dir).unwrap();
+        eprintln!("LOUPE draft preview built (decode + resize + save): {:.0} ms ({}x{})", ms(t), draft.width, draft.height);
+        let t = std::time::Instant::now();
+        ensure_develop_preview_for_hash(&source_path, &hash, &previews_dir).unwrap();
+        eprintln!("LOUPE draft preview cached: {:.1} ms", ms(t));
+
+        // Leaving Develop: the grid thumbnail is made from the graded preview (built once), so the Loupe's first
+        // open afterwards is a cache hit.
+        let after_edit = stack(vec![serde_json::json!({"op": "exposure", "value": 0.9})]);
+        let thumbs = temp_previews_dir("loupe-timing-thumbs");
+        let t = std::time::Instant::now();
+        crate::import::regenerate_edited_thumbnail(&source_path, &hash, 1, &after_edit, &previews_dir, &thumbs, None).unwrap();
+        eprintln!("LOUPE leaving Develop (thumbnail + graded preview, cold): {:.0} ms", ms(t));
+        let t = std::time::Instant::now();
+        ensure_graded_preview_for_hash(&source_path, &hash, &after_edit, &previews_dir, None).unwrap();
+        eprintln!("LOUPE Loupe first open right after leaving Develop: {:.1} ms", ms(t));
+
+        let plain = stack(vec![]);
+        let t = std::time::Instant::now();
+        let g = ensure_graded_preview_for_hash(&source_path, &hash, &plain, &previews_dir, None).unwrap();
+        eprintln!("LOUPE graded preview, cold (typical edit, no denoise): {:.0} ms ({}x{})", ms(t), g.width, g.height);
+        let t = std::time::Instant::now();
+        ensure_graded_preview_for_hash(&source_path, &hash, &plain, &previews_dir, None).unwrap();
+        eprintln!("LOUPE graded preview, warm: {:.1} ms", ms(t));
+
+        // A kept copy of the photo's full size (the cache holds the full decode, as a PNG).
+        let full = image::open(&source_path).unwrap().into_rgb8();
+        full.save(crate::denoise_cache::entry_path(&denoise_dir, &hash, crate::denoise_models::MODEL_ID)).unwrap();
+        let with = stack(vec![serde_json::json!({"op": "ai_denoise", "amount": 70})]);
+        let t = std::time::Instant::now();
+        ensure_graded_preview_for_hash(&source_path, &hash, &with, &previews_dir, Some(&denoise_dir)).unwrap();
+        eprintln!("LOUPE graded preview, cold, with a kept denoised copy ({}x{}): {:.0} ms", full.width(), full.height(), ms(t));
+        let t = std::time::Instant::now();
+        ensure_graded_preview_for_hash(&source_path, &hash, &with, &previews_dir, Some(&denoise_dir)).unwrap();
+        eprintln!("LOUPE graded preview, warm, with denoise: {:.1} ms", ms(t));
+        // Another amount: the blend is rebuilt, the graded preview again.
+        let other = stack(vec![serde_json::json!({"op": "ai_denoise", "amount": 40})]);
+        let t = std::time::Instant::now();
+        ensure_graded_preview_for_hash(&source_path, &hash, &other, &previews_dir, Some(&denoise_dir)).unwrap();
+        eprintln!("LOUPE graded preview, cold, new denoise amount: {:.0} ms", ms(t));
+    }
+
     /// RFC-0027 slice 3d: a graded preview made after a denoised copy appears is built from the mix, is a
     /// different file from the one made before, and is switched off by a hidden Noise Reduction panel.
     #[test]

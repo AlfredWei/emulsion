@@ -83,8 +83,10 @@
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     // Every plain key belongs to the open menu: a stray letter must not reach the page's shortcuts (P = Pick).
+    // Immediate: the page's own keydown listener is on the same window, and stopPropagation alone does not
+    // stop it there (Chromium/WebView2 ran Enter's "open in Loupe" after the menu had already taken Enter).
     e.preventDefault();
-    e.stopPropagation();
+    e.stopImmediatePropagation();
     const step = navigate(contextMenu.items, nav, e.key);
     if (step.close) {
       contextMenu.close(true);

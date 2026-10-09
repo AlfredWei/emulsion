@@ -130,50 +130,22 @@ describe("Library photo context menu", function () {
       const label = Array.from(document.querySelectorAll(".file-name")).find((el) => el.textContent?.includes(name));
       label.closest("[data-ctx-photo]").focus();
     }, FIXTURE_NAME);
-    const trace = [];
-    const step = async (label, fn) => {
-      await fn();
-      trace.push(`${label}:${await browser.execute(() => `${document.querySelector("[data-ctx-grid]") ? "grid" : "NO-GRID"}/${document.querySelector('[data-testid="context-menu"]') ? "menu" : "no-menu"}`)}`);
-    };
-    await step("F10", () => key("F10", { shiftKey: true }));
+    await key("F10", { shiftKey: true });
     await browser.waitUntil(menuOpen, { timeout: 10000, timeoutMsg: "Shift+F10 did not open the menu" });
     // Highlight starts on the first row; walk down to Flag with the keys (Open in Develop, Open in Loupe, Rating, Flag).
-    for (let i = 0; i < 3; i++) await step(`Down${i}`, () => key("ArrowDown"));
+    for (let i = 0; i < 3; i++) await key("ArrowDown");
     const onFlag = await browser.execute(() => document.querySelector('[data-testid="context-menu"] .hl')?.getAttribute("data-menu-id"));
     expect(onFlag).toBe("flag");
-    await step("Right", () => key("ArrowRight"));
-    // Probe (Windows: the grid vanishes right after this Enter): who sees the key, and what removes the grid.
-    await browser.execute(() => {
-      const w = /** @type {any} */ (window);
-      w.__probe = [];
-      window.addEventListener("keydown", (e) => w.__probe.push(`capture:${e.key}:prevented=${e.defaultPrevented}`), true);
-      window.addEventListener("keydown", (e) => w.__probe.push(`bubble:${e.key}:prevented=${e.defaultPrevented}`), false);
-      const hit = (/** @type {any} */ n) => n && ((n.matches && n.matches("[data-ctx-grid]")) || (n.querySelector && n.querySelector("[data-ctx-grid]")));
-      for (const [proto, name] of [[Element.prototype, "remove"], [Node.prototype, "removeChild"]]) {
-        const orig = /** @type {any} */ (proto)[name];
-        /** @type {any} */ (proto)[name] = function (/** @type {any} */ arg) {
-          if (hit(name === "remove" ? this : arg)) w.__probe.push(`${name}:${(new Error().stack ?? "").split("\n").slice(1, 7).join(" <- ")}`);
-          return orig.apply(this, arguments);
-        };
-      }
-    });
-    await step("Enter", () => key("Enter")); // the submenu's first row: Pick
-    console.log("KEY-TRACE:", trace.join(" "));
-    console.log("KEY-PROBE:", JSON.stringify(await browser.execute(() => /** @type {any} */ (window).__probe)));
+    await key("ArrowRight");
+    await key("Enter"); // the submenu's first row: Pick
     await browser.waitUntil(async () => (await cellState()).flag === "pick", { timeout: 10000, timeoutMsg: "flag was not saved" });
     expect(await menuOpen()).toBe(false);
     await browser
       .waitUntil(() => browser.execute(() => !!document.activeElement?.closest("[data-ctx-photo]")), { timeout: 3000 })
       .catch(() => {});
-    const snapshot = await browser.execute(() => ({
-      focusedIsPhoto: !!document.activeElement?.closest("[data-ctx-photo]"),
-      active: document.activeElement?.tagName + "." + document.activeElement?.className,
-      hasGrid: !!document.querySelector("[data-ctx-grid]"),
-      cells: document.querySelectorAll("[data-ctx-photo]").length,
-      body: document.body.innerText.slice(0, 200),
-    }));
-    console.log("PAGE-STATE after keyboard test:", JSON.stringify(await pageState()));
-    expect(JSON.stringify(snapshot)).toContain('"focusedIsPhoto":true');
+    expect(await browser.execute(() => !!document.activeElement?.closest("[data-ctx-photo]"))).toBe(true);
+    // The Enter that applied the row must not also reach the Library's Enter-opens-Loupe shortcut.
+    expect(await browser.execute(() => !!document.querySelector("[data-ctx-grid]"))).toBe(true);
   });
 
   it("a letter typed while the menu is open does not reach the page's shortcuts", async () => {

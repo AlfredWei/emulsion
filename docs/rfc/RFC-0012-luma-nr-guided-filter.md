@@ -73,3 +73,7 @@ Same shape as RFC-0010 §6 / RFC-0011 §6:
 - Real measured render latency for a Luma-NR-at-amount scenario, reported and confirmed under the ~100ms budget, given §4's own small-radius risk flag.
 - A documented before/after comparison on a real noisy photo with both flat and edge content, showing preserved edges with comparable flat-region denoising strength.
 - PROGRESS.md gets an M5.6 entry for this slice, same shape as RFC-0010/0011's own.
+
+## Update 2026-10-09: constants retuned on real noise
+
+`LUMA_NR_GUIDED_EPS` (0.0009 -> 0.008) and `NR_DETAIL_SCALE` (0.05 -> 0.6) were chosen on synthetic +-0.01 noise and made Luminance NR nearly a no-op on a real ISO 6400 photo (-5% noise at Amount 100). Retuned from a sweep on `test_image/nind-iso6400/`; see PROGRESS.md (2026-10-09) for the measurements. The design (guided filter, edge gate) is unchanged.

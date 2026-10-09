@@ -581,19 +581,23 @@ fn luma_nr_delta_amount_zero_is_an_exact_passthrough_even_at_full_contrast() {
 }
 
 /// Hand-derived: detail=0 -> edge_threshold = NR_DETAIL_SCALE exactly
-/// (0.05, no epsilon floor needed since it's already positive).
-/// Choosing diff = edge_threshold/2 = 0.025 gives smoothstep's own
-/// input t = 0.5 exactly, and smoothstep(0.5) = 0.5*0.5*(3-1.0) = 0.5
-/// exactly (the `t*t*(3-2t)` formula's own well-known value at its
-/// midpoint) -- so smooth_weight = 1 - 0.5 = 0.5, and at amount=100/
-/// contrast=0: smooth_delta = -0.025 * 1.0 * 0.5 = -0.0125 exactly.
+/// (positive, so no epsilon floor needed). Choosing diff =
+/// edge_threshold/2 gives smoothstep's own input t = 0.5 exactly, and
+/// smoothstep(0.5) = 0.5*0.5*(3-1.0) = 0.5 exactly (the `t*t*(3-2t)`
+/// formula's own well-known value at its midpoint) -- so smooth_weight =
+/// 1 - 0.5 = 0.5, and at amount=100/contrast=0:
+/// smooth_delta = -diff * 1.0 * 0.5 = -NR_DETAIL_SCALE/4 exactly. Written in
+/// terms of the constant (it was hard-coded 0.05 / -0.0125 until backlog
+/// item 15 retuned NR_DETAIL_SCALE) so a future retune can't silently
+/// leave this test checking a stale number.
 #[test]
 fn luma_nr_delta_matches_hand_derived_value_at_the_smoothstep_midpoint() {
     let n = LumaNr { amount: 100.0, detail: 0.0, contrast: 0.0 };
-    let l = 0.525;
-    let blurred = 0.5; // diff = 0.025
-    let delta = luma_nr_delta(l, blurred, &n);
-    assert!((delta - (-0.0125)).abs() < 1e-5, "expected ~-0.0125, got {delta}");
+    let diff = NR_DETAIL_SCALE / 2.0;
+    let blurred = 0.2;
+    let delta = luma_nr_delta(blurred + diff, blurred, &n);
+    let expected = -NR_DETAIL_SCALE / 4.0;
+    assert!((delta - expected).abs() < 1e-5, "expected ~{expected}, got {delta}");
 }
 
 /// Contrast restoration is scaled by `amount` too -- confirms it
@@ -941,5 +945,119 @@ fn sharpen_creates_a_visible_halo_at_a_real_edge_through_edit_stack() {
     assert!(
         after[0] < before[0],
         "expected a darker halo pixel near the edge, before={before:?} after={after:?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Backlog item 15 (user report 2026-10-08: "the noise reduction seems not
+// working"): both NR ops were tuned on synthetic ±0.01 / tiny-chroma test
+// images and did next to nothing on a real ISO 6400 photo (measured:
+// Luminance NR 100 removed ~5% of the noise, Color NR 100 removed none).
+// These tests use noise at a REAL high-ISO amplitude (sigma ~ 10/255) so a
+// regression back to "only works on toy noise" fails here.
+// ---------------------------------------------------------------------
+
+/// Deterministic uniform noise in [-amp, amp] (xorshift, no rand dependency).
+fn noise_stream(seed: u32) -> impl FnMut(f32) -> f32 {
+    let mut s = seed;
+    move |amp: f32| {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        ((s as f32 / u32::MAX as f32) * 2.0 - 1.0) * amp
+    }
+}
+
+fn std_dev(values: &[f32]) -> f32 {
+    let mean = values.iter().sum::<f32>() / values.len() as f32;
+    (values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32).sqrt()
+}
+
+/// 80x60 frame: left half flat 80, right half flat 176, plus per-pixel
+/// noise of +-`amp` (uniform, sigma = amp/sqrt(3)) on each channel selected
+/// by `channels`. Values stay well inside 0..255 so nothing clips.
+fn noisy_step_image(amp: f32, channels: [bool; 3]) -> RgbImage {
+    let mut n = noise_stream(0x9E3779B9);
+    image::ImageBuffer::from_fn(80, 60, |x, _y| {
+        let base = if x < 40 { 80.0 } else { 176.0 };
+        let mut px = [0u8; 3];
+        for c in 0..3 {
+            let noise = if channels[c] { n(amp) } else { 0.0 };
+            px[c] = (base + noise).round().clamp(0.0, 255.0) as u8;
+        }
+        image::Rgb(px)
+    })
+}
+
+fn luma_at(img: &RgbImage, x: u32, y: u32) -> f32 {
+    let p = img.get_pixel(x, y);
+    0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32
+}
+
+/// Luma samples from the flat left region, kept clear of the step edge.
+fn flat_region_luma(img: &RgbImage) -> Vec<f32> {
+    (8..30u32).flat_map(|x| (8..52u32).map(move |y| (x, y))).map(|(x, y)| luma_at(img, x, y)).collect()
+}
+
+/// Column-averaged luma step across the edge (x=38 vs x=41), noise averages out.
+fn edge_step(img: &RgbImage) -> f32 {
+    let col = |x: u32| (8..52u32).map(|y| luma_at(img, x, y)).sum::<f32>() / 44.0;
+    col(41) - col(38)
+}
+
+#[test]
+fn luma_nr_at_full_amount_removes_most_of_realistic_high_iso_luma_noise() {
+    // amp 17 -> sigma ~ 10/255, the measured level of the ISO 6400 test photos.
+    let mut img = noisy_step_image(17.0, [true, true, true]);
+    let before_noise = std_dev(&flat_region_luma(&img));
+    let before_step = edge_step(&img);
+    apply_edit_stack(
+        &mut img,
+        &EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({ "op": "luma_nr", "amount": 100.0, "detail": 50.0, "contrast": 0.0 })],
+        },
+    );
+    let after_noise = std_dev(&flat_region_luma(&img));
+    let after_step = edge_step(&img);
+    assert!(
+        after_noise < before_noise * 0.5,
+        "Luminance NR 100 should at least halve ISO-6400-level luma noise: {before_noise} -> {after_noise}"
+    );
+    assert!(
+        after_step > before_step * 0.85,
+        "...without softening the real edge: step {before_step} -> {after_step}"
+    );
+}
+
+#[test]
+fn color_nr_at_full_amount_removes_most_of_realistic_high_iso_chroma_noise() {
+    // Noise on R and B only: luma barely moves, almost all of it is chroma.
+    let chroma = |img: &RgbImage| -> Vec<f32> {
+        (8..30u32)
+            .flat_map(|x| (8..52u32).map(move |y| (x, y)))
+            .map(|(x, y)| img.get_pixel(x, y)[0] as f32 - img.get_pixel(x, y)[2] as f32)
+            .collect()
+    };
+    let mut img = noisy_step_image(17.0, [true, false, true]);
+    let before_noise = std_dev(&chroma(&img));
+    let before_luma_noise = std_dev(&flat_region_luma(&img));
+    apply_edit_stack(
+        &mut img,
+        &EditStack {
+            schema_version: 1,
+            ops: vec![serde_json::json!({ "op": "color_nr", "amount": 100.0, "detail": 50.0 })],
+        },
+    );
+    let after_noise = std_dev(&chroma(&img));
+    assert!(
+        after_noise < before_noise * 0.5,
+        "Color NR 100 should at least halve ISO-6400-level chroma noise: {before_noise} -> {after_noise}"
+    );
+    // Color NR must not be the thing that smooths luma (RFC-0014 invariant).
+    let after_luma_noise = std_dev(&flat_region_luma(&img));
+    assert!(
+        (after_luma_noise - before_luma_noise).abs() < before_luma_noise * 0.05,
+        "Color NR changed luma noise: {before_luma_noise} -> {after_luma_noise}"
     );
 }

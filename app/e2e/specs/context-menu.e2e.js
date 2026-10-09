@@ -60,7 +60,9 @@ describe("Library photo context menu", function () {
       cells: document.querySelectorAll("[data-ctx-photo]").length,
       names: Array.from(document.querySelectorAll(".file-name")).map((e) => e.textContent).slice(0, 5),
       dialog: !!document.querySelector('[role="dialog"]'),
-      body: document.body.innerText.replace(/\s+/g, " ").slice(0, 300),
+      view: Array.from(document.querySelector(".library-view-container")?.children ?? []).map((c) => `${c.tagName}.${c.className}`),
+      libraryBody: (document.querySelector(".library-body")?.innerText ?? "NO-LIBRARY-BODY").replace(/\s+/g, " ").slice(0, 400),
+      tiles: document.querySelectorAll("[data-ctx-photo]").length,
     }));
   afterEach(async function () {
     if (this.currentTest?.state === "failed") console.log("PAGE-STATE after failure:", JSON.stringify(await pageState().catch((e) => String(e))));

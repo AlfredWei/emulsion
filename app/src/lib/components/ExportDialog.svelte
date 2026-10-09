@@ -2,6 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { exportImages, listExportPlugins } from "$lib/api/export.js";
   import { openFolder } from "$lib/api/system.js";
+  import { denoiseMissingForExport } from "$lib/api/denoise.js";
 
   /**
    * Batch-capable since M2 Slice 3 -- `items` is the whole selection (or
@@ -47,6 +48,21 @@
   $effect(() => {
     if (items) {
       listExportPlugins().then((p) => (plugins = p));
+    }
+  });
+
+  // RFC-0027 §3.6: export never runs the model, so a photo whose edit asks for AI Denoise but that was never
+  // denoised would export without it. Say so before the user clicks Export, with the names.
+  let missingDenoise = $state(/** @type {{ version_id: number, name: string }[]} */ ([]));
+  $effect(() => {
+    const list = items;
+    missingDenoise = [];
+    if (list) {
+      denoiseMissingForExport(list.map((i) => i.version_id))
+        .then((m) => {
+          if (items === list) missingDenoise = m;
+        })
+        .catch(() => {});
     }
   });
 
@@ -169,6 +185,15 @@
         />
       </div>
 
+      {#if missingDenoise.length > 0}
+        <p class="notice" role="note" data-testid="export-denoise-missing">
+          {missingDenoise.length === 1 ? "1 photo has" : `${missingDenoise.length} photos have`} AI Denoise set but no denoised copy
+          ({missingDenoise.slice(0, 3).map((m) => m.name).join(", ")}{missingDenoise.length > 3 ? ", …" : ""}), so
+          {missingDenoise.length === 1 ? "it" : "they"} will export without it. Export never runs the model: open
+          {missingDenoise.length === 1 ? "it" : "each"} in Develop and choose Denoise whole photo first.
+        </p>
+      {/if}
+
       {#if plugins.length > 0}
         <div class="row">
           <label class="label" for="export-plugin">Run after export</label>
@@ -286,6 +311,15 @@
   input:disabled,
   select:disabled {
     opacity: 0.6;
+  }
+  .notice {
+    margin: 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
   }
   .status {
     font-size: 11px;

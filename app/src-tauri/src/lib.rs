@@ -2055,6 +2055,7 @@ pub fn run() {
             denoise_commands::denoise_cancel,
             denoise_commands::denoise_remove_cache,
             denoise_commands::get_denoised_develop_preview,
+            denoise_commands::denoise_missing_for_export,
             report_spike_result,
             import_folder,
             import_files,

@@ -6,7 +6,7 @@
 
 ## 0. Process note
 
-Design only. **No product code is changed.** Decided with the user on 2026-10-09: the menu is an **in-app component** (not native OS menus), and Develop multi-select includes a **Lightroom-style Auto Sync toggle**, not just a Sync button.
+Design only. **No product code is changed.** The UX was designed first, as an interactive mock (§3.7), at the user's request. Decided with the user on 2026-10-09: the menu is an **in-app component** (not native OS menus), and Develop multi-select includes a **Lightroom-style Auto Sync toggle**, not just a Sync button.
 
 ## 1. Problem
 
@@ -84,8 +84,22 @@ While it is on, an edit to the active photo is propagated to the other selected 
 
 Customising or reordering menu items; plugin-contributed items (the export-plugin hook could add a *Run plugin* entry later); touch long-press; making Auto Sync's undo group-wide; syncing masks with position adaptation (Lightroom's *Match Total Exposures* and *Sync mask* behaviours).
 
+### 3.7 UX (designed first, in a mock)
+
+An interactive mock, [context-menus-multiselect-mockup.html](../ux/mockups/context-menus-multiselect-mockup.html), implements the behaviour above so it can be judged by use before any app code: the target rule, the menu engine (clamping, flip-left submenus, keyboard, disabled-with-reason, danger + confirm, the "N photos" header), the Develop selection gestures with the active photo vs the selection, Sync Settings, and Auto Sync (changed op only, absolute value, excluded ops never synced). Decisions it settled or surfaced:
+
+- **Active vs selected must read at a glance.** The active photo gets the **accent frame**, other selected photos a **neutral grey frame** (not two accent shades). The filmstrip **scrolls the active photo into view** when the active photo changes through a menu or a key, otherwise it can be off-screen while the panels show it.
+- **Auto Sync has three cues, because its failure mode is silent bulk edits**: the switch itself (neutral off, accent on, bold label), a **titlebar chip "Auto Sync: N photos"** that is visible whatever panel is scrolled into view, and the switch **dimmed and inert until 2+ photos are selected**. It switches itself off when the selection drops to one photo, and says so in the status line.
+- **Per-photo ops are shown as excluded, not hidden**: the panel groups them under a *Per-photo (never auto-synced)* heading in the mock (in the app this is the existing panel order plus a tooltip on the Auto Sync switch listing the exclusions), so a user dragging Crop with Auto Sync on is not surprised that the others did not move.
+- **A multi-selection's menu is one header row longer, not different**: the "N photos" header names the target, items that cannot apply to many (Copy Settings, Show in Finder, Copy Path) are **disabled with a reason on hover**, never silently hidden, so the menu keeps the same shape for 1 and for 12 photos (muscle memory).
+- **A photo menu is 14 rows for one photo** (incl. separators it fits a 600 px window); nothing was dropped, but *Rating*, *Flag*, *Colour label*, *Add to Collection* and *Develop Settings* are submenus so the first level stays scannable. Submenus flip to the left near the right edge.
+- **Focus returns to the photo after the menu closes and after an action** (the grid re-renders on a rating change; the mock lost focus until it was restored explicitly, and the real grid's virtualisation has the same hazard: restore by `version_id`, not by DOM node).
+- **A menu closes when the window loses focus** (so it never lingers over another app) and on scroll / resize.
+- **Not in the mock** (checked at implementation): the real thumbnails, drag-and-drop interplay, a real native right-click on macOS, touch.
+
 ## 4. Slices
 
+0. **UX mock** — done, see §3.7.
 1. **Menu engine + photo menus.** `contextMenu` store, `ContextMenu.svelte`, the builder pattern, the app-wide webview-menu suppression, the Library grid cell / empty-area menus and the filmstrip menu, wired to existing actions. vitest for the builders and the store; a Svelte component test for keyboard navigation and clamping; an e2e that right-clicks a cell and rates / flags through the menu.
 2. **The other surfaces** in §3.3 (canvas, history / snapshot / preset rows, collection rail, mask list, panel headers, people), a few per PR, each with its builder tests.
 3. **Develop multi-select + Sync Settings.** The filmstrip selection gestures, the shared selection, the footer *Sync Settings...* button, the menu entries, the user guide.

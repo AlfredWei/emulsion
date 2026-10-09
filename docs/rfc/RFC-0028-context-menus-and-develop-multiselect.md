@@ -2,7 +2,7 @@
 
 - Status: Draft for review
 - Date: 2026-10-09
-- Relates to: [UX-DESIGN](../ux/UX-DESIGN.md) (§2 information architecture, §4 Develop), [RFC-0009](RFC-0009-page-decomposition.md) (stores / actions split)
+- Relates to: [UX-DESIGN](../ux/UX-DESIGN.md) (§2 information architecture, §4 Develop), [RFC-0009](RFC-0009-page-svelte-state-design.md) (stores / actions split)
 
 ## 0. Process note
 

@@ -153,3 +153,7 @@ Same shape as RFC-0010 §6 / RFC-0011 §6 / RFC-0012 §5, plus one test category
 - Real measured render latency for a Color-NR-at-amount scenario, reported and confirmed under the ~100ms budget (or this RFC is revisited before anything ships, per M5.6's own discipline), given §5's own pass-count risk flag.
 - A documented before/after comparison on a real noisy photo with a real saturated color edge, showing reduced fringing with comparable flat-region denoising strength.
 - PROGRESS.md gets an M5.6 entry for this slice, same shape as RFC-0010/0011/0012's own, explicitly noting the RFC-0012 §0 worry was checked and found not to apply (§3.1), so a future reader doesn't have to re-derive it a third time.
+
+## Update 2026-10-09: gate retuned on real noise
+
+`COLOR_NR_DETAIL_SCALE` was raised from 0.08 to 0.5: on a real ISO 6400 photo the old gate zeroed Color NR entirely (chroma noise 2.86 -> 2.86 at Amount 100); it is now 2.86 -> 1.56. `COLOR_NR_GUIDED_EPS` is unchanged (the sweep showed it barely matters here). The luma-preservation invariant of section 3.1 is unaffected and was re-checked on real data. See PROGRESS.md (2026-10-09).

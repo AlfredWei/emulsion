@@ -98,11 +98,11 @@ export const detailFilters = `    // Sharpening / Noise Reduction (M3): a direct
     // RFC-0012: matches the Rust twin's LUMA_NR_GUIDED_EPS exactly -- see
     // that constant's own doc comment in detail.rs for why it's smaller
     // than CLARITY_GUIDED_EPS (this op denoises, it doesn't enhance).
-    const LUMA_NR_GUIDED_EPS: f32 = 0.0009;
-    const NR_DETAIL_SCALE: f32 = 0.05;
+    const LUMA_NR_GUIDED_EPS: f32 = 0.008;
+    const NR_DETAIL_SCALE: f32 = 0.6;
     const NR_CONTRAST_STRENGTH: f32 = 0.6;
     const COLOR_NR_RADIUS: i32 = 4;
-    const COLOR_NR_DETAIL_SCALE: f32 = 0.08;
+    const COLOR_NR_DETAIL_SCALE: f32 = 0.5;
     // RFC-0014: matches the Rust twin's COLOR_NR_GUIDED_EPS exactly -- see
     // that constant's own doc comment in detail.rs for why it ended up
     // matching DEHAZE_GUIDED_EPS rather than LUMA_NR_GUIDED_EPS (the RFC's

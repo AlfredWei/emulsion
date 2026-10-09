@@ -1,5 +1,5 @@
-//! Tauri commands for AI denoise (M6 slice 3b, RFC-0027 §3.4): the model file, the cache, and the job that
-//! runs in the `emulsion-ai` helper. Thin wrappers, as `segment_commands.rs`; no UI calls these yet (slice 3c).
+//! Tauri commands for AI denoise (M6 slices 3b-3c, RFC-0027 §3.4): the model file, the cache, the job that
+//! runs in the `emulsion-ai` helper, and the Develop preview blend. Thin wrappers, as `segment_commands.rs`.
 //!
 //! A job decodes the source at full size (the same decode the export render uses, so a result lines up with
 //! it pixel for pixel), hands it to the helper as a temporary PNG, and either lands the result in the cache
@@ -9,6 +9,8 @@ use crate::ai::protocol::{DenoiseResult, Progress, Region, Request};
 use crate::ai::supervisor::AiHelper;
 use crate::denoise_cache;
 use crate::denoise_models::{self, ModelStatus, MODEL_ID};
+use crate::denoise_preview;
+use crate::preview_cache::{self, DevelopPreviewInfo};
 use crate::source_decode;
 use crate::{resolve_denoise_dir, AppState};
 use serde::Serialize;
@@ -41,13 +43,32 @@ pub struct DenoiseJobResult {
     pub height: u32,
     pub tiles: u32,
     pub ms: u64,
+    /// A region job only: the same rectangle of the undenoised photo (the "before" half of the preview), and
+    /// the rectangle itself in full-image pixels.
+    pub before_path: Option<String>,
+    pub region: Option<Region>,
 }
 
 #[derive(Serialize)]
 pub struct DenoiseCacheInfo {
+    pub model: &'static str,
     pub width: u32,
     pub height: u32,
     pub bytes: u64,
+}
+
+/// Size of the crop preview (RFC-0027 §3.4): four 512 px tiles, a few seconds, enough texture to judge by.
+const CROP_PREVIEW: (u32, u32) = (992, 736);
+
+/// The rectangle a crop preview covers: `CROP_PREVIEW` (or the whole image when it is smaller) centred on
+/// `centre` (0..1 of each axis) and slid back inside the image rather than clipped.
+pub fn crop_region(width: u32, height: u32, centre: [f64; 2]) -> Region {
+    let (w, h) = (CROP_PREVIEW.0.min(width), CROP_PREVIEW.1.min(height));
+    let place = |len: u32, size: u32, c: f64| -> u32 {
+        let c = if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.5 };
+        ((c * len as f64 - size as f64 / 2.0).round().max(0.0) as u32).min(len - size)
+    };
+    Region { x: place(width, w, centre[0]), y: place(height, h, centre[1]), w, h }
 }
 
 /// Whether the denoise model file is installed and valid.
@@ -109,15 +130,16 @@ pub async fn denoise_cache_info(app: AppHandle, state: State<'_, AppState>, cont
     tauri::async_runtime::spawn_blocking(move || {
         let path = denoise_cache::entry_path(&dir, &content_hash, MODEL_ID);
         let Ok((width, height)) = image::image_dimensions(&path) else { return None };
-        Some(DenoiseCacheInfo { width, height, bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) })
+        Some(DenoiseCacheInfo { model: MODEL_ID, width, height, bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) })
     })
     .await
     .map_err(|e| e.to_string())
 }
 
 /// Runs a denoise job and returns when it is done, stopped or failed. Emits `"denoise-progress"`
-/// `{done, total}` after every tile. `region` (full-image pixels) denoises only that rectangle into a crop
-/// file for the before/after preview; without it the whole photo is denoised into the cache.
+/// `{done, total}` after every tile. `crop_centre` (`[x, y]`, 0..1 of the photo) denoises only the rectangle
+/// of `crop_region` around that point and writes it, with the same rectangle of the undenoised photo, as the
+/// before/after preview files; without it the whole photo is denoised into the cache.
 ///
 /// Fails with `a denoise job is already running`, `the denoise model is not installed`, `denoise cancelled`
 /// (after `denoise_cancel`; nothing is written), or the helper's own error.
@@ -128,16 +150,17 @@ pub async fn denoise_run(
     helper: State<'_, Arc<AiHelper>>,
     path: String,
     content_hash: String,
-    region: Option<Region>,
+    crop_centre: Option<[f64; 2]>,
 ) -> Result<DenoiseJobResult, String> {
     let models = models_dir(&app, &state)?;
     let cache = resolve_denoise_dir(&app, &state.catalog)?;
+    let previews = crate::resolve_previews_dir(&app, &state.catalog)?;
     let helper = helper.inner().clone();
     let id = helper.reserve_id();
     if RUNNING_JOB.compare_exchange(0, id, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Err("a denoise job is already running".to_string());
     }
-    let result = tauri::async_runtime::spawn_blocking(move || run_job(&app, &helper, id, &models, &cache, Path::new(&path), &content_hash, region)).await;
+    let result = tauri::async_runtime::spawn_blocking(move || run_job(&app, &helper, id, &models, &cache, &previews, Path::new(&path), &content_hash, crop_centre)).await;
     RUNNING_JOB.store(0, Ordering::SeqCst);
     result.map_err(|e| e.to_string())?
 }
@@ -149,22 +172,32 @@ fn run_job(
     id: u64,
     models: &Path,
     cache: &Path,
+    previews: &Path,
     source: &Path,
     content_hash: &str,
-    region: Option<Region>,
+    crop_centre: Option<[f64; 2]>,
 ) -> Result<DenoiseJobResult, String> {
     let model = denoise_models::ready_path(models).ok_or_else(|| "the denoise model is not installed".to_string())?;
     std::fs::create_dir_all(cache).map_err(|e| format!("could not create {}: {e}", cache.display()))?;
     let decoded = source_decode::decode_preview(source).map_err(|e| e.to_string())?;
+    let image = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb).ok_or_else(|| "decoded image has the wrong size".to_string())?;
     let input = cache.join(format!("input-{id}.png"));
-    let out = match region {
-        None => denoise_cache::entry_path(cache, content_hash, MODEL_ID),
-        Some(_) => cache.join(format!("crop-{content_hash}.png")),
+    let region = crop_centre.map(|c| crop_region(image.width(), image.height(), c));
+    let (out, before) = match region {
+        None => (denoise_cache::entry_path(cache, content_hash, MODEL_ID), None),
+        Some(r) => {
+            // A new crop preview replaces the last; the before half is written now (it needs no model).
+            // In the previews directory: the webview may load files from there, not from the denoise cache.
+            std::fs::create_dir_all(previews).map_err(|e| format!("could not create {}: {e}", previews.display()))?;
+            denoise_cache::remove_crops(previews, content_hash);
+            let before = previews.join(format!("crop-{content_hash}-{id}.before.png"));
+            let part = image::imageops::crop_imm(&image, r.x, r.y, r.w, r.h).to_image();
+            write_png_fast(&part, &before)?;
+            (previews.join(format!("crop-{content_hash}-{id}.after.png")), Some(before))
+        }
     };
-    let written = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
-        .ok_or_else(|| "decoded image has the wrong size".to_string())
-        .and_then(|img| write_input(&img, &input));
-    let answer = written.and_then(|()| {
+    let answer = write_png_fast(&image, &input).and_then(|()| {
+        // The helper reads the whole decoded photo and crops it itself, so the region means the same there.
         helper
             .request_with_id(id, Request::DenoiseRun { model, image_path: input.clone(), out_path: out.clone(), region }, SILENCE_TIMEOUT, |p: Progress| {
                 let _ = app.emit("denoise-progress", JobProgress { done: p.done, total: p.total });
@@ -175,19 +208,66 @@ fn run_job(
             })
     });
     let _ = std::fs::remove_file(&input);
-    let value = answer?;
+    let value = match answer {
+        Ok(v) => v,
+        Err(e) => {
+            if let Some(b) = &before {
+                let _ = std::fs::remove_file(b);
+            }
+            return Err(e);
+        }
+    };
     let r: DenoiseResult = serde_json::from_value(value).map_err(|e| e.to_string())?;
-    Ok(DenoiseJobResult { path: out.to_string_lossy().to_string(), width: r.width, height: r.height, tiles: r.tiles, ms: r.ms })
+    Ok(DenoiseJobResult {
+        path: out.to_string_lossy().to_string(),
+        width: r.width,
+        height: r.height,
+        tiles: r.tiles,
+        ms: r.ms,
+        before_path: before.map(|b| b.to_string_lossy().to_string()),
+        region,
+    })
 }
 
-/// A fast PNG: this is a hand-off to the helper, deleted right after.
-fn write_input(img: &image::RgbImage, path: &Path) -> Result<(), String> {
+/// A fast-compressing PNG, for hand-offs, crop previews and preview blends: written once, read soon.
+pub fn write_png_fast(img: &image::RgbImage, path: &Path) -> Result<(), String> {
     use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     use image::ImageEncoder;
     let file = std::fs::File::create(path).map_err(|e| format!("could not write {}: {e}", path.display()))?;
     PngEncoder::new_with_quality(std::io::BufWriter::new(file), CompressionType::Fast, FilterType::Sub)
         .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgb8)
         .map_err(|e| e.to_string())
+}
+
+/// The Develop canvas's source image with this photo's cached denoised copy mixed in at `amount` (1..100),
+/// as a PNG the canvas loads in place of the plain preview (`full` picks the 1:1 tier). `null` means "use the
+/// plain preview": amount 0, nothing cached, or the cached copy is not of this picture. Never runs the model.
+#[tauri::command]
+pub async fn get_denoised_develop_preview(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    content_hash: String,
+    amount: u32,
+    full: bool,
+) -> Result<Option<DevelopPreviewInfo>, String> {
+    let previews = crate::resolve_previews_dir(&app, &state.catalog)?;
+    let cache = resolve_denoise_dir(&app, &state.catalog)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if amount == 0 || !denoise_cache::entry_path(&cache, &content_hash, MODEL_ID).exists() {
+            return Ok(None);
+        }
+        let source = Path::new(&path);
+        let base = if full {
+            preview_cache::ensure_develop_full_preview(source, &previews, Some(&content_hash))
+        } else {
+            preview_cache::ensure_develop_preview(source, &previews, Some(&content_hash))
+        }
+        .map_err(|e| e.user_message())?;
+        denoise_preview::ensure_blended(&base, &content_hash, &cache, &previews, full, amount)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Stops the running job at its next tile (about a second). A no-op when none is running.
@@ -206,5 +286,32 @@ pub async fn denoise_cancel(helper: State<'_, Arc<AiHelper>>) -> Result<(), Stri
 #[tauri::command]
 pub async fn denoise_remove_cache(app: AppHandle, state: State<'_, AppState>, content_hash: String) -> Result<(), String> {
     let dir = resolve_denoise_dir(&app, &state.catalog)?;
-    tauri::async_runtime::spawn_blocking(move || denoise_cache::remove_photo(&dir, &content_hash)).await.map_err(|e| e.to_string())
+    let previews = crate::resolve_previews_dir(&app, &state.catalog)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        denoise_cache::remove_photo(&dir, &content_hash);
+        // The crop previews and preview blends are derived files in the previews directory.
+        denoise_cache::remove_derived(&previews, &content_hash);
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_crop_preview_is_centred_clamped_inside_the_photo_and_whole_for_a_small_one() {
+        // Centred on a big photo.
+        assert_eq!(crop_region(6000, 4000, [0.5, 0.5]), Region { x: 3000 - 496, y: 2000 - 368, w: 992, h: 736 });
+        // Pushed against an edge it slides back inside rather than shrinking.
+        assert_eq!(crop_region(6000, 4000, [0.0, 1.0]), Region { x: 0, y: 4000 - 736, w: 992, h: 736 });
+        assert_eq!(crop_region(6000, 4000, [1.0, 0.0]), Region { x: 6000 - 992, y: 0, w: 992, h: 736 });
+        // Out-of-range and NaN centres fall back to the nearest valid place / the middle.
+        assert_eq!(crop_region(6000, 4000, [7.0, -2.0]), crop_region(6000, 4000, [1.0, 0.0]));
+        assert_eq!(crop_region(6000, 4000, [f64::NAN, 0.5]), crop_region(6000, 4000, [0.5, 0.5]));
+        // A photo smaller than the preview is previewed whole.
+        assert_eq!(crop_region(300, 200, [0.3, 0.9]), Region { x: 0, y: 0, w: 300, h: 200 });
+        assert_eq!(crop_region(2000, 500, [0.5, 0.5]), Region { x: 504, y: 0, w: 992, h: 500 });
+    }
 }

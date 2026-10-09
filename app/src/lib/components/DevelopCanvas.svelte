@@ -8,6 +8,7 @@
   import { rasterizeDab, rasterizeSpotDab } from "$lib/gpu/brushRaster.js";
   import { tick, flushSync, untrack } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
+  import { getDenoisedDevelopPreview } from "$lib/api/denoise.js";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
   import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { FIT, fitScale, effectiveScale, reduceZoom, contentOffset, visibleRegion, scrollForFocus, focusAtViewportPoint } from "$lib/zoomMath.js";
@@ -20,6 +21,8 @@
    * @type {{
    *   imagePath: string,
    *   imageContentHash?: string | null,
+   *   aiDenoiseAmount?: number,
+   *   denoiseVersion?: number,
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
@@ -103,6 +106,8 @@
   let {
     imagePath,
     imageContentHash = null,
+    aiDenoiseAmount = 0,
+    denoiseVersion = 0,
     exposure,
     contrast,
     saturation,
@@ -288,6 +293,20 @@
   /** @type {Promise<void> | null} */
   let fullTierPromise = null; // in-flight upgrade, deduped so rapid zoom toggling can't fire it twice
   let activeTier = "draft"; // "draft" | "full"
+  // AI Denoise (RFC-0027 §3.3): what the uploaded source texture currently is -- the plain preview
+  // (`amount` 0) or its mix with the kept denoised copy at that amount. `version` is the store's
+  // `cacheVersion` it was built under (a re-run or a removal makes an equal amount stale).
+  // Imperative bookkeeping like `activeTier`: markup never reads it.
+  let appliedDenoise = { path: "", tier: "draft", amount: 0, version: 0 };
+  // The amount of the mix on the GPU right now (0 = the plain preview), exposed as a data attribute so a
+  // test can tell which source texture the render is built from. Reactive, unlike `appliedDenoise`.
+  let shownDenoise = $state(0);
+  /** @param {{ path: string, tier: string, amount: number, version: number }} next */
+  function setAppliedDenoise(next) {
+    appliedDenoise = next;
+    shownDenoise = next.amount;
+  }
+  let denoiseSeq = 0; // a newer request supersedes an older one still in flight
   // True once the native-resolution tier is on the GPU: the canvas backing
   // store then IS the photo's native size (natRatio below becomes 1). Reactive
   // (unlike activeTier) because the display scale is derived from it.
@@ -1286,6 +1305,49 @@
     return writeAdjustmentsAndRenderImpl(gpu, renderInputs);
   }
 
+  /** The preview source with the kept denoised copy mixed in at the current amount, or null when the plain
+   * preview applies (amount 0, no copy, not this picture, or the mix could not be built -- a failed mix
+   * must never stop the photo loading).
+   * @param {string} path @param {boolean} full */
+  async function loadDenoised(path, full) {
+    if (!(aiDenoiseAmount > 0) || !imageContentHash) return null;
+    try {
+      return await getDenoisedDevelopPreview(path, imageContentHash, aiDenoiseAmount, full);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Re-uploads the source texture when the amount (or the kept copy) changed since the last upload. Called
+   * by the settle effect below, never per slider step. */
+  async function applyDenoiseSource() {
+    const path = imagePath;
+    if (!path || !gpu.device || status !== "ready") return;
+    const tier = activeTier;
+    const wanted = imageContentHash ? aiDenoiseAmount : 0;
+    const a = appliedDenoise;
+    if (a.path === path && a.tier === tier && a.amount === wanted && (wanted === 0 || a.version === denoiseVersion)) return;
+    const seq = ++denoiseSeq;
+    const version = denoiseVersion;
+    try {
+      const mixed = wanted > 0 ? await loadDenoised(path, tier === "full") : null;
+      const source = mixed ?? (tier === "full" ? await getDevelopFullPreview(path, imageContentHash) : await getDevelopPreview(path, imageContentHash));
+      if (seq !== denoiseSeq || imagePath !== path || activeTier !== tier) return;
+      const bitmap = await createImageBitmap(await (await fetch(convertFileSrc(source.path))).blob());
+      if (seq !== denoiseSeq || imagePath !== path || activeTier !== tier) return;
+      uploadingFullTier = tier === "full";
+      try {
+        await applyBitmapToGpu(bitmap);
+      } finally {
+        uploadingFullTier = false;
+      }
+      setAppliedDenoise({ path, tier, amount: mixed ? wanted : 0, version });
+      writeAdjustmentsAndRender();
+    } catch {
+      // Keep the texture that is on screen; the next change tries again.
+    }
+  }
+
   async function loadImage(/** @type {string} */ path) {
     if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.dehazeMeanguideHPipeline || !gpu.dehazeMeanguideVPipeline || !gpu.dehazeMeanpHPipeline || !gpu.dehazeMeanpVPipeline || !gpu.dehazeCorrguideHPipeline || !gpu.dehazeCorrguideVPipeline || !gpu.dehazeCorrguidepHPipeline || !gpu.dehazeCorrguidepVPipeline || !gpu.dehazeAPipeline || !gpu.dehazeBPipeline || !gpu.dehazeMeanaHPipeline || !gpu.dehazeMeanaVPipeline || !gpu.dehazeMeanbHPipeline || !gpu.dehazeMeanbVPipeline || !gpu.dehazeRefinePipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpVPipeline || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpVPipeline || !gpu.clarityAPipeline || !gpu.clarityBPipeline || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbVPipeline || !gpu.clarityVPipeline || !gpu.sharpenMeanpHPipeline || !gpu.sharpenMeanpVPipeline || !gpu.sharpenCorrpHPipeline || !gpu.sharpenCorrpVPipeline || !gpu.sharpenAPipeline || !gpu.sharpenBPipeline || !gpu.sharpenMeanaHPipeline || !gpu.sharpenMeanaVPipeline || !gpu.sharpenMeanbHPipeline || !gpu.sharpenMeanbVPipeline || !gpu.sharpenFinalPipeline || !gpu.lumaNRMeanpHPipeline || !gpu.lumaNRMeanpVPipeline || !gpu.lumaNRCorrpHPipeline || !gpu.lumaNRCorrpVPipeline || !gpu.lumaNRAPipeline || !gpu.lumaNRBPipeline || !gpu.lumaNRMeanaHPipeline || !gpu.lumaNRMeanaVPipeline || !gpu.lumaNRMeanbHPipeline || !gpu.lumaNRMeanbVPipeline || !gpu.lumaNRFinalPipeline || !gpu.colorNRMeanguideHPipeline || !gpu.colorNRMeanguideVPipeline || !gpu.colorNRCorrguideHPipeline || !gpu.colorNRCorrguideVPipeline || !gpu.colorNRMeanpHPipeline || !gpu.colorNRMeanpVPipeline || !gpu.colorNRCorrguidepHPipeline || !gpu.colorNRCorrguidepVPipeline || !gpu.colorNRAPipeline || !gpu.colorNRBPipeline || !gpu.colorNRMeanaHPipeline || !gpu.colorNRMeanaVPipeline || !gpu.colorNRMeanbHPipeline || !gpu.colorNRMeanbVPipeline || !gpu.colorNRFinalPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
     status = "loading";
@@ -1300,9 +1362,12 @@
     const preview = await getDevelopPreview(path, imageContentHash);
     isSmartPreview = preview.is_smart_preview;
     navThumbUrl = convertFileSrc(preview.path);
-    const response = await fetch(convertFileSrc(preview.path));
+    // The photo may already have a kept denoised copy at a non-zero amount: start from the mix.
+    const mixed = await loadDenoised(path, false);
+    const response = await fetch(convertFileSrc((mixed ?? preview).path));
     const bitmap = await createImageBitmap(await response.blob());
     await applyBitmapToGpu(bitmap);
+    setAppliedDenoise({ path, tier: "draft", amount: mixed ? aiDenoiseAmount : 0, version: denoiseVersion });
 
     status = "ready";
     await tick(); // overlayEl only mounts once status flips to "ready"
@@ -1355,7 +1420,8 @@
       return;
     }
     fullTierPromise = (async () => {
-      const preview = await getDevelopFullPreview(path);
+      const mixed = await loadDenoised(path, true);
+      const preview = mixed ?? (await getDevelopFullPreview(path, imageContentHash));
       // The user may have switched images or zoomed back out while this
       // was in flight -- only apply if still relevant, otherwise this
       // would silently stomp whatever loadImage/a later upgrade already
@@ -1372,6 +1438,7 @@
       }
       fullTierPath = path;
       activeTier = "full";
+      setAppliedDenoise({ path, tier: "full", amount: mixed ? aiDenoiseAmount : 0, version: denoiseVersion });
       // No re-centre needed: `onSourceDimensions` above flipped `fullTierReady`
       // together with the new backing-store size, so `natRatio` becomes 1
       // exactly as the backing store grows to native -- the canvas keeps its
@@ -1688,6 +1755,15 @@
       upgradeToFullTier(imagePath);
     }
   });
+  // AI Denoise: rebuild the source texture once the amount has settled (a slider drag changes it every
+  // frame; the mix is a file built by the backend), or when the kept copy was made or removed.
+  $effect(() => {
+    void aiDenoiseAmount;
+    void denoiseVersion;
+    if (status !== "ready" || !imagePath) return;
+    const timer = setTimeout(applyDenoiseSource, 250);
+    return () => clearTimeout(timer);
+  });
 </script>
 
 <!-- `.canvas-stage` is the non-scrolling frame: `.canvas-wrap` inside it
@@ -1732,6 +1808,7 @@
   >
     <canvas
       bind:this={canvasEl}
+      data-denoise-source={shownDenoise}
       class:zoomed={isZoomed}
       class:sized={!showCommittedCropPreview && canvasCss.w > 0}
       class:cropped={showCommittedCropPreview}

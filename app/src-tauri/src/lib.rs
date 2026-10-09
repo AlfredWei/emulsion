@@ -26,6 +26,7 @@ mod ai;
 mod denoise_cache;
 mod denoise_commands;
 mod denoise_models;
+mod denoise_preview;
 mod segment_commands;
 mod segment_models;
 mod print;
@@ -2043,6 +2044,7 @@ pub fn run() {
             denoise_commands::denoise_run,
             denoise_commands::denoise_cancel,
             denoise_commands::denoise_remove_cache,
+            denoise_commands::get_denoised_develop_preview,
             report_spike_result,
             import_folder,
             import_files,

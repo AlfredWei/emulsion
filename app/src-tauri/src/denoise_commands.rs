@@ -288,6 +288,9 @@ pub async fn get_denoised_develop_preview(
 pub struct MissingDenoise {
     pub version_id: i64,
     pub name: String,
+    /// What a whole-photo job needs (`denoise_run`): the source file and its fingerprint.
+    pub path: String,
+    pub content_hash: String,
 }
 
 /// True when `stack` asks for AI Denoise and `cache_dir` holds no copy for `content_hash`. Cheap: no decode.
@@ -307,9 +310,10 @@ pub async fn denoise_missing_for_export(app: AppHandle, state: State<'_, AppStat
         let mut missing = Vec::new();
         for version_id in version_ids {
             let (Ok(source), Ok(stack)) = (catalog.get_version_source(version_id), catalog.get_edit_stack(version_id)) else { continue };
-            if export_would_skip_denoise(&stack, source.content_hash.as_deref().unwrap_or(""), &cache) {
+            let content_hash = source.content_hash.clone().unwrap_or_default();
+            if export_would_skip_denoise(&stack, &content_hash, &cache) {
                 let name = Path::new(&source.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(source.path.clone());
-                missing.push(MissingDenoise { version_id, name });
+                missing.push(MissingDenoise { version_id, name, path: source.path.clone(), content_hash });
             }
         }
         Ok(missing)

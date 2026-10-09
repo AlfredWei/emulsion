@@ -54,6 +54,7 @@ beforeEach(() => {
   denoise.modelStatus = null;
   denoise.pendingJob = null;
   denoise.job = null;
+  denoise.batch = null;
   denoise.error = "";
   denoise.crop = null;
   denoise.cache = null;
@@ -334,6 +335,75 @@ describe("the store follows the open photo", () => {
     m.denoiseCacheInfo.mockRejectedValueOnce("io");
     await denoise.refreshCache();
     expect(denoise.cache).toBeNull();
+  });
+});
+
+describe("Export's denoise-these-first batch", () => {
+  const PHOTOS = [
+    { path: "/photos/a.jpg", content_hash: "hash-a" },
+    { path: "/photos/b.jpg", content_hash: "hash-b" },
+    { path: "/photos/c.jpg", content_hash: "hash-c" },
+  ];
+
+  it("runs a whole-photo job for each photo, in order, and clears itself", async () => {
+    expect(await A.handleDenoiseBatch(PHOTOS)).toBe("done");
+    expect(m.denoiseRun.mock.calls.map((c) => [c[0], c[1], c[2]])).toEqual([
+      ["/photos/a.jpg", "hash-a", null],
+      ["/photos/b.jpg", "hash-b", null],
+      ["/photos/c.jpg", "hash-c", null],
+    ]);
+    expect(denoise.batch).toBeNull();
+    expect(denoise.job).toBeNull();
+  });
+
+  it("reports which photo of how many while it runs", async () => {
+    /** @type {number[]} */
+    const seen = [];
+    m.denoiseRun.mockImplementation(async () => {
+      seen.push(denoise.batch?.index ?? -1);
+      expect(denoise.batch?.total).toBe(3);
+      return WHOLE;
+    });
+    await A.handleDenoiseBatch(PHOTOS);
+    expect(seen).toEqual([1, 2, 3]);
+  });
+
+  it("does not start without the model (no download from here) or while another job runs", async () => {
+    m.denoiseModelStatus.mockResolvedValue(MISSING);
+    expect(await A.handleDenoiseBatch(PHOTOS)).toBe("no-model");
+    expect(m.denoiseRun).not.toHaveBeenCalled();
+    expect(denoise.batch).toBeNull();
+    m.denoiseModelStatus.mockResolvedValue(READY);
+    denoise.job = { kind: "whole", hash: "x", label: "x", done: 0, total: 0 };
+    expect(await A.handleDenoiseBatch(PHOTOS)).toBe("busy");
+    expect(m.denoiseRun).not.toHaveBeenCalled();
+  });
+
+  it("stops at the first failure and leaves the rest alone", async () => {
+    m.denoiseRun.mockResolvedValueOnce(WHOLE).mockRejectedValueOnce(new Error("helper crashed"));
+    expect(await A.handleDenoiseBatch(PHOTOS)).toBe("failed");
+    expect(m.denoiseRun).toHaveBeenCalledTimes(2);
+    expect(denoise.batch).toBeNull();
+  });
+
+  it("Stop cancels the running job and skips the photos still waiting", async () => {
+    m.denoiseRun.mockImplementationOnce(async () => {
+      A.handleDenoiseBatchStop();
+      throw new Error("denoise cancelled");
+    });
+    expect(await A.handleDenoiseBatch(PHOTOS)).toBe("stopped");
+    expect(m.denoiseCancel).toHaveBeenCalledTimes(1);
+    expect(m.denoiseRun).toHaveBeenCalledTimes(1);
+    expect(denoise.batch).toBeNull();
+  });
+
+  it("Stop pressed between two jobs also ends the batch", async () => {
+    m.denoiseRun.mockImplementationOnce(async () => {
+      denoise.batch && (denoise.batch.stopped = true);
+      return WHOLE;
+    });
+    expect(await A.handleDenoiseBatch(PHOTOS)).toBe("stopped");
+    expect(m.denoiseRun).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -125,8 +125,17 @@ describe("Library photo context menu", function () {
     await key("Enter"); // the submenu's first row: Pick
     await browser.waitUntil(async () => (await cellState()).flag === "pick", { timeout: 10000, timeoutMsg: "flag was not saved" });
     expect(await menuOpen()).toBe(false);
-    const focusedIsPhoto = await browser.execute(() => !!document.activeElement?.closest("[data-ctx-photo]"));
-    expect(focusedIsPhoto).toBe(true);
+    await browser
+      .waitUntil(() => browser.execute(() => !!document.activeElement?.closest("[data-ctx-photo]")), { timeout: 3000 })
+      .catch(() => {});
+    const snapshot = await browser.execute(() => ({
+      focusedIsPhoto: !!document.activeElement?.closest("[data-ctx-photo]"),
+      active: document.activeElement?.tagName + "." + document.activeElement?.className,
+      hasGrid: !!document.querySelector("[data-ctx-grid]"),
+      cells: document.querySelectorAll("[data-ctx-photo]").length,
+      body: document.body.innerText.slice(0, 200),
+    }));
+    expect(JSON.stringify(snapshot)).toContain('"focusedIsPhoto":true');
   });
 
   it("a letter typed while the menu is open does not reach the page's shortcuts", async () => {

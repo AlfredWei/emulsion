@@ -42,7 +42,16 @@ export class ContextMenuStore {
     this.isOpen = false;
     this.items = [];
     this.returnFocusTo = null;
-    if (restoreFocus && target && typeof target.focus === "function") target.focus({ preventScroll: true });
+    if (!restoreFocus || !target || typeof target.focus !== "function") return;
+    target.focus({ preventScroll: true });
+    // The opener may be re-created by the action the menu ran (a re-render replaces the cell): find its successor.
+    const id = target.dataset?.ctxPhoto;
+    if (id !== undefined && typeof document !== "undefined") {
+      requestAnimationFrame(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        document.querySelector(`[data-ctx-photo="${id}"]`)?.focus({ preventScroll: true });
+      });
+    }
   }
 
   /** @param {{ title: string, message: string, confirmLabel: string }} ask @param {() => void} run */

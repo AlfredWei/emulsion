@@ -53,6 +53,7 @@
     {@const thumbSrc = image.thumbnail_path ? convertFileSrc(image.thumbnail_path) : null}
     <div
       class="cell"
+      data-ctx-photo={image.version_id}
       class:selected={selectedIds.has(image.version_id)}
       role="button"
       tabindex="0"

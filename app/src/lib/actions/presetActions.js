@@ -4,7 +4,7 @@
 // them, and the preset hover preview. They combine `presets`, `develop`, `selection` and `library`.
 
 import { presets } from "$lib/state/presets.svelte.js";
-import { listPresets, createPreset, presetEligibleOps, applyPresetOps, exportPresetFile, importPresetFile, deletePreset, getEditStack, setEditStack, regenerateThumbnail, copySettingsOps, previewEditStack } from "$lib/api/develop.js";
+import { listPresets, createPreset, presetEligibleOps, applyPresetOps, exportPresetFile, importPresetFile, deletePreset, getEditStack, setEditStack, regenerateThumbnail, copySettingsOps, previewEditStack, resetEditStack } from "$lib/api/develop.js";
 import { handleCreateSnapshot } from "$lib/actions/developActions.js";
 import { develop } from "$lib/state/develop.svelte.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
@@ -146,13 +146,51 @@ export async function handleApplyPresetToSelection(/** @type {string} */ value) 
 
 export function handleCopySettingsRequest() {
   if (develop.versionId === null) return;
+  presets.copySourceStack = null;
+  presets.copySettingsDialogOpen = true;
+}
+
+/** Copy Settings asked on a photo (the context menu): the open Develop photo copies its in-memory stack
+ * (it may hold edits not flushed yet), any other photo its stored one. The group dialog is the same. */
+export async function handleCopySettingsFromPhoto(/** @type {number} */ versionId) {
+  try {
+    presets.copySourceStack = versionId === develop.versionId ? null : await getEditStack(versionId);
+  } catch (/** @type {any} */ e) {
+    shell.notify(`Copy settings failed: ${e}`);
+    return;
+  }
   presets.copySettingsDialogOpen = true;
 }
 
 export function handleCopySettingsConfirmed(/** @type {string[]} */ groupIds) {
   presets.copySettingsDialogOpen = false;
-  develop.copiedSettings = copySettingsOps(develop.editStack, groupIds);
+  const source = presets.copySourceStack ?? develop.editStack;
+  presets.copySourceStack = null;
+  develop.copiedSettings = copySettingsOps(source, groupIds);
   shell.notify("Copied settings");
+}
+
+/** Reset Settings on the Library selection (the context menu; the user confirmed in the menu's dialog).
+ * Same non-atomic per-target shape as the batch apply / paste above, same re-sync of the open photo. */
+export async function handleResetSettingsForSelection() {
+  const targets = [...selection.selectedIds];
+  if (targets.length === 0) return;
+  try {
+    await Promise.all(
+      targets.map(async (versionId) => {
+        const current = await getEditStack(versionId);
+        await setEditStack(versionId, resetEditStack(current), "Reset");
+        const path = await regenerateThumbnail(versionId);
+        if (path) patchLocal(versionId, { thumbnail_path: path });
+      }),
+    );
+    if (develop.versionId !== null && targets.includes(develop.versionId)) {
+      develop.editStack = await getEditStack(develop.versionId);
+    }
+    shell.notify(`Reset settings on ${targets.length} photo${targets.length === 1 ? "" : "s"}`);
+  } catch (/** @type {any} */ e) {
+    shell.notify(`Reset settings failed: ${e}`);
+  }
 }
 
 /** The Copy/Paste Settings buttons live at the bottom of DevelopPanel

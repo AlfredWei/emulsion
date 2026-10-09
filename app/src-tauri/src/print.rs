@@ -81,8 +81,8 @@ fn color_management_cache_key(color: &PrintColorManagement) -> Result<String, Pr
 /// proofing transform `soft_proof.rs` already uses for on-screen soft
 /// proofing, always with `gamut_warning` forced off (not meaningful for a
 /// buffer that's about to be printed, not displayed with an alarm color).
-fn render_print_ready_image(source_path: &Path, stack: &EditStack, color: &PrintColorManagement) -> Result<image::RgbImage, PrintError> {
-    let mut image = export::render_full_resolution(source_path, stack, None)?;
+fn render_print_ready_image(source_path: &Path, stack: &EditStack, color: &PrintColorManagement, denoise_dir: Option<&Path>) -> Result<image::RgbImage, PrintError> {
+    let mut image = export::render_full_resolution(source_path, stack, denoise_dir)?;
     if let Some(settings) = &color.profile {
         let settings = SoftProofSettings { gamut_warning: false, ..settings.clone() };
         soft_proof::apply_soft_proof(&mut image, &settings)?;
@@ -100,18 +100,23 @@ pub fn generate_print_ready_image(
     stack: &EditStack,
     color: &PrintColorManagement,
     previews_dir: &Path,
+    denoise_dir: Option<&Path>,
 ) -> Result<(PathBuf, u32, u32), PrintError> {
     let stack_json = serde_json::to_string(stack).unwrap_or_default();
     let stack_hash = blake3::hash(stack_json.as_bytes()).to_hex().to_string();
     let color_key = color_management_cache_key(color)?;
-    let out_path = previews_dir.join(format!("{content_hash}_{}_print_{color_key}.jpg", &stack_hash[..8]));
+    // RFC-0027: the kept AI-denoised copy (when the stack asks for one and it exists) is part of what this raster
+    // is built from, so it is part of its name; a raster made before the copy existed is never reused.
+    let effective = crate::develop_engine::effective_stack_for_render(stack);
+    let denoise_tag = crate::denoise_preview::graded_tag(crate::develop_engine::ai_denoise_amount(&effective), denoise_dir, content_hash);
+    let out_path = previews_dir.join(format!("{content_hash}_{}{denoise_tag}_print_{color_key}.jpg", &stack_hash[..8]));
 
     if out_path.exists() {
         let (width, height) = image::image_dimensions(&out_path)?;
         return Ok((out_path, width, height));
     }
 
-    let image = render_print_ready_image(source_path, stack, color)?;
+    let image = render_print_ready_image(source_path, stack, color, denoise_dir)?;
 
     std::fs::create_dir_all(previews_dir)?;
     let mut file = std::fs::File::create(&out_path)?;
@@ -128,11 +133,12 @@ pub fn generate_print_ready_batch(
     items: Vec<(i64, PathBuf, String, EditStack)>,
     color: &PrintColorManagement,
     previews_dir: &Path,
+    denoise_dir: Option<&Path>,
 ) -> Vec<PrintReadyResult> {
     items
         .into_iter()
         .map(|(version_id, path, content_hash, stack)| {
-            match generate_print_ready_image(&path, &content_hash, &stack, color, previews_dir) {
+            match generate_print_ready_image(&path, &content_hash, &stack, color, previews_dir, denoise_dir) {
                 Ok((out_path, width, height)) => PrintReadyResult {
                     version_id,
                     path: Some(out_path.to_string_lossy().to_string()),
@@ -374,10 +380,11 @@ pub fn export_pdf(
     color: &PrintColorManagement,
     previews_dir: &Path,
     destination_path: &Path,
+    denoise_dir: Option<&Path>,
 ) -> Result<(), PrintError> {
     let mut images = Vec::with_capacity(items.len());
     for (_, path, content_hash, stack) in &items {
-        let (cached_path, _, _) = generate_print_ready_image(path, content_hash, stack, color, previews_dir)?;
+        let (cached_path, _, _) = generate_print_ready_image(path, content_hash, stack, color, previews_dir, denoise_dir)?;
         images.push(image::open(&cached_path)?.into_rgb8());
     }
 
@@ -445,6 +452,7 @@ mod tests {
             &EditStack::empty(),
             &PrintColorManagement { profile: None },
             &previews_dir,
+            None,
         )
         .expect("generation succeeds for a real RAW file");
 
@@ -454,6 +462,33 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&previews_dir);
+    }
+
+    /// RFC-0027 slice 3d: Print honours `ai_denoise`. A raster made after a kept copy appears is a different
+    /// file from the one made before and is the mix; without a copy (or a directory) it is the plain picture.
+    #[test]
+    fn print_raster_mixes_in_the_kept_denoised_copy_and_is_not_reused_from_before() {
+        let dir = temp_dir("denoise-source");
+        let previews_dir = temp_dir("denoise-cache");
+        let denoise_dir = temp_dir("denoise-copies");
+        let source_path = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(64, 32, image::Rgb([200, 200, 200])).save(&source_path).unwrap();
+        let hash = blake3::hash(&std::fs::read(&source_path).unwrap()).to_hex().to_string();
+        let stack = EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "ai_denoise", "amount": 100})] };
+        let none = PrintColorManagement { profile: None };
+
+        let (before, _, _) = generate_print_ready_image(&source_path, &hash, &stack, &none, &previews_dir, Some(&denoise_dir)).unwrap();
+        assert!(image::open(&before).unwrap().into_rgb8().get_pixel(3, 3).0[0] > 150, "no copy yet: the plain picture");
+
+        image::RgbImage::from_pixel(64, 32, image::Rgb([20, 20, 20]))
+            .save(crate::denoise_cache::entry_path(&denoise_dir, &hash, crate::denoise_models::MODEL_ID))
+            .unwrap();
+        let (after, _, _) = generate_print_ready_image(&source_path, &hash, &stack, &none, &previews_dir, Some(&denoise_dir)).unwrap();
+        assert_ne!(before, after, "the raster made before the copy existed must not be reused");
+        assert!(image::open(&after).unwrap().into_rgb8().get_pixel(3, 3).0[0] < 40, "amount 100 is the kept copy");
+
+        let (off, _, _) = generate_print_ready_image(&source_path, &hash, &stack, &none, &previews_dir, None).unwrap();
+        assert_eq!(off, before, "no directory: the same plain raster as before");
     }
 
     #[test]
@@ -469,6 +504,7 @@ mod tests {
             &EditStack::empty(),
             &PrintColorManagement { profile: None },
             &previews_dir,
+            None,
         )
         .expect("generation succeeds for a synthetic JPEG source");
 
@@ -506,7 +542,7 @@ mod tests {
         };
 
         let (out_path, _, _) =
-            generate_print_ready_image(&source_path, "testhash", &EditStack::empty(), &color, &previews_dir)
+            generate_print_ready_image(&source_path, "testhash", &EditStack::empty(), &color, &previews_dir, None)
                 .expect("generation succeeds with a managed custom profile");
 
         let output = image::open(&out_path).unwrap().into_rgb8();
@@ -541,14 +577,14 @@ mod tests {
         };
 
         let (none_path, _, _) =
-            generate_print_ready_image(&source_path, "testhash", &stack, &none, &previews_dir).unwrap();
+            generate_print_ready_image(&source_path, "testhash", &stack, &none, &previews_dir, None).unwrap();
         let (managed_path, _, _) =
-            generate_print_ready_image(&source_path, "testhash", &stack, &managed, &previews_dir).unwrap();
+            generate_print_ready_image(&source_path, "testhash", &stack, &managed, &previews_dir, None).unwrap();
         assert_ne!(none_path, managed_path, "different color management must produce a distinct cache entry");
 
         let mtime_before = std::fs::metadata(&none_path).unwrap().modified().unwrap();
         let (none_path_again, _, _) =
-            generate_print_ready_image(&source_path, "testhash", &stack, &none, &previews_dir).unwrap();
+            generate_print_ready_image(&source_path, "testhash", &stack, &none, &previews_dir, None).unwrap();
         let mtime_after = std::fs::metadata(&none_path_again).unwrap().modified().unwrap();
         assert_eq!(none_path, none_path_again, "repeat call with identical settings must hit the cache");
         assert_eq!(mtime_before, mtime_after, "cache hit must not rewrite the file");
@@ -708,6 +744,7 @@ mod tests {
             &PrintColorManagement { profile: None },
             &previews_dir,
             &destination,
+            None,
         )
         .expect("PDF export should succeed for a real synthetic source");
 

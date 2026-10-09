@@ -1690,6 +1690,7 @@ async fn get_print_ready_images(
 ) -> Result<Vec<print::PrintReadyResult>, String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         // A version_id whose source can't be resolved (deleted from the
@@ -1722,7 +1723,7 @@ async fn get_print_ready_images(
             }
             (resolvable, results)
         };
-        results.extend(print::generate_print_ready_batch(resolvable, &color_management, &previews_dir));
+        results.extend(print::generate_print_ready_batch(resolvable, &color_management, &previews_dir, Some(&denoise_dir)));
         Ok::<_, String>(results)
     })
     .await
@@ -1747,6 +1748,7 @@ struct PrintPdfRequest {
 async fn export_print_pdf(app: AppHandle, state: State<'_, AppState>, request: PrintPdfRequest) -> Result<(), String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let resolved = {
@@ -1767,6 +1769,7 @@ async fn export_print_pdf(app: AppHandle, state: State<'_, AppState>, request: P
             &request.color_management,
             &previews_dir,
             std::path::Path::new(&request.destination_path),
+            Some(&denoise_dir),
         )
         .map_err(|e| e.to_string())
     })

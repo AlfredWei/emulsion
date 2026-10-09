@@ -49,7 +49,7 @@ export class ContextMenuStore {
     if (id !== undefined && typeof document !== "undefined") {
       requestAnimationFrame(() => {
         if (document.activeElement && document.activeElement !== document.body) return;
-        document.querySelector(`[data-ctx-photo="${id}"]`)?.focus({ preventScroll: true });
+        /** @type {HTMLElement | null} */ (document.querySelector(`[data-ctx-photo="${id}"]`))?.focus({ preventScroll: true });
       });
     }
   }

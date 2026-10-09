@@ -2,6 +2,10 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 3d, part 4 (AI denoise): Library grid thumbnails (2026-10-09)
+
+Branch `feature/ai-denoise-3d-thumbs`. `regenerate_edited_thumbnail` takes the denoise directory, builds from the preview mixed with the kept copy at the stack's effective amount, and puts `_dn<amount>-<mtime>` in the thumbnail's file name (no stale reuse; a hidden Noise Reduction panel is off). The thumbnail already regenerates when Develop is left, so it picks the effect up then. **Verified**: a Rust test (before a copy exists: plain; after: a different file equal to the copy at amount 100); `cargo test --lib` pass. **Not verified**: the grid in the real window; a job finishing on a photo that is not open leaves its thumbnail until it is next edited. **Still open for 3d**: a "denoise missing photos first" batch in the Export dialog, a Settings line for the cache cap.
+
 ## M6 slice 3d, part 3 (AI denoise): Print, the cache cap, the stale-file sweeper (2026-10-09)
 
 Branch `feature/ai-denoise-3d-print`; RFC-0027 §11.

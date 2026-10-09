@@ -307,6 +307,8 @@
     shownDenoise = next.amount;
   }
   let denoiseSeq = 0; // a newer request supersedes an older one still in flight
+  let lateMixPending = false; // loadImage showed the plain preview and is still waiting for the mix (applyLateMix)
+  let lastShowOriginalForDenoise = false; // so the settle effect can tell a \ press from a slider step
   // True once the native-resolution tier is on the GPU: the canvas backing
   // store then IS the photo's native size (natRatio below becomes 1). Reactive
   // (unlike activeTier) because the display scale is derived from it.
@@ -1310,7 +1312,7 @@
    * must never stop the photo loading).
    * @param {string} path @param {boolean} full */
   async function loadDenoised(path, full) {
-    if (!(aiDenoiseAmount > 0) || !imageContentHash) return null;
+    if (showOriginal || !(aiDenoiseAmount > 0) || !imageContentHash) return null;
     try {
       return await getDenoisedDevelopPreview(path, imageContentHash, aiDenoiseAmount, full);
     } catch {
@@ -1322,9 +1324,10 @@
    * by the settle effect below, never per slider step. */
   async function applyDenoiseSource() {
     const path = imagePath;
-    if (!path || !gpu.device || status !== "ready") return;
+    if (!path || !gpu.device || status !== "ready" || lateMixPending) return;
     const tier = activeTier;
-    const wanted = imageContentHash ? aiDenoiseAmount : 0;
+    // Before / After shows the photo as it was before any edit, so it needs the plain preview.
+    const wanted = imageContentHash && !showOriginal ? aiDenoiseAmount : 0;
     const a = appliedDenoise;
     if (a.path === path && a.tier === tier && a.amount === wanted && (wanted === 0 || a.version === denoiseVersion)) return;
     const seq = ++denoiseSeq;
@@ -1348,6 +1351,36 @@
     }
   }
 
+  /** How long opening a photo waits for its denoised mix before showing the plain preview first. */
+  const MIX_WAIT_MS = 300;
+  const LATE = Symbol("mix not ready yet");
+
+  /** Swaps in the mix `loadImage` did not wait for, once the backend has built it -- unless the photo, the
+   * tier or Before / After moved on meanwhile. While it is pending the settle effect stays out (a second
+   * request would build the same file at the same time); when it ends, the settle effect is asked to catch up
+   * with whatever amount the slider reached meanwhile.
+   * @param {string} path @param {ReturnType<typeof loadDenoised>} pending */
+  async function applyLateMix(path, pending) {
+    const seq = ++denoiseSeq;
+    const version = denoiseVersion;
+    const amount = aiDenoiseAmount;
+    lateMixPending = true;
+    try {
+      const mixed = await pending;
+      if (!mixed || seq !== denoiseSeq || imagePath !== path || activeTier !== "draft" || showOriginal) return;
+      const bitmap = await createImageBitmap(await (await fetch(convertFileSrc(mixed.path))).blob());
+      if (seq !== denoiseSeq || imagePath !== path || activeTier !== "draft" || showOriginal) return;
+      await applyBitmapToGpu(bitmap);
+      setAppliedDenoise({ path, tier: "draft", amount, version });
+      writeAdjustmentsAndRender();
+    } catch {
+      // The plain preview stays; the next amount change tries again.
+    } finally {
+      lateMixPending = false;
+      applyDenoiseSource();
+    }
+  }
+
   async function loadImage(/** @type {string} */ path) {
     if (!gpu.device || !gpu.context || !gpu.pipeline || !gpu.preMaskPipeline || !gpu.lensCorrectPipeline || !gpu.perspectivePipeline || !gpu.gradePipeline || !gpu.atmReducePipeline || !gpu.minChannelPipeline || !gpu.minHPipeline || !gpu.minVPipeline || !gpu.dehazeMeanguideHPipeline || !gpu.dehazeMeanguideVPipeline || !gpu.dehazeMeanpHPipeline || !gpu.dehazeMeanpVPipeline || !gpu.dehazeCorrguideHPipeline || !gpu.dehazeCorrguideVPipeline || !gpu.dehazeCorrguidepHPipeline || !gpu.dehazeCorrguidepVPipeline || !gpu.dehazeAPipeline || !gpu.dehazeBPipeline || !gpu.dehazeMeanaHPipeline || !gpu.dehazeMeanaVPipeline || !gpu.dehazeMeanbHPipeline || !gpu.dehazeMeanbVPipeline || !gpu.dehazeRefinePipeline || !gpu.textureHPipeline || !gpu.textureVPipeline || !gpu.clarityMeanpHPipeline || !gpu.clarityMeanpVPipeline || !gpu.clarityCorrpHPipeline || !gpu.clarityCorrpVPipeline || !gpu.clarityAPipeline || !gpu.clarityBPipeline || !gpu.clarityMeanaHPipeline || !gpu.clarityMeanaVPipeline || !gpu.clarityMeanbHPipeline || !gpu.clarityMeanbVPipeline || !gpu.clarityVPipeline || !gpu.sharpenMeanpHPipeline || !gpu.sharpenMeanpVPipeline || !gpu.sharpenCorrpHPipeline || !gpu.sharpenCorrpVPipeline || !gpu.sharpenAPipeline || !gpu.sharpenBPipeline || !gpu.sharpenMeanaHPipeline || !gpu.sharpenMeanaVPipeline || !gpu.sharpenMeanbHPipeline || !gpu.sharpenMeanbVPipeline || !gpu.sharpenFinalPipeline || !gpu.lumaNRMeanpHPipeline || !gpu.lumaNRMeanpVPipeline || !gpu.lumaNRCorrpHPipeline || !gpu.lumaNRCorrpVPipeline || !gpu.lumaNRAPipeline || !gpu.lumaNRBPipeline || !gpu.lumaNRMeanaHPipeline || !gpu.lumaNRMeanaVPipeline || !gpu.lumaNRMeanbHPipeline || !gpu.lumaNRMeanbVPipeline || !gpu.lumaNRFinalPipeline || !gpu.colorNRMeanguideHPipeline || !gpu.colorNRMeanguideVPipeline || !gpu.colorNRCorrguideHPipeline || !gpu.colorNRCorrguideVPipeline || !gpu.colorNRMeanpHPipeline || !gpu.colorNRMeanpVPipeline || !gpu.colorNRCorrguidepHPipeline || !gpu.colorNRCorrguidepVPipeline || !gpu.colorNRAPipeline || !gpu.colorNRBPipeline || !gpu.colorNRMeanaHPipeline || !gpu.colorNRMeanaVPipeline || !gpu.colorNRMeanbHPipeline || !gpu.colorNRMeanbVPipeline || !gpu.colorNRFinalPipeline || !gpu.uniformBuffer || !gpu.masksBuffer || !gpu.curveLutBuffer || !gpu.hslBandsBuffer || !gpu.splitToningBuffer || !gpu.vignetteBuffer || !gpu.lensCorrectionBuffer || !gpu.perspectiveBuffer || !gpu.grainBuffer || !gpu.sharpenBuffer || !gpu.lumaNRBuffer || !gpu.colorNRBuffer || !gpu.clippingBuffer) return;
     status = "loading";
@@ -1362,12 +1395,18 @@
     const preview = await getDevelopPreview(path, imageContentHash);
     isSmartPreview = preview.is_smart_preview;
     navThumbUrl = convertFileSrc(preview.path);
-    // The photo may already have a kept denoised copy at a non-zero amount: start from the mix.
-    const mixed = await loadDenoised(path, false);
-    const response = await fetch(convertFileSrc((mixed ?? preview).path));
+    // The photo may already have a kept denoised copy at a non-zero amount: start from the mix when it is
+    // quick to get (it is a file the backend reuses). Building it the first time takes seconds, and the
+    // canvas, the histogram and every control must not wait for that, so after a short wait the plain
+    // preview goes up and the mix is swapped in when it is ready.
+    const pendingMix = loadDenoised(path, false);
+    const mixed = await Promise.race([pendingMix, new Promise((resolve) => setTimeout(() => resolve(LATE), MIX_WAIT_MS))]);
+    const quick = mixed === LATE ? null : /** @type {Awaited<typeof pendingMix>} */ (mixed);
+    const response = await fetch(convertFileSrc((quick ?? preview).path));
     const bitmap = await createImageBitmap(await response.blob());
     await applyBitmapToGpu(bitmap);
-    setAppliedDenoise({ path, tier: "draft", amount: mixed ? aiDenoiseAmount : 0, version: denoiseVersion });
+    setAppliedDenoise({ path, tier: "draft", amount: quick ? aiDenoiseAmount : 0, version: denoiseVersion });
+    if (mixed === LATE) applyLateMix(path, pendingMix);
 
     status = "ready";
     await tick(); // overlayEl only mounts once status flips to "ready"
@@ -1760,8 +1799,11 @@
   $effect(() => {
     void aiDenoiseAmount;
     void denoiseVersion;
+    const toggled = showOriginal !== lastShowOriginalForDenoise;
+    lastShowOriginalForDenoise = showOriginal;
     if (status !== "ready" || !imagePath) return;
-    const timer = setTimeout(applyDenoiseSource, 250);
+    // The \ key is a single action, not a drag: swap the source without the settle delay.
+    const timer = setTimeout(applyDenoiseSource, toggled ? 0 : 250);
     return () => clearTimeout(timer);
   });
 </script>

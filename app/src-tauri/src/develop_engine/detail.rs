@@ -178,9 +178,29 @@ pub(super) const LUMA_NR_RADIUS: i32 = 3;
 /// large enough to be a real edge rather than noise. A smaller `eps`
 /// moves that flat-vs-edge threshold down into the noise-variance regime
 /// this op actually operates in.
-pub(super) const LUMA_NR_GUIDED_EPS: f32 = 0.0009;
+///
+/// **Backlog item 15 (user report: "noise reduction seems not working")**:
+/// the original value here (0.0009) was tuned on synthetic ±0.01 noise,
+/// where it is above the noise variance. Real ISO 6400 photos have local
+/// luma variance of several 0.001 -- ABOVE that eps -- so the filter read
+/// the noise as structure (`a` near 1) and returned almost the input:
+/// measured on `test_image/nind-iso6400/chapel_ISO6400_2000.jpg`, the blur
+/// kept 9.1 of the photo's 10.85 (/255) high-frequency noise, where a plain
+/// 7x7 box mean keeps 0.9. 0.008 is a tuned middle: still protects real
+/// edges (strongest-edge gradient ~33 vs the box mean's 25, of 38 original)
+/// while giving the gate below enough blur to work with; going to 0.015
+/// removes a little more noise but visibly softens a high-contrast step
+/// (the `luma_nr_at_full_amount_removes_most_...` test's edge check).
+pub(super) const LUMA_NR_GUIDED_EPS: f32 = 0.008;
 
-pub(super) const NR_DETAIL_SCALE: f32 = 0.05;
+/// Edge-gate scale for Luminance NR's `detail` slider. Was 0.05, which at
+/// `detail` 50 treated any |pixel - blur| above 0.025 (6/255) as a real
+/// edge and left it alone -- but real ISO 6400 noise routinely exceeds
+/// that, so the gate itself blocked most denoising even once the blur was
+/// fixed (backlog item 15). 0.6 lets Amount 100 / Detail 50 remove about
+/// 45% of that photo's noise at a ~13% cost in strongest-edge contrast;
+/// the Detail slider (toward 100) trades the rest back for sharpness.
+pub(super) const NR_DETAIL_SCALE: f32 = 0.6;
 
 pub(super) const NR_CONTRAST_STRENGTH: f32 = 0.6;
 
@@ -257,7 +277,13 @@ pub(super) fn luma_nr_delta(l: f32, blurred_luma: f32, n: &LumaNr) -> f32 {
 /// where the guide (luma) is comparatively clean already.
 pub(super) const COLOR_NR_RADIUS: i32 = 4;
 
-pub(super) const COLOR_NR_DETAIL_SCALE: f32 = 0.08;
+/// Backlog item 15: was 0.08, which at `detail` 50 only smoothed pixels
+/// whose chroma-delta magnitude was under 0.04 -- real ISO 6400 chroma noise
+/// sits above that, so Color NR 100 removed none of it on the test photo
+/// (chroma noise 2.86 -> 2.86). 0.5 takes it to ~1.3; the guide-luma edge
+/// term (`COLOR_NR_GUIDED_EPS`) still keeps the blur from crossing luma
+/// edges, and the Detail slider still trades back toward sharp chroma.
+pub(super) const COLOR_NR_DETAIL_SCALE: f32 = 0.5;
 
 /// RFC-0014's `eps`, gating on `var_guide` (`graded_luma`'s own local
 /// variance). The RFC's own starting guess was `LUMA_NR_GUIDED_EPS`

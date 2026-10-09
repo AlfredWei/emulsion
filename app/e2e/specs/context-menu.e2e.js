@@ -140,8 +140,24 @@ describe("Library photo context menu", function () {
     const onFlag = await browser.execute(() => document.querySelector('[data-testid="context-menu"] .hl')?.getAttribute("data-menu-id"));
     expect(onFlag).toBe("flag");
     await step("Right", () => key("ArrowRight"));
+    // Probe (Windows: the grid vanishes right after this Enter): who sees the key, and what removes the grid.
+    await browser.execute(() => {
+      const w = /** @type {any} */ (window);
+      w.__probe = [];
+      window.addEventListener("keydown", (e) => w.__probe.push(`capture:${e.key}:prevented=${e.defaultPrevented}`), true);
+      window.addEventListener("keydown", (e) => w.__probe.push(`bubble:${e.key}:prevented=${e.defaultPrevented}`), false);
+      const hit = (/** @type {any} */ n) => n && ((n.matches && n.matches("[data-ctx-grid]")) || (n.querySelector && n.querySelector("[data-ctx-grid]")));
+      for (const [proto, name] of [[Element.prototype, "remove"], [Node.prototype, "removeChild"]]) {
+        const orig = /** @type {any} */ (proto)[name];
+        /** @type {any} */ (proto)[name] = function (/** @type {any} */ arg) {
+          if (hit(name === "remove" ? this : arg)) w.__probe.push(`${name}:${(new Error().stack ?? "").split("\n").slice(1, 7).join(" <- ")}`);
+          return orig.apply(this, arguments);
+        };
+      }
+    });
     await step("Enter", () => key("Enter")); // the submenu's first row: Pick
     console.log("KEY-TRACE:", trace.join(" "));
+    console.log("KEY-PROBE:", JSON.stringify(await browser.execute(() => /** @type {any} */ (window).__probe)));
     await browser.waitUntil(async () => (await cellState()).flag === "pick", { timeout: 10000, timeoutMsg: "flag was not saved" });
     expect(await menuOpen()).toBe(false);
     await browser

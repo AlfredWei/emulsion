@@ -23,3 +23,6 @@ Thumbs.db
 # Claude Code local settings/state (machine-specific, not shared)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Model files fetched for a release build (app/scripts/fetch-bundled-models.mjs)
+app/src-tauri/bundled-models/

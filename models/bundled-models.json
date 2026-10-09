@@ -1,0 +1,23 @@
+{
+  "comment": "Model files shipped inside the installer (bundle.resources, see app/src-tauri/tauri.bundle-models.conf.json). Fetched into app/src-tauri/bundled-models/ by app/scripts/fetch-bundled-models.mjs before a release build. A Rust test (bundled_models.rs) checks every entry against the constants the app verifies models with, so this list cannot drift from them.",
+  "files": [
+    {
+      "name": "nafnet_sidd_w32.onnx",
+      "size": 117316644,
+      "sha256": "5ff072283fe8c86b7c990aa7331cdb26183e20b08961769c70057b82260b133d",
+      "url": "https://github.com/AlfredWei/emulsion/releases/download/denoise-model-nafnet-sidd-w32-v1/nafnet_sidd_w32.onnx"
+    },
+    {
+      "name": "sam2_hiera_tiny.encoder.onnx",
+      "size": 134261315,
+      "sha256": "4cc015ee18520e93f8c7ddfeaca7436039daaaaf19721b4b96a8810a805e82f7",
+      "url": "https://huggingface.co/vietanhdev/segment-anything-2-onnx-models/resolve/071f58077599431edd0e5d2ac52ecca4c78f1cab/sam2_hiera_tiny.encoder.onnx"
+    },
+    {
+      "name": "sam2_hiera_tiny.decoder.onnx",
+      "size": 20640886,
+      "sha256": "f5a4bd656c143899fb7f52d64ed81e6f6aeb37d477a0b6da50146ac7cf2187bf",
+      "url": "https://huggingface.co/vietanhdev/segment-anything-2-onnx-models/resolve/071f58077599431edd0e5d2ac52ecca4c78f1cab/sam2_hiera_tiny.decoder.onnx"
+    }
+  ]
+}

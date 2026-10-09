@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "tauri build --debug --no-bundle --features wdio-webdriver --config src-tauri/tauri.e2e.conf.json && wdio run ./e2e/wdio.conf.js",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:release": "node scripts/fetch-bundled-models.mjs && tauri build --config src-tauri/tauri.bundle-models.conf.json"
   },
   "license": "MIT",
   "dependencies": {

@@ -92,6 +92,7 @@ src-tauri/
 │   ├── export.rs / export_plugin.rs   Export pipeline / the v0 export-plugin hook
 │   ├── hdr_merge.rs / panorama_merge.rs   HDR bracket merge / feature-based panorama stitch
 │   ├── face_detect.rs, face_cluster.rs, face_models.rs, face_pipeline.rs   Face detection, clustering, model cache, orchestration
+│   ├── bundled_models.rs        Models shipped inside the installer (release builds): copied into the model folders on first use, verified by SHA-256; models/bundled-models.json lists them (a test keeps it in step with the pinned constants)
 │   ├── segment_models.rs, segment_commands.rs   Click-select (RFC-0026): model fetch/verify/import, Tauri commands
 │   ├── denoise_models.rs, denoise_cache.rs, denoise_commands.rs, denoise_preview.rs   AI denoise (RFC-0027): the model file (verified resumable download, or import), the cache of finished results, Tauri commands (model status/download/import, run/cancel job, cache info/remove, the Develop preview blend), and the blend of a preview with the kept copy
 │   ├── ai/                      AI helper process, app side: protocol.rs (JSON-lines wire types, shared with the helper), supervisor.rs (lazy spawn, retry, idle respawn, progress streaming, cancel), tiling.rs (overlapping-tile inference and feathered blend, shared with the helper)

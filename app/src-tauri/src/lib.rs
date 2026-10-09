@@ -1505,6 +1505,7 @@ async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, versio
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
     let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let (source, stack) = {
@@ -1521,6 +1522,7 @@ async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, versio
             &stack,
             &previews_dir,
             &thumbnail_dir,
+            Some(&denoise_dir),
         ) else {
             return Ok(None);
         };

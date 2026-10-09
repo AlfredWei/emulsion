@@ -478,10 +478,20 @@ pub fn regenerate_edited_thumbnail(
     stack: &EditStack,
     previews_dir: &Path,
     thumbnail_dir: &Path,
+    denoise_dir: Option<&Path>,
 ) -> Option<PathBuf> {
     let preview =
         crate::preview_cache::ensure_develop_preview_for_hash(source_path, content_hash, previews_dir).ok()?;
-    let mut decoded = image::open(&preview.path).ok()?.into_rgb8();
+    // RFC-0027: build from the preview mixed with the kept AI-denoised copy when the stack asks for one and it
+    // exists (a hidden Noise Reduction panel counts as off); the amount and copy are part of the file name.
+    let effective = crate::develop_engine::effective_stack_for_render(stack);
+    let amount = crate::develop_engine::ai_denoise_amount(&effective);
+    let denoise_tag = crate::denoise_preview::graded_tag(amount, denoise_dir, content_hash);
+    let mixed = match denoise_dir.filter(|_| !denoise_tag.is_empty()) {
+        Some(dir) => crate::denoise_preview::ensure_blended(&preview, content_hash, dir, previews_dir, false, amount.round() as u32).ok().flatten(),
+        None => None,
+    };
+    let mut decoded = image::open(mixed.as_ref().map_or(&preview.path, |m| &m.path)).ok()?.into_rgb8();
     // RFC-0013: a hidden panel's ops are stripped here, once, before any of
     // the four apply_* calls below -- see effective_stack_for_render's own
     // doc comment.
@@ -510,7 +520,7 @@ pub fn regenerate_edited_thumbnail(
 
     let stack_json = serde_json::to_string(stack).ok()?;
     let stack_hash = blake3::hash(stack_json.as_bytes()).to_hex().to_string();
-    let out_path = thumbnail_dir.join(format!("{image_id}-{}.jpg", &stack_hash[..8]));
+    let out_path = thumbnail_dir.join(format!("{image_id}-{}{denoise_tag}.jpg", &stack_hash[..8]));
     let _ = std::fs::create_dir_all(thumbnail_dir);
     resized.save(&out_path).ok()?;
     Some(out_path)
@@ -801,6 +811,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
+    /// RFC-0027 slice 3d: the Library thumbnail is built from the kept AI-denoised copy when the stack asks for
+    /// it, under a different name than one made before the copy existed.
+    #[test]
+    fn regenerate_edited_thumbnail_mixes_in_the_kept_denoised_copy() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("regen-thumbnail-denoise");
+        let previews_dir = dir.parent().unwrap().join("previews");
+        let denoise_dir = dir.parent().unwrap().join("denoise");
+        std::fs::create_dir_all(&denoise_dir).unwrap();
+        let source_path = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([200, 200, 200])).save(&source_path).unwrap();
+        let content_hash = blake3::hash(&std::fs::read(&source_path).unwrap()).to_hex().to_string();
+        let stack = EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "ai_denoise", "amount": 100})] };
+
+        let before = regenerate_edited_thumbnail(&source_path, &content_hash, 7, &stack, &previews_dir, &thumb_dir, Some(&denoise_dir)).unwrap();
+        assert!(image::open(&before).unwrap().into_rgb8().get_pixel(2, 2).0[0] > 150, "no copy yet: plain");
+
+        image::RgbImage::from_pixel(200, 100, image::Rgb([20, 20, 20]))
+            .save(crate::denoise_cache::entry_path(&denoise_dir, &content_hash, crate::denoise_models::MODEL_ID))
+            .unwrap();
+        let after = regenerate_edited_thumbnail(&source_path, &content_hash, 7, &stack, &previews_dir, &thumb_dir, Some(&denoise_dir)).unwrap();
+        assert_ne!(before, after, "a thumbnail made before the copy existed must not be reused");
+        assert!(image::open(&after).unwrap().into_rgb8().get_pixel(2, 2).0[0] < 40, "amount 100 is the kept copy");
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
     /// A real (if non-photographic) JPEG, edited, regenerated -- confirms
     /// the output actually reflects the edit (not just a pass-through
     /// resize), lands at the expected content-hashed path, and that
@@ -825,7 +861,7 @@ mod tests {
             ],
         };
 
-        let out_path = regenerate_edited_thumbnail(&source_path, &content_hash, 42, &stack, &previews_dir, &thumb_dir)
+        let out_path = regenerate_edited_thumbnail(&source_path, &content_hash, 42, &stack, &previews_dir, &thumb_dir, None)
             .expect("regeneration should succeed for a real JPEG");
 
         assert!(out_path.exists());
@@ -844,7 +880,7 @@ mod tests {
 
         // Re-regenerating the identical stack must resolve to the same path.
         let out_path_again =
-            regenerate_edited_thumbnail(&source_path, &content_hash, 42, &stack, &previews_dir, &thumb_dir).unwrap();
+            regenerate_edited_thumbnail(&source_path, &content_hash, 42, &stack, &previews_dir, &thumb_dir, None).unwrap();
         assert_eq!(out_path, out_path_again);
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());

@@ -270,6 +270,42 @@ pub async fn get_denoised_develop_preview(
     .map_err(|e| e.to_string())?
 }
 
+/// A photo an export would render without the effect the user asked for (RFC-0027 §3.6): its stack has an
+/// effective `ai_denoise` (a hidden Noise Reduction panel counts as off) but no denoised copy is kept for it.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct MissingDenoise {
+    pub version_id: i64,
+    pub name: String,
+}
+
+/// True when `stack` asks for AI Denoise and `cache_dir` holds no copy for `content_hash`. Cheap: no decode.
+pub fn export_would_skip_denoise(stack: &crate::catalog::EditStack, content_hash: &str, cache_dir: &Path) -> bool {
+    let effective = crate::develop_engine::effective_stack_for_render(stack);
+    crate::develop_engine::ai_denoise_amount(&effective) > 0.0 && (content_hash.is_empty() || !denoise_cache::entry_path(cache_dir, content_hash, MODEL_ID).exists())
+}
+
+/// Which of these photos would export without the AI Denoise their edit asks for. The export dialog shows the
+/// list before anything runs: export never runs the model by itself, and must not skip the effect silently.
+#[tauri::command]
+pub async fn denoise_missing_for_export(app: AppHandle, state: State<'_, AppState>, version_ids: Vec<i64>) -> Result<Vec<MissingDenoise>, String> {
+    let cache = resolve_denoise_dir(&app, &state.catalog)?;
+    let catalog = state.catalog.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        let mut missing = Vec::new();
+        for version_id in version_ids {
+            let (Ok(source), Ok(stack)) = (catalog.get_version_source(version_id), catalog.get_edit_stack(version_id)) else { continue };
+            if export_would_skip_denoise(&stack, source.content_hash.as_deref().unwrap_or(""), &cache) {
+                let name = Path::new(&source.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(source.path.clone());
+                missing.push(MissingDenoise { version_id, name });
+            }
+        }
+        Ok(missing)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Stops the running job at its next tile (about a second). A no-op when none is running.
 #[tauri::command]
 pub async fn denoise_cancel(helper: State<'_, Arc<AiHelper>>) -> Result<(), String> {
@@ -299,6 +335,25 @@ pub async fn denoise_remove_cache(app: AppHandle, state: State<'_, AppState>, co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_export_skips_denoise_only_for_a_stack_that_asks_for_it_and_has_no_copy() {
+        let dir = std::env::temp_dir().join("emulsion-denoise-export-check");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let with = |ops: Vec<serde_json::Value>| crate::catalog::EditStack { schema_version: 1, ops };
+        let asks = with(vec![serde_json::json!({"op": "ai_denoise", "amount": 60})]);
+        assert!(export_would_skip_denoise(&asks, "h", &dir), "asked for, no copy");
+        assert!(export_would_skip_denoise(&asks, "", &dir), "no fingerprint means no copy can exist");
+        assert!(!export_would_skip_denoise(&with(vec![]), "h", &dir), "never asked for");
+        assert!(!export_would_skip_denoise(&with(vec![serde_json::json!({"op": "ai_denoise", "amount": 0})]), "h", &dir), "amount 0 is off");
+        let mut hidden = asks.clone();
+        hidden.ops.push(serde_json::json!({"op": "panel_hidden", "panel": "noise_reduction"}));
+        assert!(!export_would_skip_denoise(&hidden, "h", &dir), "a hidden panel switches it off");
+        image::RgbImage::new(2, 2).save(denoise_cache::entry_path(&dir, "h", MODEL_ID)).unwrap();
+        assert!(!export_would_skip_denoise(&asks, "h", &dir), "a copy is kept");
+        assert!(export_would_skip_denoise(&asks, "other", &dir), "another photo's copy does not count");
+    }
 
     #[test]
     fn the_crop_preview_is_centred_clamped_inside_the_photo_and_whole_for_a_small_one() {

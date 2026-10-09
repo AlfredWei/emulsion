@@ -94,6 +94,20 @@ describe("Develop AI Denoise", function () {
     expect((await invoke("denoise_remove_cache", { contentHash: "0".repeat(64) })).err).toBeUndefined();
   });
 
+  it("tells the export which photos would go out without the AI Denoise their edit asks for", async function () {
+    const stackWith = (ops) => browser.execute((vid, o) => window.__TAURI__.core.invoke("set_edit_stack", { versionId: vid, stack: { schema_version: 1, ops: o } }), versionId, ops);
+    // Nothing asked for: nothing missing. Asked for, never denoised: listed by file name. Hidden panel: off.
+    await stackWith([]);
+    expect((await invoke("denoise_missing_for_export", { versionIds: [versionId] })).ok).toEqual([]);
+    await stackWith([{ op: "ai_denoise", amount: 60 }]);
+    const asked = (await invoke("denoise_missing_for_export", { versionIds: [versionId] })).ok;
+    if (!modelReady) expect(asked.map((m) => m.version_id)).toEqual([versionId]);
+    expect(asked.every((m) => m.name.endsWith(".jpg"))).toBe(true);
+    await stackWith([{ op: "ai_denoise", amount: 60 }, { op: "panel_hidden", panel: "noise_reduction" }]);
+    expect((await invoke("denoise_missing_for_export", { versionIds: [versionId] })).ok).toEqual([]);
+    await stackWith([]);
+  });
+
   it("refuses a job while the model is missing", async function () {
     if (modelReady) this.skip(); // a developer machine that has the model installed
     const r = await invoke("denoise_run", { path: FIXTURE_PATH, contentHash: "0".repeat(64), cropCentre: null });

@@ -322,10 +322,15 @@ pub fn ensure_graded_preview_for_hash(
     content_hash: &str,
     stack: &EditStack,
     previews_dir: &Path,
+    denoise_dir: Option<&Path>,
 ) -> Result<DevelopPreviewInfo, PreviewCacheError> {
     let stack_json = serde_json::to_string(stack).unwrap_or_default();
     let stack_hash = blake3::hash(stack_json.as_bytes()).to_hex().to_string();
-    let out_path = previews_dir.join(format!("{content_hash}_{}_graded.png", &stack_hash[..8]));
+    // RFC-0027: the AI-denoised copy (when the stack asks for one and it exists) is part of what this file is
+    // built from, so it is part of its name. RFC-0013: a hidden Noise Reduction panel switches it off.
+    let effective = crate::develop_engine::effective_stack_for_render(stack);
+    let denoise_tag = crate::denoise_preview::graded_tag(crate::develop_engine::ai_denoise_amount(&effective), denoise_dir, content_hash);
+    let out_path = previews_dir.join(format!("{content_hash}_{}{denoise_tag}_graded.png", &stack_hash[..8]));
 
     if out_path.exists() {
         let (width, height) = image::image_dimensions(&out_path)?;
@@ -340,12 +345,17 @@ pub fn ensure_graded_preview_for_hash(
     // Reuse the draft tier's own unedited cache as the decode source --
     // avoids a second raw source decode purely to apply grading on top.
     let preview = ensure_develop_preview_for_hash(source_path, content_hash, previews_dir)?;
-    let mut decoded = image::open(&preview.path)?.into_rgb8();
+    let amount = crate::develop_engine::ai_denoise_amount(&effective).round() as u32;
+    let mixed = match denoise_dir.filter(|_| !denoise_tag.is_empty()) {
+        Some(dir) => crate::denoise_preview::ensure_blended(&preview, content_hash, dir, previews_dir, false, amount).ok().flatten(),
+        None => None,
+    };
+    let mut decoded = image::open(mixed.as_ref().map_or(&preview.path, |m| &m.path))?.into_rgb8();
 
-    // RFC-0013: a hidden panel's ops are stripped here, once, before any of
+    // RFC-0013: a hidden panel's ops are stripped (above, once), before any of
     // the four apply_* calls below -- see effective_stack_for_render's own
     // doc comment.
-    let stack = &crate::develop_engine::effective_stack_for_render(stack);
+    let stack = &effective;
     crate::develop_engine::apply_lens_correction(&mut decoded, stack);
     crate::develop_engine::apply_perspective(&mut decoded, stack);
     crate::develop_engine::apply_edit_stack(&mut decoded, stack);
@@ -377,6 +387,7 @@ pub fn ensure_soft_proof_preview_for_hash(
     stack: &EditStack,
     settings: &crate::soft_proof::SoftProofSettings,
     previews_dir: &Path,
+    denoise_dir: Option<&Path>,
 ) -> Result<DevelopPreviewInfo, PreviewCacheError> {
     let settings_key = crate::soft_proof::settings_cache_key(settings)?;
     let stack_json = serde_json::to_string(stack).unwrap_or_default();
@@ -396,7 +407,7 @@ pub fn ensure_soft_proof_preview_for_hash(
         });
     }
 
-    let graded = ensure_graded_preview_for_hash(source_path, content_hash, stack, previews_dir)?;
+    let graded = ensure_graded_preview_for_hash(source_path, content_hash, stack, previews_dir, denoise_dir)?;
     let mut decoded = image::open(&graded.path)?.into_rgb8();
 
     crate::soft_proof::apply_soft_proof(&mut decoded, settings)?;
@@ -752,6 +763,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch_dir);
     }
 
+    /// RFC-0027 slice 3d: a graded preview made after a denoised copy appears is built from the mix, is a
+    /// different file from the one made before, and is switched off by a hidden Noise Reduction panel.
+    #[test]
+    fn graded_preview_mixes_in_the_kept_denoised_copy_when_there_is_one() {
+        let dir = temp_previews_dir("graded-denoise-source");
+        let previews_dir = temp_previews_dir("graded-denoise-cache");
+        let denoise_dir = temp_previews_dir("graded-denoise-copies");
+        let source_path = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([200, 200, 200])).save(&source_path).unwrap();
+        let content_hash = blake3::hash(&std::fs::read(&source_path).unwrap()).to_hex().to_string();
+        let stack = EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "ai_denoise", "amount": 100})] };
+
+        let before = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir, Some(&denoise_dir)).unwrap();
+        let plain = *image::open(&before.path).unwrap().into_rgb8().get_pixel(5, 5);
+        assert!(plain.0[0] > 150, "no copy yet: the plain picture, got {plain:?}");
+
+        // A kept copy (half the size, as the cache holds full-decode size) appears.
+        image::RgbImage::from_pixel(400, 200, image::Rgb([20, 20, 20]))
+            .save(crate::denoise_cache::entry_path(&denoise_dir, &content_hash, crate::denoise_models::MODEL_ID))
+            .unwrap();
+        let after = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir, Some(&denoise_dir)).unwrap();
+        assert_ne!(before.path, after.path, "the earlier preview must not be reused once a copy exists");
+        assert!(after.path.contains("_dn100-"), "{}", after.path);
+        let mixed = *image::open(&after.path).unwrap().into_rgb8().get_pixel(5, 5);
+        assert!(mixed.0[0] < 40, "amount 100 is the kept copy, got {mixed:?}");
+
+        // Without a denoise directory (or with the panel hidden) the effect is off.
+        let off = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir, None).unwrap();
+        assert_eq!(off.path, before.path);
+        let mut hidden = stack.clone();
+        hidden.ops.push(serde_json::json!({"op": "panel_hidden", "panel": "noise_reduction"}));
+        let hidden_preview = ensure_graded_preview_for_hash(&source_path, &content_hash, &hidden, &previews_dir, Some(&denoise_dir)).unwrap();
+        assert!(!hidden_preview.path.contains("_dn"), "{}", hidden_preview.path);
+        assert!(image::open(&hidden_preview.path).unwrap().into_rgb8().get_pixel(5, 5).0[0] > 150);
+    }
+
     /// The core "Library and Develop show different colors" bug this
     /// function exists to fix: given a real, non-identity edit stack, the
     /// graded output must actually differ from the unedited draft-tier
@@ -786,7 +833,7 @@ mod tests {
         let draft_before = ensure_develop_preview_for_hash(&source_path, &content_hash, &previews_dir).unwrap();
         let draft_before_pixel = *image::open(&draft_before.path).unwrap().into_rgb8().get_pixel(0, 0);
 
-        let graded = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir)
+        let graded = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir, None)
             .expect("grading a real JPEG source should succeed");
 
         assert!(std::path::Path::new(&graded.path).exists());
@@ -801,7 +848,7 @@ mod tests {
         assert_ne!(*edited_pixel, draft_before_pixel, "graded output must differ from the unedited draft preview");
 
         // Re-requesting the identical stack must resolve to the same cache entry.
-        let graded_again = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir).unwrap();
+        let graded_again = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir, None).unwrap();
         assert_eq!(graded.path, graded_again.path);
 
         // A DIFFERENT stack must resolve to a DIFFERENT cache entry, not
@@ -811,7 +858,7 @@ mod tests {
             ops: vec![serde_json::json!({"op": "exposure", "value": -1.0})],
         };
         let other_graded =
-            ensure_graded_preview_for_hash(&source_path, &content_hash, &other_stack, &previews_dir).unwrap();
+            ensure_graded_preview_for_hash(&source_path, &content_hash, &other_stack, &previews_dir, None).unwrap();
         assert_ne!(graded.path, other_graded.path, "a different edit stack must produce a distinct cache entry");
 
         // And the draft tier's own unedited cache entry must still exist,
@@ -847,10 +894,10 @@ mod tests {
             gamut_warning: false,
         };
 
-        let graded = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir).unwrap();
+        let graded = ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir, None).unwrap();
         let graded_pixel = *image::open(&graded.path).unwrap().into_rgb8().get_pixel(0, 0);
 
-        let proofed = ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &settings, &previews_dir)
+        let proofed = ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &settings, &previews_dir, None)
             .expect("soft-proofing a real JPEG-derived graded preview should succeed");
 
         assert!(std::path::Path::new(&proofed.path).exists());
@@ -867,14 +914,14 @@ mod tests {
 
         // Re-requesting the identical settings must resolve to the same cache entry.
         let proofed_again =
-            ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &settings, &previews_dir).unwrap();
+            ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &settings, &previews_dir, None).unwrap();
         assert_eq!(proofed.path, proofed_again.path);
 
         // DIFFERENT soft-proof settings must resolve to a DIFFERENT cache
         // entry, not silently reuse (or clobber) the first one.
         let other_settings = crate::soft_proof::SoftProofSettings { gamut_warning: true, ..settings.clone() };
         let other_proofed =
-            ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &other_settings, &previews_dir)
+            ensure_soft_proof_preview_for_hash(&source_path, &content_hash, &stack, &other_settings, &previews_dir, None)
                 .unwrap();
         assert_ne!(proofed.path, other_proofed.path, "different soft-proof settings must produce a distinct cache entry");
 

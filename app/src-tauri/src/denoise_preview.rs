@@ -104,6 +104,17 @@ pub fn ensure_blended(base: &DevelopPreviewInfo, content_hash: &str, cache_dir: 
     Ok(Some(info(image.width(), image.height())))
 }
 
+/// The part of a graded preview's file name that says which denoised copy (if any) it was built from, so a
+/// preview made before a copy existed, or from an older one, is never reused: `_dn<amount>-<copy's mtime in
+/// seconds>`, or empty when the stack has no effective `ai_denoise`, there is no copy, or no cache is given.
+pub fn graded_tag(effective_amount: f32, cache_dir: Option<&Path>, content_hash: &str) -> String {
+    let amount = effective_amount.round() as u32;
+    let Some(dir) = cache_dir.filter(|_| amount > 0 && !content_hash.is_empty()) else { return String::new() };
+    let Ok(modified) = std::fs::metadata(entry_path(dir, content_hash, MODEL_ID)).and_then(|m| m.modified()) else { return String::new() };
+    let secs = modified.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    format!("_dn{amount}-{secs}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +178,19 @@ mod tests {
         RgbImage::from_pixel(16, 8, image::Rgb([40, 40, 40])).save(entry_path(&dir, hash, MODEL_ID)).unwrap();
         let rebuilt = ensure_blended(&base, hash, &dir, &dir, false, 100).unwrap().unwrap();
         assert_eq!(image::open(&rebuilt.path).unwrap().to_rgb8().get_pixel(0, 0).0, [40, 40, 40]);
+    }
+
+    #[test]
+    fn the_graded_tag_names_the_amount_and_the_copy_and_is_empty_without_either() {
+        let dir = test_dir("tag");
+        assert_eq!(graded_tag(60.0, Some(&dir), "h"), "", "no copy yet");
+        RgbImage::new(2, 2).save(entry_path(&dir, "h", MODEL_ID)).unwrap();
+        let tag = graded_tag(60.0, Some(&dir), "h");
+        assert!(tag.starts_with("_dn60-"), "{tag}");
+        assert_eq!(graded_tag(0.0, Some(&dir), "h"), "");
+        assert_eq!(graded_tag(60.0, None, "h"), "");
+        assert_eq!(graded_tag(60.0, Some(&dir), ""), "");
+        assert_ne!(graded_tag(61.0, Some(&dir), "h"), tag);
     }
 
     #[test]

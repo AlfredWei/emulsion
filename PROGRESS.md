@@ -2,6 +2,14 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Test: Noise Reduction CPU/GPU parity (follow-up to PR #219) (2026-10-09)
+
+Closes the "GPU preview not verified" gap #219 left. New e2e spec `develop-nr-parity.e2e.js` (local, needs WebGPU; skips on CI like the other parity specs): on the committed noisy night photo it picks the block where the CPU render's NR reduces noise most, then drives the **real NR sliders** (so slider -> op -> shader is covered) and compares how much NR scales that block's noise (on / off) on the live GPU vs the CPU export path.
+- **Result on Apple/Metal, with the retuned constants**: Luminance NR 100 -> CPU x0.345, GPU x0.365; Color NR 100 (chroma noise) -> CPU x0.448, GPU x0.424. **Preview and export agree.**
+- **The spec catches the original bug**: with the shader constants reverted to their old values the GPU barely reduces noise (x0.98 / x0.98 against the CPU's x0.35 / x0.45) and both scenarios fail.
+- **Method notes** (learned the hard way): single-pixel comparison, as the existing parity spec does on a *flat* road patch, is meaningless on a noisy photo: even with NR off the GPU hover readback and the CPU preview disagreed by tens of levels at noisy pixels (a sampling-position offset; both are 1280x715), so the spec compares a 7x7 block's spread and uses a **ratio**, not absolute values (even then absolute spreads differ ~20% with NR off). Develop takes ~80 s to open in a debug build and each WebDriver request times out at 90 s, so it is opened once and the sliders are driven, and the block is read one row per call.
+- **Not verified**: Windows/other GPUs, other photos/ISO, Detail/Contrast settings other than the ones used (Detail 50, Contrast 0), the 90%/Sharpen-after-NR interaction.
+
 ## Fix: crop dimming ignored the straighten rotation; `.svelte-kit/tsconfig.json` warning (2026-10-09)
 
 Two user reports, both small.

@@ -2,6 +2,10 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Next: context menus and Develop multi-select, RFC-0028 drafted (2026-10-09)
+
+User request (before the super-resolution slice): a well-designed right-click menu with *different menus for different items*, and Lightroom-style multi-select in Develop. Decided with the user: **in-app menu component** (not native), and **Auto Sync** (not only a Sync button). Design only, **no product code changed**: [RFC-0028](docs/rfc/RFC-0028-context-menus-and-develop-multiselect.md). Shape: one `ContextMenu.svelte` + `contextMenu` store, pure per-surface item builders (testable), right-click selects-then-acts via the existing `targetVersionIds`, menus for photo cells / filmstrip / canvas / history / snapshots / presets / collections / masks / panel headers / people; Develop filmstrip shares the Library `selection` (active photo vs selection), *Sync Settings...* via the Copy Settings groups, and Auto Sync as a per-changed-op write to the other selected photos in one Rust transaction (`apply_ops_to_versions`), off by default, never persisted. Five slices (engine + photo menus; other surfaces; Develop multi-select + Sync; Auto Sync; polish). Four open questions for the user are in RFC-0028 §6. **Nothing measured or verified.**
+
 ## Fix: Before / After ignored AI Denoise; Develop no longer waits for the denoised mix to open (2026-10-09)
 
 Two user reports (2026-10-09). Branch `fix/original-toggle-denoise`.

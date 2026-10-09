@@ -445,12 +445,11 @@ pub fn ensure_thumbnail(catalog: &Arc<Mutex<Catalog>>, version_id: i64, thumbnai
 }
 
 /// Thumbnail refresh after a Develop edit: unlike `generate_missing_thumbnails`
-/// above (a fresh, unedited RAW/JPEG decode), this reuses the Develop
-/// preview cache's already-decoded, unedited buffer -- `ensure_develop_preview_for_hash`
-/// returns a path/dimensions only, not pixels, so this loads the PNG
-/// itself before applying `develop_engine::apply_edit_stack`'s formula, then
-/// downscales with the same cap/filter as an unedited thumbnail so
-/// there's no visible size/quality mismatch in the grid.
+/// above (a fresh, unedited RAW/JPEG decode), this takes the edited picture
+/// from `preview_cache::ensure_graded_preview_for_hash` -- the same cached
+/// ~2048 px render the Library's Loupe view uses, built here if it is not
+/// there yet -- and downscales it with the same cap/filter as an unedited
+/// thumbnail so there's no visible size/quality mismatch in the grid.
 ///
 /// Writes to a NEW, content-hashed filename (`{image_id}-{hash8}.jpg`,
 /// hashing the edit-stack JSON) rather than overwriting `{image_id}.jpg`
@@ -480,33 +479,18 @@ pub fn regenerate_edited_thumbnail(
     thumbnail_dir: &Path,
     denoise_dir: Option<&Path>,
 ) -> Option<PathBuf> {
-    let preview =
-        crate::preview_cache::ensure_develop_preview_for_hash(source_path, content_hash, previews_dir).ok()?;
-    // RFC-0027: build from the preview mixed with the kept AI-denoised copy when the stack asks for one and it
-    // exists (a hidden Noise Reduction panel counts as off); the amount and copy are part of the file name.
+    // The edited picture is built ONCE, by the same cached call the Library's Loupe view makes
+    // (`ensure_graded_preview_for_hash`: the draft preview, the AI-denoised copy when the stack asks for one,
+    // lens / perspective / edit stack / crop), and the thumbnail is that picture shrunk. So leaving Develop pays
+    // for the edit pipeline once and the Loupe's first open is a cache hit (it was a ~2 s cold render per edit
+    // before: the thumbnail ran the pipeline and threw the result away).
+    let graded = crate::preview_cache::ensure_graded_preview_for_hash(source_path, content_hash, stack, previews_dir, denoise_dir).ok()?;
+    let decoded = image::open(&graded.path).ok()?.into_rgb8();
+    // RFC-0013 / RFC-0027: the file name is keyed by what the picture was built from -- the effective stack
+    // (a hidden panel's ops stripped) and the kept denoised copy, if one went in.
     let effective = crate::develop_engine::effective_stack_for_render(stack);
-    let amount = crate::develop_engine::ai_denoise_amount(&effective);
-    let denoise_tag = crate::denoise_preview::graded_tag(amount, denoise_dir, content_hash);
-    let mixed = match denoise_dir.filter(|_| !denoise_tag.is_empty()) {
-        Some(dir) => crate::denoise_preview::ensure_blended(&preview, content_hash, dir, previews_dir, false, amount.round() as u32).ok().flatten(),
-        None => None,
-    };
-    let mut decoded = image::open(mixed.as_ref().map_or(&preview.path, |m| &m.path)).ok()?.into_rgb8();
-    // RFC-0013: a hidden panel's ops are stripped here, once, before any of
-    // the four apply_* calls below -- see effective_stack_for_render's own
-    // doc comment.
-    let stack = &crate::develop_engine::effective_stack_for_render(stack);
-    // Lens Corrections (M3): same ordering export.rs uses -- see
-    // develop_engine.rs's own header comment on `apply_lens_correction`.
-    crate::develop_engine::apply_lens_correction(&mut decoded, stack);
-    // Perspective Correction (M4): same ordering export.rs uses -- see
-    // develop_engine.rs's own header comment on `apply_perspective`.
-    crate::develop_engine::apply_perspective(&mut decoded, stack);
-    crate::develop_engine::apply_edit_stack(&mut decoded, stack);
-    // Crop & Straighten (M3): same shared post-process export.rs uses --
-    // see develop_engine.rs's own doc comment on `apply_crop` for why
-    // this is deliberately separate from apply_edit_stack.
-    crate::develop_engine::apply_crop(&mut decoded, stack);
+    let denoise_tag = crate::denoise_preview::graded_tag(crate::develop_engine::ai_denoise_amount(&effective), denoise_dir, content_hash);
+    let stack = &effective;
 
     let (w, h) = (decoded.width(), decoded.height());
     let resized = if w.max(h) > THUMBNAIL_MAX_DIMENSION {
@@ -865,6 +849,15 @@ mod tests {
             .expect("regeneration should succeed for a real JPEG");
 
         assert!(out_path.exists());
+        // The Loupe view's graded preview for this exact stack was built on the way, so its first open is a
+        // cache hit (a ~2 s cold render per edit otherwise).
+        let graded = crate::preview_cache::ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir, None).unwrap();
+        let before = std::fs::metadata(&graded.path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let again = crate::preview_cache::ensure_graded_preview_for_hash(&source_path, &content_hash, &stack, &previews_dir, None).unwrap();
+        assert_eq!(std::fs::metadata(&again.path).unwrap().modified().unwrap(), before, "not rebuilt");
+        let graded_files = std::fs::read_dir(&previews_dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with("_graded.png")).count();
+        assert_eq!(graded_files, 1, "regenerating the thumbnail left exactly the Loupe's graded preview behind");
         assert!(
             out_path.file_name().unwrap().to_string_lossy().starts_with("42-"),
             "filename must be keyed by image_id, got {out_path:?}"

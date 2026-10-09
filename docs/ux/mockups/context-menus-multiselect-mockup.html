@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Context menus and Develop multi-select — UX mock (RFC-0028)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  UX mock for RFC-0028. Static and self-contained; uses the app's real tokens. The photos are synthetic.
+  What is real here is the BEHAVIOUR the RFC specifies, so it can be judged by using it:
+    - the target rule (right-click inside the selection acts on all of it; outside it selects that photo first),
+    - the menu engine (viewport clamping, submenu fly-out on hover / Right, Up / Down / Home / End / Enter / Esc,
+      disabled-with-reason, danger + confirm, the "N photos" header),
+    - Develop multi-select gestures (click / Cmd-Ctrl-click / Shift-click; active photo vs selection),
+    - Sync Settings (group dialog; per-photo groups unticked) and Auto Sync (changed op only, absolute value,
+      excluded ops never synced, off by default, a loud on-state).
+  Nothing here talks to the app. Right-click works with the mouse; Shift+F10 / the Menu key opens it on the focused item.
+-->
+<style>
+:root {
+  --bg-canvas:#141210; --bg-app:#1a1815; --bg-panel:#1e1c19; --bg-panel-raised:#28251f; --bg-hover:#332f28;
+  --border-subtle:#37332b; --border-strong:#4a453b;
+  --text-primary:#efeae2; --text-secondary:#a39c8e; --text-tertiary:#6e695e;
+  --accent:#e0932f; --accent-strong:#f0a94a; --accent-soft:#4a371f; --accent-on:#1b1310; --danger:#e5604d;
+  --radius-s:3px; --radius-m:5px;
+  --font-ui:-apple-system,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --shadow-soft:0 1px 2px rgba(0,0,0,.4),0 8px 24px -8px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-canvas);color:var(--text-primary);font:13px/1.4 var(--font-ui);padding:24px 32px 56px;-webkit-font-smoothing:antialiased}
+h1{font-size:15px;margin:0 0 4px} h2{font-size:12px;margin:22px 0 8px;color:var(--text-secondary);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.lede{color:var(--text-secondary);max-width:900px;margin:0 0 14px}
+.tabs,.steps{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.tabs button,.steps button,.btn{appearance:none;background:var(--bg-panel-raised);border:1px solid var(--border-subtle);color:var(--text-secondary);border-radius:var(--radius-s);font:11.5px var(--font-ui);padding:5px 10px;cursor:pointer}
+.tabs button.on,.steps button.on{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-soft)}
+.btn:hover{background:var(--bg-hover)} .btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-on);font-weight:600}
+.cap{min-height:44px;max-width:900px;color:var(--text-secondary);font-size:12px;margin:0 0 10px}
+.cap b{color:var(--text-primary)}
+.wrap{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.app{width:760px;height:520px;position:relative;border:1px solid var(--border-subtle);border-radius:var(--radius-m);overflow:hidden;background:var(--bg-app);display:flex;flex-direction:column}
+.scene{display:none;flex:1;min-height:0} .scene.on{display:flex}
+.titlebar{height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--border-subtle);background:var(--bg-panel);font-size:11px;color:var(--text-secondary)}
+.chip{display:none;margin-left:auto;padding:2px 8px;border-radius:10px;background:var(--accent);color:var(--accent-on);font-weight:600;font-size:10.5px}
+.chip.on{display:inline-block}
+.log{width:300px;min-height:200px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-m);padding:10px;font-size:11.5px}
+.log h3{margin:0 0 6px;font-size:11px;color:var(--text-tertiary);letter-spacing:.05em;text-transform:uppercase}
+.log .e{font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);padding:3px 0;border-top:1px solid var(--border-subtle)}
+.log .e b{color:var(--accent-strong);font-weight:600}
+/* ---- photo cells ---- */
+.ph{position:relative;border-radius:var(--radius-s);border:2px solid transparent;cursor:default;overflow:hidden;outline:none}
+.ph .img{position:absolute;inset:0}
+.ph .bd{position:absolute;left:4px;bottom:3px;font-size:10px;color:#fff;text-shadow:0 1px 2px #000;display:flex;gap:4px}
+.ph.sel{border-color:var(--text-secondary)} .ph.active{border-color:var(--accent)}
+.ph:focus-visible{box-shadow:0 0 0 2px var(--accent-strong)}
+.ph .tag{position:absolute;right:3px;top:3px;font-size:9px;background:rgba(0,0,0,.6);padding:1px 4px;border-radius:2px;color:#ddd}
+.grid{flex:1;padding:12px;display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:110px;gap:8px;overflow:auto;align-content:start}
+.rail{width:150px;flex:none;border-right:1px solid var(--border-subtle);background:var(--bg-panel);padding:10px;font-size:11.5px;color:var(--text-secondary)}
+.rail .it{padding:4px 6px;border-radius:var(--radius-s);cursor:default}.rail .it:hover{background:var(--bg-hover)}.rail .it.on{background:var(--accent-soft);color:var(--accent-strong)}
+.rail h4{margin:10px 0 4px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)}
+.dev{flex-direction:column}.dev .main{flex:1;display:flex;min-height:0}
+.canvas{flex:1;position:relative;display:flex;align-items:center;justify-content:center;background:#000}
+.canvas .pic{width:78%;height:82%;border-radius:2px;position:relative}
+.panel{width:230px;flex:none;border-left:1px solid var(--border-subtle);background:var(--bg-panel);padding:10px;display:flex;flex-direction:column;gap:8px;overflow:auto}
+.panel .ph-h{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary);display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--border-subtle)}
+.row{display:flex;align-items:center;gap:8px}.row label{width:64px;font-size:11px;color:var(--text-secondary);flex:none}
+.row input[type=range]{flex:1;min-width:0;appearance:none;-webkit-appearance:none;height:3px;background:var(--border-strong);border-radius:2px;outline:none}
+.row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--accent-strong);border:2px solid var(--bg-panel);cursor:pointer}
+.row .val{width:34px;text-align:right;font-family:var(--font-mono);font-size:10.5px;color:var(--text-tertiary)}
+.foot{margin-top:auto;display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--border-subtle);padding-top:8px}
+.sw{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text-secondary);cursor:pointer;user-select:none}
+.sw i{width:28px;height:16px;border-radius:8px;background:var(--border-strong);position:relative;flex:none;transition:background .12s}
+.sw i::after{content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:var(--text-secondary);transition:left .12s}
+.sw.on i{background:var(--accent)} .sw.on i::after{left:14px;background:var(--accent-on)} .sw.on{color:var(--accent-strong);font-weight:600}
+.film{height:84px;flex:none;border-top:1px solid var(--border-subtle);background:var(--bg-panel);padding:8px;display:flex;gap:6px;overflow:auto}
+.film .ph{width:92px;flex:none}
+.table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary)}
+.table td,.table th{padding:2px 4px;text-align:right;border-top:1px solid var(--border-subtle);font-weight:400}.table th:first-child,.table td:first-child{text-align:left}
+.table tr.act td{color:var(--accent-strong)} .table td.chg{background:var(--accent-soft);color:var(--accent-strong)}
+.hint{font-size:10.5px;color:var(--text-tertiary)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding:12px;overflow:auto;width:100%;align-content:start}
+.card{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-m);padding:10px;font-size:11.5px}
+.card h4{margin:0 0 6px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)}
+.target{padding:6px 8px;border:1px dashed var(--border-strong);border-radius:var(--radius-s);color:var(--text-secondary);outline:none}
+.target:hover,.target:focus-visible{border-color:var(--accent);color:var(--text-primary)}
+/* ---- the context menu ---- */
+.cm{position:fixed;z-index:50;min-width:210px;background:var(--bg-panel-raised);border:1px solid var(--border-strong);border-radius:6px;padding:4px;box-shadow:var(--shadow-soft);font-size:12px}
+.cm [role=menuitem],.cm [role=menuitemradio]{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--radius-s);cursor:default;white-space:nowrap;color:var(--text-primary)}
+.cm .l{flex:1}.cm .k{color:var(--text-tertiary);font-family:var(--font-mono);font-size:10.5px}.cm .ar{color:var(--text-tertiary)}
+.cm .ck{width:12px;color:var(--accent-strong);text-align:center;flex:none}
+.cm [aria-disabled=true]{color:var(--text-tertiary)}
+.cm .danger{color:var(--danger)}
+.cm [role=menuitem].hl,.cm [role=menuitemradio].hl{background:var(--accent-soft);color:var(--accent-strong)}
+.cm .danger.hl{background:rgba(229,96,77,.16);color:var(--danger)}
+.cm .sepr{height:1px;background:var(--border-subtle);margin:4px 2px}
+.cm .hd{padding:4px 8px 5px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)}
+.dlg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:60;display:none;align-items:center;justify-content:center}.dlg.on{display:flex}
+.dlg .box{width:340px;background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:8px;padding:16px;box-shadow:var(--shadow-soft)}
+.dlg h3{margin:0 0 8px;font-size:13px}.dlg .grp{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin:8px 0;font-size:12px;color:var(--text-secondary)}
+.dlg .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.tip{position:fixed;z-index:70;background:#000;color:#ddd;font-size:11px;padding:3px 7px;border-radius:3px;pointer-events:none;display:none}
+</style>
+</head>
+<body>
+<h1>Context menus and Develop multi-select — UX mock (RFC-0028)</h1>
+<p class="lede">Everything is interactive. <b>Right-click</b> photos, empty space and the sample targets; use <b>Cmd/Ctrl-click</b> and <b>Shift-click</b> to build a selection; in Develop try <b>Sync Settings…</b> and <b>Auto Sync</b>. The log on the right shows exactly which photos each action would act on.</p>
+
+<div class="tabs" id="tabs">
+  <button data-s="lib" class="on">1 · Library grid</button>
+  <button data-s="dev">2 · Develop: multi-select, Sync, Auto Sync</button>
+  <button data-s="oth">3 · Other surfaces</button>
+</div>
+<div class="cap" id="cap"></div>
+
+<div class="wrap">
+  <div class="app" id="app">
+    <div class="titlebar"><span id="tb">Library</span><span class="chip" id="chip"></span></div>
+
+    <!-- Scene 1: Library -->
+    <div class="scene on" id="s-lib">
+      <div class="rail"><h4>Catalog</h4><div class="it on">All photographs</div><div class="it">Quick collection</div><h4>Collections</h4><div class="it" data-ctx="coll" data-name="Trip 2026">Trip 2026</div><div class="it" data-ctx="coll" data-name="Portfolio">Portfolio</div></div>
+      <div class="grid" id="grid" data-ctx="gridbg"></div>
+    </div>
+
+    <!-- Scene 2: Develop -->
+    <div class="scene dev" id="s-dev">
+      <div class="main">
+        <div class="canvas" id="canvas" data-ctx="canvas"><div class="pic" id="pic"></div></div>
+        <div class="panel" id="panel">
+          <div class="ph-h"><span>Basic</span><span class="hint">active: <b id="actName">—</b></span></div>
+          <div class="row"><label>Exposure</label><input type="range" min="-3" max="3" step="0.05" value="0" id="r-exp"><span class="val" id="v-exp">0.00</span></div>
+          <div class="row"><label>Contrast</label><input type="range" min="-100" max="100" step="1" value="0" id="r-con"><span class="val" id="v-con">0</span></div>
+          <div class="row"><label>Saturation</label><input type="range" min="-100" max="100" step="1" value="0" id="r-sat"><span class="val" id="v-sat">0</span></div>
+          <div class="ph-h"><span>Per-photo (never auto-synced)</span></div>
+          <div class="row"><label>Crop</label><button class="btn" id="b-crop">Tighten crop</button><span class="val" id="v-crop">off</span></div>
+          <div class="ph-h"><span>Values on selected photos</span></div>
+          <table class="table" id="tbl"></table>
+          <div class="foot" id="foot">
+            <div class="hint" id="footHint">Select 2 or more photos in the filmstrip to sync.</div>
+            <button class="btn" id="b-sync" disabled>Sync Settings…</button>
+            <div class="sw" id="sw" role="switch" aria-checked="false" tabindex="0"><i></i><span>Auto Sync</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="film" id="film"></div>
+    </div>
+
+    <!-- Scene 3: other surfaces -->
+    <div class="scene" id="s-oth"><div class="cards">
+      <div class="card"><h4>Develop canvas</h4><div class="target" tabindex="0" data-ctx="canvas">Right-click the photo area</div></div>
+      <div class="card"><h4>History row</h4><div class="target" tabindex="0" data-ctx="history" data-name="Exposure +0.40">Exposure +0.40 · 10:42</div></div>
+      <div class="card"><h4>Snapshot row</h4><div class="target" tabindex="0" data-ctx="snapshot" data-name="Before crop">Before crop</div></div>
+      <div class="card"><h4>Preset row</h4><div class="target" tabindex="0" data-ctx="preset" data-name="Punch">Punch</div></div>
+      <div class="card"><h4>Collection row</h4><div class="target" tabindex="0" data-ctx="coll" data-name="Trip 2026">Trip 2026</div></div>
+      <div class="card"><h4>Mask row</h4><div class="target" tabindex="0" data-ctx="mask" data-name="Sky gradient">Sky gradient</div></div>
+      <div class="card"><h4>Panel header</h4><div class="target" tabindex="0" data-ctx="panelhdr" data-name="Tone Curve">Tone Curve</div></div>
+      <div class="card"><h4>Person tile</h4><div class="target" tabindex="0" data-ctx="person" data-name="Alex">Alex (14 photos)</div></div>
+      <div class="card"><h4>A slider</h4><div class="target" tabindex="0" data-ctx="slider" data-name="Exposure">Exposure</div></div>
+      <div class="card"><h4>Text field (native menu kept)</h4><input style="width:100%;background:var(--bg-canvas);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:3px;padding:5px" value="Right-click here: Cut / Copy / Paste"></div>
+    </div></div>
+  </div>
+
+  <div class="log"><h3>What would run</h3><div id="log"><div class="hint">Nothing yet.</div></div></div>
+</div>
+
+<div class="dlg" id="dlg"><div class="box" id="dlgBox"></div></div>
+<div class="tip" id="tip"></div>
+
+<script>
+/* ============ model ============ */
+const HUES=[20,200,45,330,120,260,10,170,60,290,100,230];
+const photos=HUES.map((h,i)=>({id:i+1,name:'IMG_'+String(4100+i*7),hue:h,rating:[0,3,5,2,0,4,1,0,3,0,5,2][i],flag:['','pick','','reject','','pick','','','','','pick',''][i],
+  exp:0,con:0,sat:0,crop:false}));
+const P=id=>photos.find(p=>p.id===id);
+const gradient=p=>`linear-gradient(135deg,hsl(${p.hue} 45% 32%),hsl(${(p.hue+40)%360} 40% 14%))`;
+const S={sel:new Set(),anchor:null,active:1,autosync:false,copied:false,scene:'lib',coll:'Trip 2026'};
+
+function log(html){const l=document.getElementById('log');if(l.firstElementChild?.classList.contains('hint'))l.innerHTML='';const d=document.createElement('div');d.className='e';d.innerHTML=html;l.prepend(d);while(l.children.length>9)l.lastChild.remove();}
+const names=ids=>ids.length===1?P(ids[0]).name:`${ids.length} photos`;
+
+/* ============ selection (Library and Develop share it) ============ */
+function pick(id,e,dev){
+  const meta=e&&(e.metaKey||e.ctrlKey), shift=e&&e.shiftKey;
+  if(shift&&S.anchor!=null){const a=photos.findIndex(p=>p.id===S.anchor),b=photos.findIndex(p=>p.id===id);const [f,t]=a<=b?[a,b]:[b,a];S.sel=new Set(photos.slice(f,t+1).map(p=>p.id));if(dev)S.active=id;}
+  else if(meta){const n=new Set(S.sel);if(n.has(id)){n.delete(id);if(S.active===id&&dev)S.active=[...n].pop()??id;}else{n.add(id);if(dev)S.active=id;}S.sel=n;S.anchor=id;}
+  else{S.sel=new Set([id]);S.anchor=id;if(dev)S.active=id;}
+  if(dev&&!S.sel.has(S.active)){S.sel.add(S.active);}
+  if(S.sel.size<2&&S.autosync){S.autosync=false;log('<b>Auto Sync</b> switched off (selection is a single photo)');}
+  render();
+}
+/* the target rule (RFC §3.2): inside the selection -> the selection; outside -> select it alone first */
+function targetFor(id,dev){ if(!S.sel.has(id)){S.sel=new Set([id]);S.anchor=id;if(dev)S.active=id;render();} return [...S.sel]; }
+
+/* ============ menu builders: pure (target,state) -> items ============ */
+const sep={separator:true};
+const stars=n=>'★'.repeat(n)||'—';
+function photoMenu(ids,dev){
+  const many=ids.length>1, one=!many;
+  const rate=n=>({id:'r'+n,label:n===0?'No rating':stars(n),checked:one&&P(ids[0]).rating===n,run:()=>{ids.forEach(i=>P(i).rating=n);log(`<b>Rating ${n}</b> → ${names(ids)}`);render();}});
+  const flag=(f,l)=>({id:'f'+f,label:l,checked:one&&P(ids[0]).flag===f,run:()=>{ids.forEach(i=>P(i).flag=f);log(`<b>Flag ${l}</b> → ${names(ids)}`);render();}});
+  const items=[];
+  if(many)items.push({header:`${ids.length} photos`});
+  if(!dev)items.push({label:'Open in Develop',shortcut:'D',run:()=>{S.active=ids[0];setScene('dev');log(`<b>Open in Develop</b> → ${P(ids[0]).name}`);}});
+  else items.push({label:'Open in Library',shortcut:'G',run:()=>{setScene('lib');log('<b>Open in Library</b>');}});
+  items.push({label:'Open in Loupe',shortcut:'E',run:()=>log(`<b>Loupe</b> → ${P(ids[0]).name}`)});
+  if(many)items.push({label:'Compare / Survey',children:[{label:'Compare the first two',run:()=>log(`<b>Compare</b> → ${P(ids[0]).name}, ${P(ids[1]).name}`)},{label:'Survey',run:()=>log(`<b>Survey</b> → ${ids.length} photos`)}]});
+  items.push(sep,
+    {label:'Rating',children:[rate(5),rate(4),rate(3),rate(2),rate(1),rate(0)]},
+    {label:'Flag',children:[flag('pick','Pick'),flag('reject','Reject'),flag('','Unflag')]},
+    {label:'Colour label',children:['Red','Yellow','Green','Blue','None'].map(c=>({label:c,run:()=>log(`<b>Label ${c}</b> → ${names(ids)}`)}))},
+    {label:'Add to Collection',children:[{label:'Trip 2026',run:()=>log(`<b>Add to “Trip 2026”</b> → ${names(ids)}`)},{label:'Portfolio',run:()=>log(`<b>Add to “Portfolio”</b> → ${names(ids)}`)},sep,{label:'New collection…',run:()=>log(`<b>New collection</b> from ${names(ids)}`)}]});
+  if(!dev&&S.coll)items.push({label:`Remove from “${S.coll}”`,run:()=>log(`<b>Remove from “${S.coll}”</b> → ${names(ids)}`)});
+  items.push(sep,{label:'Develop Settings',children:[
+      {label:'Copy Settings…',shortcut:'⌘⇧C',disabled:many,reason:many?'Copy from a single photo':'',run:()=>{S.copied=true;log(`<b>Copy Settings</b> from ${P(ids[0]).name}`);}},
+      {label:many?`Paste Settings to ${ids.length} photos`:'Paste Settings',shortcut:'⌘⇧V',disabled:!S.copied,reason:'Nothing copied yet',run:()=>log(`<b>Paste Settings</b> → ${names(ids)}`)},
+      {label:'Apply Preset',children:['Punch','Soft portrait','Mono high-contrast'].map(n=>({label:n,run:()=>log(`<b>Apply preset “${n}”</b> → ${names(ids)}`)}))},
+      sep,
+      {label:many?`Reset Settings (${ids.length} photos)…`:'Reset Settings…',danger:true,confirm:`Reset the edits of ${names(ids)}? This can be undone from each photo’s History.`,run:()=>log(`<b>Reset Settings</b> → ${names(ids)}`)}]});
+  if(dev&&many)items.push({label:'Sync Settings…',run:()=>openSync()},{label:'Auto Sync',checked:S.autosync,run:()=>setAuto(!S.autosync)});
+  items.push(sep,{label:'Export…',shortcut:'⌘⇧E',run:()=>log(`<b>Export</b> → ${names(ids)}`)},
+    {label:'Show in Finder',disabled:many,reason:'Choose a single photo',run:()=>log(`<b>Reveal</b> ${P(ids[0]).name}`)},
+    {label:'Copy Path',disabled:many,reason:'Choose a single photo',run:()=>log(`<b>Copy path</b> ${P(ids[0]).name}`)},
+    {label:'Detect Faces',run:()=>log(`<b>Detect faces</b> → ${names(ids)}`)},
+    sep,{label:'Remove from Catalog…',danger:true,confirm:`Remove ${names(ids)} from the catalog? The files on disk are not deleted.`,run:()=>log(`<b>Remove from catalog</b> → ${names(ids)}`)});
+  return items;
+}
+const mk=(label,extra={})=>({label,run:()=>log(`<b>${label}</b>${extra.on?' → '+extra.on:''}`),...extra});
+const B={
+  gridbg:()=>[mk('Select All',{shortcut:'⌘A',run:()=>{S.sel=new Set(photos.map(p=>p.id));S.anchor=1;render();log('<b>Select All</b> → 12 photos');}}),mk('Deselect All',{shortcut:'⌘D',run:()=>{S.sel=new Set();render();log('<b>Deselect All</b>');}}),sep,mk('Import Folder…'),mk('Import Files…')],
+  canvas:()=>[mk('Before / After',{shortcut:'\\'}),{label:'Zoom',children:[mk('Fit'),mk('100%')]},mk('Show Clipping',{shortcut:'J'}),mk('Hide mask overlay',{shortcut:'O'}),sep,{label:'Undo “Exposure”',shortcut:'⌘Z',run:()=>log('<b>Undo</b> Exposure')},{label:'Redo',shortcut:'⌘⇧Z',disabled:true,reason:'Nothing to redo'},sep,mk('Copy Settings…'),{label:'Paste Settings',disabled:!S.copied,reason:'Nothing copied yet',run:()=>log('<b>Paste Settings</b>')},{label:'Reset Settings…',danger:true,confirm:'Reset all edits of this photo?',run:()=>log('<b>Reset Settings</b>')}],
+  history:n=>[mk('Restore to this state',{on:n}),mk('Create Snapshot from this state'),mk('Copy Settings from this state')],
+  snapshot:n=>[mk('Apply',{on:n}),mk('Rename…'),sep,{label:'Delete snapshot…',danger:true,confirm:`Delete snapshot “${n}”?`,run:()=>log(`<b>Delete snapshot</b> ${n}`)}],
+  preset:n=>[mk('Apply to this photo',{on:n}),{label:S.sel.size>1?`Apply to ${S.sel.size} selected photos`:'Apply to selection',disabled:S.sel.size<2,reason:'Select 2 or more photos',run:()=>log(`<b>Apply preset “${n}”</b> → ${names([...S.sel])}`)},sep,mk('Rename…'),mk('Export…'),sep,{label:'Delete preset…',danger:true,confirm:`Delete preset “${n}”?`,run:()=>log(`<b>Delete preset</b> ${n}`)}],
+  coll:n=>[mk('Select photos',{on:n}),mk('Rename…'),mk('Edit smart rules…',{disabled:true,reason:'Not a smart collection'}),mk('Export collection…'),sep,{label:'Delete collection…',danger:true,confirm:`Delete collection “${n}”? Photos stay in the catalog.`,run:()=>log(`<b>Delete collection</b> ${n}`)}],
+  mask:n=>[mk('Rename…'),mk('Duplicate',{on:n}),mk('Invert'),mk('Hide'),sep,{label:'Delete mask',danger:true,confirm:`Delete mask “${n}”?`,run:()=>log(`<b>Delete mask</b> ${n}`)}],
+  panelhdr:n=>[mk(`Reset ${n}`),mk(`Hide ${n}`),mk(`Show only ${n}`)],
+  person:n=>[mk('Rename…',{on:n}),mk('Merge with…'),mk('Not this person'),mk('Exclude face')],
+  slider:n=>[mk(`Reset ${n}`,{shortcut:'dbl-click'})]
+};
+
+/* ============ menu engine ============ */
+let stack=[]; // open menu elements (root first)
+let lastFocus=null;
+function closeMenus(returnFocus=true){stack.forEach(m=>m.remove());stack=[];document.getElementById('tip').style.display='none';if(returnFocus&&lastFocus&&document.contains(lastFocus))lastFocus.focus({preventScroll:true});}
+function buildMenu(items,depth,x,y){
+  const m=document.createElement('div');m.className='cm';m.setAttribute('role','menu');m.dataset.depth=depth;
+  items.forEach(it=>{
+    if(it.separator){const s=document.createElement('div');s.className='sepr';s.setAttribute('role','separator');m.appendChild(s);return;}
+    if(it.header){const h=document.createElement('div');h.className='hd';h.textContent=it.header;m.appendChild(h);return;}
+    const r=document.createElement('div');r.tabIndex=-1;
+    r.setAttribute('role',it.checked!==undefined?'menuitemradio':'menuitem');
+    if(it.checked!==undefined)r.setAttribute('aria-checked',String(!!it.checked));
+    if(it.disabled)r.setAttribute('aria-disabled','true');
+    if(it.danger)r.classList.add('danger');
+    r.innerHTML=`<span class="ck">${it.checked?'✓':''}</span><span class="l"></span><span class="k"></span><span class="ar">${it.children?'▸':''}</span>`;
+    r.querySelector('.l').textContent=it.label;r.querySelector('.k').textContent=it.shortcut||'';
+    r._it=it;
+    r.addEventListener('mouseenter',()=>{hl(m,r);if(it.disabled&&it.reason)showTip(r,it.reason);else hideTip();trimTo(depth+1);if(it.children&&!it.disabled)openSub(r,depth);});
+    r.addEventListener('mouseleave',hideTip);
+    r.addEventListener('click',e=>{e.stopPropagation();activate(r);});
+    m.appendChild(r);
+  });
+  document.body.appendChild(m);
+  const w=m.offsetWidth,h=m.offsetHeight,vw=innerWidth,vh=innerHeight;
+  m.style.left=Math.max(4,Math.min(x,vw-w-4))+'px';m.style.top=Math.max(4,Math.min(y,vh-h-4))+'px';
+  return m;
+}
+function hl(m,r){m.querySelectorAll('.hl').forEach(e=>e.classList.remove('hl'));r.classList.add('hl');r.focus({preventScroll:true});}
+function trimTo(n){while(stack.length>n)stack.pop().remove();}
+function openSub(r,depth){
+  const b=r.getBoundingClientRect();const m=buildMenu(r._it.children,depth+1,b.right-2,b.top-4);
+  const mb=m.getBoundingClientRect();if(mb.left<b.right-4){m.style.left=Math.max(4,b.left-mb.width+2)+'px';} // flipped left near the edge
+  stack.push(m);
+}
+function activate(r){
+  const it=r._it;if(it.disabled)return;
+  if(it.children){const d=+r.parentElement.dataset.depth;trimTo(d+1);openSub(r,d);const sm=stack[stack.length-1];sm.querySelector('[role^=menuitem]:not([aria-disabled])')&&hl(sm,sm.querySelector('[role^=menuitem]:not([aria-disabled])'));return;}
+  closeMenus(true);
+  if(it.confirm)confirmDlg(it);else it.run&&it.run();
+}
+function openMenu(items,x,y,from){lastFocus=from||document.activeElement;closeMenus(false);const m=buildMenu(items,0,x,y);stack=[m];m.focus&&0;}
+function showTip(r,t){const tip=document.getElementById('tip');const b=r.getBoundingClientRect();tip.textContent=t;tip.style.display='block';tip.style.left=(b.right+8)+'px';tip.style.top=(b.top+2)+'px';}
+function hideTip(){document.getElementById('tip').style.display='none';}
+document.addEventListener('keydown',e=>{
+  if(document.getElementById('dlg').classList.contains('on')){if(e.key==='Escape')closeDlg();return;}
+  if(!stack.length)return;
+  const m=stack[stack.length-1];const rows=[...m.querySelectorAll('[role^=menuitem]')];const cur=m.querySelector('.hl');let i=rows.indexOf(cur);
+  const enabled=r=>!r.hasAttribute('aria-disabled');
+  const move=d=>{let n=i;for(let k=0;k<rows.length;k++){n=(n+d+rows.length)%rows.length;if(enabled(rows[n]))break;}hl(m,rows[n]);};
+  if(e.key==='ArrowDown'){e.preventDefault();i<0?hl(m,rows.find(enabled)):move(1);}
+  else if(e.key==='ArrowUp'){e.preventDefault();i<0?hl(m,[...rows].reverse().find(enabled)):move(-1);}
+  else if(e.key==='Home'){e.preventDefault();hl(m,rows.find(enabled));}
+  else if(e.key==='End'){e.preventDefault();hl(m,[...rows].reverse().find(enabled));}
+  else if(e.key==='ArrowRight'&&cur&&cur._it.children){e.preventDefault();activate(cur);}
+  else if(e.key==='ArrowLeft'&&stack.length>1){e.preventDefault();stack.pop().remove();const p=stack[stack.length-1];p.querySelector('.hl')&&p.querySelector('.hl').focus();}
+  else if((e.key==='Enter'||e.key===' ')&&cur){e.preventDefault();activate(cur);}
+  else if(e.key==='Escape'){e.preventDefault();closeMenus(true);}
+  else if(e.key.length===1&&/\w/.test(e.key)){const n=rows.findIndex((r,k)=>k>i&&enabled(r)&&r._it.label.toLowerCase().startsWith(e.key.toLowerCase()));if(n>=0)hl(m,rows[n]);}
+  else if(e.key==='Tab'){closeMenus(false);}
+},true);
+document.addEventListener('mousedown',e=>{if(stack.length&&!stack.some(m=>m.contains(e.target)))closeMenus(false);},true);
+addEventListener('blur',()=>closeMenus(false));addEventListener('resize',()=>closeMenus(false));
+document.addEventListener('scroll',()=>closeMenus(false),true);
+
+/* webview menu suppressed everywhere except text fields (RFC §3.1) */
+document.addEventListener('contextmenu',e=>{
+  if(e.target.closest('input,textarea'))return; // native Cut / Copy / Paste kept
+  e.preventDefault();
+  openFor(e.target,e.clientX,e.clientY);
+});
+document.addEventListener('keydown',e=>{ // keyboard route: Shift+F10 / the Menu key on a focused item
+  if(!((e.key==='F10'&&e.shiftKey)||e.key==='ContextMenu'))return;
+  const t=document.activeElement;if(!t||t===document.body)return;e.preventDefault();const b=t.getBoundingClientRect();openFor(t,b.left+14,b.bottom-8);
+});
+function openFor(el,x,y){
+  const ph=el.closest('.ph');
+  if(ph){const dev=S.scene==='dev';const ids=targetFor(+ph.dataset.id,dev);openMenu(photoMenu(ids,dev),x,y,ph);return;}
+  const c=el.closest('[data-ctx]');
+  if(c){const kind=c.dataset.ctx;if(kind==='canvas'&&S.scene==='dev'&&S.sel.size>1){/* canvas acts on the active photo only */}
+    openMenu(B[kind](c.dataset.name),x,y,c);return;}
+  // nothing here has a menu: show nothing rather than the browser menu
+}
+
+/* ============ confirm + dialogs ============ */
+function confirmDlg(it){const d=document.getElementById('dlg'),b=document.getElementById('dlgBox');b.innerHTML=`<h3>${it.label.replace('…','')}</h3><div class="hint" style="font-size:12px">${it.confirm}</div><div class="acts"><button class="btn" id="dc">Cancel</button><button class="btn primary" id="dok" style="background:var(--danger);border-color:var(--danger)">Confirm</button></div>`;d.classList.add('on');document.getElementById('dc').onclick=closeDlg;document.getElementById('dok').onclick=()=>{closeDlg();it.run();};document.getElementById('dok').focus();}
+function closeDlg(){document.getElementById('dlg').classList.remove('on');}
+const GROUPS=[['Basic (exposure, contrast, saturation)',true],['White balance',true],['Tone curve',true],['HSL / colour',true],['Detail (sharpen, noise)',true],['Effects (grain, vignette)',true],['Crop & straighten',false],['Spot removal / red eye',false],['Masks & local adjustments',false],['AI Denoise',false]];
+function openSync(){const ids=[...S.sel].filter(i=>i!==S.active);const d=document.getElementById('dlg'),b=document.getElementById('dlgBox');
+  b.innerHTML=`<h3>Sync Settings</h3><div class="hint" style="font-size:12px">From <b style="color:var(--accent-strong)">${P(S.active).name}</b> to ${ids.length} other photo${ids.length>1?'s':''}. Per-photo groups are unticked.</div><div class="grp">${GROUPS.map(([n,on],k)=>`<label><input type="checkbox" ${on?'checked':''} data-k="${k}"> ${n}</label>`).join('')}</div><div class="acts"><button class="btn" id="dc">Cancel</button><button class="btn primary" id="dok">Synchronize</button></div>`;
+  d.classList.add('on');document.getElementById('dc').onclick=closeDlg;document.getElementById('dok').onclick=()=>{const on=[...b.querySelectorAll('input:checked')].map(i=>+i.dataset.k);closeDlg();const a=P(S.active);
+    ids.forEach(i=>{const t=P(i);if(on.includes(0)){t.exp=a.exp;t.con=a.con;t.sat=a.sat;}if(on.includes(6))t.crop=a.crop;});
+    log(`<b>Sync Settings</b> ${on.length} group${on.length===1?'':'s'}: ${P(S.active).name} → ${ids.length} photo${ids.length>1?'s':''} (history: “Sync Settings” on each)`);render();};document.getElementById('dok').focus();}
+
+/* ============ Auto Sync ============ */
+function setAuto(on){
+  if(on&&S.sel.size<2)return;
+  if(on&&S.sel.size>50&&!confirm('Auto Sync across >50 photos writes many files. Continue?'))return;
+  S.autosync=on;log(on?`<b>Auto Sync ON</b> → ${S.sel.size} photos (edits to ${P(S.active).name} now go to the others; crop, masks, spots, AI Denoise are never synced)`:'<b>Auto Sync OFF</b>');render();
+}
+const OPS={exp:'Exposure',con:'Contrast',sat:'Saturation'};
+function editActive(op,v){
+  const a=P(S.active);const before=a[op];a[op]=v;
+  if(S.autosync&&before!==v){S.sel.forEach(i=>{if(i!==S.active)P(i)[op]=v;});flashCol=op;} else flashCol=null;
+  render(true);
+}
+let flashCol=null,syncTimer=null;
+function commitLog(op){ if(!S.autosync)return; clearTimeout(syncTimer);syncTimer=setTimeout(()=>log(`<b>Auto Sync: ${OPS[op]}</b> = ${fmt(op,P(S.active)[op])} → ${S.sel.size-1} other photo${S.sel.size>2?'s':''} (one transaction, one history entry each)`),250); }
+const fmt=(op,v)=>op==='exp'?(v>=0?'+':'')+(+v).toFixed(2):(v>=0?'+':'')+v;
+
+/* ============ rendering ============ */
+function cell(p,dev){
+  const d=document.createElement('div');d.className='ph'+(S.sel.has(p.id)?' sel':'')+(dev&&p.id===S.active?' active':'');d.dataset.id=p.id;d.tabIndex=0;d.setAttribute('role','button');
+  d.innerHTML=`<div class="img" style="background:${gradient(p)}"></div><div class="bd"><span>${p.flag==='pick'?'⚑':p.flag==='reject'?'✕':''}</span><span>${p.rating?'★'.repeat(p.rating):''}</span></div>${p.crop?'<div class="tag">crop</div>':''}`;
+  d.addEventListener('click',e=>pick(p.id,e,dev));
+  d.addEventListener('dblclick',()=>{if(!dev){S.active=p.id;pick(p.id,null,true);setScene('dev');}});
+  d.addEventListener('keydown',e=>{if(e.key==='Enter'&&!stack.length)pick(p.id,e,dev);});
+  return d;
+}
+function render(keepFocus){
+  const fa=document.activeElement,faId=fa&&fa.classList&&fa.classList.contains('ph')?fa.dataset.id:null,faIn=faId&&fa.closest('#film')?'#film':'#grid';
+  const g=document.getElementById('grid');g.innerHTML='';photos.forEach(p=>g.appendChild(cell(p,false)));
+  const f=document.getElementById('film');f.innerHTML='';photos.forEach(p=>f.appendChild(cell(p,true)));
+  const a=P(S.active);
+  const ac=f.querySelector('.active');if(ac&&S.scene==='dev'){const fb=f.getBoundingClientRect(),cb=ac.getBoundingClientRect();if(cb.left<fb.left||cb.right>fb.right)f.scrollLeft+=cb.left-fb.left-(fb.width-cb.width)/2;}
+  document.getElementById('pic').style.background=gradient(a);
+  document.getElementById('pic').style.filter=`brightness(${1+a.exp*0.25}) contrast(${1+a.con/200}) saturate(${1+a.sat/100})`;
+  document.getElementById('pic').style.clipPath=a.crop?'inset(8% 10% 8% 10%)':'none';
+  document.getElementById('actName').textContent=a.name;
+  [['exp','r-exp','v-exp'],['con','r-con','v-con'],['sat','r-sat','v-sat']].forEach(([op,r,v])=>{const el=document.getElementById(r);if(+el.value!==a[op])el.value=a[op];document.getElementById(v).textContent=fmt(op,a[op]);});
+  document.getElementById('v-crop').textContent=a.crop?'on':'off';
+  const ids=photos.filter(p=>S.sel.has(p.id)).map(p=>p.id);
+  document.getElementById('tbl').innerHTML=`<tr><th></th><th>Exp</th><th>Con</th><th>Sat</th><th>Crop</th></tr>`+ids.map(i=>{const p=P(i);return `<tr class="${i===S.active?'act':''}"><td>${p.name.slice(4)}${i===S.active?' ●':''}</td><td class="${flashCol==='exp'&&i!==S.active?'chg':''}">${fmt('exp',p.exp)}</td><td class="${flashCol==='con'&&i!==S.active?'chg':''}">${fmt('con',p.con)}</td><td class="${flashCol==='sat'&&i!==S.active?'chg':''}">${fmt('sat',p.sat)}</td><td>${p.crop?'on':'—'}</td></tr>`;}).join('');
+  const multi=S.sel.size>1;
+  document.getElementById('b-sync').disabled=!multi;
+  document.getElementById('footHint').textContent=multi?`${S.sel.size} selected · “${a.name}” is the active photo (●).`:'Select 2 or more photos in the filmstrip to sync.';
+  const sw=document.getElementById('sw');sw.classList.toggle('on',S.autosync);sw.setAttribute('aria-checked',String(S.autosync));sw.style.opacity=multi||S.autosync?1:.45;
+  const chip=document.getElementById('chip');chip.classList.toggle('on',S.autosync);chip.textContent=`Auto Sync: ${S.sel.size} photos`;
+  if(faId){const re=document.querySelector(`${faIn} .ph[data-id="${faId}"]`);if(re)re.focus({preventScroll:true});}
+  document.getElementById('tb').textContent=S.scene==='dev'?`Develop — ${a.name}`:S.scene==='oth'?'Other surfaces':'Library — Trip 2026';
+}
+document.getElementById('r-exp').addEventListener('input',e=>editActive('exp',+e.target.value));
+document.getElementById('r-con').addEventListener('input',e=>editActive('con',+e.target.value));
+document.getElementById('r-sat').addEventListener('input',e=>editActive('sat',+e.target.value));
+['r-exp:exp','r-con:con','r-sat:sat'].forEach(s=>{const [id,op]=s.split(':');document.getElementById(id).addEventListener('change',()=>commitLog(op));});
+document.getElementById('b-crop').addEventListener('click',()=>{const a=P(S.active);a.crop=!a.crop;log(`<b>Crop ${a.crop?'on':'off'}</b> on ${a.name} only${S.autosync?' (never auto-synced)':''}`);render();});
+document.getElementById('b-sync').addEventListener('click',openSync);
+const sw=document.getElementById('sw');sw.addEventListener('click',()=>setAuto(!S.autosync));sw.addEventListener('keydown',e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();setAuto(!S.autosync);}});
+
+/* ============ scenes + walkthrough ============ */
+const CAPS={
+  lib:'<b>Library.</b> Click a photo, then <b>Shift-click</b> another: a range is selected. <b>Right-click a selected photo</b> — the menu says “N photos” and Rating / Flag / Add to Collection act on all of them. <b>Right-click an unselected photo</b> — it becomes the only selection first, then the menu acts on it. Right-click the grey space for the empty-area menu. Greyed items show their reason on hover (Paste Settings before any Copy; Show in Finder with a multi-selection).',
+  dev:'<b>Develop.</b> Click a filmstrip photo to open it. <b>Cmd/Ctrl-click</b> adds photos and makes the clicked one <b>active</b> (orange frame; the others are grey “selected”). With 2+ selected, <b>Sync Settings…</b> and <b>Auto Sync</b> appear in the panel. Turn Auto Sync on, drag <b>Exposure</b>: only that op, with the same value, lands on the other selected photos (the table). <b>Tighten crop</b> stays on the active photo. Right-click a filmstrip photo for the same menu plus Sync / Auto Sync entries.',
+  oth:'<b>Other surfaces.</b> Right-click each sample: a history row, a snapshot, a preset (Apply to selection is greyed until 2+ photos are selected in Library/Develop), a collection, a mask, a panel header, a person, a slider. Destructive items are red and confirm first. The text field keeps the native Cut / Copy / Paste menu.'
+};
+function setScene(s){S.scene=s;document.querySelectorAll('.scene').forEach(e=>e.classList.toggle('on',e.id==='s-'+s));document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));document.getElementById('cap').innerHTML=CAPS[s];closeMenus(false);render();
+  if(s==='dev'&&S.sel.size===0){S.sel=new Set([S.active]);S.anchor=S.active;render();}}
+document.querySelectorAll('#tabs button').forEach(b=>b.addEventListener('click',()=>setScene(b.dataset.s)));
+setScene('lib');
+</script>
+</body>
+</html>

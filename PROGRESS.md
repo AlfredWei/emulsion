@@ -2,6 +2,13 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M6 slice 3d, part 5 (AI denoise): "Denoise these first" in the Export dialog (2026-10-09)
+
+Branch `feature/denoise-export-batch`. The passive notice from part 2 now has a **Denoise these first** button: `denoise_missing_for_export` also returns each photo's path and content hash, `handleDenoiseBatch` (`denoiseActions.js`) runs ordinary whole-photo jobs in order (progress "Denoising 2 of 5, tile x of y", **Stop**, stops at the first failure), the dialog's Close / Export are disabled meanwhile, and the missing list is re-read afterwards. Without the model installed it does not open a download dialog (that lives in Develop); it says to install it there once.
+- **Verified**: vitest 6 new tests (order and args, progress, no model / busy, failure, Stop mid-job and between jobs); svelte-check 0 errors; `cargo test --lib denoise` pass.
+- **Not verified**: the button in the real window with the real model (no e2e step yet); a batch spanning photos while one of them is open in Develop (the open one refreshes through the existing path); Windows.
+- **Still open for 3d**: a Settings line for the cache cap.
+
 ## Release builds bundle the AI models (2026-10-09)
 
 User decision: ship **both** models (denoise and Select Subject) inside the installer so they work straight after installation. And (second decision) keep them current by a background update, opt-in setting on by default: **not built yet, see below**.

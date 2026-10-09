@@ -38,6 +38,9 @@ export class DenoiseStore {
    * @type {null | { kind: "crop" | "whole", hash: string, label: string, done: number, total: number }} */
   job = $state(null);
   error = $state("");
+  /** The Export dialog's "denoise these first" run: which photo of how many, and whether Stop was pressed.
+   * @type {null | { index: number, total: number, stopped: boolean }} */
+  batch = $state(null);
   /** The last crop preview, for the photo `hash`.
    * @type {null | { hash: string, before: string, after: string, region: { x: number, y: number, w: number, h: number }, ms: number }} */
   crop = $state(null);

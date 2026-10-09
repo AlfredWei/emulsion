@@ -3,6 +3,8 @@
   import { exportImages, listExportPlugins } from "$lib/api/export.js";
   import { openFolder } from "$lib/api/system.js";
   import { denoiseMissingForExport } from "$lib/api/denoise.js";
+  import { denoise } from "$lib/state/denoise.svelte.js";
+  import { handleDenoiseBatch, handleDenoiseBatchStop } from "$lib/actions/denoiseActions.js";
 
   /**
    * Batch-capable since M2 Slice 3 -- `items` is the whole selection (or
@@ -53,18 +55,36 @@
 
   // RFC-0027 §3.6: export never runs the model, so a photo whose edit asks for AI Denoise but that was never
   // denoised would export without it. Say so before the user clicks Export, with the names.
-  let missingDenoise = $state(/** @type {{ version_id: number, name: string }[]} */ ([]));
-  $effect(() => {
+  let missingDenoise = $state(/** @type {{ version_id: number, name: string, path: string, content_hash: string }[]} */ ([]));
+  let denoiseNote = $state("");
+  function refreshMissingDenoise() {
     const list = items;
+    if (!list) return Promise.resolve();
+    return denoiseMissingForExport(list.map((i) => i.version_id))
+      .then((m) => {
+        if (items === list) missingDenoise = m;
+      })
+      .catch(() => {});
+  }
+  $effect(() => {
     missingDenoise = [];
-    if (list) {
-      denoiseMissingForExport(list.map((i) => i.version_id))
-        .then((m) => {
-          if (items === list) missingDenoise = m;
-        })
-        .catch(() => {});
-    }
+    denoiseNote = "";
+    if (items) refreshMissingDenoise();
   });
+
+  /** "Denoise these first": the user's explicit go-ahead for the model jobs (RFC-0027 §3.6). */
+  async function denoiseFirst() {
+    denoiseNote = "";
+    const outcome = await handleDenoiseBatch(missingDenoise);
+    if (outcome === "no-model") {
+      denoiseNote = "The denoise model is not installed yet. Open a photo in Develop and choose Denoise whole photo once to install it.";
+    } else if (outcome === "busy") {
+      denoiseNote = "Another denoise job is running; try again when it has finished.";
+    } else if (outcome === "failed") {
+      denoiseNote = "A denoise job failed; the rest were not run.";
+    }
+    await refreshMissingDenoise();
+  }
 
   async function pickDestination() {
     const dir = await open({ directory: true, multiple: false });
@@ -189,8 +209,18 @@
         <p class="notice" role="note" data-testid="export-denoise-missing">
           {missingDenoise.length === 1 ? "1 photo has" : `${missingDenoise.length} photos have`} AI Denoise set but no denoised copy
           ({missingDenoise.slice(0, 3).map((m) => m.name).join(", ")}{missingDenoise.length > 3 ? ", …" : ""}), so
-          {missingDenoise.length === 1 ? "it" : "they"} will export without it. Export never runs the model: open
-          {missingDenoise.length === 1 ? "it" : "each"} in Develop and choose Denoise whole photo first.
+          {missingDenoise.length === 1 ? "it" : "they"} will export without it. Export never runs the model by itself.
+          {#if denoise.batch}
+            <span data-testid="export-denoise-progress">
+              Denoising {denoise.batch.index} of {denoise.batch.total}{denoise.job && denoise.job.total > 0 ? `, tile ${denoise.job.done} of ${denoise.job.total}` : ""}…
+            </span>
+            <button class="secondary" type="button" onclick={handleDenoiseBatchStop} data-testid="export-denoise-stop">Stop</button>
+          {:else}
+            <button class="secondary" type="button" onclick={denoiseFirst} disabled={exporting || denoise.job !== null} data-testid="export-denoise-first">
+              Denoise {missingDenoise.length === 1 ? "it" : "these"} first
+            </button>
+          {/if}
+          {#if denoiseNote}<span data-testid="export-denoise-note"> {denoiseNote}</span>{/if}
         </p>
       {/if}
 
@@ -239,12 +269,12 @@
       {/if}
 
       <div class="actions">
-        <button class="secondary" type="button" onclick={onClose} disabled={exporting}>Close</button>
+        <button class="secondary" type="button" onclick={onClose} disabled={exporting || denoise.batch !== null}>Close</button>
         <button
           class="primary"
           type="button"
           onclick={handleExport}
-          disabled={exporting || !destinationDir}
+          disabled={exporting || !destinationDir || denoise.batch !== null}
         >
           {exporting ? "Exporting…" : "Export"}
         </button>

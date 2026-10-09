@@ -117,7 +117,7 @@ export function isJobCancelled(err) {
 }
 
 /** Which of these photos would export without the AI Denoise their edit asks for (no kept copy).
- * @param {number[]} versionIds @returns {Promise<{ version_id: number, name: string }[]>} */
+ * @param {number[]} versionIds @returns {Promise<{ version_id: number, name: string, path: string, content_hash: string }[]>} */
 export function denoiseMissingForExport(versionIds) {
   return invoke("denoise_missing_for_export", { versionIds });
 }

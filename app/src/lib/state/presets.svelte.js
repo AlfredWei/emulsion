@@ -30,6 +30,10 @@ export class PresetsStore {
   // being lost to the usual 250ms slider debounce.
   confirmingReset = $state(false);
   copySettingsDialogOpen = $state(false);
+  /** The stack Copy Settings copies from when it was asked on a photo that is not the open Develop one (the
+   * Library context menu); null = the open Develop photo's own stack.
+   * @type {import('$lib/api/develop.js').EditStack | null} */
+  copySourceStack = null;
   // Guards "Paste Settings to Selection" while a batch paste is in
   // flight, same narrow race-mitigation purpose as applyingPreset.
   pastingSettingsToSelection = $state(false);

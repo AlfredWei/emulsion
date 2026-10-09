@@ -47,6 +47,7 @@
 <div
   class="cell"
   class:selected
+  data-ctx-photo={image.version_id}
   role="button"
   tabindex="0"
   onclick={(e) => onSelect(e)}

@@ -55,6 +55,7 @@
 
 <div
   class="grid-scroll"
+  data-ctx-grid
   bind:this={containerEl}
   bind:clientWidth={containerWidth}
   bind:clientHeight={containerHeight}

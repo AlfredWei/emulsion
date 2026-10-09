@@ -2,6 +2,8 @@
   import "$lib/styles/tokens.css";
   import { onMount } from "svelte";
   import AppTitlebar from "$lib/components/AppTitlebar.svelte";
+  import ContextMenu from "$lib/components/ContextMenu.svelte";
+  import { handleContextMenu, handleContextMenuKey } from "$lib/actions/contextMenuActions.js";
   import AppDialogs from "$lib/components/AppDialogs.svelte";
   import StatusStrip from "$lib/components/StatusStrip.svelte";
                 import Filmstrip from "$lib/components/Filmstrip.svelte";
@@ -257,7 +259,12 @@
 
 </script>
 
-<svelte:window onkeydown={handleGlobalKeydown} onkeyup={handleGlobalKeyup} onblur={() => (develop.spacePanning = false)} />
+<svelte:window
+  onkeydown={(e) => handleContextMenuKey(e) || handleGlobalKeydown(e)}
+  onkeyup={handleGlobalKeyup}
+  onblur={() => (develop.spacePanning = false)}
+  oncontextmenu={handleContextMenu}
+/>
 
 <div class="app">
   <AppTitlebar
@@ -295,6 +302,8 @@
     onRequestRemoval={() => (library.confirmingRemoval = true)}
     onOpenSettings={() => (shell.settingsOpen = true)}
   />
+
+  <ContextMenu />
 
   <AppDialogs
     settingsOpen={shell.settingsOpen}

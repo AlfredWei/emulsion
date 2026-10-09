@@ -393,3 +393,69 @@ describe("handlePeekPreset", () => {
     expect(api.previewEditStack).not.toHaveBeenCalled();
   });
 });
+
+describe("Copy Settings from a photo, and Reset Settings on a selection (the context menu)", () => {
+  beforeEach(() => {
+    presets.copySourceStack = null;
+  });
+
+  it("copying from the open Develop photo uses its in-memory stack", async () => {
+    await A.handleCopySettingsFromPhoto(10);
+    expect(api.getEditStack).not.toHaveBeenCalled();
+    expect(presets.copySettingsDialogOpen).toBe(true);
+    A.handleCopySettingsConfirmed(["basic_tone"]);
+    expect(exposureOf(develop.copiedSettings)).toBe(1);
+  });
+
+  it("copying from another photo copies that photo's stored stack, not the open one", async () => {
+    api.getEditStack.mockResolvedValue(stack(7));
+    await A.handleCopySettingsFromPhoto(20);
+    expect(api.getEditStack).toHaveBeenCalledWith(20);
+    expect(presets.copySettingsDialogOpen).toBe(true);
+    A.handleCopySettingsConfirmed(["basic_tone"]);
+    expect(exposureOf(develop.copiedSettings)).toBe(7);
+    expect(presets.copySourceStack).toBeNull();
+  });
+
+  it("a Develop copy request after a photo copy goes back to the open photo", async () => {
+    api.getEditStack.mockResolvedValue(stack(7));
+    await A.handleCopySettingsFromPhoto(20);
+    presets.copySettingsDialogOpen = false;
+    A.handleCopySettingsRequest();
+    A.handleCopySettingsConfirmed(["basic_tone"]);
+    expect(exposureOf(develop.copiedSettings)).toBe(1);
+  });
+
+  it("a failed read says so and opens nothing", async () => {
+    api.getEditStack.mockRejectedValue("db locked");
+    await A.handleCopySettingsFromPhoto(20);
+    expect(presets.copySettingsDialogOpen).toBe(false);
+    expect(shell.statusMessage).toMatch(/Copy settings failed: db locked/);
+  });
+
+  it("reset empties every selected photo's ops under the label Reset, refreshes thumbnails and re-syncs the open photo", async () => {
+    selection.selectedIds = new Set([10, 20]);
+    api.getEditStack.mockImplementation(async (/** @type {number} */ id) => (id === 10 ? stack(1) : stack(2)));
+    library.images = /** @type {any} */ ([{ version_id: 10, thumbnail_path: "/t/10.jpg" }, { version_id: 20, thumbnail_path: "/t/20.jpg" }]);
+    await A.handleResetSettingsForSelection();
+    expect(api.setEditStack).toHaveBeenCalledTimes(2);
+    for (const call of api.setEditStack.mock.calls) {
+      expect(call[1].ops).toEqual([]);
+      expect(call[2]).toBe("Reset");
+    }
+    expect(api.regenerateThumbnail).toHaveBeenCalledTimes(2);
+    // the open photo (10) was a target: its in-memory stack is re-read so a later flush cannot undo the reset
+    expect(api.getEditStack).toHaveBeenCalledWith(10);
+    expect(shell.statusMessage).toBe("Reset settings on 2 photos");
+  });
+
+  it("reset with nothing selected does nothing; a failure is reported", async () => {
+    selection.selectedIds = new Set();
+    await A.handleResetSettingsForSelection();
+    expect(api.setEditStack).not.toHaveBeenCalled();
+    selection.selectedIds = new Set([20]);
+    api.getEditStack.mockRejectedValue("boom");
+    await A.handleResetSettingsForSelection();
+    expect(shell.statusMessage).toMatch(/Reset settings failed: boom/);
+  });
+});

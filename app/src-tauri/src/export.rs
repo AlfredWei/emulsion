@@ -15,7 +15,8 @@
 //! (M2 Slice 1).
 
 use crate::catalog::{EditStack, ExportPlugin};
-use crate::develop_engine::{apply_crop, apply_edit_stack, apply_lens_correction, apply_perspective};
+use crate::denoise_cache;
+use crate::develop_engine::{ai_denoise_amount, apply_crop, apply_edit_stack, apply_lens_correction, apply_perspective, blend_denoised};
 use crate::export_plugin;
 use crate::metadata_writer::{self, ExportMetadata, MetadataWriteOptions};
 use crate::source_decode::{self, DecodeError};
@@ -102,7 +103,10 @@ pub(crate) fn unique_output_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
 /// since this exact op ordering (lens correction -> perspective -> edit
 /// stack -> crop) is correctness-sensitive -- see the doc comments on each
 /// step below, unchanged from before this was extracted.
-pub(crate) fn render_full_resolution(source_path: &Path, stack: &EditStack) -> Result<RgbImage, ExportError> {
+///
+/// `denoise_dir` is the AI-denoise cache (RFC-0027): where a finished job's result for this photo may be. `None`
+/// (Print, until slice 3d teaches its raster cache about it) renders without the `ai_denoise` op.
+pub(crate) fn render_full_resolution(source_path: &Path, stack: &EditStack, denoise_dir: Option<&Path>) -> Result<RgbImage, ExportError> {
     let decoded = source_decode::decode_preview(source_path)?;
     let mut image = RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb)
         .ok_or(ExportError::BufferMismatch)?;
@@ -113,6 +117,10 @@ pub(crate) fn render_full_resolution(source_path: &Path, stack: &EditStack) -> R
     // comment.
     let stack = &crate::develop_engine::effective_stack_for_render(stack);
 
+    // AI denoise (M6, RFC-0027 §3.2): mixed into the decoded source before everything else, so lens
+    // resampling, grading and a later exposure lift all work on the cleaned pixels. Reads a cached
+    // result; never runs the model.
+    apply_ai_denoise(&mut image, source_path, stack, denoise_dir);
     // Lens Corrections (M3): runs FIRST, before grading -- the user is
     // grading/cropping the corrected image, not the raw lens-distorted
     // one, matching real Lightroom. See develop_engine.rs's own header
@@ -132,6 +140,29 @@ pub(crate) fn render_full_resolution(source_path: &Path, stack: &EditStack) -> R
     Ok(image)
 }
 
+/// What the `ai_denoise` stage did, for the export pre-flight of RFC-0027 §3.6 (slice 3d).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DenoiseStage {
+    /// The stack has no `ai_denoise` (or amount 0), or no cache is available to this caller.
+    Off,
+    Applied,
+    /// The op is on but there is no usable cached result: the render goes ahead without it.
+    Missing,
+}
+
+/// Mixes the cached AI-denoised copy of `source_path` into `image` (the decoded source) by the op's amount.
+/// The cache is keyed by the content hash of the source file, the same hash the preview cache uses.
+pub(crate) fn apply_ai_denoise(image: &mut RgbImage, source_path: &Path, stack: &EditStack, denoise_dir: Option<&Path>) -> DenoiseStage {
+    let amount = ai_denoise_amount(stack);
+    let Some(dir) = denoise_dir.filter(|_| amount > 0.0) else { return DenoiseStage::Off };
+    let Ok(bytes) = std::fs::read(source_path) else { return DenoiseStage::Missing };
+    let hash = blake3::hash(&bytes).to_hex().to_string();
+    let Some(entry) = denoise_cache::lookup(dir, &hash, image.dimensions()) else { return DenoiseStage::Missing };
+    let Ok(denoised) = image::open(entry) else { return DenoiseStage::Missing };
+    blend_denoised(image, &denoised.into_rgb8(), amount);
+    DenoiseStage::Applied
+}
+
 /// `metadata` is the catalog-resolved EXIF/IPTC source, `None` when the
 /// caller has none (or metadata writing wasn't requested). The `Option<String>`
 /// in the return is a metadata-embedding warning, not an export failure.
@@ -140,8 +171,9 @@ pub fn export_one(
     stack: &EditStack,
     options: &ExportOptions,
     metadata: Option<&ExportMetadata>,
+    denoise_dir: Option<&Path>,
 ) -> Result<(PathBuf, Option<String>), ExportError> {
-    let image = render_full_resolution(source_path, stack)?;
+    let image = render_full_resolution(source_path, stack, denoise_dir)?;
 
     let image = match options.long_edge {
         Some(long_edge) if image.width().max(image.height()) > long_edge => {
@@ -195,10 +227,11 @@ pub fn export_batch(
     items: Vec<(PathBuf, EditStack, Option<ExportMetadata>)>,
     options: &ExportOptions,
     plugin: Option<&ExportPlugin>,
+    denoise_dir: Option<&Path>,
 ) -> Vec<ExportResult> {
     items
         .into_iter()
-        .map(|(path, stack, metadata)| match export_one(&path, &stack, options, metadata.as_ref()) {
+        .map(|(path, stack, metadata)| match export_one(&path, &stack, options, metadata.as_ref(), denoise_dir) {
             Ok((out_path, metadata_warning)) => {
                 let plugin_error = plugin
                     .and_then(|p| export_plugin::invoke(p, &out_path).err())
@@ -259,7 +292,7 @@ mod tests {
         let dest = temp_dir("native-res");
         let options = ExportOptions { destination_dir: dest.to_string_lossy().to_string(), long_edge: None, quality: 90, plugin_id: None, metadata: MetadataWriteOptions::default() };
 
-        let out_path = export_one(Path::new(&sample_path), &EditStack::empty(), &options, None)
+        let out_path = export_one(Path::new(&sample_path), &EditStack::empty(), &options, None, None)
             .expect("export succeeds for a real RAW file")
             .0;
 
@@ -279,7 +312,7 @@ mod tests {
         let dest = temp_dir("long-edge");
         let options = ExportOptions { destination_dir: dest.to_string_lossy().to_string(), long_edge: Some(800), quality: 90, plugin_id: None, metadata: MetadataWriteOptions::default() };
 
-        let out_path = export_one(Path::new(&sample_path), &EditStack::empty(), &options, None)
+        let out_path = export_one(Path::new(&sample_path), &EditStack::empty(), &options, None, None)
             .expect("export succeeds for a real RAW file")
             .0;
 
@@ -306,7 +339,7 @@ mod tests {
             metadata: MetadataWriteOptions::default(),
         };
 
-        let result = export_one(Path::new("/nonexistent/not-a-real-raw-file.CR3"), &EditStack::empty(), &options, None);
+        let result = export_one(Path::new("/nonexistent/not-a-real-raw-file.CR3"), &EditStack::empty(), &options, None, None);
         assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&parent);
@@ -332,7 +365,7 @@ mod tests {
                 plugin_id: None,
                 metadata: opts,
             };
-            let (path, warning) = export_one(&source, &EditStack::empty(), &options, Some(&meta)).unwrap();
+            let (path, warning) = export_one(&source, &EditStack::empty(), &options, Some(&meta), None).unwrap();
             assert_eq!(warning, None);
             std::fs::read(path).unwrap()
         };
@@ -352,5 +385,65 @@ mod tests {
         assert!(everything.windows(13).any(|w| w == b"Photoshop 3.0"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- AI denoise stage (RFC-0027 §3.2) -------------------------------------------------------
+
+    fn denoise_fixture(name: &str) -> (PathBuf, PathBuf, String) {
+        let dir = temp_dir(name);
+        let source = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(6, 4, image::Rgb([200, 100, 50])).save(&source).unwrap();
+        let hash = blake3::hash(&std::fs::read(&source).unwrap()).to_hex().to_string();
+        (dir.join("denoise"), source, hash)
+    }
+
+    fn denoise_stack(amount: u32) -> EditStack {
+        EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "ai_denoise", "amount": amount})] }
+    }
+
+    #[test]
+    fn the_stage_is_off_without_the_op_an_amount_or_a_cache() {
+        let (dir, source, _) = denoise_fixture("denoise-off");
+        let mut img = image::RgbImage::from_pixel(6, 4, image::Rgb([1, 2, 3]));
+        assert_eq!(apply_ai_denoise(&mut img, &source, &EditStack::empty(), Some(&dir)), DenoiseStage::Off);
+        assert_eq!(apply_ai_denoise(&mut img, &source, &denoise_stack(0), Some(&dir)), DenoiseStage::Off);
+        assert_eq!(apply_ai_denoise(&mut img, &source, &denoise_stack(80), None), DenoiseStage::Off);
+        assert_eq!(img, image::RgbImage::from_pixel(6, 4, image::Rgb([1, 2, 3])));
+    }
+
+    #[test]
+    fn with_the_op_on_but_no_usable_cache_entry_the_render_goes_ahead_without_it() {
+        let (dir, source, hash) = denoise_fixture("denoise-missing");
+        let mut img = image::RgbImage::from_pixel(6, 4, image::Rgb([1, 2, 3]));
+        assert_eq!(apply_ai_denoise(&mut img, &source, &denoise_stack(80), Some(&dir)), DenoiseStage::Missing);
+        // A wrong-sized entry is not an entry.
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbImage::new(5, 5).save(denoise_cache::entry_path(&dir, &hash, crate::denoise_models::MODEL_ID)).unwrap();
+        assert_eq!(apply_ai_denoise(&mut img, &source, &denoise_stack(80), Some(&dir)), DenoiseStage::Missing);
+        assert_eq!(apply_ai_denoise(&mut img, Path::new("/nonexistent/photo.jpg"), &denoise_stack(80), Some(&dir)), DenoiseStage::Missing);
+        assert_eq!(img, image::RgbImage::from_pixel(6, 4, image::Rgb([1, 2, 3])));
+    }
+
+    #[test]
+    fn a_cached_result_is_mixed_in_by_the_amount_and_a_hidden_panel_switches_it_off() {
+        let (dir, source, hash) = denoise_fixture("denoise-on");
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbImage::from_pixel(6, 4, image::Rgb([100, 200, 250])).save(denoise_cache::entry_path(&dir, &hash, crate::denoise_models::MODEL_ID)).unwrap();
+        let base = || image::RgbImage::from_pixel(6, 4, image::Rgb([200, 100, 50]));
+        let mut half = base();
+        assert_eq!(apply_ai_denoise(&mut half, &source, &denoise_stack(50), Some(&dir)), DenoiseStage::Applied);
+        assert_eq!(half.get_pixel(3, 2).0, [150, 150, 150]);
+        let mut full = base();
+        apply_ai_denoise(&mut full, &source, &denoise_stack(100), Some(&dir));
+        assert_eq!(full.get_pixel(0, 0).0, [100, 200, 250]);
+
+        // Through the real render entry: the Noise Reduction panel hidden strips the op (RFC-0013), so it is Off.
+        let mut hidden = denoise_stack(100);
+        hidden.ops.push(serde_json::json!({"op": "panel_hidden", "panel": "noise_reduction"}));
+        let shown = render_full_resolution(&source, &denoise_stack(100), Some(&dir)).unwrap();
+        let none = render_full_resolution(&source, &hidden, Some(&dir)).unwrap();
+        let plain = render_full_resolution(&source, &EditStack::empty(), Some(&dir)).unwrap();
+        assert_eq!(none, plain, "a hidden panel's op must not render");
+        assert!(shown.get_pixel(0, 0).0[2] > plain.get_pixel(0, 0).0[2] + 100, "the cached result must show: {:?} vs {:?}", shown.get_pixel(0, 0), plain.get_pixel(0, 0));
     }
 }

@@ -322,7 +322,7 @@ pub(crate) const PANEL_OP_NAMES: &[(&str, &[&str])] = &[
     ("texture_clarity", &["texture", "clarity"]),
     ("dehaze", &["dehaze"]),
     ("sharpening", &["sharpen"]),
-    ("noise_reduction", &["luma_nr", "color_nr"]),
+    ("noise_reduction", &["luma_nr", "color_nr", "ai_denoise"]),
     ("vignette", &["vignette"]),
     ("grain", &["grain"]),
     ("lens_corrections", &["lens_correction"]),

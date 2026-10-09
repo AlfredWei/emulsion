@@ -48,6 +48,13 @@ pub enum Request {
     SegmentPrepare { models: ModelPaths, content_hash: String, image_path: PathBuf },
     /// Decoder only; answers `Vec<Candidate>`, best predicted IoU first.
     SegmentDecode { models: ModelPaths, content_hash: String, prompts: Vec<Prompt>, refine: Option<String> },
+    /// Denoise the image at `image_path` (or just `region` of it) with the ONNX model at `model`, in overlapping
+    /// tiles (RFC-0027 §3.4), and write the result as a PNG at `out_path` (full-image size, or region size).
+    /// Streams `progress` lines under the same id; answers `DenoiseResult`, or the error `cancelled`.
+    DenoiseRun { model: PathBuf, image_path: PathBuf, out_path: PathBuf, region: Option<Region> },
+    /// Ask the running request `target` to stop at its next tile boundary; answers at once, whether or not
+    /// `target` is still running (so a late cancel is harmless).
+    Cancel { target: u64 },
     /// Drop the sessions and the cached embedding (the process stays alive).
     Release,
     /// Answer, then exit.
@@ -61,10 +68,26 @@ pub struct Frame {
     pub request: Request,
 }
 
+/// A rectangle in full-image pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Region {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// Interim line of a long request: `done` of `total` units finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Progress {
+    pub done: u32,
+    pub total: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorBody {
     /// Stable machine-readable code: `not_prepared`, `inference`, `image`,
-    /// `bad_request`, `internal`.
+    /// `bad_request`, `cancelled`, `internal`.
     pub code: String,
     pub message: String,
 }
@@ -76,6 +99,9 @@ pub struct Response {
     pub ok: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub err: Option<ErrorBody>,
+    /// Present only on interim lines: the request is still running and its final answer follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<Progress>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +115,14 @@ pub struct PrepareResult {
     /// Encoder time in ms; 0 when the embedding was already cached.
     pub encode_ms: u64,
     pub cached: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DenoiseResult {
+    pub width: u32,
+    pub height: u32,
+    pub tiles: u32,
+    pub ms: u64,
 }
 
 #[cfg(test)]
@@ -120,11 +154,33 @@ mod tests {
     fn unit_requests_and_error_responses_round_trip() {
         let hello: Frame = serde_json::from_str(r#"{"id":1,"op":"hello"}"#).unwrap();
         assert!(matches!(hello.request, Request::Hello));
-        let err = Response { id: 2, ok: None, err: Some(ErrorBody { code: "not_prepared".into(), message: "x".into() }) };
+        let err = Response { id: 2, ok: None, err: Some(ErrorBody { code: "not_prepared".into(), message: "x".into() }), progress: None };
         let line = serde_json::to_string(&err).unwrap();
         assert!(!line.contains("\"ok\""));
         let back: Response = serde_json::from_str(&line).unwrap();
         assert_eq!(back.err.unwrap().code, "not_prepared");
+    }
+
+    #[test]
+    fn denoise_requests_and_progress_lines_round_trip() {
+        let frame = Frame {
+            id: 9,
+            request: Request::DenoiseRun { model: "m.onnx".into(), image_path: "in.png".into(), out_path: "out.png".into(), region: Some(Region { x: 1, y: 2, w: 3, h: 4 }) },
+        };
+        let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&frame).unwrap()).unwrap();
+        assert_eq!(v["op"], "denoise_run");
+        assert_eq!(v["region"]["w"], 3);
+        let no_region: Frame = serde_json::from_str(r#"{"id":1,"op":"denoise_run","model":"m","image_path":"i","out_path":"o","region":null}"#).unwrap();
+        assert!(matches!(no_region.request, Request::DenoiseRun { region: None, .. }));
+        let cancel: Frame = serde_json::from_str(r#"{"id":2,"op":"cancel","target":9}"#).unwrap();
+        assert!(matches!(cancel.request, Request::Cancel { target: 9 }));
+
+        let line = serde_json::to_string(&Response { id: 9, ok: None, err: None, progress: Some(Progress { done: 3, total: 12 }) }).unwrap();
+        let back: Response = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.progress, Some(Progress { done: 3, total: 12 }));
+        // An old-style final answer has no progress field at all.
+        let plain: Response = serde_json::from_str(r#"{"id":9,"ok":{}}"#).unwrap();
+        assert!(plain.progress.is_none() && plain.ok.is_some());
     }
 
     #[test]

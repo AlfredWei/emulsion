@@ -60,7 +60,7 @@ describe("Library photo context menu", function () {
     await findCellByNameAnywhere(FIXTURE_NAME, { timeout: 60000 });
     versionId = await browser.execute(async (name) => {
       const images = await window.__TAURI__.core.invoke("list_images");
-      return images.find((i) => i.path.endsWith(`/${name}.jpg`)).version_id;
+      return images.find((i) => i.path.replace(/\\/g, "/").endsWith(`/${name}.jpg`)).version_id; // Windows paths use backslashes
     }, FIXTURE_NAME);
     // A known starting point (the shared dev catalog keeps whatever earlier runs left).
     await browser.execute(async (vid) => {

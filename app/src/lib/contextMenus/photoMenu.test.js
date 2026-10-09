@@ -88,6 +88,12 @@ describe("photo menu: one photo, Library", () => {
     expect(cmd.openInDevelop).toHaveBeenCalledWith(10);
   });
 
+  it("names the platform's file manager", () => {
+    expect(find(menu, "reveal")?.label).toBe("Show in Finder");
+    const win = buildPhotoMenu(input({ fileManager: "Explorer" }), commands());
+    expect(find(win, "reveal")?.label).toBe("Show in Explorer");
+  });
+
   it("Paste Settings is disabled, with a reason, until something was copied", () => {
     expect(find(menu, "paste-settings")?.disabled).toBe(true);
     expect(find(menu, "paste-settings")?.reason).toMatch(/Copy settings/);

@@ -16,6 +16,7 @@ import { formatKeyDisplay } from "$lib/shortcuts.js";
  * @property {{ id: number, name: string }[]} presets
  * @property {boolean} hasCopiedSettings
  * @property {Record<string, string>} shortcuts  the user's current key map
+ * @property {string} [fileManager]  what the platform calls its file manager ("Finder", "Explorer"); default "Finder"
  */
 
 /**
@@ -63,7 +64,7 @@ function plural(n) {
 
 /** @param {PhotoMenuInput} input @param {PhotoMenuCommands} cmd @returns {import('./model.js').MenuEntry[]} */
 export function buildPhotoMenu(input, cmd) {
-  const { images, module, openVersionId, viewedCollection, manualCollections, presets, hasCopiedSettings, shortcuts } = input;
+  const { images, module, openVersionId, viewedCollection, manualCollections, presets, hasCopiedSettings, shortcuts, fileManager = "Finder" } = input;
   if (images.length === 0) return [];
   const many = images.length > 1;
   const first = images[0];
@@ -162,7 +163,7 @@ export function buildPhotoMenu(input, cmd) {
     SEPARATOR,
 
     { id: "export", label: "Export…", run: cmd.exportPhotos },
-    { id: "reveal", label: "Show in Finder", disabled: many, reason: singleOnly, run: () => cmd.reveal(first.path) },
+    { id: "reveal", label: `Show in ${fileManager}`, disabled: many, reason: singleOnly, run: () => cmd.reveal(first.path) },
     { id: "copy-path", label: "Copy Path", disabled: many, reason: singleOnly, run: () => cmd.copyPath(first.path) },
     { id: "detect-faces", label: "Detect Faces", run: cmd.detectFaces },
     SEPARATOR,

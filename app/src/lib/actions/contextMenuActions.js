@@ -42,6 +42,14 @@ export function resolveTargets(versionId, module) {
   return library.images.filter((img) => selection.selectedIds.has(img.version_id));
 }
 
+/** What this platform calls its file manager, for "Show in ...". */
+function fileManagerName() {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  if (/Windows/i.test(ua)) return "Explorer";
+  if (/Mac/i.test(ua)) return "Finder";
+  return "File Manager";
+}
+
 /** @returns {"library" | "develop"} */
 function currentModule() {
   return shell.activeModule === "develop" ? "develop" : "library";
@@ -62,6 +70,7 @@ export function openPhotoMenu(versionId, x, y, opener, fromKeyboard = false) {
       presets: presets.list.map((p) => ({ id: p.id, name: p.name })),
       hasCopiedSettings: develop.copiedSettings !== null,
       shortcuts: shell.shortcuts,
+      fileManager: fileManagerName(),
     },
     photoCommands(images, module),
   );

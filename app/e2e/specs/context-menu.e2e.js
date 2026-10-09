@@ -53,6 +53,19 @@ describe("Library photo context menu", function () {
       extra,
     );
 
+  const pageState = () =>
+    browser.execute(() => ({
+      href: location.href,
+      hasGrid: !!document.querySelector("[data-ctx-grid]"),
+      cells: document.querySelectorAll("[data-ctx-photo]").length,
+      names: Array.from(document.querySelectorAll(".file-name")).map((e) => e.textContent).slice(0, 5),
+      dialog: !!document.querySelector('[role="dialog"]'),
+      body: document.body.innerText.replace(/\s+/g, " ").slice(0, 300),
+    }));
+  afterEach(async function () {
+    if (this.currentTest?.state === "failed") console.log("PAGE-STATE after failure:", JSON.stringify(await pageState().catch((e) => String(e))));
+  });
+
   before(async () => {
     await browser.setTimeout({ script: 90000 });
     await browser.execute(async (p) => window.__TAURI__.core.invoke("import_files", { paths: [p] }), FIXTURE_PATH);
@@ -135,6 +148,7 @@ describe("Library photo context menu", function () {
       cells: document.querySelectorAll("[data-ctx-photo]").length,
       body: document.body.innerText.slice(0, 200),
     }));
+    console.log("PAGE-STATE after keyboard test:", JSON.stringify(await pageState()));
     expect(JSON.stringify(snapshot)).toContain('"focusedIsPhoto":true');
   });
 

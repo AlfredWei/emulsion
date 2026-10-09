@@ -23,6 +23,7 @@ mod metadata_writer;
 mod panorama_merge;
 mod preview_cache;
 mod ai;
+mod bundled_models;
 mod denoise_cache;
 mod denoise_commands;
 mod denoise_models;
@@ -2029,6 +2030,18 @@ pub fn run() {
             tauri::async_runtime::spawn_blocking(move || {
                 import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir);
             });
+
+            // Models shipped in the installer (release builds only) are copied into the model folders once, in the
+            // background, so the first use finds them ready. A status check also seeds (and waits on this).
+            {
+                let handle = app.handle().clone();
+                let catalog_for_models = catalog.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let Ok(root) = resolve_cache_root(&handle, &catalog_for_models) else { return };
+                    bundled_models::seed_from_app(&handle, &root.join("denoise_models"), &bundled_models::DENOISE);
+                    bundled_models::seed_from_app(&handle, &root.join("segment_models"), &bundled_models::SEGMENT);
+                });
+            }
 
             // AI helper process (RFC-0026 §3.1): spawned lazily on the first AI request, not here.
             app.manage(Arc::new(ai::supervisor::AiHelper::new(

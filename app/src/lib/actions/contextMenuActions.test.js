@@ -186,6 +186,38 @@ describe("right-click entry point", () => {
   });
 });
 
+describe("the Ctrl-click that completes a context click (macOS)", () => {
+  const click = (/** @type {object} */ over = {}) => /** @type {any} */ ({ ctrlKey: true, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...over });
+
+  it("is swallowed right after a menu opened, so the Library does not toggle the photo out of the selection", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ photo: 20 })));
+    expect(contextMenu.isOpen).toBe(true);
+    const e = click();
+    A.handleClickCapture(e);
+    expect(e.stopPropagation).toHaveBeenCalled();
+    expect(e.preventDefault).toHaveBeenCalled();
+  });
+
+  it("leaves ordinary clicks, Ctrl-clicks with no menu open, and clicks long after the menu opened alone", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ photo: 20 })));
+    const plain = click({ ctrlKey: false });
+    A.handleClickCapture(plain);
+    expect(plain.stopPropagation).not.toHaveBeenCalled();
+
+    const later = click();
+    const now = performance.now();
+    const spy = vi.spyOn(performance, "now").mockReturnValue(now + 5000);
+    A.handleClickCapture(later);
+    spy.mockRestore();
+    expect(later.stopPropagation).not.toHaveBeenCalled();
+
+    contextMenu.close();
+    const closed = click();
+    A.handleClickCapture(closed);
+    expect(closed.stopPropagation).not.toHaveBeenCalled();
+  });
+});
+
 describe("Shift+F10 / the Menu key", () => {
   const key = (/** @type {object} */ over) => /** @type {any} */ ({ key: "F10", shiftKey: true, target: new FakeHTMLElement(), preventDefault: vi.fn(), ...over });
 

@@ -371,6 +371,21 @@ function openSurfaceMenu(el, x, y, opener, fromKeyboard) {
   return true;
 }
 
+/** When the last menu was opened by a pointer (performance.now()), for `handleClickCapture`. */
+let lastPointerMenuAt = -Infinity;
+
+/** On macOS a Ctrl-click is a context click: WebKit fires `contextmenu` on mousedown and then a `click` that still
+ * carries ctrlKey, which the Library reads as "toggle this photo in the selection" -- it would deselect the very photo
+ * the menu was just opened for (found with a real mouse; the menu's commands act on the live selection). The window's
+ * capture-phase click listener swallows that one trailing click.
+ * @param {MouseEvent} e */
+export function handleClickCapture(e) {
+  if (!e.ctrlKey || !contextMenu.isOpen) return;
+  if (performance.now() - lastPointerMenuAt > 600) return;
+  e.preventDefault();
+  e.stopPropagation();
+}
+
 /** The window's `contextmenu` listener: the webview's own menu is suppressed everywhere except text fields,
  * and the surfaces that have a menu open theirs. Anything else shows nothing.
  * @param {MouseEvent} e */
@@ -381,6 +396,7 @@ export function handleContextMenu(e) {
   contextMenu.close();
   const surface = target?.closest(SURFACE_SELECTOR);
   if (surface instanceof HTMLElement) openSurfaceMenu(surface, e.clientX, e.clientY, surface.dataset.ctxGrid !== undefined ? null : surface, false);
+  if (contextMenu.isOpen) lastPointerMenuAt = performance.now();
 }
 
 /** Shift+F10 / the Menu key on a focused row opens its menu beside it (the keyboard route to the menu).

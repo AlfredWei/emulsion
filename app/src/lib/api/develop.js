@@ -581,6 +581,25 @@ export function togglePanelVisibility(/** @type {EditStack} */ stack, /** @type 
   return { ...stack, ops };
 }
 
+/** Shows only `panel`: hides every other panel and shows this one (Lightroom's "solo"). Values are untouched,
+ * like `togglePanelVisibility`. Showing all again is `showAllPanels`.
+ * @param {EditStack} stack @param {string} panel */
+export function soloPanel(stack, panel) {
+  const keep = stack.ops.filter((o) => o.op !== "panel_hidden");
+  const hidden = Object.keys(PANEL_OP_NAMES)
+    .filter((name) => name !== panel)
+    .map((name) => /** @type {any} */ ({ op: "panel_hidden", panel: name }));
+  return { ...stack, ops: [...keep, ...hidden] };
+}
+
+/** Removes every panel's `panel_hidden` marker. @param {EditStack} stack */
+export function showAllPanels(stack) {
+  return { ...stack, ops: stack.ops.filter((o) => o.op !== "panel_hidden") };
+}
+
+/** Panel ids in display order. */
+export const PANEL_IDS = Object.freeze(Object.keys(PANEL_OP_NAMES));
+
 /** Removes a panel's own op entries, reverting it to default (each field's
  * existing identity/fallback value, the same mechanism `resetEditStack`
  * already relies on, just scoped to one panel's own op names). Never

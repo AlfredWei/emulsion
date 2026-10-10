@@ -10,8 +10,17 @@ vi.mock("$lib/actions/libraryActions.js", () => ({
   selectPerson: vi.fn(async () => {}),
   handleDeleteCollection: vi.fn(async () => {}),
 }));
-vi.mock("$lib/actions/historyActions.js", () => ({ handleRestoreSnapshot: vi.fn() }));
-vi.mock("$lib/actions/developActions.js", () => ({ handleDeleteSnapshot: vi.fn() }));
+vi.mock("$lib/actions/historyActions.js", () => ({ handleRestoreSnapshot: vi.fn(), handleUndo: vi.fn(), handleRedo: vi.fn() }));
+vi.mock("$lib/actions/developActions.js", () => ({
+  handleDeleteSnapshot: vi.fn(),
+  handleTogglePanelVisibility: vi.fn(),
+  handleResetPanel: vi.fn(),
+  handleSoloPanel: vi.fn(),
+  handleShowAllPanels: vi.fn(),
+  handleToggleClippingOverlay: vi.fn(),
+  PANEL_LABELS: { vignette: "Vignette", grain: "Grain" },
+}));
+vi.mock("$lib/actions/maskActions.js", () => ({ handleMaskDeleted: vi.fn(), handleMaskUpdated: vi.fn(), handleShapeSelected: vi.fn(), handleShapeRemoved: vi.fn() }));
 vi.mock("$lib/actions/selectionActions.js", () => ({ handleSelectAll: vi.fn(), handleDeselectAll: vi.fn() }));
 vi.mock("$lib/actions/metadataActions.js", () => ({ handleRatingChange: vi.fn(), handleFlagChange: vi.fn(), handleColorLabelChange: vi.fn() }));
 vi.mock("$lib/actions/collectionsActions.js", () => ({ handleAddToCollectionSelect: vi.fn(), handleRemoveFromCollection: vi.fn() }));
@@ -26,6 +35,7 @@ vi.mock("$lib/actions/presetActions.js", () => ({
   handleDeletePresetRequest: vi.fn(),
   handleSaveCurrentAsPresetRequest: vi.fn(),
   handleImportPresetRequest: vi.fn(),
+  handleCopySettingsRequest: vi.fn(),
 }));
 vi.mock("$lib/api/system.js", () => ({ revealInFileManager: vi.fn() }));
 
@@ -34,8 +44,11 @@ import { openDevelop } from "$lib/actions/navigation.js";
 import { handleRatingChange } from "$lib/actions/metadataActions.js";
 import { handlePasteSettings, handlePasteSettingsToSelection, handleApplyPreset, handleExportPreset, handleDeletePresetRequest, handleSaveCurrentAsPresetRequest } from "$lib/actions/presetActions.js";
 import { selectCollection, selectPerson, handleDeleteCollection } from "$lib/actions/libraryActions.js";
-import { handleRestoreSnapshot } from "$lib/actions/historyActions.js";
-import { handleDeleteSnapshot } from "$lib/actions/developActions.js";
+import { handleRestoreSnapshot, handleUndo } from "$lib/actions/historyActions.js";
+import { masks } from "$lib/state/masks.svelte.js";
+import { addMask, createRadialGradientMask, createBrushMask, createModifier, addModifier } from "$lib/api/develop.js";
+import { handleDeleteSnapshot, handleTogglePanelVisibility, handleSoloPanel, handleResetPanel } from "$lib/actions/developActions.js";
+import { handleMaskUpdated, handleMaskDeleted, handleShapeRemoved } from "$lib/actions/maskActions.js";
 import { handleSelectAll } from "$lib/actions/selectionActions.js";
 import { faces } from "$lib/state/faces.svelte.js";
 import { presets } from "$lib/state/presets.svelte.js";
@@ -57,7 +70,7 @@ const ids = () => [...selection.selectedIds].sort((a, b) => a - b);
 // Just enough DOM for the entry points: elements that answer closest() and carry a dataset.
 class FakeElement {}
 class FakeHTMLElement extends FakeElement {
-  /** @param {{ photo?: number, grid?: boolean, text?: boolean, collection?: number, person?: number, snapshot?: number, preset?: number, presets?: boolean }} kind */
+  /** @param {{ photo?: number, grid?: boolean, text?: boolean, collection?: number, person?: number, snapshot?: number, preset?: number, presets?: boolean, panel?: string, canvas?: boolean, mask?: string, shape?: string, title?: string }} kind */
   constructor(kind = {}) {
     super();
     this.kind = kind;
@@ -70,6 +83,11 @@ class FakeHTMLElement extends FakeElement {
     if (kind.preset !== undefined) this.dataset.ctxPreset = String(kind.preset);
     if (kind.presets) this.dataset.ctxPresets = "";
     if (kind.grid) this.dataset.ctxGrid = "";
+    if (kind.panel !== undefined) this.dataset.ctxPanel = kind.panel;
+    if (kind.canvas) this.dataset.ctxCanvas = "";
+    if (kind.mask !== undefined) this.dataset.ctxMask = kind.mask;
+    if (kind.shape !== undefined) this.dataset.ctxShape = kind.shape;
+    if (kind.title !== undefined) this.dataset.ctxTitle = kind.title;
     this.focus = vi.fn();
     this.getBoundingClientRect = () => ({ left: 100, bottom: 200 });
   }
@@ -315,5 +333,131 @@ describe("rail and Develop-rail surfaces", () => {
     expect(A.handleContextMenuKey(/** @type {any} */ ({ key: "F10", shiftKey: true, target: new FakeHTMLElement(), preventDefault: vi.fn() }))).toBe(true);
     expect(contextMenu.isOpen).toBe(true);
     expect(contextMenu.returnFocusTo).toBe(button);
+  });
+});
+
+describe("Develop surfaces", () => {
+  /** Finds an item at any depth (Zoom's Fit lives in a submenu). @param {any[]} entries @param {string} id @returns {any} */
+  const findDeep = (entries, id) => {
+    for (const e of entries) {
+      if (e.id === id) return e;
+      const inner = e.children ? findDeep(e.children, id) : undefined;
+      if (inner) return inner;
+    }
+    return undefined;
+  };
+  const run = (/** @type {string} */ id) => findDeep(contextMenu.items, id).run();
+  const item = (/** @type {string} */ id) => findDeep(contextMenu.items, id);
+  const stackWith = (/** @type {any[]} */ ops) => ({ schema_version: 1, ops });
+
+  beforeEach(() => {
+    shell.activeModule = "develop";
+    develop.editStack = /** @type {any} */ (stackWith([]));
+    develop.history = /** @type {any} */ ([
+      { id: 1, label: "Import" },
+      { id: 2, label: "Exposure" },
+      { id: 3, label: "Contrast" },
+    ]);
+    develop.historyIndex = 1;
+    develop.showOriginal = false;
+    develop.showClippingOverlay = false;
+    develop.zoomRequest = null;
+    presets.confirmingReset = false;
+    masks.selectedMaskId = null;
+    masks.selectedShapeId = null;
+    masks.showMaskOverlay = true;
+  });
+
+  it("a panel header offers the panel's own title and runs the panel actions", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ panel: "vignette", title: "Vignette" })));
+    expect(item("toggle-panel").label).toBe("Hide Vignette");
+    run("toggle-panel");
+    expect(handleTogglePanelVisibility).toHaveBeenCalledWith("vignette");
+    A.handleContextMenu(mouse(new FakeHTMLElement({ panel: "vignette", title: "Vignette" })));
+    run("solo-panel");
+    expect(handleSoloPanel).toHaveBeenCalledWith("vignette");
+    A.handleContextMenu(mouse(new FakeHTMLElement({ panel: "vignette", title: "Vignette" })));
+    run("reset-panel");
+    expect(handleResetPanel).toHaveBeenCalledWith("vignette");
+  });
+
+  it("a panel hidden in the stack is offered Show, and Show All becomes available", () => {
+    develop.editStack = /** @type {any} */ (stackWith([{ op: "panel_hidden", panel: "vignette" }]));
+    A.handleContextMenu(mouse(new FakeHTMLElement({ panel: "vignette", title: "Vignette" })));
+    expect(item("toggle-panel").label).toBe("Show Vignette");
+    expect(item("show-all-panels").disabled).toBe(false);
+  });
+
+  it("the canvas menu names the history entries Undo / Redo would step over, from the real history", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ canvas: true })));
+    expect(item("undo").label).toBe("Undo Exposure");
+    expect(item("redo").label).toBe("Redo Contrast");
+    run("undo");
+    expect(handleUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it("the canvas toggles flip Develop's own flags; Zoom posts a fresh request; Reset opens the existing confirmation", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ canvas: true })));
+    run("before-after");
+    expect(develop.showOriginal).toBe(true);
+    A.handleContextMenu(mouse(new FakeHTMLElement({ canvas: true })));
+    expect(item("before-after").checked).toBe(true);
+    run("zoom-fit");
+    expect(develop.zoomRequest).toEqual({ action: { type: "fit" } });
+    const first = develop.zoomRequest;
+    A.handleContextMenu(mouse(new FakeHTMLElement({ canvas: true })));
+    run("zoom-fit");
+    expect(develop.zoomRequest).not.toBe(first); // a new object, or the canvas would not react
+    A.handleContextMenu(mouse(new FakeHTMLElement({ canvas: true })));
+    run("reset-settings");
+    expect(presets.confirmingReset).toBe(true);
+  });
+
+  it("Mask Overlay is disabled with no masks, and enabled and togglable with one", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ canvas: true })));
+    expect(item("mask-overlay").disabled).toBe(true);
+    develop.editStack = /** @type {any} */ (addMask(/** @type {any} */ (stackWith([])), /** @type {any} */ (createBrushMask("b1"))));
+    A.handleContextMenu(mouse(new FakeHTMLElement({ canvas: true })));
+    expect(item("mask-overlay").disabled).toBe(false);
+    run("mask-overlay");
+    expect(masks.showMaskOverlay).toBe(false);
+  });
+
+  it("the mask panel menu inverts the selected mask, closes the panel, deletes it", () => {
+    const mask = createRadialGradientMask({ x: 0.5, y: 0.5 }, 0.2, 0.2);
+    develop.editStack = /** @type {any} */ (addMask(/** @type {any} */ (stackWith([])), mask));
+    masks.selectedMaskId = mask.id;
+    A.handleContextMenu(mouse(new FakeHTMLElement({ mask: mask.id, title: "Radial Gradient" })));
+    expect(item("invert-mask").checked).toBe(false);
+    expect(item("mask-overlay")).toBeUndefined(); // a gradient has no overlay row, as in the panel
+    run("invert-mask");
+    expect(handleMaskUpdated).toHaveBeenCalledWith(mask.id, { invert: true });
+    A.handleContextMenu(mouse(new FakeHTMLElement({ mask: mask.id, title: "Radial Gradient" })));
+    expect(item("delete-mask").confirm).toBeTruthy();
+    run("delete-mask");
+    expect(handleMaskDeleted).toHaveBeenCalledTimes(1);
+    A.handleContextMenu(mouse(new FakeHTMLElement({ mask: mask.id, title: "Radial Gradient" })));
+    run("close-mask");
+    expect(masks.selectedMaskId).toBeNull();
+  });
+
+  it("Invert follows the selected shape, not the base mask", () => {
+    const base = createBrushMask("base");
+    const shape = createModifier("add", /** @type {any} */ (createRadialGradientMask({ x: 0.5, y: 0.5 }, 0.2, 0.2)), "s1");
+    develop.editStack = /** @type {any} */ (addModifier(/** @type {any} */ (addMask(/** @type {any} */ (stackWith([])), /** @type {any} */ (base))), "base", shape));
+    masks.selectedMaskId = "base";
+    masks.selectedShapeId = "s1";
+    A.handleContextMenu(mouse(new FakeHTMLElement({ mask: "base", title: "Brush" })));
+    run("invert-mask");
+    expect(handleMaskUpdated).toHaveBeenCalledWith("s1", { invert: true });
+  });
+
+  it("a shape row can be removed (after its confirmation)", () => {
+    masks.selectedShapeId = "s1";
+    A.handleContextMenu(mouse(new FakeHTMLElement({ shape: "s1", title: "Radial" })));
+    expect(item("select-shape").disabled).toBe(true); // it is the one being edited
+    expect(item("remove-shape").confirm).toBeTruthy();
+    run("remove-shape");
+    expect(handleShapeRemoved).toHaveBeenCalledWith("s1");
   });
 });

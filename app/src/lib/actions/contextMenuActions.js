@@ -14,6 +14,7 @@ import { presets } from "$lib/state/presets.svelte.js";
 import { exportFlow } from "$lib/state/exportFlow.svelte.js";
 import { contextMenu } from "$lib/state/contextMenu.svelte.js";
 import { faces } from "$lib/state/faces.svelte.js";
+import { masks } from "$lib/state/masks.svelte.js";
 import { handleSelectAll, handleDeselectAll } from "$lib/actions/selectionActions.js";
 import { handleRatingChange, handleFlagChange, handleColorLabelChange } from "$lib/actions/metadataActions.js";
 import { handleAddToCollectionSelect, handleRemoveFromCollection } from "$lib/actions/collectionsActions.js";
@@ -28,16 +29,28 @@ import {
   handleDeletePresetRequest,
   handleSaveCurrentAsPresetRequest,
   handleImportPresetRequest,
+  handleCopySettingsRequest,
 } from "$lib/actions/presetActions.js";
 import { handleDetectFacesForSelected, handleDetectFacesForSelection } from "$lib/actions/faceActions.js";
 import { handleImportFolder, handleImportFiles } from "$lib/actions/importActions.js";
 import { prioritizeThumbnail, selectCollection, selectPerson, handleDeleteCollection } from "$lib/actions/libraryActions.js";
-import { handleRestoreSnapshot } from "$lib/actions/historyActions.js";
-import { handleDeleteSnapshot } from "$lib/actions/developActions.js";
+import { handleRestoreSnapshot, handleUndo, handleRedo } from "$lib/actions/historyActions.js";
+import {
+  handleDeleteSnapshot,
+  handleTogglePanelVisibility,
+  handleResetPanel,
+  handleSoloPanel,
+  handleShowAllPanels,
+  handleToggleClippingOverlay,
+  PANEL_LABELS,
+} from "$lib/actions/developActions.js";
+import { handleMaskDeleted, handleMaskUpdated, handleShapeSelected, handleShapeRemoved } from "$lib/actions/maskActions.js";
+import { isPanelHidden, PANEL_IDS, listModifiers, OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
 import { openDevelop, switchModule } from "$lib/actions/navigation.js";
 import { revealInFileManager } from "$lib/api/system.js";
 import { buildPhotoMenu } from "$lib/contextMenus/photoMenu.js";
 import { buildGridBackgroundMenu } from "$lib/contextMenus/gridMenu.js";
+import { buildPanelHeaderMenu, buildCanvasMenu, buildMaskMenu, buildShapeMenu } from "$lib/contextMenus/developMenus.js";
 import { buildCollectionMenu, buildPersonMenu, buildSnapshotMenu, buildPresetMenu, buildPresetListMenu } from "$lib/contextMenus/railMenus.js";
 import { matchesRules } from "$lib/collectionRules.js";
 
@@ -161,7 +174,8 @@ export function photoCommands(images, module) {
 /** Every surface that has a menu marks its element with one of these `data-ctx-*` attributes (the value is the
  * row's id where it has one). The nearest marked ancestor of the pointer decides which menu opens, so a photo cell
  * inside the grid opens the photo menu and the grid's own background the empty-area one. */
-const SURFACE_SELECTOR = "[data-ctx-photo], [data-ctx-collection], [data-ctx-person], [data-ctx-snapshot], [data-ctx-preset], [data-ctx-presets], [data-ctx-grid]";
+const SURFACE_SELECTOR =
+  "[data-ctx-photo], [data-ctx-collection], [data-ctx-person], [data-ctx-snapshot], [data-ctx-preset], [data-ctx-presets], [data-ctx-panel], [data-ctx-canvas], [data-ctx-mask], [data-ctx-shape], [data-ctx-grid]";
 
 /** @param {number} id @param {number} x @param {number} y @param {HTMLElement | null} opener @param {boolean} fromKeyboard */
 function openCollectionMenu(id, x, y, opener, fromKeyboard) {
@@ -236,6 +250,107 @@ function openPresetListMenu(x, y, opener, fromKeyboard) {
   contextMenu.show({ items, x, y, returnFocusTo: opener, fromKeyboard });
 }
 
+/** @param {HTMLElement} el the header @param {number} x @param {number} y @param {HTMLElement | null} opener @param {boolean} fromKeyboard */
+function openPanelHeaderMenu(el, x, y, opener, fromKeyboard) {
+  const panel = el.dataset.ctxPanel ?? "";
+  const stack = develop.editStack;
+  const items = buildPanelHeaderMenu(
+    {
+      title: el.dataset.ctxTitle ?? PANEL_LABELS[panel] ?? panel,
+      hidden: isPanelHidden(stack, panel),
+      othersVisible: PANEL_IDS.some((p) => p !== panel && !isPanelHidden(stack, p)),
+      anyHidden: PANEL_IDS.some((p) => isPanelHidden(stack, p)),
+    },
+    {
+      toggleVisibility: () => handleTogglePanelVisibility(panel),
+      reset: () => handleResetPanel(panel),
+      solo: () => handleSoloPanel(panel),
+      showAll: handleShowAllPanels,
+    },
+  );
+  contextMenu.show({ items, x, y, returnFocusTo: opener, fromKeyboard });
+}
+
+/** @param {number} x @param {number} y @param {HTMLElement | null} opener @param {boolean} fromKeyboard */
+function openCanvasMenu(x, y, opener, fromKeyboard) {
+  const { history, historyIndex } = develop;
+  const items = buildCanvasMenu(
+    {
+      undoLabel: develop.canUndo ? (history[historyIndex]?.label ?? "") : null,
+      redoLabel: develop.canRedo ? (history[historyIndex + 1]?.label ?? "") : null,
+      showOriginal: develop.showOriginal,
+      clipping: develop.showClippingOverlay,
+      maskOverlay: masks.showMaskOverlay,
+      hasMasks: masks.list.length > 0,
+      hasCopiedSettings: develop.copiedSettings !== null,
+    },
+    {
+      undo: handleUndo,
+      redo: handleRedo,
+      toggleBeforeAfter: () => {
+        develop.showOriginal = !develop.showOriginal;
+      },
+      // A fresh object each time: the canvas reacts to the object changing (see develop.zoomRequest).
+      zoomFit: () => {
+        develop.zoomRequest = { action: { type: "fit" } };
+      },
+      zoomActual: () => {
+        develop.zoomRequest = { action: { type: "actual" } };
+      },
+      toggleClipping: handleToggleClippingOverlay,
+      toggleMaskOverlay: () => {
+        masks.showMaskOverlay = !masks.showMaskOverlay;
+      },
+      copySettings: handleCopySettingsRequest,
+      pasteSettings: handlePasteSettings,
+      resetSettings: () => {
+        presets.confirmingReset = true;
+      },
+    },
+  );
+  contextMenu.show({ items, x, y, returnFocusTo: opener, fromKeyboard });
+}
+
+/** @param {HTMLElement} el the mask panel @param {number} x @param {number} y @param {HTMLElement | null} opener @param {boolean} fromKeyboard */
+function openMaskMenu(el, x, y, opener, fromKeyboard) {
+  const mask = masks.selectedMask;
+  if (!mask) return;
+  // Invert edits the selected shape (the base shape is the mask itself), exactly like the panel's checkbox.
+  const shapeId = masks.selectedShapeId;
+  const editShape = shapeId === null ? null : listModifiers(mask).find((m) => m.id === shapeId);
+  const target = /** @type {any} */ (editShape ? editShape.shape : mask);
+  const items = buildMaskMenu(
+    {
+      title: el.dataset.ctxTitle ?? "Mask",
+      canInvert: mask.op !== "spot_mask" && mask.op !== "red_eye_mask",
+      inverted: !!target.invert,
+      overlayCapable: OVERLAY_CAPABLE_MASK_OPS.includes(mask.op) || listModifiers(mask).length > 0,
+      overlayOn: masks.showMaskOverlay,
+    },
+    {
+      toggleInvert: () => handleMaskUpdated(editShape ? editShape.id : mask.id, { invert: !target.invert }),
+      toggleOverlay: () => {
+        masks.showMaskOverlay = !masks.showMaskOverlay;
+      },
+      close: () => {
+        masks.selectedMaskId = null;
+      },
+      remove: handleMaskDeleted,
+    },
+  );
+  contextMenu.show({ items, x, y, returnFocusTo: opener, fromKeyboard });
+}
+
+/** @param {HTMLElement} el the shape row @param {number} x @param {number} y @param {HTMLElement | null} opener @param {boolean} fromKeyboard */
+function openShapeMenu(el, x, y, opener, fromKeyboard) {
+  const id = el.dataset.ctxShape ?? "";
+  const items = buildShapeMenu(
+    { name: el.dataset.ctxTitle ?? "shape", selected: masks.selectedShapeId === id },
+    { select: () => handleShapeSelected(id), remove: () => handleShapeRemoved(id) },
+  );
+  contextMenu.show({ items, x, y, returnFocusTo: opener, fromKeyboard });
+}
+
 /** Opens the menu of the surface `el` belongs to, if it has one. `fromKeyboard` starts the highlight on the first row.
  * @param {HTMLElement} el the marked element @param {number} x @param {number} y @param {HTMLElement | null} opener @param {boolean} fromKeyboard
  * @returns {boolean} whether a menu was opened */
@@ -247,6 +362,10 @@ function openSurfaceMenu(el, x, y, opener, fromKeyboard) {
   else if (d.ctxSnapshot !== undefined) openSnapshotMenu(Number(d.ctxSnapshot), x, y, opener, fromKeyboard);
   else if (d.ctxPreset !== undefined) openPresetMenu(Number(d.ctxPreset), x, y, opener, fromKeyboard);
   else if (d.ctxPresets !== undefined) openPresetListMenu(x, y, opener, fromKeyboard);
+  else if (d.ctxPanel !== undefined) openPanelHeaderMenu(el, x, y, opener, fromKeyboard);
+  else if (d.ctxShape !== undefined) openShapeMenu(el, x, y, opener, fromKeyboard);
+  else if (d.ctxMask !== undefined) openMaskMenu(el, x, y, opener, fromKeyboard);
+  else if (d.ctxCanvas !== undefined) openCanvasMenu(x, y, opener, fromKeyboard);
   else if (d.ctxGrid !== undefined && shell.activeModule === "library") openGridBackgroundMenu(x, y, opener);
   else return false;
   return true;

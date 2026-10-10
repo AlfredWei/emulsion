@@ -30,6 +30,8 @@ import {
   addSnapshot,
   deleteSnapshot,
   togglePanelVisibility,
+  soloPanel,
+  showAllPanels,
   resetPanel,
 } from "$lib/api/develop.js";
 import { developView } from "$lib/state/developView.svelte.js";
@@ -62,7 +64,7 @@ export function handleAdjustmentChange(/** @type {string} */ opName, /** @type {
 // RFC-0013: human-readable History labels for the 12 op-bearing panels'
 // visibility/reset actions -- same fallback-to-key shape ADJUSTMENT_LABELS
 // uses above.
-const PANEL_LABELS = /** @type {Record<string, string>} */ ({
+export const PANEL_LABELS = /** @type {Record<string, string>} */ ({
   basic: "Basic",
   tone_curve: "Tone Curve",
   hsl: "HSL / Color Mixer",
@@ -82,6 +84,17 @@ const PANEL_LABELS = /** @type {Record<string, string>} */ ({
 export function handleTogglePanelVisibility(/** @type {string} */ panel) {
   develop.editStack = togglePanelVisibility(develop.editStack, panel);
   develop.scheduleFlush(`${PANEL_LABELS[panel] ?? panel} Visibility`);
+}
+
+/** Shows only this panel (RFC-0028 context menu); undoable like any visibility change. */
+export function handleSoloPanel(/** @type {string} */ panel) {
+  develop.editStack = soloPanel(develop.editStack, panel);
+  develop.scheduleFlush(`Solo ${PANEL_LABELS[panel] ?? panel}`);
+}
+
+export function handleShowAllPanels() {
+  develop.editStack = showAllPanels(develop.editStack);
+  develop.scheduleFlush("Show All Panels");
 }
 
 /** Reverts just one panel's own values to default (RFC-0013) -- never

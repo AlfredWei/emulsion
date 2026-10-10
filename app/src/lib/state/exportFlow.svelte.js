@@ -30,6 +30,11 @@ export class ExportFlowStore {
   // follow-up M1 Slice 5's export_batch was explicitly built to accept).
   currentItems = $derived.by(() => {
     if (this.shell.activeModule === "develop" && this.develop.versionId !== null) {
+      // Develop multi-select (RFC-0028 §3.4): the selection, which always contains the open photo.
+      const picked = this.selection.selectedImages;
+      if (picked.length > 1 && this.selection.selectedIds.has(this.develop.versionId)) {
+        return picked.map((img) => ({ path: img.path, version_id: img.version_id }));
+      }
       return [{ path: this.develop.imagePath, version_id: this.develop.versionId }];
     }
     if (this.selection.selectedImages.length > 0) {

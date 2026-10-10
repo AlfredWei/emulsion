@@ -55,6 +55,8 @@ function makeCtx(over = {}) {
     openDevelop: vi.fn(async () => {}),
     handleSelectAll: vi.fn(),
     handleDeselectAll: vi.fn(),
+    handleDevelopSelectAll: vi.fn(),
+    handleDevelopCollapseSelection: vi.fn(),
     handleCompareNextCandidate: vi.fn(),
     handleComparePrevCandidate: vi.fn(),
     handleRatingChange: vi.fn(async () => {}),
@@ -291,6 +293,17 @@ describe("library module", () => {
 
 describe("develop module", () => {
   const dev = (/** @type {object} */ o = {}) => makeCtx({ activeModule: "develop", ...o });
+
+  it("Cmd/Ctrl+A selects the whole filmstrip and Cmd/Ctrl+D drops back to the open photo", () => {
+    const ctx = dev();
+    const { press } = setup(ctx);
+    const a = press("a", { metaKey: true });
+    expect(ctx.handleDevelopSelectAll).toHaveBeenCalledTimes(1);
+    expect(a.preventDefault).toHaveBeenCalled();
+    press("d", { ctrlKey: true });
+    expect(ctx.handleDevelopCollapseSelection).toHaveBeenCalledTimes(1);
+    expect(ctx.handleSelectAll).not.toHaveBeenCalled();
+  });
 
   it("Cmd/Ctrl+Z undoes, +Shift redoes, Ctrl+Y redoes", () => {
     const ctx = dev();

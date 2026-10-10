@@ -23,6 +23,10 @@ export class SelectionStore {
 
   selectedId = $state(/** @type {number | null} */ (null));
   selectedIds = $state(/** @type {Set<number>} */ (new Set()));
+  /** Where a Shift-click range starts in the Develop filmstrip (RFC-0028 §3.4): the last photo clicked plainly or
+   * added with Cmd / Ctrl. Unlike `selectedId` it stays put when a range makes another photo the active one.
+   * @type {number | null} */
+  developAnchorId = null;
 
   selectedImage = $derived(this.library.images.find((img) => img.version_id === this.selectedId) ?? null);
   selectedImages = $derived(this.library.images.filter((img) => this.selectedIds.has(img.version_id)));

@@ -8,7 +8,7 @@ const img = (/** @type {number} */ id, /** @type {object} */ extra = {}) =>
 
 const COMMANDS = [
   "openInDevelop", "openInLoupe", "compare", "survey", "setRating", "setFlag", "setColorLabel", "addToCollection", "removeFromCollection",
-  "copySettings", "pasteSettings", "applyPreset", "resetSettings", "exportPhotos", "reveal", "copyPath", "detectFaces", "removeFromCatalog",
+  "copySettings", "syncSettings", "pasteSettings", "applyPreset", "resetSettings", "exportPhotos", "reveal", "copyPath", "detectFaces", "removeFromCatalog",
 ];
 function commands() {
   return /** @type {any} */ (Object.fromEntries(COMMANDS.map((c) => [c, vi.fn()])));
@@ -161,6 +161,28 @@ describe("photo menu: Develop filmstrip", () => {
     const m = buildPhotoMenu(input({ module: "develop", images: [img(1), img(2)], viewedCollection: { id: 1, name: "x" } }), commands());
     expect(find(m, "remove-from-collection")).toBeUndefined();
     expect(find(m, "compare-survey")).toBeUndefined();
+  });
+});
+
+describe("photo menu: Sync Settings (Develop multi-select)", () => {
+  const images = [img(1), img(2), img(3)];
+
+  it("is the first Develop Settings entry when the open photo is one of several selected", () => {
+    const cmd = commands();
+    const m = buildPhotoMenu(input({ module: "develop", images, openVersionId: 20 }), cmd);
+    const sync = find(m, "sync-settings");
+    expect(sync?.label).toBe("Sync Settings…");
+    expect(sync?.disabled).toBeFalsy();
+    const children = find(m, "develop-settings")?.children ?? [];
+    expect(isItem(children[0]) && children[0].id).toBe("sync-settings");
+    sync?.run?.();
+    expect(cmd.syncSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("is absent for one photo, in Library, and when the open photo is not among the selected ones", () => {
+    expect(find(buildPhotoMenu(input({ module: "develop", images: [img(1)], openVersionId: 10 }), commands()), "sync-settings")).toBeUndefined();
+    expect(find(buildPhotoMenu(input({ module: "library", images, openVersionId: null }), commands()), "sync-settings")).toBeUndefined();
+    expect(find(buildPhotoMenu(input({ module: "develop", images, openVersionId: 99 }), commands()), "sync-settings")).toBeUndefined();
   });
 });
 

@@ -147,6 +147,16 @@ export async function handleApplyPresetToSelection(/** @type {string} */ value) 
 export function handleCopySettingsRequest() {
   if (develop.versionId === null) return;
   presets.copySourceStack = null;
+  presets.copySettingsPurpose = "copy";
+  presets.copySettingsDialogOpen = true;
+}
+
+/** Sync Settings (RFC-0028 §3.4): the same group dialog, but confirming applies the chosen groups of the open photo
+ * to the other selected photos instead of filling the clipboard. Needs 2+ selected photos. */
+export function handleSyncSettingsRequest() {
+  if (develop.versionId === null || selection.selectedIds.size < 2) return;
+  presets.copySourceStack = null;
+  presets.copySettingsPurpose = "sync";
   presets.copySettingsDialogOpen = true;
 }
 
@@ -159,15 +169,48 @@ export async function handleCopySettingsFromPhoto(/** @type {number} */ versionI
     shell.notify(`Copy settings failed: ${e}`);
     return;
   }
+  presets.copySettingsPurpose = "copy";
   presets.copySettingsDialogOpen = true;
 }
 
 export function handleCopySettingsConfirmed(/** @type {string[]} */ groupIds) {
   presets.copySettingsDialogOpen = false;
+  if (presets.copySettingsPurpose === "sync") {
+    presets.copySourceStack = null;
+    return syncSettingsToSelection(groupIds);
+  }
   const source = presets.copySourceStack ?? develop.editStack;
   presets.copySourceStack = null;
   develop.copiedSettings = copySettingsOps(source, groupIds);
   shell.notify("Copied settings");
+}
+
+/** Sync Settings: the chosen groups of the open photo's stack (the in-memory one, so edits not flushed yet count) are
+ * merged into every other selected photo, one history entry each labelled "Sync Settings". Same non-atomic per-target
+ * shape as the batch paste above; the open photo is never a target, so there is nothing to re-sync.
+ * @param {string[]} groupIds */
+export async function syncSettingsToSelection(groupIds) {
+  const sourceId = develop.versionId;
+  if (sourceId === null) return;
+  const ops = copySettingsOps(develop.editStack, groupIds);
+  const targets = [...selection.selectedIds].filter((id) => id !== sourceId);
+  if (targets.length === 0) return;
+  presets.syncingSettings = true;
+  try {
+    await Promise.all(
+      targets.map(async (versionId) => {
+        const current = await getEditStack(versionId);
+        await setEditStack(versionId, applyPresetOps(current, ops), "Sync Settings");
+        const path = await regenerateThumbnail(versionId);
+        if (path) patchLocal(versionId, { thumbnail_path: path });
+      }),
+    );
+    shell.notify(`Synced settings to ${targets.length} photo${targets.length === 1 ? "" : "s"}`);
+  } catch (/** @type {any} */ e) {
+    shell.notify(`Sync settings failed: ${e}`);
+  } finally {
+    presets.syncingSettings = false;
+  }
 }
 
 /** Reset Settings on the Library selection (the context menu; the user confirmed in the menu's dialog).

@@ -46,6 +46,8 @@ import { OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
  * @property {(versionId: number) => Promise<void>} openDevelop
  * @property {() => void} handleSelectAll
  * @property {() => void} handleDeselectAll
+ * @property {() => void} handleDevelopSelectAll - Cmd/Ctrl-A in Develop: the whole filmstrip
+ * @property {() => void} handleDevelopCollapseSelection - Cmd/Ctrl-D in Develop: back to the active photo
  * @property {() => void} handleCompareNextCandidate
  * @property {() => void} handleComparePrevCandidate
  * @property {(versionId: number | null | undefined, rating: number) => Promise<void>} handleRatingChange
@@ -102,6 +104,15 @@ export function createKeyboardHandlers(ctx) {
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && key === "y") {
         e.preventDefault();
         ctx.handleRedo();
+        return;
+      }
+
+      // Filmstrip multi-select (RFC-0028 §3.4): Cmd/Ctrl-A selects every photo of the filmstrip, Cmd/Ctrl-D drops
+      // back to the active photo.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (key === "a" || key === "d")) {
+        e.preventDefault();
+        if (key === "a") ctx.handleDevelopSelectAll();
+        else ctx.handleDevelopCollapseSelection();
         return;
       }
 

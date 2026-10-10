@@ -30,6 +30,7 @@ import {
   handleSaveCurrentAsPresetRequest,
   handleImportPresetRequest,
   handleCopySettingsRequest,
+  handleSyncSettingsRequest,
 } from "$lib/actions/presetActions.js";
 import { handleDetectFacesForSelected, handleDetectFacesForSelection } from "$lib/actions/faceActions.js";
 import { handleImportFolder, handleImportFiles } from "$lib/actions/importActions.js";
@@ -46,7 +47,7 @@ import {
 } from "$lib/actions/developActions.js";
 import { handleMaskDeleted, handleMaskUpdated, handleShapeSelected, handleShapeRemoved } from "$lib/actions/maskActions.js";
 import { isPanelHidden, PANEL_IDS, listModifiers, OVERLAY_CAPABLE_MASK_OPS } from "$lib/api/develop.js";
-import { openDevelop, switchModule } from "$lib/actions/navigation.js";
+import { openDevelop, switchModule, handleDevelopFilmstripSelect } from "$lib/actions/navigation.js";
 import { revealInFileManager } from "$lib/api/system.js";
 import { buildPhotoMenu } from "$lib/contextMenus/photoMenu.js";
 import { buildGridBackgroundMenu } from "$lib/contextMenus/gridMenu.js";
@@ -60,13 +61,18 @@ function isTextField(target) {
   return target instanceof Element && target.closest("input, textarea, select, [contenteditable='true']") !== null;
 }
 
-/** Applies the target rule and returns the photos the menu acts on, in library order.
+/** Applies the target rule and returns the photos the menu acts on, in library order. A photo outside the selection
+ * is selected first; in Develop that is a plain click on it (it becomes the active photo, as in Lightroom), which
+ * keeps the selection containing the active photo.
  * @param {number} versionId @param {"library" | "develop"} module */
 export function resolveTargets(versionId, module) {
-  const inSelection = module === "library" && selection.selectedIds.has(versionId);
-  if (!inSelection) {
-    selection.selectedId = versionId;
-    selection.selectedIds = new Set([versionId]);
+  if (!selection.selectedIds.has(versionId)) {
+    if (module === "develop") {
+      handleDevelopFilmstripSelect(versionId);
+    } else {
+      selection.selectedId = versionId;
+      selection.selectedIds = new Set([versionId]);
+    }
   }
   return library.images.filter((img) => selection.selectedIds.has(img.version_id));
 }
@@ -93,7 +99,8 @@ export function openPhotoMenu(versionId, x, y, opener, fromKeyboard = false) {
     {
       images,
       module,
-      openVersionId: module === "develop" ? develop.versionId : null,
+      // `selectedId` follows the active photo at once, `develop.versionId` only once the photo has loaded.
+      openVersionId: module === "develop" ? (selection.selectedId ?? develop.versionId) : null,
       viewedCollection: collection && !collection.is_smart ? { id: collection.id, name: collection.name } : null,
       manualCollections: library.manualCollections.map((c) => ({ id: c.id, name: c.name })),
       presets: presets.list.map((p) => ({ id: p.id, name: p.name })),
@@ -119,6 +126,11 @@ function openGridBackgroundMenu(x, y, opener) {
  * @param {import('$lib/api/catalog.js').ImageSummary[]} images @param {"library" | "develop"} module
  * @returns {import('$lib/contextMenus/photoMenu.js').PhotoMenuCommands} */
 export function photoCommands(images, module) {
+  // A batch writes straight to the catalog and then re-reads the open photo, so its pending slider edit (debounced,
+  // not saved yet) must land first or the re-read would drop it.
+  const flushOpenPhoto = async () => {
+    if (module === "develop") await develop.flushEditStack();
+  };
   return {
     openInDevelop: (versionId) => {
       openDevelop(versionId);
@@ -142,13 +154,21 @@ export function photoCommands(images, module) {
     addToCollection: (id) => handleAddToCollectionSelect(id === "new" ? "__new__" : String(id)),
     removeFromCollection: () => handleRemoveFromCollection(),
     copySettings: (versionId) => handleCopySettingsFromPhoto(versionId),
-    pasteSettings: () => {
-      // The open Develop photo is pasted through Develop's own path (its in-memory stack, flushed under a label).
+    syncSettings: () => handleSyncSettingsRequest(),
+    pasteSettings: async () => {
+      // The open Develop photo alone is pasted through Develop's own path (its in-memory stack, flushed under a label).
       if (module === "develop" && images.length === 1 && images[0].version_id === develop.versionId) return handlePasteSettings();
+      await flushOpenPhoto();
       return handlePasteSettingsToSelection();
     },
-    applyPreset: (presetId) => handleApplyPresetToSelection(String(presetId)),
-    resetSettings: () => handleResetSettingsForSelection(),
+    applyPreset: async (presetId) => {
+      await flushOpenPhoto();
+      return handleApplyPresetToSelection(String(presetId));
+    },
+    resetSettings: async () => {
+      await flushOpenPhoto();
+      return handleResetSettingsForSelection();
+    },
     exportPhotos: async () => {
       if (module === "develop") await develop.flushEditStack();
       exportFlow.items = images.map((img) => ({ path: img.path, version_id: img.version_id }));

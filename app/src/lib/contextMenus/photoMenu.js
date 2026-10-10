@@ -31,6 +31,7 @@ import { formatKeyDisplay } from "$lib/shortcuts.js";
  * @property {(collectionId: number | "new") => void} addToCollection
  * @property {() => void} removeFromCollection
  * @property {(versionId: number) => void} copySettings
+ * @property {() => void} syncSettings
  * @property {() => void} pasteSettings
  * @property {(presetId: number) => void} applyPreset
  * @property {() => void} resetSettings
@@ -74,6 +75,9 @@ export function buildPhotoMenu(input, cmd) {
   const flag = shared(images, (i) => i.flag);
   const label = shared(images, (i) => i.color_label);
   const onlyOpenPhoto = !many && first.version_id === openVersionId;
+
+  // Sync Settings (RFC-0028 §3.4) copies the open photo's settings to the other selected ones.
+  const syncable = module === "develop" && many && images.some((i) => i.version_id === openVersionId);
 
   const singleOnly = many ? "Choose a single photo" : undefined;
 
@@ -137,6 +141,12 @@ export function buildPhotoMenu(input, cmd) {
       id: "develop-settings",
       label: "Develop Settings",
       children: tidy([
+        syncable && {
+          id: "sync-settings",
+          label: "Sync Settings…",
+          run: cmd.syncSettings,
+        },
+        syncable && SEPARATOR,
         { id: "copy-settings", label: "Copy Settings…", disabled: many, reason: singleOnly, run: () => cmd.copySettings(first.version_id) },
         {
           id: "paste-settings",

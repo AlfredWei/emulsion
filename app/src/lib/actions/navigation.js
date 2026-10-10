@@ -84,6 +84,85 @@ export function selectPrevImage(/** @type {boolean=} */ extend) {
   }
 }
 
+/** The photos the Develop filmstrip shows: the filtered ones, or all of them when the filter excludes the open photo. */
+export function developFilmstripList() {
+  return library.filteredImages.some((img) => img.version_id === develop.versionId) ? library.filteredImages : library.images;
+}
+
+/** A click in the Develop filmstrip (RFC-0028 §3.4). The selection always contains the active photo
+ * (`develop.versionId`), which is the only one decoded:
+ *  - plain click: open that photo, the only selected one;
+ *  - Cmd / Ctrl-click: toggle it; a photo that was added becomes the active one, and removing the active one hands
+ *    the role to the nearest photo still selected (the last photo cannot be removed);
+ *  - Shift-click: select the range from the anchor, and the clicked photo becomes the active one.
+ * @param {number} versionId @param {{ shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean }} [event] */
+export function handleDevelopFilmstripSelect(versionId, event) {
+  const list = developFilmstripList();
+  const clickedIndex = list.findIndex((img) => img.version_id === versionId);
+  if (clickedIndex === -1) return;
+
+  if (event?.shiftKey) {
+    const anchorId = selection.developAnchorId ?? develop.versionId;
+    const anchorIndex = list.findIndex((img) => img.version_id === anchorId);
+    if (anchorIndex !== -1) {
+      const [from, to] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
+      selection.developAnchorId = list[anchorIndex].version_id;
+      selection.selectedIds = new Set(list.slice(from, to + 1).map((img) => img.version_id));
+      selection.selectedId = versionId;
+      if (versionId !== develop.versionId) openDevelop(versionId);
+      return;
+    }
+    // A stale anchor (filtered out, removed): fall through to a plain click.
+  }
+
+  if (event?.metaKey || event?.ctrlKey) {
+    const next = new Set(selection.selectedIds);
+    if (!next.has(versionId)) {
+      next.add(versionId);
+      selection.developAnchorId = versionId;
+      selection.selectedIds = next;
+      selection.selectedId = versionId;
+      openDevelop(versionId);
+      return;
+    }
+    if (next.size === 1) return;
+    next.delete(versionId);
+    selection.selectedIds = next;
+    if (versionId === develop.versionId) {
+      const nearest = list
+        .map((img, index) => ({ id: img.version_id, distance: Math.abs(index - clickedIndex) }))
+        .filter((c) => next.has(c.id))
+        .sort((a, b) => a.distance - b.distance)[0];
+      selection.selectedId = nearest.id;
+      selection.developAnchorId = nearest.id;
+      openDevelop(nearest.id);
+    }
+    return;
+  }
+
+  selection.developAnchorId = versionId;
+  selection.selectedId = versionId;
+  selection.selectedIds = new Set([versionId]);
+  if (versionId !== develop.versionId) openDevelop(versionId);
+}
+
+/** Cmd / Ctrl-A in Develop: every photo of the filmstrip is selected, the active one stays active. */
+export function handleDevelopSelectAll() {
+  const list = developFilmstripList();
+  if (list.length === 0) return;
+  selection.selectedIds = new Set(list.map((img) => img.version_id));
+  if (develop.versionId !== null) selection.selectedId = develop.versionId;
+}
+
+/** Cmd / Ctrl-D in Develop: back to the active photo alone. */
+export function handleDevelopCollapseSelection() {
+  if (develop.versionId === null) return;
+  selection.selectedId = develop.versionId;
+  selection.developAnchorId = develop.versionId;
+  selection.selectedIds = new Set([develop.versionId]);
+}
+
+
 export async function openDevelop(/** @type {number} */ versionId) {
   // Captured before developVersionId is reassigned below -- the same
   // capture-before-reassignment shape flushEditStack itself already
@@ -115,6 +194,9 @@ export async function openDevelop(/** @type {number} */ versionId) {
   prioritizeThumbnail(versionId);
   develop.versionId = versionId;
   develop.imagePath = image.path;
+  // The selection always contains the active photo, and `selectedId` follows it (RFC-0028 §3.4).
+  selection.selectedId = versionId;
+  if (!selection.selectedIds.has(versionId)) selection.selectedIds = new Set([versionId]);
   // Cleared, not left stale, on every open -- the new image's own real
   // histogram arrives shortly via DevelopCanvas's own GPU readback, but
   // showing the PREVIOUS image's histogram in the meantime would be

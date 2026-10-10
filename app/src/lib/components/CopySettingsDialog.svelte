@@ -7,11 +7,13 @@
    * SmartCollectionDialog/ConfirmDialog -- no new dialog chrome invented.
    * @type {{
    *   open: boolean,
+   *   purpose?: "copy" | "sync",
    *   onConfirm: (selectedGroupIds: string[]) => void,
    *   onCancel: () => void,
    * }}
    */
-  let { open, onConfirm, onCancel } = $props();
+  let { open, purpose = "copy", onConfirm, onCancel } = $props();
+  const sync = $derived(purpose === "sync");
 
   let selected = $state(/** @type {Set<string>} */ (new Set()));
 
@@ -47,12 +49,12 @@
 
 {#if open}
   <div class="overlay">
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Copy Settings">
-      <h2>Copy Settings</h2>
+    <div class="dialog" role="dialog" aria-modal="true" aria-label={sync ? "Sync Settings" : "Copy Settings"}>
+      <h2>{sync ? "Sync Settings" : "Copy Settings"}</h2>
 
       <div class="field">
         <div class="field-header">
-          <span class="field-label">Settings to copy</span>
+          <span class="field-label">{sync ? "Settings to sync" : "Settings to copy"}</span>
           <div class="bulk-actions">
             <button type="button" onclick={selectAll}>Select All</button>
             <button type="button" onclick={selectNone}>Select None</button>
@@ -70,7 +72,7 @@
 
       <div class="actions">
         <button class="secondary" type="button" onclick={onCancel}>Cancel</button>
-        <button class="primary" type="button" onclick={submit} disabled={selected.size === 0}>Copy</button>
+        <button class="primary" type="button" onclick={submit} disabled={selected.size === 0}>{sync ? "Sync" : "Copy"}</button>
       </div>
     </div>
   </div>

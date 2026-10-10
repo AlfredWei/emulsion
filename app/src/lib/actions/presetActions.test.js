@@ -41,6 +41,8 @@ beforeEach(() => {
   presets.applyingPreset = false;
   presets.pastingSettingsToSelection = false;
   presets.copySettingsDialogOpen = false;
+  presets.copySettingsPurpose = "copy";
+  presets.syncingSettings = false;
   develop.versionId = 10;
   develop.imagePath = "/p/a.raw";
   develop.editStack = /** @type {any} */ (stack(1));
@@ -457,5 +459,88 @@ describe("Copy Settings from a photo, and Reset Settings on a selection (the con
     api.getEditStack.mockRejectedValue("boom");
     await A.handleResetSettingsForSelection();
     expect(shell.statusMessage).toMatch(/Reset settings failed: boom/);
+  });
+});
+
+describe("Sync Settings (Develop multi-select)", () => {
+  beforeEach(() => {
+    presets.copySourceStack = null;
+    library.images = /** @type {any} */ ([
+      { version_id: 10, thumbnail_path: "/t/10.jpg" },
+      { version_id: 20, thumbnail_path: "/t/20.jpg" },
+      { version_id: 30, thumbnail_path: "/t/30.jpg" },
+    ]);
+    selection.selectedId = 10;
+    selection.selectedIds = new Set([10, 20, 30]);
+    develop.editStack = /** @type {any} */ (stack(5));
+    api.getEditStack.mockResolvedValue(stack(0));
+  });
+
+  it("the request opens the group dialog for syncing, and needs 2+ selected photos and an open photo", () => {
+    A.handleSyncSettingsRequest();
+    expect(presets.copySettingsDialogOpen).toBe(true);
+    expect(presets.copySettingsPurpose).toBe("sync");
+    presets.copySettingsDialogOpen = false;
+    selection.selectedIds = new Set([10]);
+    A.handleSyncSettingsRequest();
+    expect(presets.copySettingsDialogOpen).toBe(false);
+    selection.selectedIds = new Set([10, 20]);
+    develop.versionId = null;
+    A.handleSyncSettingsRequest();
+    expect(presets.copySettingsDialogOpen).toBe(false);
+  });
+
+  it("a plain Copy Settings request switches the dialog back to copying", () => {
+    A.handleSyncSettingsRequest();
+    presets.copySettingsDialogOpen = false;
+    A.handleCopySettingsRequest();
+    expect(presets.copySettingsPurpose).toBe("copy");
+  });
+
+  it("confirming applies the chosen groups of the open photo's in-memory stack to the OTHER selected photos only, labelled Sync Settings", async () => {
+    A.handleSyncSettingsRequest();
+    await A.handleCopySettingsConfirmed(["basic_tone"]);
+    expect(presets.copySettingsDialogOpen).toBe(false);
+    expect(api.setEditStack.mock.calls.map((c) => c[0]).sort()).toEqual([20, 30]);
+    for (const c of api.setEditStack.mock.calls) {
+      expect(exposureOf(c[1])).toBe(5);
+      expect(c[2]).toBe("Sync Settings");
+    }
+    expect(library.images.filter((i) => i.thumbnail_path === "/t/new.jpg").map((i) => i.version_id)).toEqual([20, 30]);
+    expect(shell.statusMessage).toBe("Synced settings to 2 photos");
+    expect(develop.copiedSettings).toBeNull(); // syncing is not copying
+    expect(presets.syncingSettings).toBe(false);
+  });
+
+  it("only the chosen groups travel: a group left unticked leaves the target's own value alone", async () => {
+    develop.editStack = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "exposure", value: 5 }, { op: "vignette", amount: -40 }] });
+    api.getEditStack.mockResolvedValue({ schema_version: 1, ops: [{ op: "vignette", amount: 7 }] });
+    A.handleSyncSettingsRequest();
+    await A.handleCopySettingsConfirmed(["basic_tone"]);
+    const written = api.setEditStack.mock.calls[0][1];
+    expect(exposureOf(written)).toBe(5);
+    expect(written.ops.find((/** @type {any} */ o) => o.op === "vignette").amount).toBe(7);
+  });
+
+  it("sets its in-flight flag while working and reports a failure once", async () => {
+    /** @type {(v: any) => void} */
+    let release = () => {};
+    api.getEditStack.mockReturnValueOnce(new Promise((r) => (release = r)));
+    A.handleSyncSettingsRequest();
+    const p = A.handleCopySettingsConfirmed(["basic_tone"]);
+    expect(presets.syncingSettings).toBe(true);
+    release(stack(0));
+    await p;
+    expect(presets.syncingSettings).toBe(false);
+    api.getEditStack.mockRejectedValue("nope");
+    A.handleSyncSettingsRequest();
+    await A.handleCopySettingsConfirmed(["basic_tone"]);
+    expect(shell.statusMessage).toBe("Sync settings failed: nope");
+  });
+
+  it("does not touch the catalog when the open photo is the only one selected", async () => {
+    selection.selectedIds = new Set([10]);
+    await A.syncSettingsToSelection(["basic_tone"]);
+    expect(api.setEditStack).not.toHaveBeenCalled();
   });
 });

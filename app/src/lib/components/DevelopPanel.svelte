@@ -395,7 +395,7 @@
   </div>
   <Histogram data={histogramData} {showClippingOverlay} {onToggleClippingOverlay} {hoverPixel} />
   <details class="section" class:panel-hidden={isPanelHidden("basic")} open>
-    <summary>{@render panelHeader("Basic", "basic")}</summary>
+    <summary data-ctx-panel="basic" data-ctx-title="Basic">{@render panelHeader("Basic", "basic")}</summary>
     <div class="sub-body">
       <!-- White Balance -->
       <div class="subsection-header">
@@ -593,7 +593,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("tone_curve")} open>
-    <summary>{@render panelHeader("Tone Curve", "tone_curve")}</summary>
+    <summary data-ctx-panel="tone_curve" data-ctx-title="Tone Curve">{@render panelHeader("Tone Curve", "tone_curve")}</summary>
     <div class="sub-body">
       <div class="row eyedropper-row">
         <button
@@ -613,7 +613,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("hsl")}>
-    <summary>{@render panelHeader("HSL / Color", "hsl")}</summary>
+    <summary data-ctx-panel="hsl" data-ctx-title="HSL / Color">{@render panelHeader("HSL / Color", "hsl")}</summary>
     <div class="sub-body">
       <div class="row eyedropper-row">
         <button
@@ -683,7 +683,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("split_toning")}>
-    <summary>{@render panelHeader("Split Toning", "split_toning")}</summary>
+    <summary data-ctx-panel="split_toning" data-ctx-title="Split Toning">{@render panelHeader("Split Toning", "split_toning")}</summary>
     <div class="sub-body">
       <div class="split-zone">
         <div class="split-zone-label">
@@ -791,7 +791,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("texture_clarity")}>
-    <summary>{@render panelHeader("Texture & Clarity", "texture_clarity")}</summary>
+    <summary data-ctx-panel="texture_clarity" data-ctx-title="Texture & Clarity">{@render panelHeader("Texture & Clarity", "texture_clarity")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="texture-amount">Texture</label>
@@ -825,7 +825,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("dehaze")}>
-    <summary>{@render panelHeader("Dehaze", "dehaze")}</summary>
+    <summary data-ctx-panel="dehaze" data-ctx-title="Dehaze">{@render panelHeader("Dehaze", "dehaze")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="dehaze-amount">Amount</label>
@@ -845,7 +845,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("sharpening")}>
-    <summary>{@render panelHeader("Sharpening", "sharpening")}</summary>
+    <summary data-ctx-panel="sharpening" data-ctx-title="Sharpening">{@render panelHeader("Sharpening", "sharpening")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="sharpen-amount">Amount</label>
@@ -907,7 +907,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("noise_reduction")}>
-    <summary>{@render panelHeader("Noise Reduction", "noise_reduction")}</summary>
+    <summary data-ctx-panel="noise_reduction" data-ctx-title="Noise Reduction">{@render panelHeader("Noise Reduction", "noise_reduction")}</summary>
     <div class="sub-body">
       {#if aiDenoiseSection}
         <div class="subsection-label">AI Denoise</div>
@@ -989,7 +989,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("vignette")}>
-    <summary>{@render panelHeader("Vignette", "vignette")}</summary>
+    <summary data-ctx-panel="vignette" data-ctx-title="Vignette">{@render panelHeader("Vignette", "vignette")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="vignette-amount">Amount</label>
@@ -1051,7 +1051,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("grain")}>
-    <summary>{@render panelHeader("Grain", "grain")}</summary>
+    <summary data-ctx-panel="grain" data-ctx-title="Grain">{@render panelHeader("Grain", "grain")}</summary>
     <div class="sub-body">
       {#if onGrainStockChange}
         {@const picker = grainPicker}
@@ -1172,7 +1172,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("lens_corrections")}>
-    <summary>{@render panelHeader("Lens Corrections", "lens_corrections")}</summary>
+    <summary data-ctx-panel="lens_corrections" data-ctx-title="Lens Corrections">{@render panelHeader("Lens Corrections", "lens_corrections")}</summary>
     <div class="sub-body">
       {#if lensCorrection.profile}
         <div class="static-note">Profile found: {lensCorrection.profile.camera} + {lensCorrection.profile.lens}</div>
@@ -1270,7 +1270,7 @@
   </details>
 
   <details class="section" class:panel-hidden={isPanelHidden("perspective")}>
-    <summary>{@render panelHeader("Perspective", "perspective")}</summary>
+    <summary data-ctx-panel="perspective" data-ctx-title="Perspective">{@render panelHeader("Perspective", "perspective")}</summary>
     <div class="sub-body">
       <div class="row">
         <label for="perspective-vertical">Vertical</label>

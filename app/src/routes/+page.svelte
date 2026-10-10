@@ -3,7 +3,7 @@
   import { onMount } from "svelte";
   import AppTitlebar from "$lib/components/AppTitlebar.svelte";
   import ContextMenu from "$lib/components/ContextMenu.svelte";
-  import { handleContextMenu, handleContextMenuKey } from "$lib/actions/contextMenuActions.js";
+  import { handleContextMenu, handleContextMenuKey, handleClickCapture } from "$lib/actions/contextMenuActions.js";
   import { contextMenu } from "$lib/state/contextMenu.svelte.js";
   import AppDialogs from "$lib/components/AppDialogs.svelte";
   import StatusStrip from "$lib/components/StatusStrip.svelte";
@@ -270,6 +270,7 @@
   onkeyup={handleGlobalKeyup}
   onblur={() => (develop.spacePanning = false)}
   oncontextmenu={handleContextMenu}
+  onclickcapture={handleClickCapture}
 />
 
 <div class="app">

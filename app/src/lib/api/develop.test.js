@@ -26,6 +26,9 @@ import {
   nearestHslBand,
   isPanelHidden,
   togglePanelVisibility,
+  soloPanel,
+  showAllPanels,
+  PANEL_IDS,
   resetPanel,
   effectiveEditStack,
   MAX_MASKS,
@@ -311,6 +314,30 @@ describe("computeAutoTone", () => {
 
 
 // RFC-0013: per-panel visibility toggle + reset.
+describe("solo and show-all panels", () => {
+  const stack = /** @type {any} */ ({ schema_version: 1, ops: [{ op: "dehaze", value: 50 }, { op: "panel_hidden", panel: "grain" }] });
+
+  test("soloPanel hides every other panel and shows the chosen one; values are untouched", () => {
+    const solo = soloPanel(stack, "dehaze");
+    expect(isPanelHidden(solo, "dehaze")).toBe(false);
+    for (const id of PANEL_IDS.filter((p) => p !== "dehaze")) expect(isPanelHidden(solo, id)).toBe(true);
+    expect(solo.ops).toContainEqual({ op: "dehaze", value: 50 });
+    expect(solo.ops.filter((o) => o.op === "panel_hidden")).toHaveLength(PANEL_IDS.length - 1);
+  });
+
+  test("soloing a panel that was hidden shows it; soloing twice is the same as once", () => {
+    const hiddenFirst = togglePanelVisibility(stack, "dehaze");
+    expect(isPanelHidden(soloPanel(hiddenFirst, "dehaze"), "dehaze")).toBe(false);
+    expect(soloPanel(soloPanel(stack, "vignette"), "vignette")).toEqual(soloPanel(stack, "vignette"));
+  });
+
+  test("showAllPanels removes every marker and nothing else", () => {
+    const all = showAllPanels(soloPanel(stack, "dehaze"));
+    expect(all.ops).toEqual([{ op: "dehaze", value: 50 }]);
+    expect(showAllPanels(all)).toEqual(all);
+  });
+});
+
 describe("panel visibility and reset", () => {
   test("isPanelHidden is false with no markers, true once one is added", () => {
     const stack = /** @type {EditStack} */ ({ schema_version: 1, ops: [{ op: "dehaze", value: 50 }] });

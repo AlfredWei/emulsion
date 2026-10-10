@@ -97,7 +97,7 @@
     </button>
   </div>
 
-  <div class="rail-scroll">
+  <div class="rail-scroll" data-ctx-presets={activeTab === "presets" ? "" : undefined}>
     {#if activeTab === "history"}
       <div class="section-label">History</div>
       <div class="entry-list">
@@ -128,7 +128,7 @@
           <div class="empty">No snapshots</div>
         {/if}
         {#each snapshots as snapshot (snapshot.id)}
-          <div class="snapshot-row">
+          <div class="snapshot-row" data-ctx-snapshot={snapshot.id}>
             <button
               type="button"
               class="entry snapshot-entry"
@@ -162,7 +162,7 @@
       {:else}
         <ul class="preset-list">
           {#each presets as preset (preset.id)}
-            <li class="preset-row">
+            <li class="preset-row" data-ctx-preset={preset.id}>
               <button
                 type="button"
                 class="preset-name-btn"

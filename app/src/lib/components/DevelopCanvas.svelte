@@ -716,6 +716,9 @@
   }
 
   function handlePointerDown(/** @type {PointerEvent} */ e) {
+    // Only the primary button draws / pans: a right-click belongs to the context menu (RFC-0028) and must
+    // not start a mask stroke, a gradient or a pan (the pointer is captured on pointerdown).
+    if (e.button !== 0) return;
     // Space-to-pan (checked before every activeTool branch below, including
     // "crop"): holding Space temporarily overrides WHATEVER tool is active
     // so the user can reposition a zoomed-in view without switching tools
@@ -1096,6 +1099,7 @@
     /** @type {{x:number,y:number}=} */ center,
     /** @type {import('$lib/api/develop.js').SpotDab[]=} */ dabs,
   ) {
+    if (e.button !== 0) return; // a right-click opens the context menu, it does not start a handle drag
     e.stopPropagation();
     e.preventDefault();
     // Set the drag state FIRST, `setPointerCapture` second, wrapped
@@ -1811,7 +1815,7 @@
 <!-- `.canvas-stage` is the non-scrolling frame: `.canvas-wrap` inside it
      scrolls when zoomed, and the zoom HUD sits beside it (not in it) so it
      stays fixed in the corner instead of scrolling away with the photo. -->
-<div class="canvas-stage">
+<div class="canvas-stage" data-ctx-canvas>
 <div
   class="canvas-wrap"
   class:zoomed={isZoomed}

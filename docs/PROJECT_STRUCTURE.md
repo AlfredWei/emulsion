@@ -165,8 +165,9 @@ src/
 │   │                        historyActions.js (restore, undo/redo, snapshot restore, reset), softProofActions.js (custom
 │   │                        profile), navigation.js (openDevelop, switchModule, next/prev image, export click); more land per RFC-0009
 │   ├── contextMenus/        Right-click menus (RFC-0028): model.js (menu item types, tidy, keyboard row choice, placement),
-│   │                        navigation.js (hover / keyboard navigation as a pure reducer), photoMenu.js + gridMenu.js
-│   │                        (pure per-surface item builders over injected commands); the component is
+│   │                        navigation.js (hover / keyboard navigation as a pure reducer), photoMenu.js + gridMenu.js + railMenus.js + developMenus.js
+│   │                        (pure per-surface item builders over injected commands: photo, empty grid, collection / person /
+│   │                        snapshot / preset rows, Develop panel header / canvas / mask panel / shape row); the component is
 │   │                        components/ContextMenu.svelte, its state state/contextMenu.svelte.js, its entry points and real
 │   │                        commands actions/contextMenuActions.js. Tested via the *.test.js beside each
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)

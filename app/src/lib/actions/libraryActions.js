@@ -222,8 +222,8 @@ export async function handleCreateSmartCollection(
   await refreshCollections();
 }
 
-export async function handleDeleteCollection(/** @type {number} */ collectionId, /** @type {MouseEvent} */ event) {
-  event.stopPropagation(); // don't also trigger selectCollection
+export async function handleDeleteCollection(/** @type {number} */ collectionId, /** @type {MouseEvent | undefined} */ event = undefined) {
+  event?.stopPropagation(); // don't also trigger selectCollection (the rail's × button; the context menu passes none)
   await deleteCollection(collectionId);
   if (library.activeCollectionId === collectionId) library.activeCollectionId = null;
   await refreshCollections();

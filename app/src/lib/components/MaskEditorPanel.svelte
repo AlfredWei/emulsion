@@ -159,7 +159,7 @@
   </div>
 {/snippet}
 
-<div class="panel" role="dialog" aria-label="{title} adjustments">
+<div class="panel" role="dialog" aria-label="{title} adjustments" data-ctx-mask={mask.id} data-ctx-title={title}>
   <div class="header">
     <span class="title">{title}</span>
     <button class="close" type="button" title="Deselect" onclick={onClose}>×</button>
@@ -250,7 +250,7 @@
         <span class="base">base</span>
       </div>
       {#each shapes as shape (shape.id)}
-        <div class="shape" class:sel={shape.id === selectedShapeId}>
+        <div class="shape" class:sel={shape.id === selectedShapeId} data-ctx-shape={shape.id} data-ctx-title={SHAPE_NAMES[shape.shape.op]}>
           <button type="button" class="pick" onclick={() => onSelectShape(shape.id)}>
             <span class="ico">{SHAPE_ICONS[shape.shape.op]}</span><span class="nm">{SHAPE_NAMES[shape.shape.op]}</span>
           </button>

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (/** @type {string} */ p) => p }));
-vi.mock("$lib/actions/navigation.js", () => ({ openDevelop: vi.fn(), switchModule: vi.fn(async () => {}) }));
+vi.mock("$lib/actions/navigation.js", () => ({ openDevelop: vi.fn(), switchModule: vi.fn(async () => {}), handleDevelopFilmstripSelect: vi.fn() }));
 vi.mock("$lib/actions/faceActions.js", () => ({ handleDetectFacesForSelected: vi.fn(), handleDetectFacesForSelection: vi.fn() }));
 vi.mock("$lib/actions/importActions.js", () => ({ handleImportFolder: vi.fn(), handleImportFiles: vi.fn() }));
 vi.mock("$lib/actions/libraryActions.js", () => ({
@@ -36,13 +36,14 @@ vi.mock("$lib/actions/presetActions.js", () => ({
   handleSaveCurrentAsPresetRequest: vi.fn(),
   handleImportPresetRequest: vi.fn(),
   handleCopySettingsRequest: vi.fn(),
+  handleSyncSettingsRequest: vi.fn(),
 }));
 vi.mock("$lib/api/system.js", () => ({ revealInFileManager: vi.fn() }));
 
 import * as A from "./contextMenuActions.js";
-import { openDevelop } from "$lib/actions/navigation.js";
+import { openDevelop, handleDevelopFilmstripSelect } from "$lib/actions/navigation.js";
 import { handleRatingChange } from "$lib/actions/metadataActions.js";
-import { handlePasteSettings, handlePasteSettingsToSelection, handleApplyPreset, handleExportPreset, handleDeletePresetRequest, handleSaveCurrentAsPresetRequest } from "$lib/actions/presetActions.js";
+import { handlePasteSettings, handlePasteSettingsToSelection, handleSyncSettingsRequest, handleApplyPreset, handleExportPreset, handleDeletePresetRequest, handleSaveCurrentAsPresetRequest } from "$lib/actions/presetActions.js";
 import { selectCollection, selectPerson, handleDeleteCollection } from "$lib/actions/libraryActions.js";
 import { handleRestoreSnapshot, handleUndo } from "$lib/actions/historyActions.js";
 import { masks } from "$lib/state/masks.svelte.js";
@@ -140,10 +141,21 @@ describe("the target rule", () => {
     expect(selection.selectedId).toBe(40);
   });
 
-  it("in Develop the filmstrip has no multi-selection, so even a photo in a stale Library selection acts alone", () => {
+  it("in Develop a photo inside the selection acts on the whole selection too, and does not change the active photo", () => {
     sel([10, 20, 30], 10);
-    expect(A.resolveTargets(20, "develop").map((i) => i.version_id)).toEqual([20]);
-    expect(ids()).toEqual([20]);
+    expect(A.resolveTargets(20, "develop").map((i) => i.version_id)).toEqual([10, 20, 30]);
+    expect(ids()).toEqual([10, 20, 30]);
+    expect(handleDevelopFilmstripSelect).not.toHaveBeenCalled();
+  });
+
+  it("in Develop a photo outside the selection is clicked first (it becomes the active photo), as in Lightroom", () => {
+    sel([10, 20], 10);
+    vi.mocked(handleDevelopFilmstripSelect).mockImplementationOnce((id) => {
+      selection.selectedId = id;
+      selection.selectedIds = new Set([id]);
+    });
+    expect(A.resolveTargets(40, "develop").map((i) => i.version_id)).toEqual([40]);
+    expect(handleDevelopFilmstripSelect).toHaveBeenCalledWith(40);
   });
 });
 
@@ -251,13 +263,36 @@ describe("the commands", () => {
     expect(handleRatingChange).toHaveBeenCalledWith(undefined, 4);
   });
 
-  it("Paste on the open Develop photo uses Develop's own path; anything else the batch path", () => {
+  it("Paste on the open Develop photo alone uses Develop's own path; anything else the batch path", async () => {
     develop.versionId = 10;
-    A.photoCommands([img(1)], "develop").pasteSettings();
+    vi.spyOn(develop, "flushEditStack").mockResolvedValue(undefined);
+    await A.photoCommands([img(1)], "develop").pasteSettings();
     expect(handlePasteSettings).toHaveBeenCalledTimes(1);
-    A.photoCommands([img(2)], "develop").pasteSettings();
-    A.photoCommands([img(1), img(2)], "library").pasteSettings();
+    await A.photoCommands([img(2)], "develop").pasteSettings();
+    await A.photoCommands([img(1), img(2)], "library").pasteSettings();
     expect(handlePasteSettingsToSelection).toHaveBeenCalledTimes(2);
+  });
+
+  it("a batch from the Develop filmstrip saves the open photo's pending edit first", async () => {
+    develop.versionId = 10;
+    const flush = vi.spyOn(develop, "flushEditStack").mockResolvedValue(undefined);
+    let flushed = false;
+    flush.mockImplementation(async () => {
+      flushed = true;
+    });
+    vi.mocked(handlePasteSettingsToSelection).mockImplementationOnce(async () => {
+      expect(flushed).toBe(true);
+    });
+    await A.photoCommands([img(1), img(2)], "develop").pasteSettings();
+    expect(handlePasteSettingsToSelection).toHaveBeenCalledTimes(1);
+    flushed = false;
+    await A.photoCommands([img(1), img(2)], "library").pasteSettings();
+    expect(flushed).toBe(false);
+  });
+
+  it("Sync Settings asks the existing request, which reads the resolved selection", () => {
+    A.photoCommands([img(1), img(2)], "develop").syncSettings();
+    expect(handleSyncSettingsRequest).toHaveBeenCalledTimes(1);
   });
 
   it("Export opens the dialog with exactly the menu's photos, not the open Develop photo", async () => {

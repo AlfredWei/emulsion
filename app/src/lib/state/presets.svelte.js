@@ -30,6 +30,12 @@ export class PresetsStore {
   // being lost to the usual 250ms slider debounce.
   confirmingReset = $state(false);
   copySettingsDialogOpen = $state(false);
+  /** What the group dialog is for: "copy" fills the Copy Settings clipboard, "sync" applies the chosen groups of the
+   * open photo to the other selected photos (RFC-0028 §3.4). Set by whichever action opens the dialog.
+   * @type {"copy" | "sync"} */
+  copySettingsPurpose = $state("copy");
+  // Guards the Sync Settings button while a sync is in flight (same narrow purpose as pastingSettingsToSelection).
+  syncingSettings = $state(false);
   /** The stack Copy Settings copies from when it was asked on a photo that is not the open Develop one (the
    * Library context menu); null = the open Develop photo's own stack.
    * @type {import('$lib/api/develop.js').EditStack | null} */

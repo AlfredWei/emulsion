@@ -163,7 +163,7 @@ src/
 │   │                        maskActions.js (mask create/update/delete, resample,
 │   │                        eyedropper, GPU fallback), presetActions.js (preset list, apply/import/export, copy/paste settings),
 │   │                        historyActions.js (restore, undo/redo, snapshot restore, reset), softProofActions.js (custom
-│   │                        profile), navigation.js (openDevelop, switchModule, next/prev image, export click); more land per RFC-0009
+│   │                        profile), navigation.js (openDevelop, switchModule, next/prev image, Develop filmstrip multi-select gestures, export click); more land per RFC-0009
 │   ├── contextMenus/        Right-click menus (RFC-0028): model.js (menu item types, tidy, keyboard row choice, placement),
 │   │                        navigation.js (hover / keyboard navigation as a pure reducer), photoMenu.js + gridMenu.js + railMenus.js + developMenus.js
 │   │                        (pure per-surface item builders over injected commands: photo, empty grid, collection / person /

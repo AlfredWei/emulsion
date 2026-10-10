@@ -40,6 +40,18 @@ describe("ExportFlowStore", () => {
       expect(flow.currentItems).toEqual([{ path: "/p/2.jpg", version_id: 20 }]);
     });
 
+    it("in Develop with several photos selected (the open one among them): the selection, in library order", () => {
+      const { shell, selection, develop, flow } = setup();
+      shell.activeModule = "develop";
+      develop.versionId = 20;
+      develop.imagePath = "/p/2.jpg";
+      selection.selectedIds = new Set([30, 20]);
+      expect(flow.currentItems).toEqual([
+        { path: "/p/2.jpg", version_id: 20 },
+        { path: "/p/3.jpg", version_id: 30 },
+      ]);
+    });
+
     it("outside Develop, an open Develop image does not count: the Library selection wins", () => {
       const { shell, selection, develop, flow } = setup();
       shell.activeModule = "library";

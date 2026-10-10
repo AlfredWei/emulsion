@@ -15,6 +15,7 @@
    *   settingsOpen: boolean,
    *   exportItems: { path: string, version_id: number }[] | null,
    *   copySettingsDialogOpen: boolean,
+   *   copySettingsPurpose: "copy" | "sync",
    *   confirmingFaceDetectionOnImport: boolean,
    *   pendingImportBatchSize: number,
    *   confirmingRemoval: boolean,
@@ -58,6 +59,7 @@
     settingsOpen,
     exportItems,
     copySettingsDialogOpen,
+    copySettingsPurpose,
     confirmingFaceDetectionOnImport,
     pendingImportBatchSize,
     confirmingRemoval,
@@ -104,6 +106,7 @@
 
 <CopySettingsDialog
   open={copySettingsDialogOpen}
+  purpose={copySettingsPurpose}
   onConfirm={handleCopySettingsConfirmed}
   onCancel={onCancelCopySettings}
 />

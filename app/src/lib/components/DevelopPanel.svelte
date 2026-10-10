@@ -94,6 +94,9 @@
    *   onCopySettingsRequest: () => void,
    *   canPasteSettings: boolean,
    *   onPasteSettingsRequest: () => void,
+   *   selectedCount?: number,
+   *   syncingSettings?: boolean,
+   *   onSyncSettingsRequest?: () => void,
    *   isPanelHidden: (panel: string) => boolean,
    *   onTogglePanelVisibility: (panel: string) => void,
    *   onResetPanel: (panel: string) => void,
@@ -174,6 +177,9 @@
     onCopySettingsRequest,
     canPasteSettings,
     onPasteSettingsRequest,
+    selectedCount = 1,
+    syncingSettings = false,
+    onSyncSettingsRequest,
     isPanelHidden,
     onTogglePanelVisibility,
     onResetPanel,
@@ -1449,6 +1455,18 @@
     >
       {@render pasteSettingsIcon()}
     </button>
+    {#if selectedCount > 1}
+      <!-- Develop multi-select (RFC-0028 §3.4): the open photo's settings go to the other selected photos. -->
+      <button
+        type="button"
+        class="footer-text-btn"
+        onclick={onSyncSettingsRequest}
+        disabled={syncingSettings}
+        title="Apply this photo's settings to the other {selectedCount - 1} selected photo{selectedCount === 2 ? '' : 's'}"
+      >
+        Sync Settings…
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -1493,6 +1511,30 @@
     background: var(--accent-soft);
     border: 1px solid var(--accent);
     border-radius: var(--radius-s);
+  }
+  .footer-text-btn {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    margin-left: auto;
+    padding: 0 10px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-s);
+  }
+  .footer-text-btn:hover {
+    background: var(--accent);
+    color: #fff;
+  }
+  .footer-text-btn:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
   .footer-icon-btn:hover {
     filter: brightness(1.15);

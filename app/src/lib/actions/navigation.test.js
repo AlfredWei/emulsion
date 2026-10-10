@@ -10,7 +10,16 @@ vi.mock("$lib/actions/libraryActions.js", () => ({ prioritizeThumbnail: prioriti
 const people = vi.hoisted(() => vi.fn());
 vi.mock("$lib/actions/faceActions.js", () => ({ refreshPeople: people }));
 
-import { openDevelop, switchModule, handleExportClick, selectNextImage, selectPrevImage } from "./navigation.js";
+import {
+  openDevelop,
+  switchModule,
+  handleExportClick,
+  selectNextImage,
+  selectPrevImage,
+  handleDevelopFilmstripSelect,
+  handleDevelopSelectAll,
+  handleDevelopCollapseSelection,
+} from "./navigation.js";
 import { develop } from "$lib/state/develop.svelte.js";
 import { developView } from "$lib/state/developView.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
@@ -406,5 +415,108 @@ describe("selectNextImage / selectPrevImage", () => {
     await tick();
     expect(selection.selectedId).toBe(10);
     expect(api.getEditStack).not.toHaveBeenCalled();
+  });
+});
+
+describe("Develop filmstrip selection (RFC-0028 §3.4)", () => {
+  const ids = () => [...selection.selectedIds].sort((a, b) => a - b);
+  const click = (/** @type {number} */ id, /** @type {object} */ mods = {}) => {
+    handleDevelopFilmstripSelect(id, mods);
+    return tick();
+  };
+
+  beforeEach(async () => {
+    library.images = [image(1), image(2), image(3), image(4), image(5)];
+    shell.activeModule = "develop";
+    await openDevelop(10);
+    selection.developAnchorId = null;
+  });
+
+  it("openDevelop keeps the selection containing the active photo, and selectedId follows it", async () => {
+    selection.selectedIds = new Set([10, 30]);
+    await openDevelop(30);
+    expect([selection.selectedId, ids()]).toEqual([30, [10, 30]]);
+    await openDevelop(40);
+    expect([selection.selectedId, ids()]).toEqual([40, [40]]);
+  });
+
+  it("plain click opens that photo and makes it the only selection", async () => {
+    selection.selectedIds = new Set([10, 20]);
+    await click(30);
+    expect([develop.versionId, selection.selectedId, ids()]).toEqual([30, 30, [30]]);
+  });
+
+  it("plain click on the active photo collapses the selection without reopening it", async () => {
+    selection.selectedIds = new Set([10, 20]);
+    flush.mockClear();
+    await click(10);
+    expect([develop.versionId, ids()]).toEqual([10, [10]]);
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  it("Cmd / Ctrl-click adds a photo and makes it the active one", async () => {
+    await click(30, { metaKey: true });
+    expect([develop.versionId, selection.selectedId, ids()]).toEqual([30, 30, [10, 30]]);
+    await click(50, { ctrlKey: true });
+    expect([develop.versionId, ids()]).toEqual([50, [10, 30, 50]]);
+  });
+
+  it("Cmd / Ctrl-click on a selected, non-active photo removes it and keeps the active one", async () => {
+    await click(30, { metaKey: true });
+    await click(10, { metaKey: true });
+    expect([develop.versionId, ids()]).toEqual([30, [30]]);
+  });
+
+  it("removing the ACTIVE photo hands the role to the nearest photo still selected", async () => {
+    await click(20, { metaKey: true });
+    await click(50, { metaKey: true });
+    expect(develop.versionId).toBe(50);
+    await click(50, { metaKey: true });
+    expect([develop.versionId, selection.selectedId, ids()]).toEqual([20, 20, [10, 20]]);
+  });
+
+  it("the last selected photo cannot be removed", async () => {
+    await click(10, { metaKey: true });
+    expect([develop.versionId, ids()]).toEqual([10, [10]]);
+  });
+
+  it("Shift-click selects the range from the anchor and makes the clicked photo active; the anchor stays", async () => {
+    await click(20); // plain click sets the anchor
+    await click(40, { shiftKey: true });
+    expect([develop.versionId, selection.selectedId, ids()]).toEqual([40, 40, [20, 30, 40]]);
+    await click(10, { shiftKey: true });
+    expect([develop.versionId, ids()]).toEqual([10, [10, 20]]);
+  });
+
+  it("Shift-click without a stored anchor starts from the active photo", async () => {
+    await click(30, { shiftKey: true });
+    expect([develop.versionId, ids()]).toEqual([30, [10, 20, 30]]);
+  });
+
+  it("a stale anchor falls back to a plain click", async () => {
+    selection.developAnchorId = 999;
+    await click(30, { shiftKey: true });
+    // The anchor is not in the strip, so the click is a plain one.
+    expect([develop.versionId, ids()]).toEqual([30, [30]]);
+  });
+
+  it("clicks on photos that are not in the filmstrip do nothing", async () => {
+    await click(999);
+    expect([develop.versionId, ids()]).toEqual([10, [10]]);
+  });
+
+  it("Select All takes the whole filmstrip and keeps the active photo; Collapse goes back to it", async () => {
+    await click(30);
+    handleDevelopSelectAll();
+    expect([develop.versionId, selection.selectedId, ids()]).toEqual([30, 30, [10, 20, 30, 40, 50]]);
+    handleDevelopCollapseSelection();
+    expect([develop.versionId, ids()]).toEqual([30, [30]]);
+  });
+
+  it("an arrow key after a multi-selection collapses it to the neighbour of the active photo", async () => {
+    await click(30, { metaKey: true });
+    selectNextImage();
+    await tick();
+    expect([develop.versionId, ids()]).toEqual([40, [40]]);
   });
 });

@@ -3,8 +3,9 @@
   import { develop } from "$lib/state/develop.svelte.js";
   import { restoreTo, handleRestoreSnapshot } from "$lib/actions/historyActions.js";
   import { presets } from "$lib/state/presets.svelte.js";
+  import { selection } from "$lib/state/selection.svelte.js";
   import { handleDeleteSnapshot, handlePeekHistory, handlePeekSnapshot, handleCropChange, handleSourceDimensions, handleHistogramUpdate, handleHoverPixel, handleToggleClippingOverlay, handleAdjustmentChange, handleAutoWhiteBalance, handleAutoTone, handleWbPresetChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleGrainStockChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropAspectPreset, handleCropReset, handleTogglePanelVisibility, handleResetPanel } from "$lib/actions/developActions.js";
-  import { handleApplyPreset, handleSaveCurrentAsPresetRequest, handleExportPreset, handleDeletePresetRequest, handleImportPresetRequest, handlePeekPreset, handleCopySettingsRequest, handlePasteSettings } from "$lib/actions/presetActions.js";
+  import { handleApplyPreset, handleSaveCurrentAsPresetRequest, handleExportPreset, handleDeletePresetRequest, handleImportPresetRequest, handlePeekPreset, handleCopySettingsRequest, handlePasteSettings, handleSyncSettingsRequest } from "$lib/actions/presetActions.js";
   import { shell } from "$lib/state/shell.svelte.js";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
   import { developView } from "$lib/state/developView.svelte.js";
@@ -250,6 +251,9 @@
     onCopySettingsRequest={handleCopySettingsRequest}
     canPasteSettings={develop.copiedSettings !== null}
     onPasteSettingsRequest={handlePasteSettings}
+    selectedCount={selection.selectedIds.size}
+    syncingSettings={presets.syncingSettings}
+    onSyncSettingsRequest={handleSyncSettingsRequest}
     isPanelHidden={(panel) => developView.isPanelHidden(panel)}
     onTogglePanelVisibility={handleTogglePanelVisibility}
     onResetPanel={handleResetPanel}

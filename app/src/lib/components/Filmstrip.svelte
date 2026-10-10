@@ -34,11 +34,23 @@
    * @type {{
    *   images: import('$lib/api/catalog.js').ImageSummary[],
    *   selectedIds: Set<number>,
+   *   activeId?: number | null,
    *   onSelect: (versionId: number, event?: MouseEvent) => void,
    *   onOpen: (versionId: number) => void,
    * }}
    */
-  let { images, selectedIds, onSelect, onOpen } = $props();
+  let { images, selectedIds, activeId = null, onSelect, onOpen } = $props();
+
+  // Develop (RFC-0028 §3.4): `activeId` is the photo the canvas shows. It gets the accent frame and the other selected
+  // photos a neutral one; Library passes none, so every selected cell keeps the accent. The strip scrolls the active
+  // photo into view when it changes (a menu or a key can move it off-screen).
+  /** @type {HTMLDivElement | undefined} */
+  let strip = $state();
+  $effect(() => {
+    if (activeId === null || !strip) return;
+    const cell = strip.querySelector(`[data-ctx-photo="${activeId}"]`);
+    cell?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
 
   /** @param {import('$lib/api/catalog.js').ImageSummary} image */
   function dragImageIds(image) {
@@ -48,13 +60,14 @@
   }
 </script>
 
-<div class="filmstrip">
+<div class="filmstrip" bind:this={strip}>
   {#each images as image (image.version_id)}
     {@const thumbSrc = image.thumbnail_path ? convertFileSrc(image.thumbnail_path) : null}
     <div
       class="cell"
       data-ctx-photo={image.version_id}
       class:selected={selectedIds.has(image.version_id)}
+      class:secondary={activeId !== null && image.version_id !== activeId}
       role="button"
       tabindex="0"
       onpointerdown={(e) => shell.handlePhotoDragPointerDown(e, dragImageIds(image))}
@@ -100,6 +113,11 @@
   .cell.selected {
     border-color: var(--accent);
     box-shadow: 0 0 0 1px var(--accent);
+  }
+  /* Selected but not the active photo (Develop multi-select): a neutral frame, so the active one reads at a glance. */
+  .cell.selected.secondary {
+    border-color: var(--text-tertiary);
+    box-shadow: 0 0 0 1px var(--text-tertiary);
   }
   .cell:focus-visible {
     outline: 2px solid var(--accent);

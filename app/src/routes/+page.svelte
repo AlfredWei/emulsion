@@ -65,15 +65,23 @@
   import { handleToggleClippingOverlay } from "$lib/actions/developActions.js";
     import { handleCreateSnapshotConfirmed, handleCreatePresetConfirmed, handleDeletePresetConfirmed, handleApplyPresetToSelection, handleCopySettingsRequest, handleCopySettingsConfirmed, handlePasteSettings, handlePasteSettingsToSelection } from "$lib/actions/presetActions.js";
     import { handleUndo, handleRedo, handleResetEditStack } from "$lib/actions/historyActions.js";
-  import { selectNextImage, selectPrevImage, openDevelop, switchModule, handleExportClick } from "$lib/actions/navigation.js";
+  import {
+    selectNextImage,
+    selectPrevImage,
+    openDevelop,
+    switchModule,
+    handleExportClick,
+    developFilmstripList,
+    handleDevelopFilmstripSelect,
+    handleDevelopSelectAll,
+    handleDevelopCollapseSelection,
+  } from "$lib/actions/navigation.js";
 
   let imageViewerRef = $state(/** @type {any} */ (null));
 
 
   // The Filmstrip shows filtered images, falling back if active Develop photo is excluded
-  let developFilmstripImages = $derived(
-    library.filteredImages.some((img) => img.version_id === develop.versionId) ? library.filteredImages : library.images,
-  );
+  let developFilmstripImages = $derived(developFilmstripList());
 
 
   // Print module (M4, final scope item): ephemeral view state, same
@@ -173,6 +181,8 @@
     handleComparePrevCandidate,
     handleCopySettingsRequest,
     handleDeselectAll,
+    handleDevelopCollapseSelection,
+    handleDevelopSelectAll,
     handleExportClick,
     handleExportPdf,
     handleFlagChange,
@@ -316,6 +326,7 @@
     settingsOpen={shell.settingsOpen}
     exportItems={exportFlow.items}
     copySettingsDialogOpen={presets.copySettingsDialogOpen}
+    copySettingsPurpose={presets.copySettingsPurpose}
     confirmingFaceDetectionOnImport={faces.confirmingDetectionOnImport}
     pendingImportBatchSize={faces.pendingImportBatchSize}
     confirmingRemoval={library.confirmingRemoval}
@@ -388,8 +399,9 @@
   {:else if shell.activeModule === "develop"}
     <Filmstrip
       images={developFilmstripImages}
-      selectedIds={new Set(develop.versionId !== null ? [develop.versionId] : [])}
-      onSelect={openDevelop}
+      selectedIds={selection.selectedIds}
+      activeId={develop.versionId}
+      onSelect={handleDevelopFilmstripSelect}
       onOpen={openDevelop}
     />
   {/if}

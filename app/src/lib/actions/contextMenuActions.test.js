@@ -4,7 +4,15 @@ vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (/** @type {string} */ 
 vi.mock("$lib/actions/navigation.js", () => ({ openDevelop: vi.fn(), switchModule: vi.fn(async () => {}) }));
 vi.mock("$lib/actions/faceActions.js", () => ({ handleDetectFacesForSelected: vi.fn(), handleDetectFacesForSelection: vi.fn() }));
 vi.mock("$lib/actions/importActions.js", () => ({ handleImportFolder: vi.fn(), handleImportFiles: vi.fn() }));
-vi.mock("$lib/actions/libraryActions.js", () => ({ prioritizeThumbnail: vi.fn() }));
+vi.mock("$lib/actions/libraryActions.js", () => ({
+  prioritizeThumbnail: vi.fn(),
+  selectCollection: vi.fn(async () => {}),
+  selectPerson: vi.fn(async () => {}),
+  handleDeleteCollection: vi.fn(async () => {}),
+}));
+vi.mock("$lib/actions/historyActions.js", () => ({ handleRestoreSnapshot: vi.fn() }));
+vi.mock("$lib/actions/developActions.js", () => ({ handleDeleteSnapshot: vi.fn() }));
+vi.mock("$lib/actions/selectionActions.js", () => ({ handleSelectAll: vi.fn(), handleDeselectAll: vi.fn() }));
 vi.mock("$lib/actions/metadataActions.js", () => ({ handleRatingChange: vi.fn(), handleFlagChange: vi.fn(), handleColorLabelChange: vi.fn() }));
 vi.mock("$lib/actions/collectionsActions.js", () => ({ handleAddToCollectionSelect: vi.fn(), handleRemoveFromCollection: vi.fn() }));
 vi.mock("$lib/actions/presetActions.js", () => ({
@@ -13,13 +21,24 @@ vi.mock("$lib/actions/presetActions.js", () => ({
   handlePasteSettingsToSelection: vi.fn(),
   handleApplyPresetToSelection: vi.fn(),
   handleResetSettingsForSelection: vi.fn(),
+  handleApplyPreset: vi.fn(),
+  handleExportPreset: vi.fn(),
+  handleDeletePresetRequest: vi.fn(),
+  handleSaveCurrentAsPresetRequest: vi.fn(),
+  handleImportPresetRequest: vi.fn(),
 }));
 vi.mock("$lib/api/system.js", () => ({ revealInFileManager: vi.fn() }));
 
 import * as A from "./contextMenuActions.js";
 import { openDevelop } from "$lib/actions/navigation.js";
 import { handleRatingChange } from "$lib/actions/metadataActions.js";
-import { handlePasteSettings, handlePasteSettingsToSelection } from "$lib/actions/presetActions.js";
+import { handlePasteSettings, handlePasteSettingsToSelection, handleApplyPreset, handleExportPreset, handleDeletePresetRequest, handleSaveCurrentAsPresetRequest } from "$lib/actions/presetActions.js";
+import { selectCollection, selectPerson, handleDeleteCollection } from "$lib/actions/libraryActions.js";
+import { handleRestoreSnapshot } from "$lib/actions/historyActions.js";
+import { handleDeleteSnapshot } from "$lib/actions/developActions.js";
+import { handleSelectAll } from "$lib/actions/selectionActions.js";
+import { faces } from "$lib/state/faces.svelte.js";
+import { presets } from "$lib/state/presets.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
 import { selection } from "$lib/state/selection.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
@@ -38,18 +57,26 @@ const ids = () => [...selection.selectedIds].sort((a, b) => a - b);
 // Just enough DOM for the entry points: elements that answer closest() and carry a dataset.
 class FakeElement {}
 class FakeHTMLElement extends FakeElement {
-  /** @param {{ photo?: number, grid?: boolean, text?: boolean }} kind */
+  /** @param {{ photo?: number, grid?: boolean, text?: boolean, collection?: number, person?: number, snapshot?: number, preset?: number, presets?: boolean }} kind */
   constructor(kind = {}) {
     super();
     this.kind = kind;
-    this.dataset = kind.photo !== undefined ? { ctxPhoto: String(kind.photo) } : {};
+    /** @type {Record<string, string>} */
+    this.dataset = {};
+    if (kind.photo !== undefined) this.dataset.ctxPhoto = String(kind.photo);
+    if (kind.collection !== undefined) this.dataset.ctxCollection = String(kind.collection);
+    if (kind.person !== undefined) this.dataset.ctxPerson = String(kind.person);
+    if (kind.snapshot !== undefined) this.dataset.ctxSnapshot = String(kind.snapshot);
+    if (kind.preset !== undefined) this.dataset.ctxPreset = String(kind.preset);
+    if (kind.presets) this.dataset.ctxPresets = "";
+    if (kind.grid) this.dataset.ctxGrid = "";
     this.focus = vi.fn();
     this.getBoundingClientRect = () => ({ left: 100, bottom: 200 });
   }
   /** @param {string} sel */
   closest(sel) {
-    if (sel.includes("data-ctx-photo")) return this.kind.photo !== undefined ? this : null;
-    if (sel.includes("data-ctx-grid")) return this.kind.grid ? this : null;
+    // The real selector lists every surface attribute; the fake matches when it carries any of them.
+    if (sel.includes("data-ctx-photo") && Object.keys(this.dataset).length > 0) return this;
     if (sel.includes("input")) return this.kind.text ? this : null;
     return null;
   }
@@ -207,5 +234,86 @@ describe("the commands", () => {
     await A.photoCommands([img(3)], "library").openInLoupe(30);
     expect(library.libraryViewMode).toBe("loupe");
     expect(ids()).toEqual([30]);
+  });
+});
+
+describe("rail and Develop-rail surfaces", () => {
+  beforeEach(() => {
+    library.collections = /** @type {any} */ ([{ id: 5, name: "Trip", is_smart: false, count: 2, rules: [] }]);
+    faces.people = /** @type {any} */ ([{ id: 7, name: "Ann", photo_count: 3 }]);
+    faces.renamingPersonId = null;
+    develop.snapshots = /** @type {any} */ ([{ id: 3, name: "Before crop", created_at: "" }]);
+    presets.list = /** @type {any} */ ([{ id: 9, name: "Warm", edit_stack: { ops: [] } }]);
+  });
+  const run = (/** @type {string} */ id) => {
+    const item = /** @type {any} */ (contextMenu.items.find((i) => "id" in i && i.id === id));
+    return item.run();
+  };
+
+  it("a collection row opens its menu without touching the photo selection; Show and Select go through the existing actions", async () => {
+    sel([10], 10);
+    A.handleContextMenu(mouse(new FakeHTMLElement({ collection: 5 })));
+    expect(contextMenu.isOpen).toBe(true);
+    expect(ids()).toEqual([10]);
+    await run("open");
+    expect(selectCollection).toHaveBeenCalledWith(5);
+    await run("select-photos");
+    expect(handleSelectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("Delete on a collection asks first (the menu's confirm) and then deletes without a pointer event", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ collection: 5 })));
+    const del = /** @type {any} */ (contextMenu.items.find((i) => "id" in i && i.id === "delete-collection"));
+    expect(del.confirm).toBeTruthy();
+    del.run();
+    expect(handleDeleteCollection).toHaveBeenCalledWith(5);
+  });
+
+  it("a person row: Show Photos selects the person, Rename asks the rail to start its inline editor", async () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ person: 7 })));
+    await run("show-photos");
+    expect(selectPerson).toHaveBeenCalledWith(7);
+    await run("rename-person");
+    expect(faces.renamingPersonId).toBe(7);
+  });
+
+  it("a snapshot row restores or deletes that snapshot", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ snapshot: 3 })));
+    run("restore-snapshot");
+    expect(handleRestoreSnapshot).toHaveBeenCalledWith(3);
+    A.handleContextMenu(mouse(new FakeHTMLElement({ snapshot: 3 })));
+    run("delete-snapshot");
+    expect(handleDeleteSnapshot).toHaveBeenCalledWith(3);
+  });
+
+  it("a preset row applies, exports, and requests deletion of that preset", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ preset: 9 })));
+    run("apply-preset");
+    expect(handleApplyPreset).toHaveBeenCalledWith(9);
+    A.handleContextMenu(mouse(new FakeHTMLElement({ preset: 9 })));
+    run("export-preset");
+    expect(handleExportPreset).toHaveBeenCalledWith(9);
+    A.handleContextMenu(mouse(new FakeHTMLElement({ preset: 9 })));
+    run("delete-preset");
+    expect(handleDeletePresetRequest).toHaveBeenCalledWith(9);
+  });
+
+  it("the presets list's empty space has its own menu", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ presets: true })));
+    run("save-preset");
+    expect(handleSaveCurrentAsPresetRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("a row whose data is gone (deleted since render) opens nothing", () => {
+    A.handleContextMenu(mouse(new FakeHTMLElement({ preset: 99 })));
+    expect(contextMenu.isOpen).toBe(false);
+  });
+
+  it("Shift+F10 on a focused row opens its menu and returns focus to the element that had it", () => {
+    const button = new FakeHTMLElement({ snapshot: 3 });
+    /** @type {any} */ (document).activeElement = button;
+    expect(A.handleContextMenuKey(/** @type {any} */ ({ key: "F10", shiftKey: true, target: new FakeHTMLElement(), preventDefault: vi.fn() }))).toBe(true);
+    expect(contextMenu.isOpen).toBe(true);
+    expect(contextMenu.returnFocusTo).toBe(button);
   });
 });

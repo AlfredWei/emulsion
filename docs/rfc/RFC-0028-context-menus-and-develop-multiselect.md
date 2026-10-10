@@ -101,7 +101,7 @@ An interactive mock, [context-menus-multiselect-mockup.html](../ux/mockups/conte
 
 0. **UX mock** — done, see §3.7.
 1. **Menu engine + photo menus.** `contextMenu` store, `ContextMenu.svelte`, the builder pattern, the app-wide webview-menu suppression, the Library grid cell / empty-area menus and the filmstrip menu, wired to existing actions. vitest for the builders and the store; a Svelte component test for keyboard navigation and clamping; an e2e that right-clicks a cell and rates / flags through the menu.
-2. **The other surfaces** in §3.3 (canvas, history / snapshot / preset rows, collection rail, mask list, panel headers, people), a few per PR, each with its builder tests.
+2. **The other surfaces** in §3.3 (canvas, history / snapshot / preset rows, collection rail, mask list, panel headers, people), a few per PR, each with its builder tests. **2a (done)**: collection, person, snapshot and preset rows and the Presets list -- everything whose action already exists; Rename, *Edit smart rules…*, *Export collection…*, *Merge…* and the History row wait for backend commands. **2b**: Develop canvas, mask list, panel headers, slider / curve reset.
 3. **Develop multi-select + Sync Settings.** The filmstrip selection gestures, the shared selection, the footer *Sync Settings...* button, the menu entries, the user guide.
 4. **Auto Sync.** The stack diff (pure, heavily unit-tested: changed / added / removed ops, excluded ops, no-ops), `apply_ops_to_versions` and its transaction tests, the switch and toolbar chip, an e2e that edits one photo and checks the others.
 5. **Polish**: a keyboard-only pass, the user guide, a screenshot pass at the narrow filmstrip width.

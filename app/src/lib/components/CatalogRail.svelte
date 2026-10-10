@@ -1,6 +1,7 @@
 <script>
   import { matchesRules } from "$lib/collectionRules.js";
   import { getStoredRailSections, saveStoredRailSections } from "$lib/railSections.js";
+  import { faces } from "$lib/state/faces.svelte.js";
 
   /**
    * The Catalog/Folders/Collections/People navigation rail, shared between
@@ -101,6 +102,18 @@
     onRenamePerson(id, trimmed || null);
   }
 
+  // "Rename…" in a People row's context menu (RFC-0028) asks for the inline editor through the faces store.
+  $effect(() => {
+    const id = faces.renamingPersonId;
+    if (id === null) return;
+    faces.renamingPersonId = null;
+    const person = people.find((p) => p.id === id);
+    if (person) {
+      expanded = { ...expanded, people: true };
+      startEditingPerson(person);
+    }
+  });
+
   function cancelEditingPerson() {
     editingPersonId = null;
   }
@@ -199,7 +212,7 @@
   </div>
   {#if expanded.collections}
     {#each collections as collection (collection.id)}
-      <div class="tree-item collection-item" class:active={activeCollectionId === collection.id}>
+      <div class="tree-item collection-item" class:active={activeCollectionId === collection.id} data-ctx-collection={collection.id}>
         <button type="button" class="tree-item-main" onclick={() => onSelectCollection(collection.id)}>
           {#if collection.is_smart}<span class="smart-icon" title="Smart Collection">⚡</span>{/if}
           <span class="tree-item-name">{collection.name}</span>
@@ -231,6 +244,7 @@
           class="tree-item person-item"
           class:active={activePersonId === person.id}
           class:unnamed={!person.name}
+          data-ctx-person={person.id}
           ondblclick={(e) => handlePersonRowDblClick(e, person.id)}
           role="button"
           tabindex="0"

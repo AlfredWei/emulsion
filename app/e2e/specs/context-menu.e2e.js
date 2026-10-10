@@ -182,3 +182,71 @@ describe("Library photo context menu", function () {
     expect(still).toBe(true);
   });
 });
+
+/** RFC-0028 slice 2a: the Catalog rail's collection row. Same DOM-driven approach as above. */
+describe("Collection rail row context menu", function () {
+  this.timeout(120000);
+  const NAME = `ctx-menu-e2e-${Date.now()}`;
+  let collectionId;
+
+  const menuOpen = () => browser.execute(() => !!document.querySelector('[data-testid="context-menu"]'));
+  const rowIds = () =>
+    browser.execute(() => Array.from(document.querySelectorAll('[data-testid="context-menu"] [data-menu-id]')).map((e) => e.getAttribute("data-menu-id")));
+  const collectionExists = () =>
+    browser.execute(async (id) => (await window.__TAURI__.core.invoke("list_collections")).some((c) => c.id === id), collectionId);
+
+  before(async () => {
+    await browser.setTimeout({ script: 60000 });
+    collectionId = await browser.execute(async (name) => {
+      const created = await window.__TAURI__.core.invoke("create_collection", { name });
+      return typeof created === "number" ? created : created.id;
+    }, NAME);
+    await browser.refresh();
+    await browser.waitUntil(() => browser.execute((id) => !!document.querySelector(`[data-ctx-collection="${id}"]`), collectionId), {
+      timeout: 30000,
+      timeoutMsg: "the new collection never showed in the rail",
+    });
+  });
+
+  after(async () => {
+    await browser.execute(async (id) => window.__TAURI__.core.invoke("delete_collection", { collectionId: id }).catch(() => {}), collectionId);
+  });
+
+  it("right-click opens the collection menu; Delete asks first, Cancel keeps it, Delete removes it", async () => {
+    const rightClick = () =>
+      browser.execute((id) => {
+        const row = document.querySelector(`[data-ctx-collection="${id}"]`);
+        const box = row.getBoundingClientRect();
+        row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 10, clientY: box.top + 5 }));
+      }, collectionId);
+    const clickButton = (/** @type {RegExp} */ re) =>
+      browser.execute(
+        (source) => {
+          const rx = new RegExp(source, "i");
+          const b = Array.from(document.querySelectorAll('[role="dialog"] button')).find((x) => rx.test(x.textContent ?? ""));
+          b.click();
+        },
+        re.source,
+      );
+
+    await rightClick();
+    await browser.waitUntil(menuOpen, { timeout: 10000, timeoutMsg: "the collection menu never opened" });
+    expect(await rowIds()).toEqual(["open", "select-photos", "delete-collection"]);
+
+    // Delete -> the dialog names the collection; Cancel leaves it.
+    await browser.execute(() => document.querySelector('[data-menu-id="delete-collection"]').click());
+    await browser.waitUntil(() => browser.execute(() => !!document.querySelector('[role="dialog"]')), { timeout: 5000, timeoutMsg: "no confirmation dialog" });
+    expect(await browser.execute(() => document.querySelector('[role="dialog"]').textContent)).toContain(NAME);
+    await clickButton(/cancel/);
+    await browser.waitUntil(() => browser.execute(() => !document.querySelector('[role="dialog"]')), { timeout: 5000 });
+    expect(await collectionExists()).toBe(true);
+
+    // Delete again and confirm.
+    await rightClick();
+    await browser.waitUntil(menuOpen, { timeout: 10000 });
+    await browser.execute(() => document.querySelector('[data-menu-id="delete-collection"]').click());
+    await browser.waitUntil(() => browser.execute(() => !!document.querySelector('[role="dialog"]')), { timeout: 5000 });
+    await clickButton(/^delete$/);
+    await browser.waitUntil(async () => !(await collectionExists()), { timeout: 10000, timeoutMsg: "the collection was not deleted" });
+  });
+});

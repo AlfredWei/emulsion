@@ -12,6 +12,8 @@ export class FacesStore {
   currentImageFaces = $state(/** @type {import('$lib/api/faces.js').FaceRow[]} */ ([]));
   showFaceRects = $state(false);
   hoveredFaceId = $state(/** @type {number | null} */ (null));
+  /** Set by the People row's context menu (RFC-0028): CatalogRail starts inline-renaming that person and clears it. */
+  renamingPersonId = $state(/** @type {number | null} */ (null));
 
   // Shared by all three detection entry points (MetadataPanel's per-photo "Face" button,
   // Library's multi-select batch action, and "Detect Faces in Folder") -- only one

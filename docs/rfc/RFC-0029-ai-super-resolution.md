@@ -126,3 +126,21 @@ Decided with the user on 2026-10-12 (first round): scope = a new catalog photo, 
 6. **Enlarging an enlargement is disabled** in the first cut.
 
 Nothing is left open for the user before slice 4a; the open items are measurements (§4).
+
+## 8. Slice 4a, step 1: the licence reading (2026-10-12)
+
+Read from the public pages (no downloads, nothing run); **not legal advice**, and nothing here is a measurement.
+
+- **Real-ESRGAN** (xinntao, github.com/xinntao/Real-ESRGAN): the repository is **BSD-3-Clause**. The README and the v0.2.5.0 release notes (where `realesr-general-x4v3` was published) say **nothing about the weights' licence**. The model-zoo page returned HTTP 503, so it was not read. The third-party ONNX re-host `Heliosoph/realesrgan-onnx` declares **BSD-3-Clause** and ships a `LICENSE`, says it is an ONNX export of the upstream weights "re-hosted for distribution stability" and names xinntao's releases as the authoritative source; it does not describe the export. One other re-packager describes `general-x4v3` as a *deep network interpolation* of two official checkpoints, which, if true, makes it a derivative of both (unverified).
+- **Training-data terms:** no source read states which images the Real-ESRGAN checkpoints were trained on or under what terms. The BSD-3 text covers the weights only as far as the repository's licence is read to cover them.
+- **SwinIR** (JingyunLiang/SwinIR): the repository is **Apache-2.0**; the README says nothing separate about the weights, asks users to also follow the licences of the Swin Transformer and KAIR code it is based on, and lists the real-world 4x models `003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN.pth` (middle) and `003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x4_GAN.pth` (large) without sizes. Not read: the classical (fidelity-oriented) 4x model's page, its training data terms.
+- **What this does and does not settle.** The code licences are permissive; for both families the weights' own terms are *implicit* (read from the repository licence), and the training data's are unstated. That is the same position RFC-0023 §5.4 flagged for Real-ESRGAN. It does not stop a prototype or the bake-off, but **shipping it in the installer is a judgment call for the project owner** (accept the implicit reading, ask the maintainers, or prefer a model whose card states terms for weights and data).
+
+**Needs the user's go-ahead before 4a continues (downloads, none done):**
+
+| File | Source | Size | Why |
+|---|---|---|---|
+| `realesr-general-x4v3.onnx` | huggingface.co/Heliosoph/realesrgan-onnx | about 5 MB (card) | the model already measured in RFC-0023; its inputs were not kept, so it is needed again for same-protocol numbers |
+| `RealESRGAN_x4plus.pth` | github.com/xinntao/Real-ESRGAN releases | about 64 MB (from memory, unchecked) | the larger Real-ESRGAN, to be converted to ONNX locally |
+| a SwinIR checkpoint (real-world `SwinIR-M_x4_GAN`, and the classical `SwinIR-M x4` as the fidelity-oriented one) | github.com/JingyunLiang/SwinIR releases | not stated on the README (to be read from the release page) | the fidelity-oriented candidate, to be converted to ONNX locally |
+| a Python environment with PyTorch and ONNX Runtime | PyPI (via `uv`, in a throw-away directory) | several hundred MB | the machine has neither; RFC-0023 / RFC-0027's measurements used a scratch environment that is gone |

@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Enlarge (AI): a connected photo — UX mock (RFC-0029)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  UX mock for RFC-0029. Static and self-contained; uses the app's real tokens. The "photos" are synthetic SVG.
+  What is real here is the BEHAVIOUR the RFC specifies, so it can be judged by using it:
+    - the entry points (photo right-click menu, Photo menu button in the info panel),
+    - the Enlarge dialog: scale 2x / 4x / long edge, output pixels + megapixels, time estimate, file-size estimate,
+      JPEG disabled when a side would exceed 65,535 px, a very-large warning, Strength blended against a plain resize
+      with a draggable before / after at 1:1, a movable preview region, the metadata-note check box, format and name,
+    - the job: runs in the background, progress in the status strip, Cancel, the dialog is not held open,
+    - the result: a NEW photo in the catalog next to the original, badged, with a "Connected photos" block on both
+      sides (Go to original / Show enlargements), and the "original edited since" state with Enlarge again,
+    - the model-not-installed state (consent, same wording family as AI Denoise / Select Subject).
+  Nothing here talks to the app. The enlargement itself is faked: the plain side is a blurred copy, the AI side a sharper
+  copy with a few invented hard lines, mixed by Strength, which is what the real preview shows too.
+-->
+<style>
+:root {
+  --bg-canvas:#141210; --bg-app:#1a1815; --bg-panel:#1e1c19; --bg-panel-raised:#28251f; --bg-hover:#332f28;
+  --border-subtle:#37332b; --border-strong:#4a453b;
+  --text-primary:#efeae2; --text-secondary:#a39c8e; --text-tertiary:#6e695e;
+  --accent:#e0932f; --accent-strong:#f0a94a; --accent-soft:#4a371f; --accent-on:#1b1310; --danger:#e5604d; --ok:#7bb274;
+  --radius-s:3px; --radius-m:5px;
+  --font-ui:-apple-system,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --shadow-soft:0 1px 2px rgba(0,0,0,.4),0 8px 24px -8px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-canvas);color:var(--text-primary);font:13px/1.4 var(--font-ui);padding:24px 32px 56px;-webkit-font-smoothing:antialiased}
+h1{font-size:15px;margin:0 0 4px}
+.lede{color:var(--text-secondary);max-width:920px;margin:0 0 12px}
+.steps{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;align-items:center}
+.btn{appearance:none;background:var(--bg-panel-raised);border:1px solid var(--border-subtle);color:var(--text-secondary);border-radius:var(--radius-s);font:11.5px var(--font-ui);padding:5px 10px;cursor:pointer}
+.btn:hover{background:var(--bg-hover)} .btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-on);font-weight:600}
+.btn.primary:hover{background:var(--accent-strong)}
+.btn:focus-visible,.menu .mi:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent-strong);outline-offset:1px}
+.steps .btn.on{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-soft)}
+.cap{min-height:40px;max-width:920px;color:var(--text-secondary);font-size:12px;margin:0 0 10px}
+.cap b{color:var(--text-primary)}
+.wrap{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.app{width:900px;height:580px;position:relative;border:1px solid var(--border-subtle);border-radius:var(--radius-m);overflow:hidden;background:var(--bg-app);display:flex;flex-direction:column}
+.titlebar{height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--border-subtle);background:var(--bg-panel);font-size:11px;color:var(--text-secondary)}
+.titlebar .mod{padding:2px 8px;border-radius:var(--radius-s)} .titlebar .mod.on{background:var(--bg-panel-raised);color:var(--text-primary)}
+.main{flex:1;min-height:0;display:flex}
+.rail{width:150px;flex:none;border-right:1px solid var(--border-subtle);background:var(--bg-panel);padding:10px;font-size:11.5px;color:var(--text-secondary)}
+.rail .it{padding:4px 6px;border-radius:var(--radius-s);cursor:default;display:flex;justify-content:space-between}.rail .it:hover{background:var(--bg-hover)}.rail .it.on{background:var(--accent-soft);color:var(--accent-strong)}
+.rail h4{margin:10px 0 4px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)}
+.grid{flex:1;padding:12px;display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:118px;gap:8px;overflow:auto;align-content:start}
+.ph{position:relative;border-radius:var(--radius-s);border:2px solid transparent;overflow:hidden;outline:none;cursor:default}
+.ph svg{position:absolute;inset:0;width:100%;height:100%}
+.ph.sel{border-color:var(--accent)}
+.ph:focus-visible{box-shadow:0 0 0 2px var(--accent-strong)}
+.ph .nm{position:absolute;left:0;right:0;bottom:0;padding:10px 5px 3px;font-size:10px;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.7));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* the connected-photo cues: a corner chip on the enlargement, a link glyph on the original */
+.ph .chip{position:absolute;right:4px;top:4px;font-size:9.5px;font-weight:700;background:var(--accent);color:var(--accent-on);padding:1px 5px;border-radius:9px;letter-spacing:.02em}
+.ph .link{position:absolute;right:4px;top:4px;font-size:10px;background:rgba(0,0,0,.62);color:var(--accent-strong);padding:1px 5px;border-radius:9px;font-weight:700}
+.ph.pulse{animation:pulse 1.2s ease-out 2}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(240,169,74,.9)}100%{box-shadow:0 0 0 14px rgba(240,169,74,0)}}
+.info{width:240px;flex:none;border-left:1px solid var(--border-subtle);background:var(--bg-panel);padding:12px;font-size:11.5px;color:var(--text-secondary);overflow:auto}
+.info h3{margin:0 0 6px;font-size:12px;color:var(--text-primary);word-break:break-all}
+.info dl{margin:0 0 10px;display:grid;grid-template-columns:78px 1fr;gap:3px 8px} .info dt{color:var(--text-tertiary)} .info dd{margin:0;color:var(--text-primary)}
+.conn{border:1px solid var(--border-strong);background:var(--bg-panel-raised);border-radius:var(--radius-m);padding:8px 9px;margin:8px 0}
+.conn h4{margin:0 0 4px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent-strong)}
+.conn p{margin:0 0 6px} .conn .row{display:flex;gap:6px;flex-wrap:wrap}
+.conn .warn{color:var(--accent-strong)}
+a.lnk{color:var(--accent-strong);cursor:pointer;text-decoration:underline;background:none;border:0;font:inherit;padding:0}
+.status{height:26px;flex:none;border-top:1px solid var(--border-subtle);background:var(--bg-panel);display:flex;align-items:center;gap:10px;padding:0 10px;font-size:11px;color:var(--text-secondary)}
+.status .bar{width:160px;height:6px;border-radius:3px;background:var(--bg-hover);overflow:hidden;display:none}
+.status .bar i{display:block;height:100%;width:0;background:var(--accent)}
+.status.run .bar{display:block}
+.status .cx{display:none} .status.run .cx{display:inline}
+.toast{position:absolute;left:50%;bottom:40px;transform:translateX(-50%);background:var(--bg-panel-raised);border:1px solid var(--accent);border-radius:var(--radius-m);padding:8px 12px;font-size:12px;box-shadow:var(--shadow-soft);display:none;gap:10px;align-items:center}
+.toast.on{display:flex}
+/* menu */
+.menu{position:absolute;z-index:30;min-width:200px;background:var(--bg-panel-raised);border:1px solid var(--border-strong);border-radius:var(--radius-m);box-shadow:var(--shadow-soft);padding:4px;font-size:12px;display:none}
+.menu.on{display:block}
+.menu .mi{padding:5px 10px;border-radius:var(--radius-s);display:flex;justify-content:space-between;gap:16px;cursor:default;outline:none;color:var(--text-primary)}
+.menu .mi:hover,.menu .mi.f{background:var(--accent-soft);color:var(--accent-strong)}
+.menu .mi.dis{color:var(--text-tertiary)} .menu .mi small{color:var(--text-tertiary)}
+.menu .sep{height:1px;background:var(--border-subtle);margin:4px 2px}
+/* dialog */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:20}
+.scrim.on{display:flex}
+.dlg{width:820px;max-height:540px;background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:var(--radius-m);box-shadow:var(--shadow-soft);display:flex;flex-direction:column}
+.dlg header{padding:10px 14px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:baseline;gap:10px}
+.dlg header h2{margin:0;font-size:13px} .dlg header span{color:var(--text-tertiary);font-size:11px}
+.dlg .body{display:flex;gap:14px;padding:12px 14px;min-height:0}
+.dlg footer{padding:10px 14px;border-top:1px solid var(--border-subtle);display:flex;gap:8px;align-items:center}
+.dlg footer .sp{flex:1}
+.pv{flex:1;min-width:0}
+.pvbox{position:relative;height:290px;border:1px solid var(--border-subtle);border-radius:var(--radius-s);overflow:hidden;background:#000;user-select:none;cursor:ew-resize}
+.pvbox .layer{position:absolute;inset:0;overflow:hidden}
+.pvbox .layer svg{position:absolute;width:300%;height:300%;left:-100%;top:-100%}
+.pvbox .plain svg{filter:blur(1.5px)}
+.pvbox .ai svg{filter:contrast(1.18) saturate(1.08)}
+.pvbox .ai{clip-path:inset(0 0 0 50%)}
+.pvbox .div{position:absolute;top:0;bottom:0;width:2px;background:var(--accent-strong);left:50%;pointer-events:none}
+.pvbox .div:after{content:"\21C4";position:absolute;top:50%;left:-11px;width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--accent-on);display:flex;align-items:center;justify-content:center;font-size:12px;transform:translateY(-50%)}
+.pvbox .lbl{position:absolute;top:6px;font-size:10.5px;background:rgba(0,0,0,.65);padding:2px 6px;border-radius:2px;color:#ddd;pointer-events:none}
+.pvbox .lbl.l{left:6px}.pvbox .lbl.r{right:6px}
+.pvnote{font-size:11px;color:var(--text-tertiary);margin:6px 0 0;display:flex;gap:10px;align-items:center}
+.nav{position:relative;width:96px;height:64px;flex:none;border:1px solid var(--border-subtle);border-radius:var(--radius-s);overflow:hidden;cursor:pointer}
+.nav svg{position:absolute;inset:0;width:100%;height:100%}
+.nav i{position:absolute;width:30%;height:42%;border:2px solid var(--accent-strong);background:rgba(240,169,74,.18);pointer-events:none}
+.ctl{width:312px;flex:none;font-size:12px}
+.ctl label.t{display:block;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary);margin:0 0 4px}
+.ctl .grp{margin:0 0 12px}
+.seg{display:flex;gap:0}
+.seg button{flex:1;appearance:none;background:var(--bg-panel-raised);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:5px 4px;font:12px var(--font-ui);cursor:pointer;margin-left:-1px}
+.seg button:first-child{margin-left:0;border-radius:var(--radius-s) 0 0 var(--radius-s)}.seg button:last-child{border-radius:0 var(--radius-s) var(--radius-s) 0}
+.seg button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong);position:relative;z-index:1}
+.seg button:focus-visible{outline:2px solid var(--accent-strong);outline-offset:-2px}
+.ctl input[type=range]{width:100%;accent-color:var(--accent)}
+.ctl .hint{color:var(--text-tertiary);font-size:11px;margin:2px 0 0}
+.ctl input[type=number],.ctl input[type=text],.ctl select{background:var(--bg-panel-raised);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:var(--radius-s);padding:4px 6px;font:12px var(--font-ui)}
+.ctl input[type=text]{width:100%;font-family:var(--font-mono);font-size:11px}
+.kv{display:grid;grid-template-columns:1fr auto;gap:2px 10px;background:var(--bg-panel-raised);border:1px solid var(--border-subtle);border-radius:var(--radius-s);padding:8px 10px;margin:0 0 12px}
+.kv .k{color:var(--text-tertiary)} .kv .v{text-align:right;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.kv .big{grid-column:1/-1;font-size:15px;color:var(--text-primary);font-variant-numeric:tabular-nums;margin-bottom:2px}
+.warn{color:var(--accent-strong);font-size:11.5px;margin:0 0 8px}
+.chk{display:flex;gap:7px;align-items:flex-start;margin:0 0 8px;color:var(--text-secondary);font-size:12px}
+.chk input{margin-top:2px;accent-color:var(--accent)}
+.consent{padding:22px 24px;max-width:520px;color:var(--text-secondary);font-size:12.5px}
+.consent h3{margin:0 0 8px;color:var(--text-primary);font-size:13px}
+.log{width:260px;min-height:200px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-m);padding:10px;font-size:11.5px}
+.log h3{margin:0 0 6px;font-size:11px;color:var(--text-tertiary);letter-spacing:.05em;text-transform:uppercase}
+.log .e{font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);padding:3px 0;border-top:1px solid var(--border-subtle)}
+.log .e b{color:var(--accent-strong);font-weight:600}
+</style>
+</head>
+<body>
+<h1>Enlarge (AI): the enlargement becomes a connected photo</h1>
+<p class="lede">Right-click the highlighted photo (or select it and press <b>Shift+F10</b>) and choose <b>Enlarge (AI)…</b>. The enlargement is saved as a <b>new photo next to the original</b>, cataloged and linked to it, so it can be rated, edited, collected and printed like any other. Everything below is clickable; the quality of the fake preview is not the point, the flow is.</p>
+<div class="steps">
+  <button class="btn" id="reset">Start over</button>
+  <button class="btn" id="tglModel">Model not installed: <span id="modelState">off</span></button>
+  <button class="btn" id="tglEdited">Simulate: original edited after the enlargement</button>
+</div>
+<p class="cap" id="cap"></p>
+
+<div class="wrap">
+  <div class="app" id="app">
+    <div class="titlebar"><span class="mod on">Library</span><span class="mod">Develop</span><span class="mod">Print</span><span style="margin-left:auto" id="count">8 photos</span></div>
+    <div class="main">
+      <div class="rail">
+        <h4>Catalog</h4>
+        <div class="it on" data-f="all">All photographs <span id="nAll">8</span></div>
+        <div class="it" data-f="enl">AI enlarged <span id="nEnl">0</span></div>
+        <h4>Collections</h4>
+        <div class="it">Singapore trip <span>3</span></div>
+        <div class="it">Prints <span>0</span></div>
+      </div>
+      <div class="grid" id="grid" role="listbox" aria-label="Photos"></div>
+      <div class="info" id="info"></div>
+    </div>
+    <div class="status" id="status"><span id="stTxt">Ready</span><span class="bar"><i id="bar"></i></span><a class="lnk cx" id="stCancel">Cancel</a></div>
+    <div class="toast" id="toast"><span id="toastTxt"></span><button class="btn" id="toastGo">Show</button></div>
+    <div class="menu" id="menu" role="menu"></div>
+    <div class="scrim" id="scrim"><div class="dlg" id="dlg" role="dialog" aria-modal="true" aria-label="Enlarge (AI)"></div></div>
+  </div>
+  <div class="log"><h3>What the app would do</h3><div id="log"></div></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const SRC={id:3,name:"Cavenagh-Bridge-Singapore",w:2400,h:1600,fmt:"JPEG"};
+let sameColl=false, photos, sel, scale, strength, longEdge, outFmt, noteMeta, region, dlgMode, job, edited, modelMissing, filter, nameEdit;
+const hues=[28,200,340,150,260,50,180,310];
+
+function scene(h,fine){ // a synthetic photo: sky, building with a window grid, railing stripes
+  const w=`hsl(${h} 35% 62%)`,d=`hsl(${h} 30% 24%)`,m=`hsl(${(h+30)%360} 28% 40%)`;
+  let wins='';for(let r=0;r<6;r++)for(let c=0;c<9;c++)wins+=`<rect x="${20+c*20}" y="${34+r*13}" width="11" height="7" fill="hsl(${h} 50% ${r%2?72:58}%)" opacity=".85"/>`;
+  let rail='';for(let i=0;i<48;i++)rail+=`<rect x="${6+i*3.9}" y="${fine?118:120}" width="${fine?1.1:0.9}" height="${fine?20:18}" fill="#1b1815"/>`;
+  return `<svg viewBox="0 0 200 150" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g${h}${fine?'f':'n'}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${w}"/><stop offset="1" stop-color="hsl(${h} 40% 80%)"/></linearGradient></defs><rect width="200" height="150" fill="url(#g${h}${fine?'f':'n'})"/><rect x="14" y="26" width="172" height="92" fill="${m}"/>${wins}<rect x="0" y="118" width="200" height="32" fill="${d}"/>${rail}<rect x="0" y="116" width="200" height="3" fill="#0d0c0a"/></svg>`;
+}
+function resetState(){
+  photos=hues.map((h,i)=>({id:i+1,name:i===2?SRC.name:`Photo-${String(i+1).padStart(2,'0')}`,h,w:i===2?SRC.w:6000,h2:i===2?SRC.h:4000,link:null}));
+  sel=3;scale=4;strength=70;longEdge=7200;outFmt="JPEG 95";noteMeta=true;region=[.5,.84];dlgMode=null;job=null;edited=false;filter="all";nameEdit=null;
+  $('#toast').classList.remove('on');$('#menu').classList.remove('on');$('#scrim').classList.remove('on');
+  setStatus("Ready",false);$('#log').innerHTML='';log("Library open; <b>Cavenagh-Bridge-Singapore</b> (2400 × 1600, a crop) selected");
+  caption(1);render();
+}
+function mp(w,h){return (w*h/1e6)}
+function outDims(){const a=SRC.w,b=SRC.h;let f=scale==='edge'?longEdge/Math.max(a,b):scale;return {w:Math.round(a*f),h:Math.round(b*f),f}}
+function estTime(){const t=Math.ceil(SRC.w/480)*Math.ceil(SRC.h/480);return Math.round(t*2.2)} // the model always runs 4x; 2x and "edge" resample down
+function estSize(o,fmt){const m=mp(o.w,o.h);return fmt==="JPEG 100"?m*2.6:m*1.1} // MB, rough
+function fmtMB(x){return x>=1000?(x/1000).toFixed(1)+" GB":Math.round(x)+" MB"}
+function stem(){return `${SRC.name}-Enlarged-${scale==='edge'?longEdge+'px':scale+'x'}`}
+function ext(){return "jpg"}
+function log(t){const d=document.createElement('div');d.className='e';d.innerHTML=t;$('#log').prepend(d)}
+function caption(n){$('#cap').innerHTML={
+1:"<b>1 · Library.</b> The photo to enlarge is selected. The info panel is where connections will show. Right-click it.",
+2:"<b>2 · The dialog.</b> Pick a scale, judge the result at 1:1 with the split (drag it, or click the navigator to move the region), set <b>Strength</b>, read the output size and time <i>before</i> anything runs. Nothing is written until <b>Enlarge</b>.",
+3:"<b>3 · Running.</b> The dialog closes at once; the job runs in the background with progress in the status strip and a Cancel. You can keep working. One job at a time.",
+4:"<b>4 · Done.</b> A new photo appears next to the original with an <b>×4</b> chip; the original gets a link glyph. Both info panels carry a <b>Connected photos</b> block with links in each direction.",
+5:"<b>Model not installed.</b> Same consent wording family as AI Denoise and Select Subject: what is downloaded, its size, from where; or import the file yourself."}[n]}
+
+function render(){
+  const list=photos.filter(p=>filter==='all'||p.link);
+  $('#grid').innerHTML=list.map(p=>{
+    const hasEnl=photos.some(q=>q.link&&q.link.from===p.id);
+    return `<div class="ph ${p.id===sel?'sel':''} ${p.pulse?'pulse':''}" tabindex="0" role="option" aria-selected="${p.id===sel}" data-id="${p.id}">${scene(p.h,false)}${p.link?`<span class="chip" title="Enlarged from another photo">×${p.link.scale}</span>`:''}${hasEnl?`<span class="link" title="This photo has an enlargement">⛓</span>`:''}<div class="nm">${p.name}</div></div>`}).join('');
+  photos.forEach(p=>p.pulse=false);
+  $('#nAll').textContent=photos.length;$('#nEnl').textContent=photos.filter(p=>p.link).length;$('#count').textContent=photos.length+" photos";
+  $$('.rail .it[data-f]').forEach(e=>e.classList.toggle('on',e.dataset.f===filter));
+  renderInfo();
+}
+function renderInfo(){
+  const p=photos.find(x=>x.id===sel);if(!p){$('#info').innerHTML='';return}
+  const M=(p.w*p.h2/1e6).toFixed(1);
+  let conn='';
+  if(p.link){
+    const o=photos.find(x=>x.id===p.link.from);
+    conn=`<div class="conn"><h4>Connected photos</h4><p>Enlarged <b>×${p.link.scale}</b> from <a class="lnk" data-go="${p.link.from}">${o.name}</a></p><p style="color:var(--text-tertiary)">Strength ${p.link.strength}% · model Real-ESRGAN general-x4v3 · ${p.link.when}</p>${edited?`<p class="warn">The original was edited after this was made.</p><div class="row"><button class="btn" data-act="again">Enlarge again…</button></div>`:`<div class="row"><button class="btn" data-go="${p.link.from}">Go to original</button></div>`}</div>`;
+  } else {
+    const kids=photos.filter(q=>q.link&&q.link.from===p.id);
+    if(kids.length)conn=`<div class="conn"><h4>Connected photos</h4><p>${kids.length} enlargement${kids.length>1?'s':''}: ${kids.map(k=>`<a class="lnk" data-go="${k.id}">×${k.link.scale}</a>`).join(', ')}</p>${edited?`<p class="warn">Edited since the enlargement was made.</p>`:''}<div class="row"><button class="btn" data-act="show">Show enlargements</button>${edited?`<button class="btn" data-act="again">Enlarge again…</button>`:''}</div></div>`;
+  }
+  $('#info').innerHTML=`<h3>${p.name}${p.link?'.jpg':'.jpg'}</h3><dl><dt>Size</dt><dd>${p.w} × ${p.h2}</dd><dt>Megapixels</dt><dd>${M} MP</dd><dt>Camera</dt><dd>${p.link?'(from original)':'X-T4'}</dd><dt>Rating</dt><dd>${p.link?'—':'★★★★☆'}</dd></dl>${conn}<button class="btn" id="enlBtn" ${p.link?'disabled title="This photo is itself an enlargement"':''}>Enlarge (AI)…</button>`;
+}
+function setStatus(t,run){$('#stTxt').textContent=t;$('#status').classList.toggle('run',run)}
+
+/* ---------- context menu ---------- */
+function openMenu(x,y,id){
+  const p=photos.find(q=>q.id===id);
+  const rows=[['Open in Develop','D'],['Open in Loupe','E'],'-',
+   ['Enlarge (AI)…',p.link?'':'',!!p.link,'This photo is already an enlargement'],
+   p.link?['Go to Original','',false]:(photos.some(q=>q.link&&q.link.from===id)?['Show Enlargements','',false]:null),
+   '-',['Develop Settings ▸',''],['Export…','⇧⌘E'],['Show in Finder','']].filter(Boolean);
+  const m=$('#menu');m.innerHTML=rows.map((r,i)=>r==='-'?'<div class="sep"></div>':`<div class="mi ${r[2]?'dis':''}" tabindex="-1" role="menuitem" ${r[2]?'aria-disabled="true" title="'+r[3]+'"':''} data-i="${i}"><span>${r[0]}</span><small>${r[1]||''}</small></div>`).join('');
+  m.classList.add('on');const b=$('#app').getBoundingClientRect();
+  m.style.left=Math.min(x-b.left,b.width-220)+'px';m.style.top=Math.min(y-b.top,b.height-210)+'px';
+  m._id=id;m._rows=rows;m.querySelector('.mi:not(.dis)')?.classList.add('f');m.querySelector('.mi:not(.dis)')?.focus();
+}
+function closeMenu(){$('#menu').classList.remove('on')}
+$('#menu').addEventListener('click',e=>{const mi=e.target.closest('.mi');if(!mi||mi.classList.contains('dis'))return;const r=$('#menu')._rows[+mi.dataset.i],id=$('#menu')._id;closeMenu();
+  if(r[0].startsWith('Enlarge'))openDialog(id);else if(r[0]==='Go to Original')goTo(photos.find(x=>x.id===id).link.from);else if(r[0]==='Show Enlargements')showEnl()});
+$('#menu').addEventListener('keydown',e=>{const items=$$('#menu .mi:not(.dis)');let i=items.indexOf(document.activeElement);
+  if(e.key==='ArrowDown'){i=(i+1)%items.length}else if(e.key==='ArrowUp'){i=(i-1+items.length)%items.length}else if(e.key==='Enter'||e.key===' '){document.activeElement.click();e.preventDefault();return}else if(e.key==='Escape'){closeMenu();$(`.ph[data-id="${$('#menu')._id}"]`)?.focus();return}else return;
+  items.forEach(x=>x.classList.remove('f'));items[i].classList.add('f');items[i].focus();e.preventDefault()});
+$('#grid').addEventListener('contextmenu',e=>{const c=e.target.closest('.ph');if(!c)return;e.preventDefault();sel=+c.dataset.id;render();openMenu(e.clientX,e.clientY,sel)});
+$('#grid').addEventListener('keydown',e=>{const c=e.target.closest('.ph');if(!c)return;if(e.key==='F10'&&e.shiftKey||e.key==='ContextMenu'){e.preventDefault();const r=c.getBoundingClientRect();sel=+c.dataset.id;openMenu(r.left+20,r.top+20,sel)}});
+$('#grid').addEventListener('click',e=>{const c=e.target.closest('.ph');if(c){sel=+c.dataset.id;render()}});
+document.addEventListener('click',e=>{if(!e.target.closest('#menu'))closeMenu()});
+$('#info').addEventListener('click',e=>{const g=e.target.closest('[data-go]');if(g)return goTo(+g.dataset.go);
+  const a=e.target.closest('[data-act]');if(a){if(a.dataset.act==='show')showEnl();else openDialog(sel,true)}
+  if(e.target.id==='enlBtn')openDialog(sel)});
+function goTo(id){filter='all';sel=id;const p=photos.find(x=>x.id===id);p.pulse=true;render();log(`Select <b>${p.name}</b> and scroll to it`)}
+function showEnl(){filter='enl';render();log('Library filter: <b>AI enlarged</b>')}
+$$('.rail .it[data-f]').forEach(e=>e.addEventListener('click',()=>{filter=e.dataset.f;render()}));
+
+/* ---------- dialog ---------- */
+function openDialog(id,again){
+  if(id!==SRC.id){sel=id}
+  $('#scrim').classList.add('on');$('#menu').classList.remove('on');dlgMode=modelMissing?'consent':'main';
+  caption(modelMissing?5:2);log(`Open <b>Enlarge (AI)</b> for the selected photo${again?' (again, from a changed original)':''}`);drawDialog();
+  setTimeout(()=>$('#dlg .btn.primary,#dlg .seg button.on')?.focus(),0);
+}
+function closeDialog(){$('#scrim').classList.remove('on');dlgMode=null;(document.querySelector(`.ph[data-id="${sel}"]`))?.focus()}
+function drawDialog(){
+  const d=$('#dlg');
+  if(dlgMode==='consent'){
+    d.innerHTML=`<header><h2>Enlarge (AI)</h2><span>${SRC.name}</span></header><div class="consent"><h3>The enlargement model is not installed</h3><p>Enlarge (AI) runs a model on this computer; nothing about your photos is sent anywhere. The model is a <b>4.9 MB</b> file, downloaded once from <b>github.com</b> (this project's own release), checked against a fixed checksum before it is used.</p><p>Or choose <b>Import…</b> if you already have the file.</p></div><footer><span class="sp"></span><button class="btn" id="dImport">Import…</button><button class="btn" id="dCancel">Cancel</button><button class="btn primary" id="dDl">Download (4.9 MB)</button></footer>`;
+    $('#dCancel').onclick=closeDialog;$('#dDl').onclick=()=>{modelMissing=false;$('#modelState').textContent='off';log('Model downloaded and verified');dlgMode='main';caption(2);drawDialog()};$('#dImport').onclick=()=>log('Open the file picker for the model file');return}
+  const o=outDims(),M=mp(o.w,o.h),big=M>100;
+  const secs=estTime(),tm=secs>=60?`about ${Math.round(secs/60*10)/10} min`:`about ${secs} s`;
+  d.innerHTML=`<header><h2>Enlarge (AI)</h2><span>${SRC.name} · ${SRC.w} × ${SRC.h} (${mp(SRC.w,SRC.h).toFixed(1)} MP)</span></header>
+  <div class="body"><div class="pv">
+    <div class="pvbox" id="pv"><div class="layer plain">${scene(28,true)}</div><div class="layer ai" id="aiL">${scene(28,true)}</div><div class="div" id="dv"></div><span class="lbl l">Plain enlargement</span><span class="lbl r" id="rl">Enlarged (AI) · ${strength}%</span></div>
+    <div class="pvnote"><div class="nav" id="nav" title="Click to move the preview region">${scene(28,false)}<i id="navR"></i></div><span>1:1 preview of about 1 MP. Drag the split. The right side is the model blended with the plain resize at the chosen Strength.</span></div>
+  </div>
+  <div class="ctl">
+    <div class="grp"><label class="t">Scale</label><div class="seg" id="segScale" role="radiogroup" aria-label="Scale"><button role="radio" data-s="2" class="${scale===2?'on':''}" aria-checked="${scale===2}">2×</button><button role="radio" data-s="4" class="${scale===4?'on':''}" aria-checked="${scale===4}">4×</button><button role="radio" data-s="edge" class="${scale==='edge'?'on':''}" aria-checked="${scale==='edge'}">Long edge</button></div>
+      ${scale==='edge'?`<p class="hint"><input type="number" id="edge" min="${Math.max(SRC.w,SRC.h)+1}" max="65535" value="${longEdge}" style="width:90px"> px on the long side</p>`:''}${scale==='edge'?'<p class="hint">JPEG holds at most 65,535 px on a side.</p>':''}</div>
+    <div class="grp"><label class="t" for="str">Strength <span style="text-transform:none;letter-spacing:0;color:var(--text-secondary)" id="strV">${strength}%</span></label><input id="str" type="range" min="0" max="100" value="${strength}"><p class="hint">0 is a plain resize, 100 is the model alone. Lower it if the model draws detail that was not there (look at the railings).</p></div>
+    <div class="kv"><div class="big">${o.w} × ${o.h} px</div><span class="k">Megapixels</span><span class="v">${M.toFixed(1)} MP</span><span class="k">Time on this computer</span><span class="v">${tm}</span><span class="k">File (${outFmt})</span><span class="v">≈ ${fmtMB(estSize(o,outFmt))}</span></div>
+    ${big?`<p class="warn">⚠ ${M.toFixed(0)} MP is very large: it needs several GB of disk and most editors cannot open it.</p>`:''}
+    <div class="grp"><label class="t">Save as</label><div style="display:flex;gap:6px;margin:0 0 6px"><select id="fmt" aria-label="Format"><option ${outFmt==='JPEG 95'?'selected':''}>JPEG 95</option><option ${outFmt==='JPEG 100'?'selected':''}>JPEG 100</option></select><span class="hint" style="align-self:center">the catalog opens RAW and JPEG</span></div>
+      <input type="text" id="nm" value="${nameEdit??stem()}" aria-label="File name"><p class="hint">…${ext()} · saved next to the original, added to the catalog and linked to it.</p></div>
+    <label class="chk"><input type="checkbox" id="cl" ${sameColl?'checked':''}> Add to the same collections as the original <span style="color:var(--text-tertiary)">(Singapore trip)</span></label>
+    <label class="chk"><input type="checkbox" id="mk" ${noteMeta?'checked':''}> Note in the file's metadata that it was enlarged by a model <span style="color:var(--text-tertiary)">(recommended)</span></label>
+  </div></div>
+  <footer><span class="hint" style="color:var(--text-tertiary);font-size:11px">Nothing is written until you press Enlarge. The original is never changed.</span><span class="sp"></span><button class="btn" id="dCancel">Cancel</button><button class="btn primary" id="dGo">Enlarge</button></footer>`;
+  wireDialog();paintPreview();
+}
+function paintPreview(){
+  const ai=$('#aiL');if(!ai)return;ai.style.opacity=strength/100;
+  const [rx,ry]=region;const sv=[...document.querySelectorAll('#pv .layer svg')];sv.forEach(s=>{s.style.left=(50-rx*300)+'%';s.style.top=(50-ry*300)+'%'});
+  const n=$('#navR');if(n){n.style.left=(rx*70)+'%';n.style.top=(ry*58)+'%'}
+}
+function wireDialog(){
+  $('#dCancel').onclick=closeDialog;
+  $$('#segScale button').forEach(b=>b.onclick=()=>{scale=b.dataset.s==='edge'?'edge':+b.dataset.s;nameEdit=null;drawDialog();$(`#segScale button.on`).focus()});
+  const e=$('#edge');if(e)e.onchange=()=>{longEdge=Math.max(SRC.w+1,Math.min(65535,+e.value||SRC.w+1));nameEdit=null;drawDialog()};
+  $('#str').oninput=ev=>{strength=+ev.target.value;$('#strV').textContent=strength+'%';$('#rl').textContent='Enlarged (AI) · '+strength+'%';paintPreview()};
+  $('#fmt').onchange=ev=>{outFmt=ev.target.value;nameEdit=null;drawDialog()};
+  $('#nm').oninput=ev=>nameEdit=ev.target.value;$('#mk').onchange=ev=>noteMeta=ev.target.checked;$('#cl').onchange=ev=>sameColl=ev.target.checked;
+  const pv=$('#pv'),dv=$('#dv'),ai=$('#aiL');let drag=false;
+  const mv=x=>{const r=pv.getBoundingClientRect();let p=Math.max(0,Math.min(1,(x-r.left)/r.width))*100;dv.style.left=p+'%';ai.style.clipPath=`inset(0 0 0 ${p}%)`};
+  pv.onpointerdown=e=>{drag=true;pv.setPointerCapture(e.pointerId);mv(e.clientX)};pv.onpointermove=e=>drag&&mv(e.clientX);pv.onpointerup=()=>drag=false;
+  $('#nav').onclick=e=>{const r=e.currentTarget.getBoundingClientRect();region=[Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))];paintPreview();log('Preview region moved (renders ~1 MP at 1:1, ~3 s)')};
+  $('#dGo').onclick=startJob;
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&dlgMode)closeDialog()});
+
+/* ---------- job ---------- */
+let timer;
+function startJob(){
+  const o=outDims(),name=(nameEdit??stem())+'.'+ext(),secs=Math.min(estTime(),12);
+  job={o,name,strength,scale,fmt:outFmt};closeDialog();caption(3);
+  log(`Job: enlarge <b>${SRC.name}</b> ×${scale==='edge'?longEdge+'px':scale} (${o.w} × ${o.h}), strength ${strength}%, ${outFmt}, note ${noteMeta?'on':'off'}, same collections ${sameColl?'yes':'no'}`);
+  let t0=Date.now();setStatus(`Enlarging ${SRC.name}…  0%`,true);
+  timer=setInterval(()=>{const f=Math.min(1,(Date.now()-t0)/(secs*1000));$('#bar').style.width=f*100+'%';setStatus(`Enlarging ${SRC.name}…  ${Math.round(f*100)}%  (tile ${Math.max(1,Math.round(f*20))} of 20)`,true);if(f>=1){clearInterval(timer);finish()}},120);
+}
+$('#stCancel').onclick=()=>{if(!job)return;clearInterval(timer);job=null;setStatus('Cancelled: nothing was written',false);$('#bar').style.width='0';log('Cancel: helper stops between tiles, no file, no catalog row');caption(1)};
+function finish(){
+  const id=photos.length+1,j=job;job=null;
+  const o=photos.find(x=>x.id===SRC.id);
+  photos.push({id,name:j.name.replace(/\.[a-z]+$/,''),h:o.h,w:j.o.w,h2:j.o.h,link:{from:SRC.id,scale:j.scale==='edge'?'edge':j.scale,strength:j.strength,when:'today 14:02',fmt:j.fmt},pulse:true});
+  if(photos[photos.length-1].link.scale==='edge')photos[photos.length-1].link.scale=(j.o.w/SRC.w).toFixed(1).replace(/\.0$/,'');
+  sel=id;filter='all';setStatus('Done: '+j.name,false);$('#bar').style.width='0';caption(4);
+  $('#toastTxt').textContent=`Enlarged photo added: ${j.name}`;$('#toast').classList.add('on');setTimeout(()=>$('#toast').classList.remove('on'),6000);
+  log(`Write <b>${j.name}</b> next to the original; add image row + <b>upscale_sources</b> link; thumbnail; select it`);render();
+  setTimeout(()=>document.querySelector(`.ph[data-id="${id}"]`)?.scrollIntoView({block:'nearest'}),0);
+}
+$('#toastGo').onclick=()=>{$('#toast').classList.remove('on');const l=photos[photos.length-1];if(l)goTo(l.id)};
+
+$('#reset').onclick=()=>{clearInterval(timer);resetState()};
+$('#tglModel').onclick=()=>{modelMissing=!modelMissing;$('#modelState').textContent=modelMissing?'on':'off';log(modelMissing?'Simulating a missing model':'Model present')};
+$('#tglEdited').onclick=()=>{edited=!edited;log(edited?'Original edited after the enlargement (its stack hash differs from the one recorded)':'Edit undone');render()};
+modelMissing=false;resetState();
+</script>
+</body>
+</html>

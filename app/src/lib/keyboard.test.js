@@ -350,11 +350,12 @@ describe("develop module", () => {
   it("Space on a keyboard-focused button or switch is left to the control: no pan, no preventDefault", () => {
     const ctx = dev();
     const { press } = setup(ctx);
-    const focused = { matches: vi.fn(() => true) };
+    const matches = vi.fn((/** @type {string} */ _selector) => true);
+    const focused = { matches };
     const e = press(" ", { target: focused });
     expect(ctx.spacePanning).toBe(false);
     expect(e.preventDefault).not.toHaveBeenCalled();
-    expect(focused.matches.mock.calls[0][0]).toContain("focus-visible");
+    expect(matches.mock.calls[0][0]).toContain("focus-visible");
   });
 
   it("Space still pans when focus is on a button that was only clicked with the mouse (not focus-visible)", () => {

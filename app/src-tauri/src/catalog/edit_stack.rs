@@ -18,6 +18,38 @@ impl EditStack {
     }
 }
 
+/// What `Catalog::apply_ops_to_versions` did: the versions whose stack changed (their thumbnails are
+/// stale) and the ones that no longer exist.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ApplyOpsOutcome {
+    pub changed: Vec<i64>,
+    pub missing: Vec<i64>,
+}
+
+fn op_name(op: &serde_json::Value) -> Option<&str> {
+    op.get("op").and_then(|v| v.as_str())
+}
+
+/// `target` without the `removed_ops`, with each of `ops` replacing the same-named op wholesale -- in
+/// place when the target has it (so an unchanged op leaves the stack byte-identical), appended when not.
+/// Name-only, like the frontend's `applyPresetOps`.
+fn merge_ops(target: &EditStack, ops: &[serde_json::Value], removed_ops: &[String]) -> EditStack {
+    let mut merged: Vec<serde_json::Value> = target
+        .ops
+        .iter()
+        .filter(|existing| !removed_ops.iter().any(|r| Some(r.as_str()) == op_name(existing)))
+        .cloned()
+        .collect();
+    for incoming in ops {
+        let slot = op_name(incoming).and_then(|name| merged.iter().position(|e| op_name(e) == Some(name)));
+        match slot {
+            Some(i) => merged[i] = incoming.clone(),
+            None => merged.push(incoming.clone()),
+        }
+    }
+    EditStack { schema_version: target.schema_version, ops: merged }
+}
+
 /// Per-version cap on stored `edit_history` rows (M3) -- oldest-by-id
 /// pruned first once exceeded. See `record_edit_stack`.
 const MAX_HISTORY_ENTRIES: i64 = 100;
@@ -121,6 +153,19 @@ impl Catalog {
         label: Option<&str>,
     ) -> Result<Vec<HistoryEntry>> {
         let tx = self.conn.unchecked_transaction()?;
+        Self::write_edit_stack(&tx, version_id, stack, label)?;
+        tx.commit()?;
+        self.get_history(version_id)
+    }
+
+    /// The body of `record_edit_stack`, inside a transaction the caller owns, so a batch write
+    /// (`apply_ops_to_versions`) can run many of these in one transaction.
+    fn write_edit_stack(
+        tx: &rusqlite::Transaction<'_>,
+        version_id: i64,
+        stack: &EditStack,
+        label: Option<&str>,
+    ) -> Result<()> {
         let new_json = serde_json::to_string(stack).expect("EditStack is always serializable");
 
         if let Some(label) = label {
@@ -158,9 +203,47 @@ impl Catalog {
             "UPDATE image_versions SET edit_stack_json = ?2, updated_at = datetime('now') WHERE id = ?1",
             params![version_id, new_json],
         )?;
-        tx.commit()?;
+        Ok(())
+    }
 
-        self.get_history(version_id)
+    /// Auto Sync (RFC-0028 §3.5): writes the same op values into several versions in ONE transaction. For
+    /// each target the stored stack is read, every op named in `removed_ops` is dropped, each op in `ops`
+    /// replaces the target's op of the same name wholesale (appended when absent), and the result goes
+    /// through the same write as `record_edit_stack` (one history row labelled `label`, and none when the
+    /// stack did not change). Everything else in a target's stack is left alone. Targets that no longer
+    /// exist are skipped and returned in `missing`; any other failure rolls the whole batch back.
+    pub fn apply_ops_to_versions(
+        &self,
+        version_ids: &[i64],
+        ops: &[serde_json::Value],
+        removed_ops: &[String],
+        label: &str,
+    ) -> Result<ApplyOpsOutcome> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut outcome = ApplyOpsOutcome::default();
+        for &version_id in version_ids {
+            let current_json: Option<String> = tx
+                .query_row(
+                    "SELECT edit_stack_json FROM image_versions WHERE id = ?1",
+                    params![version_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(current_json) = current_json else {
+                outcome.missing.push(version_id);
+                continue;
+            };
+            let current: EditStack =
+                serde_json::from_str(&current_json).expect("stored edit stacks are always valid JSON");
+            let merged = merge_ops(&current, ops, removed_ops);
+            if merged == current {
+                continue;
+            }
+            Self::write_edit_stack(&tx, version_id, &merged, Some(label))?;
+            outcome.changed.push(version_id);
+        }
+        tx.commit()?;
+        Ok(outcome)
     }
 
     /// List a version's history entries (oldest first -- the order a
@@ -300,6 +383,7 @@ impl Catalog {
 mod tests {
     use super::*;
     use crate::catalog::test_support::*;
+    use serde_json::json;
 
     #[test]
     fn record_edit_stack_creates_a_labeled_history_row_on_real_content_change() {
@@ -533,5 +617,108 @@ mod tests {
             .unwrap();
         assert_eq!(history_count, 0);
         assert_eq!(snapshot_count, 0);
+    }
+
+    fn version_with(catalog: &Catalog, path: &str, ops: Vec<serde_json::Value>) -> i64 {
+        let image_id = catalog.add_image(path).unwrap();
+        catalog.add_edit_stack(image_id, &EditStack { schema_version: 1, ops }).unwrap()
+    }
+
+    #[test]
+    fn apply_ops_replaces_only_the_named_ops_and_keeps_the_targets_own() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let b = version_with(&catalog, "/b.CR3", vec![json!({"op": "exposure", "value": 0.1}), json!({"op": "contrast", "value": 7.0})]);
+        let c = version_with(&catalog, "/c.CR3", vec![]);
+
+        let outcome = catalog
+            .apply_ops_to_versions(&[b, c], &[json!({"op": "exposure", "value": 0.8})], &[], "Auto Sync: Exposure")
+            .unwrap();
+
+        assert_eq!(outcome.changed, vec![b, c]);
+        assert!(outcome.missing.is_empty());
+        assert_eq!(
+            catalog.get_edit_stack(b).unwrap().ops,
+            vec![json!({"op": "exposure", "value": 0.8}), json!({"op": "contrast", "value": 7.0})],
+            "replaced in place, the target's contrast untouched"
+        );
+        assert_eq!(catalog.get_edit_stack(c).unwrap().ops, vec![json!({"op": "exposure", "value": 0.8})]);
+        assert_eq!(catalog.get_history(b).unwrap().iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec!["Auto Sync: Exposure"]);
+    }
+
+    #[test]
+    fn apply_ops_removes_named_ops_and_a_whole_list_op_is_replaced_as_one() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let b = version_with(
+            &catalog,
+            "/b.CR3",
+            vec![json!({"op": "exposure", "value": 0.1}), json!({"op": "tone_curve", "points": [[0, 0], [1, 1]]})],
+        );
+
+        catalog
+            .apply_ops_to_versions(
+                &[b],
+                &[json!({"op": "tone_curve", "points": [[0, 0], [0.5, 0.6], [1, 1]]})],
+                &["exposure".to_string()],
+                "Auto Sync: Tone Curve",
+            )
+            .unwrap();
+
+        assert_eq!(
+            catalog.get_edit_stack(b).unwrap().ops,
+            vec![json!({"op": "tone_curve", "points": [[0, 0], [0.5, 0.6], [1, 1]]})]
+        );
+    }
+
+    #[test]
+    fn apply_ops_that_change_nothing_write_no_history_and_report_no_change() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let b = version_with(&catalog, "/b.CR3", vec![json!({"op": "exposure", "value": 0.8}), json!({"op": "contrast", "value": 7.0})]);
+
+        let outcome = catalog
+            .apply_ops_to_versions(&[b], &[json!({"op": "exposure", "value": 0.8})], &["vignette".to_string()], "Auto Sync: Exposure")
+            .unwrap();
+
+        assert!(outcome.changed.is_empty());
+        assert!(catalog.get_history(b).unwrap().is_empty());
+    }
+
+    #[test]
+    fn apply_ops_skips_a_missing_version_and_still_writes_the_others() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let b = version_with(&catalog, "/b.CR3", vec![]);
+
+        let outcome = catalog
+            .apply_ops_to_versions(&[9999, b], &[json!({"op": "exposure", "value": 0.8})], &[], "Auto Sync: Exposure")
+            .unwrap();
+
+        assert_eq!(outcome.missing, vec![9999]);
+        assert_eq!(outcome.changed, vec![b]);
+    }
+
+    #[test]
+    fn apply_ops_is_one_transaction_a_failure_rolls_every_target_back() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let b = version_with(&catalog, "/b.CR3", vec![]);
+        let c = version_with(&catalog, "/c.CR3", vec![]);
+        // Make the second target's history insert fail.
+        catalog
+            .conn
+            .execute_batch(&format!(
+                "CREATE TRIGGER fail_c BEFORE INSERT ON edit_history WHEN NEW.version_id = {c} BEGIN SELECT RAISE(ABORT, 'boom'); END;"
+            ))
+            .unwrap();
+
+        let result = catalog.apply_ops_to_versions(&[b, c], &[json!({"op": "exposure", "value": 0.8})], &[], "Auto Sync: Exposure");
+
+        assert!(result.is_err());
+        assert!(catalog.get_edit_stack(b).unwrap().ops.is_empty(), "b was rolled back");
+        assert!(catalog.get_history(b).unwrap().is_empty());
+    }
+
+    #[test]
+    fn merge_ops_ignores_an_incoming_op_with_no_name_by_appending_it() {
+        let target = EditStack { schema_version: 1, ops: vec![json!({"op": "exposure", "value": 0.1})] };
+        let merged = merge_ops(&target, &[json!({"value": 1})], &[]);
+        assert_eq!(merged.ops.len(), 2);
     }
 }

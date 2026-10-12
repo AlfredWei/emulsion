@@ -1232,6 +1232,23 @@ fn set_edit_stack(
         .map_err(|e| e.to_string())
 }
 
+/// Auto Sync (RFC-0028 §3.5): one catalog transaction that writes the changed ops of the open photo into
+/// every other selected photo (see `Catalog::apply_ops_to_versions`). Returns which versions changed (the
+/// frontend regenerates their thumbnails) and which no longer exist.
+#[tauri::command]
+fn apply_ops_to_versions(
+    state: State<'_, AppState>,
+    version_ids: Vec<i64>,
+    ops: Vec<serde_json::Value>,
+    removed_ops: Vec<String>,
+    label: String,
+) -> Result<catalog::ApplyOpsOutcome, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .apply_ops_to_versions(&version_ids, &ops, &removed_ops, &label)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_history(state: State<'_, AppState>, version_id: i64) -> Result<Vec<HistoryEntry>, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
@@ -2124,6 +2141,7 @@ pub fn run() {
             export_print_pdf,
             get_edit_stack,
             set_edit_stack,
+            apply_ops_to_versions,
             lookup_lens_profile,
             get_history,
             restore_history_entry,

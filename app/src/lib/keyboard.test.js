@@ -347,6 +347,30 @@ describe("develop module", () => {
     expect(ctx.spacePanning).toBe(false);
   });
 
+  it("Space on a keyboard-focused button or switch is left to the control: no pan, no preventDefault", () => {
+    const ctx = dev();
+    const { press } = setup(ctx);
+    const focused = { matches: vi.fn(() => true) };
+    const e = press(" ", { target: focused });
+    expect(ctx.spacePanning).toBe(false);
+    expect(e.preventDefault).not.toHaveBeenCalled();
+    expect(focused.matches.mock.calls[0][0]).toContain("focus-visible");
+  });
+
+  it("Space still pans when focus is on a button that was only clicked with the mouse (not focus-visible)", () => {
+    const ctx = dev();
+    const { press } = setup(ctx);
+    press(" ", { target: { matches: () => false } });
+    expect(ctx.spacePanning).toBe(true);
+  });
+
+  it("Space on a focused button leaves the Library's view toggle alone too", () => {
+    const ctx = makeCtx({ selectedId: 1 });
+    const { press } = setup(ctx);
+    press(" ", { target: { matches: () => true } });
+    expect(ctx.libraryViewMode).toBe("grid");
+  });
+
   it("backslash toggles before/after; H toggles mask pins", () => {
     const ctx = dev();
     const { press } = setup(ctx);

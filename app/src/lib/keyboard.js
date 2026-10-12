@@ -69,6 +69,16 @@ export function createKeyboardHandlers(ctx) {
   // target-computation needed.
   const COLOR_KEYS = { 6: "red", 7: "yellow", 8: "green", 9: "blue" };
 
+  // Space on a button or switch that has keyboard focus is that control's own activation: the shortcut below
+  // (Develop's space-pan, Library's toggle view) must leave it alone, or no focused button could ever be pressed
+  // from the keyboard. `:focus-visible` is true for keyboard focus only, so Space-to-pan still works after a
+  // mouse click left focus on a toolbar button (Chromium focuses a clicked button, WebKit does not).
+  /** @param {EventTarget | null} target */
+  function isKeyboardFocusedControl(target) {
+    const el = /** @type {any} */ (target);
+    return typeof el?.matches === "function" && el.matches(':is(button, [role="switch"], [role="button"], [role="checkbox"]):focus-visible');
+  }
+
   // Comprehensive keyboard shortcut handler with custom user bindings
   function handleGlobalKeydown(/** @type {KeyboardEvent} */ e) {
     const target = e.target;
@@ -82,6 +92,8 @@ export function createKeyboardHandlers(ctx) {
 
     const key = e.key.toLowerCase();
     const rawKey = e.key;
+
+    if (rawKey === " " && isKeyboardFocusedControl(target)) return;
 
     if (ctx.activeModule === "develop") {
       if (

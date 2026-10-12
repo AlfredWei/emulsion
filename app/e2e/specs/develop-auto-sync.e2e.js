@@ -138,4 +138,24 @@ describe("Develop Auto Sync", function () {
     await browser.waitUntil(async () => (await chipText()) === null, { timeout: 10000, timeoutMsg: "the chip stayed after the selection collapsed" });
     expect(await switchState()).toEqual({ on: false, disabled: true });
   });
+
+  it("keyboard: the switch takes focus, and the page leaves Space alone so the button can activate (no pan, no preventDefault)", async () => {
+    await clickCell(ids.target, { metaKey: true, ctrlKey: true });
+    await waitForSelected(2);
+    await browser.waitUntil(async () => (await switchState())?.disabled === false, { timeout: 10000 });
+    await browser.execute(() => {
+      // Registered after the app's own window listener, so it sees whether that one cancelled the key.
+      window.__spaceDown = null;
+      window.addEventListener("keydown", (e) => {
+        if (e.key === " ") window.__spaceDown = { prevented: e.defaultPrevented };
+      });
+      /** @type {HTMLElement} */ (document.querySelector(".auto-sync-switch")).focus();
+    });
+    expect(await browser.execute(() => document.activeElement?.classList.contains("auto-sync-switch"))).toBe(true);
+    await browser.keys(" ");
+    await browser.waitUntil(() => browser.execute(() => window.__spaceDown !== null), { timeout: 10000, timeoutMsg: "the Space keydown never arrived" });
+    // WebDriver's key events are untrusted, so the browser itself does not click the button for them: what can be
+    // checked is that the app did not take the key (before this fix it cancelled every Space and started a pan).
+    expect(await browser.execute(() => window.__spaceDown.prevented)).toBe(false);
+  });
 });

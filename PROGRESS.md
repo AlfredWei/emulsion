@@ -2,6 +2,10 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Next: AI super-resolution, RFC-0029 drafted (2026-10-12)
+
+RFC-0028 is closed (#235 merged). Next M6 feature per the plan is super-resolution. Design only, **no product code changed, nothing measured** (every number is RFC-0023's): [RFC-0029](docs/rfc/RFC-0029-ai-super-resolution.md). Shape: **an export-time option, not an edit-stack op** (an enlargement changes the pixel grid that crop, masks, spot removal and the histogram assume): render the stack at native size (denoise blend included), enlarge the *graded crop* in the `emulsion-ai` helper, encode the final file. A new `upscale_run` helper op next to `denoise_run`, with a **band-streamed tiler** (the denoise tiler's whole-image float accumulator would be over 1 GB at 4x of 24 MP), a **Strength** blend with a plain Lanczos enlargement because the model invents detail, a crop before / after Preview, a time estimate before anything runs, and a metadata mark that the file was model-enlarged. Slices: 4a model bake-off (research; **the weights' licence is unresolved and can stop the feature**; a fidelity-oriented model such as SwinIR is named, not tested, because it invents less than the GAN look), 4b engine, 4c Export UI, 4d polish. Five open questions for the user are in RFC-0029 §7.
+
 ## Context menus, slice 5: polish (2026-10-12)
 
 Branch `feature/context-menus-polish`; RFC-0028 §4 slice 5 (closes the RFC). #234 (slice 4) is merged.

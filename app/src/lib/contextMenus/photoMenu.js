@@ -15,6 +15,7 @@ import { formatKeyDisplay } from "$lib/shortcuts.js";
  * @property {{ id: number, name: string }[]} manualCollections
  * @property {{ id: number, name: string }[]} presets
  * @property {boolean} hasCopiedSettings
+ * @property {boolean} [autoSyncOn]  Develop's Auto Sync switch
  * @property {Record<string, string>} shortcuts  the user's current key map
  * @property {string} [fileManager]  what the platform calls its file manager ("Finder", "Explorer"); default "Finder"
  */
@@ -32,6 +33,7 @@ import { formatKeyDisplay } from "$lib/shortcuts.js";
  * @property {() => void} removeFromCollection
  * @property {(versionId: number) => void} copySettings
  * @property {() => void} syncSettings
+ * @property {() => void} toggleAutoSync
  * @property {() => void} pasteSettings
  * @property {(presetId: number) => void} applyPreset
  * @property {() => void} resetSettings
@@ -65,7 +67,7 @@ function plural(n) {
 
 /** @param {PhotoMenuInput} input @param {PhotoMenuCommands} cmd @returns {import('./model.js').MenuEntry[]} */
 export function buildPhotoMenu(input, cmd) {
-  const { images, module, openVersionId, viewedCollection, manualCollections, presets, hasCopiedSettings, shortcuts, fileManager = "Finder" } = input;
+  const { images, module, openVersionId, viewedCollection, manualCollections, presets, hasCopiedSettings, autoSyncOn, shortcuts, fileManager = "Finder" } = input;
   if (images.length === 0) return [];
   const many = images.length > 1;
   const first = images[0];
@@ -146,6 +148,7 @@ export function buildPhotoMenu(input, cmd) {
           label: "Sync Settings…",
           run: cmd.syncSettings,
         },
+        syncable && { id: "auto-sync", label: "Auto Sync", checked: autoSyncOn === true, run: cmd.toggleAutoSync },
         syncable && SEPARATOR,
         { id: "copy-settings", label: "Copy Settings…", disabled: many, reason: singleOnly, run: () => cmd.copySettings(first.version_id) },
         {

@@ -32,6 +32,7 @@ import {
   handleCopySettingsRequest,
   handleSyncSettingsRequest,
 } from "$lib/actions/presetActions.js";
+import { handleAutoSyncToggle } from "$lib/actions/autoSyncActions.js";
 import { handleDetectFacesForSelected, handleDetectFacesForSelection } from "$lib/actions/faceActions.js";
 import { handleImportFolder, handleImportFiles } from "$lib/actions/importActions.js";
 import { prioritizeThumbnail, selectCollection, selectPerson, handleDeleteCollection } from "$lib/actions/libraryActions.js";
@@ -105,6 +106,7 @@ export function openPhotoMenu(versionId, x, y, opener, fromKeyboard = false) {
       manualCollections: library.manualCollections.map((c) => ({ id: c.id, name: c.name })),
       presets: presets.list.map((p) => ({ id: p.id, name: p.name })),
       hasCopiedSettings: develop.copiedSettings !== null,
+      autoSyncOn: presets.autoSyncOn,
       shortcuts: shell.shortcuts,
       fileManager: fileManagerName(),
     },
@@ -155,6 +157,7 @@ export function photoCommands(images, module) {
     removeFromCollection: () => handleRemoveFromCollection(),
     copySettings: (versionId) => handleCopySettingsFromPhoto(versionId),
     syncSettings: () => handleSyncSettingsRequest(),
+    toggleAutoSync: () => handleAutoSyncToggle(),
     pasteSettings: async () => {
       // The open Develop photo alone is pasted through Develop's own path (its in-memory stack, flushed under a label).
       if (module === "develop" && images.length === 1 && images[0].version_id === develop.versionId) return handlePasteSettings();

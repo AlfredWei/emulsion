@@ -28,7 +28,8 @@
   import LibraryModule from "$lib/components/LibraryModule.svelte";
   import DevelopModule from "$lib/components/DevelopModule.svelte";
   import PrintModule from "$lib/components/PrintModule.svelte";
-            import { handleExportPdf } from "$lib/actions/printActions.js";
+            import { handleAutoSyncToggle, handleAutoSyncConfirmed, installAutoSync, reconcileAutoSync } from "$lib/actions/autoSyncActions.js";
+  import { handleExportPdf } from "$lib/actions/printActions.js";
   import {
     handleCancelFaceDetection,
     refreshCurrentImageFaces,
@@ -105,6 +106,13 @@
   masks.install();
   segment.install();
   denoise.install();
+  installAutoSync();
+  // Auto Sync switches itself off with the selection (fewer than two photos) and when Develop is left.
+  $effect(() => {
+    void shell.activeModule;
+    void selection.selectedIds;
+    reconcileAutoSync();
+  });
 
 
   // Copy/Paste Settings (M4.5): an unsaved, in-memory analog of Presets --
@@ -302,6 +310,8 @@
     faceDetectionCancelable={faces.detectionCancelable}
     showFaceRects={faces.showFaceRects}
     importing={importFlow.importing}
+    autoSyncCount={presets.autoSyncOn ? selection.selectedIds.size : 0}
+    onAutoSyncOff={handleAutoSyncToggle}
     {switchModule}
     {handleRemoveFromCollection}
     {handleAddToCollectionSelect}
@@ -345,6 +355,10 @@
     onCancelCopySettings={() => (presets.copySettingsDialogOpen = false)}
     onCancelRemoval={() => (library.confirmingRemoval = false)}
     onCancelReset={() => (presets.confirmingReset = false)}
+    confirmingAutoSync={presets.confirmingAutoSync}
+    autoSyncPhotoCount={selection.selectedIds.size}
+    onConfirmAutoSync={handleAutoSyncConfirmed}
+    onCancelAutoSync={() => (presets.confirmingAutoSync = false)}
     onCancelCreateCollection={() => (library.creatingCollection = false)}
     onCancelCreateCollectionWithImages={() => {
       library.creatingCollectionWithImages = false;

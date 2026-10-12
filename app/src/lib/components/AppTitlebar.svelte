@@ -21,6 +21,8 @@
    *   faceDetectionCancelable: boolean,
    *   showFaceRects: boolean,
    *   importing: boolean,
+   *   autoSyncCount: number,
+   *   onAutoSyncOff: () => void,
    *   switchModule: (target: string) => void,
    *   handleRemoveFromCollection: () => void,
    *   handleAddToCollectionSelect: (value: string) => void,
@@ -57,6 +59,8 @@
     faceDetectionCancelable,
     showFaceRects,
     importing,
+    autoSyncCount,
+    onAutoSyncOff,
     switchModule,
     handleRemoveFromCollection,
     handleAddToCollectionSelect,
@@ -92,6 +96,17 @@
       Print
     </button>
   </div>
+  {#if autoSyncCount > 0}
+    <!-- Auto Sync writes into other photos without asking each time, so it is shown here whatever panel is in view (RFC-0028 §3.5). -->
+    <button
+      type="button"
+      class="auto-sync-chip"
+      onclick={onAutoSyncOff}
+      title="Auto Sync is on: each edit of the open photo is also applied to the other selected photos. Click to turn it off."
+    >
+      Auto Sync: {autoSyncCount} photo{autoSyncCount === 1 ? "" : "s"}
+    </button>
+  {/if}
   <div class="spacer"></div>
   {#if activeModule === "library" && activeCollectionId !== null && activeCollection && !activeCollection.is_smart}
     <button
@@ -275,6 +290,29 @@
   cursor: default;
   opacity: 0.5;
 }
+.auto-sync-chip {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  height: 24px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-on);
+  background: var(--accent);
+  border-radius: 12px;
+  flex: none;
+  white-space: nowrap;
+}
+.auto-sync-chip:hover {
+  background: var(--accent-strong);
+}
+.auto-sync-chip:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
 .spacer {
   flex: 1;
 }
@@ -407,6 +445,12 @@
   border-radius: 6px;
   color: var(--text-secondary);
   border: 1px solid var(--border-strong);
+  /* May give way to the Auto Sync chip (and other additions) on a narrow window instead of pushing the buttons off it. */
+  flex: 0 1 auto;
+  min-width: 90px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .add-to-collection-select:disabled {
   opacity: 0.6;

@@ -96,6 +96,8 @@
    *   onPasteSettingsRequest: () => void,
    *   selectedCount?: number,
    *   syncingSettings?: boolean,
+   *   autoSyncOn?: boolean,
+   *   onAutoSyncToggle?: () => void,
    *   onSyncSettingsRequest?: () => void,
    *   isPanelHidden: (panel: string) => boolean,
    *   onTogglePanelVisibility: (panel: string) => void,
@@ -179,6 +181,8 @@
     onPasteSettingsRequest,
     selectedCount = 1,
     syncingSettings = false,
+    autoSyncOn = false,
+    onAutoSyncToggle = () => {},
     onSyncSettingsRequest,
     isPanelHidden,
     onTogglePanelVisibility,
@@ -1455,18 +1459,36 @@
     >
       {@render pasteSettingsIcon()}
     </button>
-    {#if selectedCount > 1}
-      <!-- Develop multi-select (RFC-0028 §3.4): the open photo's settings go to the other selected photos. -->
+    <!-- Develop multi-select (RFC-0028 §3.4, §3.5): Sync Settings applies this photo's settings to the other selected
+         photos once; Auto Sync keeps doing it for every edit while it is on. Inert until two photos are selected. -->
+    <div class="sync-group">
+      {#if selectedCount > 1}
+        <button
+          type="button"
+          class="footer-text-btn"
+          onclick={onSyncSettingsRequest}
+          disabled={syncingSettings}
+          title="Apply this photo's settings to the other {selectedCount - 1} selected photo{selectedCount === 2 ? '' : 's'}"
+        >
+          Sync Settings…
+        </button>
+      {/if}
       <button
         type="button"
-        class="footer-text-btn"
-        onclick={onSyncSettingsRequest}
-        disabled={syncingSettings}
-        title="Apply this photo's settings to the other {selectedCount - 1} selected photo{selectedCount === 2 ? '' : 's'}"
+        role="switch"
+        aria-checked={autoSyncOn}
+        class="auto-sync-switch"
+        class:on={autoSyncOn}
+        onclick={onAutoSyncToggle}
+        disabled={!autoSyncOn && selectedCount < 2}
+        title={selectedCount < 2 && !autoSyncOn
+          ? "Select two or more photos to use Auto Sync"
+          : "Each edit of this photo is also applied to the other selected photos (only the value that changed). Never synced: crop, straighten, perspective, lens profile, masks, spot removal, red eye, AI Denoise."}
       >
-        Sync Settings…
+        <span class="auto-sync-track" aria-hidden="true"><span class="auto-sync-knob"></span></span>
+        Auto Sync
       </button>
-    {/if}
+    </div>
   </div>
 </div>
 
@@ -1512,11 +1534,68 @@
     border: 1px solid var(--accent);
     border-radius: var(--radius-s);
   }
+  .sync-group {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .auto-sync-switch {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .auto-sync-switch.on {
+    font-weight: 700;
+    color: var(--accent-strong);
+  }
+  .auto-sync-switch:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+  .auto-sync-switch:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-s);
+  }
+  .auto-sync-track {
+    position: relative;
+    width: 26px;
+    height: 14px;
+    border-radius: 7px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-strong);
+  }
+  .auto-sync-switch.on .auto-sync-track {
+    background: var(--accent);
+    border-color: var(--accent-strong);
+  }
+  .auto-sync-knob {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+  }
+  .auto-sync-switch.on .auto-sync-knob {
+    transform: translateX(12px);
+    background: var(--accent-on);
+  }
   .footer-text-btn {
     all: unset;
     box-sizing: border-box;
     cursor: pointer;
-    margin-left: auto;
     padding: 0 10px;
     height: 26px;
     display: inline-flex;

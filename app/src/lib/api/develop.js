@@ -315,6 +315,15 @@ export function setEditStack(
   return invoke("set_edit_stack", { versionId, stack, label: label ?? null });
 }
 
+/** Auto Sync (RFC-0028 §3.5): writes `ops` (replacing the same-named op) and drops `removedOps` in every
+ * target version, in one catalog transaction, one history entry `label` each. Resolves to the versions that
+ * changed (their thumbnails are stale) and the ones that no longer exist.
+ * @param {number[]} versionIds @param {EditStack['ops']} ops @param {string[]} removedOps @param {string} label
+ * @returns {Promise<{ changed: number[], missing: number[] }>} */
+export function applyOpsToVersions(versionIds, ops, removedOps, label) {
+  return invoke("apply_ops_to_versions", { versionIds, ops, removedOps, label });
+}
+
 /** @returns {Promise<HistoryEntry[]>} */
 export function getHistory(/** @type {number} */ versionId) {
   return invoke("get_history", { versionId });

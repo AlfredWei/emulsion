@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { flushSync } from "svelte";
 
-const api = vi.hoisted(() => ({ setEditStack: vi.fn(), previewEditStack: vi.fn() }));
-vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), setEditStack: api.setEditStack, previewEditStack: api.previewEditStack }));
+const api = vi.hoisted(() => ({ getEditStack: vi.fn(), setEditStack: vi.fn(), previewEditStack: vi.fn() }));
+vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), getEditStack: api.getEditStack, setEditStack: api.setEditStack, previewEditStack: api.previewEditStack }));
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (/** @type {string} */ p) => `asset://${p}` }));
 
 import { DevelopStore } from "./develop.svelte.js";
@@ -411,5 +411,87 @@ describe("DevelopStore.installCpuFallback", () => {
     stop();
     await vi.advanceTimersByTimeAsync(1000);
     expect(api.previewEditStack).not.toHaveBeenCalled();
+  });
+});
+
+describe("Auto Sync hook on flushEditStack (RFC-0028 §3.5)", () => {
+  /** @param {number[] | null} targets */
+  function withHook(targets) {
+    const { develop } = setup();
+    const hook = { targets: vi.fn(() => targets), onFlushed: vi.fn(async () => {}) };
+    develop.autoSyncHook = hook;
+    return { develop, hook };
+  }
+
+  it("reads the stored stack before the write and reports the flush to the hook with the targets, stacks and label", async () => {
+    const { develop, hook } = withHook([11, 12]);
+    const before = stackWith(0.2);
+    api.getEditStack.mockResolvedValue(before);
+    const order = /** @type {string[]} */ ([]);
+    api.getEditStack.mockImplementation(async () => (order.push("read"), before));
+    api.setEditStack.mockImplementation(async () => (order.push("write"), []));
+    const written = develop.editStack;
+    await develop.flushEditStack("Exposure");
+    expect(order).toEqual(["read", "write"]);
+    expect(hook.onFlushed).toHaveBeenCalledWith(10, [11, 12], before, written, "Exposure");
+  });
+
+  it("an unlabelled flush is the plain single write: no read, no hook call", async () => {
+    const { develop, hook } = withHook([11]);
+    await develop.flushEditStack();
+    expect(api.getEditStack).not.toHaveBeenCalled();
+    expect(hook.onFlushed).not.toHaveBeenCalled();
+  });
+
+  it("no targets (Auto Sync off, or one photo) is the plain single write", async () => {
+    const { develop, hook } = withHook([]);
+    await develop.flushEditStack("Exposure");
+    expect(api.getEditStack).not.toHaveBeenCalled();
+    expect(hook.onFlushed).not.toHaveBeenCalled();
+  });
+
+  it("the targets are fixed when the edit is scheduled, not when the debounce fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const { develop, hook } = withHook([11, 12]);
+      api.getEditStack.mockResolvedValue(stackWith(0.2));
+      develop.scheduleFlush("Exposure");
+      hook.targets.mockReturnValue([]); // a click on another photo collapsed the selection in the meantime
+      await vi.advanceTimersByTimeAsync(300);
+      expect(hook.onFlushed).toHaveBeenCalledTimes(1);
+      expect(/** @type {any} */ (hook.onFlushed.mock.calls[0])[1]).toEqual([11, 12]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the awaited flush includes the sync, so switching photos waits for it", async () => {
+    const { develop, hook } = withHook([11]);
+    api.getEditStack.mockResolvedValue(stackWith(0.2));
+    const sync = deferred();
+    hook.onFlushed.mockReturnValue(sync.promise);
+    let settled = false;
+    const done = develop.flushEditStack("Exposure").then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+    expect(develop.hasPendingEdit).toBe(true);
+    sync.resolve();
+    await done;
+    expect(develop.hasPendingEdit).toBe(false);
+  });
+
+  it("a discarded pending edit does not sync under its old targets", async () => {
+    vi.useFakeTimers();
+    try {
+      const { develop, hook } = withHook([11]);
+      develop.scheduleFlush("Exposure");
+      develop.cancelScheduledFlush();
+      develop.discardPendingLabel();
+      hook.targets.mockReturnValue([]);
+      await develop.flushEditStack("Reset");
+      expect(hook.onFlushed).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -34,6 +34,10 @@
    *   onCancelCopySettings: () => void,
    *   onCancelRemoval: () => void,
    *   onCancelReset: () => void,
+   *   confirmingAutoSync: boolean,
+   *   autoSyncPhotoCount: number,
+   *   onConfirmAutoSync: () => void,
+   *   onCancelAutoSync: () => void,
    *   onCancelCreateCollection: () => void,
    *   onCancelCreateCollectionWithImages: () => void,
    *   onCancelCreateSmartCollection: () => void,
@@ -78,6 +82,10 @@
     onCancelCopySettings,
     onCancelRemoval,
     onCancelReset,
+    confirmingAutoSync,
+    autoSyncPhotoCount,
+    onConfirmAutoSync,
+    onCancelAutoSync,
     onCancelCreateCollection,
     onCancelCreateCollectionWithImages,
     onCancelCreateSmartCollection,
@@ -137,6 +145,15 @@
   confirmLabel="Reset"
   onConfirm={handleResetEditStack}
   onCancel={onCancelReset}
+/>
+
+<ConfirmDialog
+  open={confirmingAutoSync}
+  title="Turn on Auto Sync"
+  message={`Auto Sync will write every edit of this photo into the other ${autoSyncPhotoCount - 1} selected photos, and regenerate their thumbnails each time. Turn it on?`}
+  confirmLabel="Turn on"
+  onConfirm={onConfirmAutoSync}
+  onCancel={onCancelAutoSync}
 />
 
 <TextPromptDialog

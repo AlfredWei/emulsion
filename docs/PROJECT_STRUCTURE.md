@@ -161,7 +161,8 @@ src/
 │   │                        readout setters, peeks, snapshots), metadataActions.js (rating/flag/label, IPTC saves);
 │   │                        libraryActions.js also holds handleRemoveConfirmed; segmentActions.js (Select Subject: arm, click, candidates, accept/cancel, model download/import), denoiseActions.js (AI Denoise: Amount, crop preview, whole-photo job, remove, model download/import),
 │   │                        maskActions.js (mask create/update/delete, resample,
-│   │                        eyedropper, GPU fallback), presetActions.js (preset list, apply/import/export, copy/paste settings),
+│   │                        eyedropper, GPU fallback), presetActions.js (preset list, apply/import/export, copy/paste/sync settings),
+│   │                        autoSyncActions.js (Auto Sync: the switch, targets, the flush hook that writes changed ops to the other selected photos),
 │   │                        historyActions.js (restore, undo/redo, snapshot restore, reset), softProofActions.js (custom
 │   │                        profile), navigation.js (openDevelop, switchModule, next/prev image, Develop filmstrip multi-select gestures, export click); more land per RFC-0009
 │   ├── contextMenus/        Right-click menus (RFC-0028): model.js (menu item types, tidy, keyboard row choice, placement),
@@ -170,6 +171,7 @@ src/
 │   │                        snapshot / preset rows, Develop panel header / canvas / mask panel / shape row); the component is
 │   │                        components/ContextMenu.svelte, its state state/contextMenu.svelte.js, its entry points and real
 │   │                        commands actions/contextMenuActions.js. Tested via the *.test.js beside each
+│   ├── autoSync.js          Pure Auto Sync diff (RFC-0028 §3.5): the syncable ops that changed between two edit stacks, per-photo ops excluded
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering, viewport filter (M5.5)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`

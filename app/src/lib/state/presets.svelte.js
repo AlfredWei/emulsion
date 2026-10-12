@@ -36,6 +36,11 @@ export class PresetsStore {
   copySettingsPurpose = $state("copy");
   // Guards the Sync Settings button while a sync is in flight (same narrow purpose as pastingSettingsToSelection).
   syncingSettings = $state(false);
+  // Auto Sync (RFC-0028 §3.5): while on, an edit of the open photo is written into the other selected photos. Never
+  // persisted; the actions switch it off when fewer than two photos are selected and when Develop is left.
+  autoSyncOn = $state(false);
+  /** Asking before Auto Sync is switched on for a large selection. */
+  confirmingAutoSync = $state(false);
   /** The stack Copy Settings copies from when it was asked on a photo that is not the open Develop one (the
    * Library context menu); null = the open Develop photo's own stack.
    * @type {import('$lib/api/develop.js').EditStack | null} */

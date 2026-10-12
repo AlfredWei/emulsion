@@ -33,7 +33,7 @@ mod schema;
 #[cfg(test)]
 mod test_support;
 
-pub use edit_stack::{EditStack, HistoryEntry, SnapshotEntry};
+pub use edit_stack::{ApplyOpsOutcome, EditStack, HistoryEntry, SnapshotEntry};
 pub use presets::PresetEntry;
 pub use export_plugins::ExportPlugin;
 pub use images::ImageSummary;

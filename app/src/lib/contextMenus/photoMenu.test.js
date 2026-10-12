@@ -8,7 +8,7 @@ const img = (/** @type {number} */ id, /** @type {object} */ extra = {}) =>
 
 const COMMANDS = [
   "openInDevelop", "openInLoupe", "compare", "survey", "setRating", "setFlag", "setColorLabel", "addToCollection", "removeFromCollection",
-  "copySettings", "syncSettings", "pasteSettings", "applyPreset", "resetSettings", "exportPhotos", "reveal", "copyPath", "detectFaces", "removeFromCatalog",
+  "copySettings", "syncSettings", "toggleAutoSync", "pasteSettings", "applyPreset", "resetSettings", "exportPhotos", "reveal", "copyPath", "detectFaces", "removeFromCatalog",
 ];
 function commands() {
   return /** @type {any} */ (Object.fromEntries(COMMANDS.map((c) => [c, vi.fn()])));
@@ -179,10 +179,24 @@ describe("photo menu: Sync Settings (Develop multi-select)", () => {
     expect(cmd.syncSettings).toHaveBeenCalledTimes(1);
   });
 
+  it("offers Auto Sync right after it as a checkable row that reflects the switch and toggles it", () => {
+    const cmd = commands();
+    const off = find(buildPhotoMenu(input({ module: "develop", images, openVersionId: 20, autoSyncOn: false }), cmd), "auto-sync");
+    expect(off?.checked).toBe(false);
+    const children = find(buildPhotoMenu(input({ module: "develop", images, openVersionId: 20 }), cmd), "develop-settings")?.children ?? [];
+    expect(children.filter(isItem).map((c) => c.id).slice(0, 2)).toEqual(["sync-settings", "auto-sync"]);
+    const on = find(buildPhotoMenu(input({ module: "develop", images, openVersionId: 20, autoSyncOn: true }), cmd), "auto-sync");
+    expect(on?.checked).toBe(true);
+    on?.run?.();
+    expect(cmd.toggleAutoSync).toHaveBeenCalledTimes(1);
+  });
+
   it("is absent for one photo, in Library, and when the open photo is not among the selected ones", () => {
     expect(find(buildPhotoMenu(input({ module: "develop", images: [img(1)], openVersionId: 10 }), commands()), "sync-settings")).toBeUndefined();
     expect(find(buildPhotoMenu(input({ module: "library", images, openVersionId: null }), commands()), "sync-settings")).toBeUndefined();
     expect(find(buildPhotoMenu(input({ module: "develop", images, openVersionId: 99 }), commands()), "sync-settings")).toBeUndefined();
+    expect(find(buildPhotoMenu(input({ module: "develop", images: [img(1)], openVersionId: 10 }), commands()), "auto-sync")).toBeUndefined();
+    expect(find(buildPhotoMenu(input({ module: "library", images, openVersionId: null }), commands()), "auto-sync")).toBeUndefined();
   });
 });
 

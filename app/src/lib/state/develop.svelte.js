@@ -13,7 +13,7 @@
 // reset, open/close Develop (lib/actions, later steps).
 
 import { library } from "./library.svelte.js";
-import { setEditStack, previewEditStack } from "$lib/api/develop.js";
+import { getEditStack, setEditStack, previewEditStack } from "$lib/api/develop.js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 export class DevelopStore {
@@ -295,13 +295,27 @@ export class DevelopStore {
     }
     const effectiveLabel = label ?? this.#pendingLabel;
     this.#pendingLabel = null;
+    const syncTargets = this.#pendingSyncTargets;
+    this.#pendingSyncTargets = null;
     if (this.versionId !== null) {
       const versionId = this.versionId;
       const stack = this.editStack;
-      this.#pendingSave = setEditStack(versionId, stack, effectiveLabel ?? undefined)
+      // Auto Sync (RFC-0028 §3.5): the photos this edit goes to were fixed when it was scheduled (a click on
+      // another photo collapses the selection before the debounce fires); an immediate flush asks now. The
+      // stored stack from before the write tells which ops changed, so it is read only for a labelled edit
+      // with targets, and every other flush stays the single write it always was.
+      const targets = effectiveLabel ? (syncTargets ?? this.autoSyncHook?.targets(versionId) ?? null) : null;
+      const hook = targets && targets.length > 0 ? this.autoSyncHook : null;
+      const previous = hook ? getEditStack(versionId) : null;
+      const write = () => setEditStack(versionId, stack, effectiveLabel ?? undefined);
+      this.#pendingSave = (previous ? previous.then(write) : write())
         .then((freshHistory) => {
           this.history = freshHistory;
           if (effectiveLabel) this.historyIndex = freshHistory.length - 1;
+        })
+        .then(async () => {
+          // The sync is part of the awaited flush, so switching photos waits for it (the hook reports its own failures).
+          if (previous && hook && targets && effectiveLabel) await hook.onFlushed(versionId, targets, await previous, stack, effectiveLabel);
         })
         .finally(() => {
           this.#pendingSave = null;
@@ -310,6 +324,14 @@ export class DevelopStore {
     return this.#pendingSave ?? Promise.resolve();
   };
 
+  /** Installed by the Auto Sync actions; null = Auto Sync does not exist as far as persistence is concerned.
+   * `targets(versionId)` lists the photos an edit of `versionId` goes to right now (empty or null when Auto Sync is
+   * off); `onFlushed` runs after the write with the stored stack from before it.
+   * @type {{ targets: (versionId: number) => number[] | null, onFlushed: (versionId: number, targets: number[], previous: import('$lib/api/develop.js').EditStack, next: import('$lib/api/develop.js').EditStack, label: string) => Promise<void> } | null} */
+  autoSyncHook = null;
+  /** @type {number[] | null} */
+  #pendingSyncTargets = null;
+
   /** Schedules a debounced, LABELED flush -- the replacement for every
    * former `if (persistTimer) clearTimeout(persistTimer); persistTimer =
    * setTimeout(flushEditStack, 250);` call site. Records `label` for
@@ -317,6 +339,7 @@ export class DevelopStore {
    * settling, or an earlier explicit flush elsewhere pre-empting it). */
   scheduleFlush = (/** @type {string} */ label) => {
     this.#pendingLabel = label;
+    if (this.versionId !== null) this.#pendingSyncTargets = this.autoSyncHook?.targets(this.versionId) ?? null;
     if (this.#persistTimer) clearTimeout(this.#persistTimer);
     this.#persistTimer = setTimeout(this.flushEditStack, 250);
   };
@@ -335,6 +358,7 @@ export class DevelopStore {
    * recorded under it. */
   discardPendingLabel() {
     this.#pendingLabel = null;
+    this.#pendingSyncTargets = null;
   }
 
   /** IPTC fields save on blur, not debounced -- each is a single discrete edit rather than a slider

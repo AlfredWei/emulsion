@@ -114,13 +114,15 @@ TIFF / PNG output (the catalog cannot open them; adding a TIFF decoder and a 16-
 6. **Disk use.** A 60 MP JPEG is about 70 MB, a 150 MP one far more, written next to the original; the dialog shows the size first.
 7. **JPEG only** means the result is lossy and 8-bit. Acceptable for the stated use (prints, sharing); the lossless route is §3.8's follow-up.
 
-## 7. Open questions for the user
+## 7. Decisions and what is left
 
-Decided 2026-10-12: scope (a new catalog photo, virtual copy or connected image: **connected image**, with the reasoning in §3.1), bake-off first, targets 2x / 4x / long edge, default Strength by eye (session-only memory), metadata note as a check box.
+Decided with the user on 2026-10-12 (first round): scope = a new catalog photo, a **connected image** (§3.1); bake-off first; targets 2x / 4x / long edge; default Strength by eye (session-only memory); the metadata note a check box. **Second round (same day, "go with the recommendations")**:
 
-1. **Connected image vs virtual copy:** this RFC chooses a **connected image** because a virtual copy cannot hold a different pixel size (§3.1). Say so if you meant something else by "virtual copy".
-2. **Rating, flag and colour label on the enlargement:** not inherited (§3.1), because they judged the original. Alternative: inherit them. Recommendation: not inherited.
-3. **Keywords, caption, copyright, GPS:** inherited (§3.1). Alternative: none. Recommendation: inherited.
-4. **Collections:** should the enlargement join the same manual collections as the original? Recommendation: **no by default, with a check box in the dialog** ("Add to the same collections"), since a print collection often wants the enlargement and a trip collection often does not.
-5. **Lossless output:** JPEG only now (§3.8). Is a later TIFF / 16-bit route worth its own slice (a TIFF decoder in the catalog)? Recommendation: decide after 4d, when it is clear how people use the result.
-6. **Enlarging an enlargement** is disabled (§3.1). Recommendation: keep disabled in the first cut.
+1. **Connected image, not a virtual copy** (§3.1).
+2. **Rating, flag and colour label are not inherited** by the enlargement.
+3. **Keywords, caption, copyright, contact and GPS are inherited.**
+4. **Collections:** a dialog check box "Add to the same collections as the original", **off by default**.
+5. **Lossless output (TIFF / 16-bit):** not in this RFC; decide after 4d, when it is clear how the result is used.
+6. **Enlarging an enlargement is disabled** in the first cut.
+
+Nothing is left open for the user before slice 4a; the open items are measurements (§4).

@@ -52,6 +52,20 @@ pub enum Request {
     /// tiles (RFC-0027 §3.4), and write the result as a PNG at `out_path` (full-image size, or region size).
     /// Streams `progress` lines under the same id; answers `DenoiseResult`, or the error `cancelled`.
     DenoiseRun { model: PathBuf, image_path: PathBuf, out_path: PathBuf, region: Option<Region> },
+    /// Enlarge the image at `image_path` (or just `region` of it) with the 4x ONNX model at `model` (RFC-0029):
+    /// in overlapping tiles, to exactly `out_width x out_height`, `strength` percent of the model over a plain
+    /// Lanczos enlargement, written as a JPEG of `jpeg_quality` at `out_path` row by row (so the size of the result
+    /// does not decide the memory). Streams `progress` lines; answers `UpscaleResult`, or the error `cancelled`.
+    UpscaleRun {
+        model: PathBuf,
+        image_path: PathBuf,
+        out_path: PathBuf,
+        out_width: u32,
+        out_height: u32,
+        strength: u8,
+        jpeg_quality: u8,
+        region: Option<Region>,
+    },
     /// Ask the running request `target` to stop at its next tile boundary; answers at once, whether or not
     /// `target` is still running (so a late cancel is harmless).
     Cancel { target: u64 },
@@ -125,6 +139,14 @@ pub struct DenoiseResult {
     pub ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpscaleResult {
+    pub width: u32,
+    pub height: u32,
+    pub tiles: u32,
+    pub ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +203,30 @@ mod tests {
         // An old-style final answer has no progress field at all.
         let plain: Response = serde_json::from_str(r#"{"id":9,"ok":{}}"#).unwrap();
         assert!(plain.progress.is_none() && plain.ok.is_some());
+    }
+
+    #[test]
+    fn upscale_requests_round_trip_with_and_without_a_region() {
+        let frame = Frame {
+            id: 4,
+            request: Request::UpscaleRun {
+                model: "m.onnx".into(),
+                image_path: "in.png".into(),
+                out_path: "out.jpg".into(),
+                out_width: 4000,
+                out_height: 3000,
+                strength: 45,
+                jpeg_quality: 95,
+                region: Some(Region { x: 1, y: 2, w: 3, h: 4 }),
+            },
+        };
+        let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&frame).unwrap()).unwrap();
+        assert_eq!(v["op"], "upscale_run");
+        assert_eq!((v["out_width"].as_u64(), v["strength"].as_u64(), v["region"]["h"].as_u64()), (Some(4000), Some(45), Some(4)));
+        let plain: Frame = serde_json::from_str(r#"{"id":1,"op":"upscale_run","model":"m","image_path":"i","out_path":"o","out_width":8,"out_height":8,"strength":100,"jpeg_quality":90,"region":null}"#).unwrap();
+        assert!(matches!(plain.request, Request::UpscaleRun { region: None, strength: 100, .. }));
+        // Every field is required: a request that forgets the size must not default to something.
+        assert!(serde_json::from_str::<Frame>(r#"{"id":1,"op":"upscale_run","model":"m","image_path":"i","out_path":"o","region":null}"#).is_err());
     }
 
     #[test]

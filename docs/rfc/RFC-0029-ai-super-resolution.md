@@ -144,3 +144,26 @@ Read from the public pages (no downloads, nothing run); **not legal advice**, an
 | `RealESRGAN_x4plus.pth` | github.com/xinntao/Real-ESRGAN releases | about 64 MB (from memory, unchecked) | the larger Real-ESRGAN, to be converted to ONNX locally |
 | a SwinIR checkpoint (real-world `SwinIR-M_x4_GAN`, and the classical `SwinIR-M x4` as the fidelity-oriented one) | github.com/JingyunLiang/SwinIR releases | not stated on the README (to be read from the release page) | the fidelity-oriented candidate, to be converted to ONNX locally |
 | a Python environment with PyTorch and ONNX Runtime | PyPI (via `uv`, in a throw-away directory) | several hundred MB | the machine has neither; RFC-0023 / RFC-0027's measurements used a scratch environment that is gone |
+
+## 9. Slice 4a, step 2: the bake-off (2026-10-12)
+
+Measured on an M1 Pro, ORT CPU, the eight RFC-0023 §4.7 photos (CC0), [appendix](RFC-0029-appendix/README.md). Three models, converted from the upstream `.pth` files by us (each ONNX checked against PyTorch: max abs difference 4e-6, 2e-6, 2e-6). Two degradations: **ideal** (bicubic /4, RFC-0023's protocol) and **realistic** (blur 0.8, /4, JPEG quality 50: a soft, compressed source). The comparison baseline is a **Lanczos** enlargement, since that is what Strength blends against. Means over 8 photos; HF is the fine-texture energy relative to the reference (1.0 = the same; the plain resize is about 0.25-0.3).
+
+| | Lanczos | `general-x4v3` (Real-ESRGAN compact, 4.9 MB) | `x4plus` (Real-ESRGAN RRDB, 67 MB) | SwinIR-M real-world **PSNR** (52 MB) |
+|---|---|---|---|---|
+| ideal: PSNR dB / SSIM / HF | 26.19 / 0.793 / 0.29 | 24.80 / 0.791 / 0.72 | 24.26 / 0.768 / 0.85 | 25.88 / **0.812** / 0.57 |
+| realistic: PSNR / SSIM / HF | 24.49 / 0.732 / 0.24 | 23.52 / 0.732 / 0.66 | 23.24 / 0.711 / 0.78 | **24.76 / 0.750** / 0.46 |
+| best Strength blend vs Lanczos, ideal (PSNR / SSIM) | - | 30%: 26.44 / 0.805 | 30%: 26.35 / 0.802 | 50%: **26.57 / 0.813** |
+| best blend, realistic | - | 30%: 24.75 / 0.744 | 30%: 24.75 / 0.740 | 50%: **25.10 / 0.751** |
+| time, 256x256 input tile (-> 1024x1024) | - | **0.55 s** | 9.0 s | about 7.8 s (16 tiles of 64x64 at 0.49 s, no overlap) |
+| peak RSS | - | 161 MB (256 tile), 438 MB (512 tile) | 1.6 GB (256), **5.0 GB (512)** | 350 MB (64 tile) |
+| **6 MP input, extrapolated** | - | **about 50 s** | about 14 min | about 21 min with the tiling overlap |
+
+1. **`x4plus` is out.** Worst on every metric, 16x slower than the compact model and up to 5 GB of memory at a 512 px tile: nothing justifies it in a laptop app.
+2. **The GAN-trained models invent detail; the fidelity-trained one does not.** By eye (crop sheets in the appendix; 2 of the 16 sheets were examined closely, the rest only skimmed): `general-x4v3` and `x4plus` are crisper but draw hard edges and colour fringes that were not there (conifer branch tips in warm colours, a hard-edged structure on a soft, compressed source). SwinIR-PSNR stays close to the plain resize, just cleaner, and is softer. This matches the metrics: only SwinIR-PSNR beats the plain resize at full strength on the realistic case, and it has the best SSIM everywhere.
+3. **The Strength blend is validated, and the metric optimum is low.** For every model a blend of 30-50% beats both the plain resize and the pure model on PSNR and SSIM (`general-x4v3`: 26.44 dB at 30% against 26.19 plain and 24.80 pure). Metrics favour restraint, and the RFC's own default is to be set by eye (§7), so the metrics are only a prior: **start the by-eye default near 40-50%** and let the 1:1 Preview decide.
+4. **Only `general-x4v3` passes the proposed go criterion** (§5: at most about 1 min per 6 MP of input, under about 1.5 GB). SwinIR-PSNR is about 25x slower on CPU, so as a second model it would be an optional "High fidelity (slow)" choice, not the first cut. A GPU / CoreML run was not tried and could change that; SwinIR's ONNX export is fixed-size (64) because it pads with Python integers.
+5. **Licences (§8) apply to all three**: code under BSD-3 / Apache-2.0, weights' terms implicit, training-data terms unstated.
+6. **Caveats, not closed:** eight CC0 photos and two synthetic degradations (no real phone or scanned file, no real sensor noise, no JPEG-compressed photo at full size); the high-frequency ratio is crude and a hard painterly edge scores like real texture; the by-eye part is two sheets; SwinIR runs as 64 px tiles with an 8 px overlap and a simple feather (seams were not inspected), so its quality figures may differ slightly from an untiled run; the GAN SwinIR checkpoint and SwinIR-L were not tested; no GPU, no Windows; peak memory is the model session in one process, not the app's.
+
+**Proposed decision for 4b (user to confirm):** `realesr-general-x4v3` is the first-cut model (converted by us from the upstream `.pth`, not the third-party ONNX; 4.9 MB, so it can be bundled), shipped only if the project owner accepts the **implicit weights licence** of §8; the Strength default starts at 40-50% and is set by eye in 4d. SwinIR-PSNR is recorded as the optional fidelity model for later, not built. `x4plus` is dropped.

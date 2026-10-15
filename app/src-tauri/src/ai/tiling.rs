@@ -51,7 +51,7 @@ pub fn reflect(i: isize, n: usize) -> usize {
 
 /// Weight of window position `p` along an axis: 1 in the middle, a linear ramp over `overlap` pixels on each
 /// side that borders another window, 1 on a side that is the image edge.
-fn axis_weight(p: usize, start: usize, tile: usize, len: usize, overlap: usize) -> f32 {
+pub fn axis_weight(p: usize, start: usize, tile: usize, len: usize, overlap: usize) -> f32 {
     let mut w = 1.0f32;
     let ramp = (overlap + 1) as f32;
     if start > 0 && p < overlap {

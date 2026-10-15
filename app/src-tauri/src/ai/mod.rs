@@ -7,3 +7,6 @@
 pub mod protocol;
 pub mod supervisor;
 pub mod tiling;
+pub mod resample;
+pub mod upscale_tiling;
+pub mod upscale_pipeline;

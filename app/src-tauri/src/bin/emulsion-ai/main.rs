@@ -15,14 +15,22 @@ mod denoise;
 #[path = "../../ai/protocol.rs"]
 mod protocol;
 mod segment;
+#[path = "../../ai/resample.rs"]
+mod resample;
 #[path = "../../ai/tiling.rs"]
 mod tiling;
+mod upscale;
+#[path = "../../ai/upscale_pipeline.rs"]
+mod upscale_pipeline;
+#[path = "../../ai/upscale_tiling.rs"]
+mod upscale_tiling;
 
 use denoise::{DenoiseError, Denoiser};
 use protocol::{
     Candidate, ErrorBody, Frame, HelloResult, ModelPaths, PrepareResult, Progress, Prompt, Region, Request, Response, PROTOCOL_VERSION,
 };
 use segment::{SegmentError, Segmenter};
+use upscale::{Job, UpscaleError, Upscaler};
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -84,18 +92,17 @@ fn denoise_error_code(e: &DenoiseError) -> &'static str {
     }
 }
 
-/// Runs one denoise job. Between tiles it reports progress and looks at what has arrived on stdin: a `cancel`
-/// naming this job stops it (and is answered here); anything else is parked in `backlog` for the main loop.
-fn denoise_run(
-    den: &Denoiser,
+/// Runs one long tile job. After every tile it reports progress and looks at what has arrived on stdin: a
+/// `cancel` naming this job stops it (and is answered here); anything else is parked in `backlog` for the main
+/// loop. `job` gets the per-tile callback (it returns `false` once a cancel has been seen).
+fn run_job<R>(
     id: u64,
-    request: (&std::path::Path, &std::path::Path, &std::path::Path, Option<Region>),
     rx: &std::sync::mpsc::Receiver<String>,
     backlog: &mut VecDeque<String>,
-) -> Response {
-    let (model, image_path, out_path, region) = request;
+    job: impl FnOnce(&mut dyn FnMut(usize, usize) -> bool) -> R,
+) -> R {
     let mut cancelled = false;
-    let result = den.run(model, image_path, out_path, region, |done, total| {
+    let mut progress = |done: usize, total: usize| {
         let _ = write_response(&Response { id, ok: None, err: None, progress: Some(Progress { done: done as u32, total: total as u32 }) });
         while let Ok(line) = rx.try_recv() {
             match serde_json::from_str::<Frame>(&line) {
@@ -107,10 +114,45 @@ fn denoise_run(
             }
         }
         !cancelled
-    });
-    match result {
+    };
+    job(&mut progress)
+}
+
+fn denoise_run(
+    den: &Denoiser,
+    id: u64,
+    request: (&std::path::Path, &std::path::Path, &std::path::Path, Option<Region>),
+    rx: &std::sync::mpsc::Receiver<String>,
+    backlog: &mut VecDeque<String>,
+) -> Response {
+    let (model, image_path, out_path, region) = request;
+    match run_job(id, rx, backlog, |progress| den.run(model, image_path, out_path, region, progress)) {
         Ok(r) => ok(id, &r),
         Err(e) => fail(id, denoise_error_code(&e), e.to_string()),
+    }
+}
+
+fn upscale_error_code(e: &UpscaleError) -> &'static str {
+    match e {
+        UpscaleError::Ort(_) | UpscaleError::BadOutput(_) => "inference",
+        UpscaleError::Image(_) => "image",
+        UpscaleError::BadRequest(_) => "bad_request",
+        UpscaleError::Cancelled => "cancelled",
+        UpscaleError::Poisoned => "internal",
+    }
+}
+
+fn upscale_run(
+    up: &Upscaler,
+    id: u64,
+    request: (&std::path::Path, &std::path::Path, &std::path::Path, Option<Region>, Job),
+    rx: &std::sync::mpsc::Receiver<String>,
+    backlog: &mut VecDeque<String>,
+) -> Response {
+    let (model, image_path, out_path, region, job) = request;
+    match run_job(id, rx, backlog, |progress| up.run(model, image_path, out_path, region, job, progress)) {
+        Ok(r) => ok(id, &r),
+        Err(e) => fail(id, upscale_error_code(&e), e.to_string()),
     }
 }
 
@@ -138,6 +180,7 @@ fn main() {
 
     let seg = Segmenter::default();
     let den = Denoiser::default();
+    let up = Upscaler::default();
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
@@ -165,11 +208,19 @@ fn main() {
                     segment_decode(&seg, id, &models, &content_hash, &prompts, refine.as_deref())
                 }
                 Request::DenoiseRun { model, image_path, out_path, region } => denoise_run(&den, id, (&model, &image_path, &out_path, region), &rx, &mut backlog),
+                Request::UpscaleRun { model, image_path, out_path, out_width, out_height, strength, jpeg_quality, region } => upscale_run(
+                    &up,
+                    id,
+                    (&model, &image_path, &out_path, region, Job { out_w: out_width, out_h: out_height, strength, quality: jpeg_quality }),
+                    &rx,
+                    &mut backlog,
+                ),
                 // A cancel that finds nothing running: harmless (the job it named already finished).
                 Request::Cancel { .. } => ok(id, &serde_json::json!({})),
                 Request::Release => {
                     seg.release();
                     den.release();
+                    up.release();
                     ok(id, &serde_json::json!({}))
                 }
                 Request::Shutdown => {

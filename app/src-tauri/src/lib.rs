@@ -30,6 +30,7 @@ mod denoise_models;
 mod denoise_preview;
 mod segment_commands;
 mod segment_models;
+mod upscale_job;
 mod print;
 mod raw_decode;
 mod soft_proof;

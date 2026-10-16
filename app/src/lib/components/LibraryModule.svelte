@@ -30,6 +30,7 @@
   ratingOp={library.ratingOp}
   colorLabelFilter={library.colorLabelFilter}
   fileTypeFilter={library.fileTypeFilter}
+  enlargedFilter={library.enlargedFilter}
   cameraFilter={library.cameraFilter}
   lensFilter={library.lensFilter}
   dateFrom={library.dateFrom}
@@ -46,6 +47,7 @@
   }}
   onColorLabelChange={(c) => (library.colorLabelFilter = c)}
   onFileTypeChange={(t) => (library.fileTypeFilter = t)}
+  onEnlargedChange={(on) => (library.enlargedFilter = on)}
   onCameraChange={(c) => (library.cameraFilter = c)}
   onLensChange={(l) => (library.lensFilter = l)}
   onDateRangeChange={(from, to) => {

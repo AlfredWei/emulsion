@@ -1,5 +1,6 @@
 <script>
   import { convertFileSrc } from "@tauri-apps/api/core";
+  import { scaleLabel } from "$lib/upscaleLinks.js";
 
   /**
    * The MouseEvent reaches onSelect so multi-select modifiers (Cmd/Ctrl,
@@ -21,6 +22,9 @@
   const COLOR_CYCLE = ["none", "red", "yellow", "green", "blue", "purple"];
 
   let thumbSrc = $derived(image.thumbnail_path ? convertFileSrc(image.thumbnail_path) : null);
+  // AI enlargement cues (RFC-0029 §3.2): a "×N" chip on an enlargement, a link glyph on an original that has some.
+  let enlargedChip = $derived(image.enlarged_scale != null ? scaleLabel(image.enlarged_scale) : null);
+  let enlargementCount = $derived(image.enlargement_count ?? 0);
   let filename = $derived(image.path.split(/[/\\]/).pop() ?? image.path);
   let dirPath = $derived(image.path.slice(0, Math.max(0, image.path.length - filename.length)).replace(/[/\\]$/, ""));
 
@@ -60,7 +64,27 @@
     <div class="thumb placeholder" aria-hidden="true"></div>
   {/if}
 
-  <div class="file-label" title="{filename}&#10;{image.path}">
+  {#if enlargedChip || enlargementCount > 0}
+    <div class="ai-cues">
+      {#if enlargedChip}
+        <span class="ai-chip" title="Enlarged {enlargedChip} with Enlarge (AI)">{enlargedChip}</span>
+      {/if}
+      {#if enlargementCount > 0}
+        <span
+          class="ai-link"
+          title={enlargementCount === 1 ? "Has 1 AI enlargement" : `Has ${enlargementCount} AI enlargements`}
+          role="img"
+          aria-label={enlargementCount === 1 ? "Has 1 AI enlargement" : `Has ${enlargementCount} AI enlargements`}
+        >
+          <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <path d="M6.5 9.5l3-3M5 7.5L3.8 8.7a2.5 2.5 0 003.5 3.5L8.5 11M11 8.5l1.2-1.2a2.5 2.5 0 00-3.5-3.5L7.5 5" />
+          </svg>
+        </span>
+      {/if}
+    </div>
+  {/if}
+
+  <div class="file-label" class:has-cues={enlargedChip || enlargementCount > 0} title="{filename}&#10;{image.path}">
     <span class="file-name">{filename}</span>
   </div>
 
@@ -153,6 +177,9 @@
     opacity: 0.85;
     transition: opacity 0.12s ease;
   }
+  .file-label.has-cues {
+    padding-right: 54px; /* keep the file name out from under the AI chip and glyph */
+  }
   .cell:hover .file-label,
   .cell.selected .file-label {
     opacity: 1;
@@ -165,6 +192,34 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  }
+  .ai-cues {
+    position: absolute;
+    top: 4px;
+    right: 5px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    pointer-events: none;
+  }
+  .ai-chip,
+  .ai-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 16px;
+    padding: 0 5px;
+    border-radius: var(--radius-s);
+    background: rgba(0, 0, 0, 0.62);
+    border: 1px solid var(--accent-border);
+    color: var(--accent-strong);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+  }
+  .ai-link {
+    padding: 0 4px;
   }
   .badge-row {
     position: absolute;

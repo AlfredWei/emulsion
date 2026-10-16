@@ -2,6 +2,12 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Slice 4e (super-resolution): the connection in the Library UI (2026-10-17)
+
+Branch `feature/upscale-links-ui`, stacked on #239 (4c); RFC-0029 §13. `list_images` carries `enlarged_scale` / `enlarged_from` / `enlargement_count`; the grid shows a **x-N chip** and a **link glyph**; an **AI enlarged** filter; photo-menu *Go to Original* / *Show Enlargement(s)*; a **Connected photos** block in the info panel with the edited-since and original-removed wording; navigation that clears scope and filters only when they would hide the target. vitest 1017 (26 new), svelte-check 0 errors.
+- **Not verified** (add to the milestone-end backlog): everything visual and in the real window (nothing can create an enlargement until 4d, so no e2e or screenshot), the filter button at the minimum window width, the grid's scroll-to-selection after *Show enlargements*, Windows, screen reader on the chip / glyph. The Develop info bar does not carry the block yet.
+- **Not in 4e (needs 4d):** *Enlarge (AI)…* and *Enlarge again*.
+
 ## Slice 4c (super-resolution): the catalog connection (2026-10-16)
 
 Branch `feature/upscale-catalog`; RFC-0029 §12. #238 (4b) is merged. `catalog/upscale_sources.rs`: the `upscale_sources` table (the link is NULLed, not dangling, when the original is removed), `add_enlargement` (one transaction: new photo with an empty stack, capture metadata / GPS / copyright / contact / caption / keywords inherited, collections only on request, rating / flag / label not), reading both sides with **`edited_since`** (order-insensitive stack hash), `is_enlargement`, the Tauri command `get_upscale_links`, `result_stem` and a streamed `fingerprint` in `upscale_job.rs`. 10 new lib tests (571 total).

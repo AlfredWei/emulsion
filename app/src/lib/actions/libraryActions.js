@@ -123,6 +123,7 @@ export function handleResetFilters() {
   library.ratingOp = ">=";
   library.colorLabelFilter = "all";
   library.fileTypeFilter = "all";
+  library.enlargedFilter = false;
   library.cameraFilter = "all";
   library.lensFilter = "all";
   library.dateFrom = "";

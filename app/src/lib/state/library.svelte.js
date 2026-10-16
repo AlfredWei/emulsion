@@ -72,6 +72,8 @@ export class LibraryStore {
   ratingOp = $state(/** @type {">=" | "="} */ (">="));
   colorLabelFilter = $state("all");
   fileTypeFilter = $state(/** @type {"all" | "raw" | "jpeg"} */ ("all"));
+  /** "AI enlarged" (RFC-0029 §3.2): only the photos that are model enlargements. */
+  enlargedFilter = $state(false);
   cameraFilter = $state("all");
   lensFilter = $state("all");
   dateFrom = $state("");

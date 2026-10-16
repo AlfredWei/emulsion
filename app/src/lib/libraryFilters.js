@@ -34,6 +34,7 @@ import { folderKeyForPath } from "$lib/libraryFolders.js";
  * @property {">=" | "="} ratingOp
  * @property {string} colorLabelFilter
  * @property {"all" | "raw" | "jpeg"} fileTypeFilter
+ * @property {boolean} [enlargedFilter]
  * @property {string} cameraFilter
  * @property {string} lensFilter
  * @property {string} dateFrom
@@ -139,6 +140,11 @@ export function applyLibraryFilters(inputs) {
       (img) =>
         img.path.toLowerCase().endsWith(".jpg") || img.path.toLowerCase().endsWith(".jpeg"),
     );
+  }
+
+  // AI enlarged: only the photos that are model enlargements
+  if (inputs.enlargedFilter) {
+    result = result.filter((img) => img.enlarged_scale != null);
   }
 
   // Camera filter

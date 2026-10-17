@@ -52,3 +52,16 @@ export function connectedLines(links, nameOf) {
   }
   return lines;
 }
+
+/**
+ * The info panel's Enlarge button for an original: "Enlarge again…" once an enlargement shows an earlier edit of it
+ * (the new one is another connected photo; the first is kept), "Enlarge (AI)…" otherwise. Null for an enlargement,
+ * which is not enlarged again (it would compound invented detail).
+ * @param {import('$lib/api/catalog.js').UpscaleLinks | null} links  null while unread or for an ordinary photo
+ * @param {boolean} isEnlargement
+ * @returns {string | null}
+ */
+export function enlargeButtonLabel(links, isEnlargement) {
+  if (isEnlargement) return null;
+  return links?.enlargements.some((e) => e.edited_since) ? "Enlarge again…" : "Enlarge (AI)…";
+}

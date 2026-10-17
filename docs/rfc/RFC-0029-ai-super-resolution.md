@@ -242,3 +242,8 @@ Branch `feature/upscale-preview`. §3.4 as built: **Preview 1:1** shows about on
 - **Measured (debug helper, so not representative; M1 Pro):** 4x preview of a 1779x2848 JPEG: 250 px region to 1000x1000 in 0.8 s of model time; 2x: 500 px region to 1000x1000 in 5.7 s. Seen: the model smooths the fabric and invents a fine rib texture on the sleeve, which is exactly what the preview is for.
 - **Not done:** a render cached between previews (each Preview re-renders the whole photo, §12's cost); a bigger region or panning inside the 1:1 view.
 
+## 17. Enlarge from the info panel, and Enlarge again (2026-10-18)
+
+- The info panel's Connected photos block (`ConnectedPhotos.svelte`) carries the button the menu already had: **Enlarge (AI)…** on an ordinary photo (under an "AI enlargement" label; the backend is still not asked about it) and on an original; **Enlarge again…** when any enlargement of it is `edited_since`. It opens the §14 dialog, so *Enlarge again* is just another run: another connected photo, the first one untouched, the name suffixed by the usual clash rule. An enlargement shows no button (§7.6).
+- The wording rule is `enlargeButtonLabel` (`upscaleLinks.js`). The photo menu keeps one *Enlarge (AI)…* entry: it works on an original whether or not it was edited since.
+- **Not verified:** the panel in the real window; the label changing after an edit in Develop and a return to Library (the block re-reads on a module change, as for the note). The Develop info bar still has no block.

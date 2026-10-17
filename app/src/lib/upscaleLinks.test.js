@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scaleLabel, connectedLines } from "./upscaleLinks.js";
+import { scaleLabel, connectedLines, enlargeButtonLabel } from "./upscaleLinks.js";
 
 const origin = (/** @type {object} */ o = {}) => ({ source_image_id: 7, source_version_id: 70, scale: 4, strength: 45, model_id: "m", created_at: "", edited_since: false, ...o });
 const enl = (/** @type {number} */ id, /** @type {number} */ scale = 4, /** @type {boolean | null} */ edited = false) => ({ result_image_id: id, scale, strength: 45, model_id: "m", created_at: "", edited_since: edited });
@@ -47,5 +47,20 @@ describe("connectedLines", () => {
     const many = connectedLines({ origin: null, enlargements: [enl(6, 2.5, true), enl(5, 4)] }, names);
     expect(many[0]).toMatchObject({ text: "2 enlargements: ×2.5, ×4", imageId: 6, action: "Show enlargements" });
     expect(many[0].note).toMatch(/edited since/i);
+  });
+});
+
+describe("enlargeButtonLabel", () => {
+  it("offers Enlarge (AI) on an ordinary photo and on an original that has not been edited since", () => {
+    expect(enlargeButtonLabel(null, false)).toBe("Enlarge (AI)…");
+    expect(enlargeButtonLabel({ origin: null, enlargements: [/** @type {any} */ (enl(5))] }, false)).toBe("Enlarge (AI)…");
+  });
+
+  it("says Enlarge again once an enlargement shows an earlier edit", () => {
+    expect(enlargeButtonLabel({ origin: null, enlargements: [/** @type {any} */ (enl(5)), /** @type {any} */ (enl(6, 2, true))] }, false)).toBe("Enlarge again…");
+  });
+
+  it("offers nothing on an enlargement", () => {
+    expect(enlargeButtonLabel({ origin: /** @type {any} */ (origin()), enlargements: [] }, true)).toBeNull();
   });
 });

@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Enlarge from the info panel, and Enlarge again (2026-10-18)
+
+The Library info panel (`ConnectedPhotos.svelte`) now has an **Enlarge (AI)…** button: on an ordinary photo under an
+"AI enlargement" label, and under "Connected photos" on an original. Once one of its enlargements shows an earlier edit
+(`edited_since`) the button reads **Enlarge again…**; either way it opens the same dialog and the result is another
+connected photo (the first is never overwritten). An enlargement has no button (RFC-0029 §3.2). Label rule:
+`enlargeButtonLabel` in `upscaleLinks.js`, 3 new vitest cases; svelte-check and vitest pass. **Not verified:** the
+button in the real window (placement, opening the dialog from the panel, the label flipping after an edit in Develop);
+no e2e. Still open: batch enlargement and the user guide (4f), a render cache between Previews.
+
 ## Filter bar wraps on a narrow window (2026-10-18)
 
 The Library filter bar had `overflow-x: auto` and never wrapped, so a narrow window cut off the date range and the

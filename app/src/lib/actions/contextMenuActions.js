@@ -52,6 +52,7 @@ import { openDevelop, switchModule, handleDevelopFilmstripSelect } from "$lib/ac
 import { revealInFileManager } from "$lib/api/system.js";
 import { buildPhotoMenu } from "$lib/contextMenus/photoMenu.js";
 import { goToOriginal, showEnlargements } from "$lib/actions/upscaleActions.js";
+import { openEnlargeDialog } from "$lib/actions/enlargeActions.js";
 import { buildGridBackgroundMenu } from "$lib/contextMenus/gridMenu.js";
 import { buildPanelHeaderMenu, buildCanvasMenu, buildMaskMenu, buildShapeMenu } from "$lib/contextMenus/developMenus.js";
 import { buildCollectionMenu, buildPersonMenu, buildSnapshotMenu, buildPresetMenu, buildPresetListMenu } from "$lib/contextMenus/railMenus.js";
@@ -197,6 +198,13 @@ export function photoCommands(images, module) {
     },
     showEnlargements: (imageId) => {
       showEnlargements(imageId);
+    },
+    enlarge: async (versionId) => {
+      const image = images.find((img) => img.version_id === versionId);
+      if (!image) return;
+      // The photo as it is in Develop right now is what gets enlarged.
+      if (module === "develop") await develop.flushEditStack();
+      openEnlargeDialog(image);
     },
   };
 }

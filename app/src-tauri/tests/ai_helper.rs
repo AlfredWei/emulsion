@@ -531,7 +531,10 @@ fn a_request_that_arrives_during_an_upscale_waits_its_turn() {
         })
     };
     started.wait();
-    hello_pid(&h);
+    // Queued behind the job, so it waits as long as the job may take: a debug build on a loaded CI runner needs far
+    // more than the usual 20 s (this timed out on a macOS runner whose other tests ran 10x slower than usual).
+    let hello = h.request(Request::Hello, Duration::from_secs(120)).expect("hello");
+    assert_eq!(serde_json::from_value::<HelloResult>(hello).unwrap().protocol, PROTOCOL_VERSION);
     assert!(dir.join("out.jpg").exists(), "hello was answered before the running job finished");
     assert!(job.join().unwrap().is_ok());
     h.shutdown();

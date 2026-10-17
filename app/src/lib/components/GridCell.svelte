@@ -1,6 +1,7 @@
 <script>
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { scaleLabel } from "$lib/upscaleLinks.js";
+  import { resolutionLine } from "$lib/resolution.js";
 
   /**
    * The MouseEvent reaches onSelect so multi-select modifiers (Cmd/Ctrl,
@@ -25,6 +26,7 @@
   // AI enlargement cues (RFC-0029 §3.2): a "×N" chip on an enlargement, a link glyph on an original that has some.
   let enlargedChip = $derived(image.enlarged_scale != null ? scaleLabel(image.enlarged_scale) : null);
   let enlargementCount = $derived(image.enlargement_count ?? 0);
+  let resolution = $derived(resolutionLine(image.width, image.height));
   let filename = $derived(image.path.split(/[/\\]/).pop() ?? image.path);
   let dirPath = $derived(image.path.slice(0, Math.max(0, image.path.length - filename.length)).replace(/[/\\]$/, ""));
 
@@ -86,6 +88,7 @@
 
   <div class="file-label" class:has-cues={enlargedChip || enlargementCount > 0} title="{filename}&#10;{image.path}">
     <span class="file-name">{filename}</span>
+    {#if resolution}<span class="file-res" data-testid="cell-resolution">{resolution}</span>{/if}
   </div>
 
   <div class="badge-row">
@@ -172,13 +175,15 @@
     padding: 4px 6px;
     background: linear-gradient(180deg, rgba(0, 0, 0, 0.7) 0%, rgba(0, 0, 0, 0) 100%);
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
     pointer-events: none;
     opacity: 0.85;
     transition: opacity 0.12s ease;
   }
-  .file-label.has-cues {
-    padding-right: 54px; /* keep the file name out from under the AI chip and glyph */
+  .file-label.has-cues .file-name {
+    max-width: calc(100% - 48px); /* keep the file name out from under the AI chip and glyph */
   }
   .cell:hover .file-label,
   .cell.selected .file-label {
@@ -188,6 +193,16 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: rgba(255, 255, 255, 0.9);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  }
+  .file-res {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.7);
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

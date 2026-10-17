@@ -108,6 +108,13 @@ export function backfillMissingThumbnails(/** @type {number} */ importBatch) {
   return invoke("backfill_missing_thumbnails", { importBatch });
 }
 
+/** Fills in the pixel size of photos the catalog has none for, from the files themselves. Resolves to how many
+ * were filled (refresh the list when it is above zero). Cheap when nothing is missing.
+ * @returns {Promise<number>} */
+export function backfillImageDimensions() {
+  return invoke("backfill_image_dimensions");
+}
+
 /** On-demand "jump the queue" thumbnail generation for one image -- called
  * when opening Loupe/Develop on a photo the background backfill pass
  * above hasn't reached yet, so it doesn't have to wait behind the rest of

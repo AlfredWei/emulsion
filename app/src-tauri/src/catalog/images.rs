@@ -359,6 +359,19 @@ impl Catalog {
         Ok(())
     }
 
+    /// Photos the catalog has no pixel size for (imported before it was read from the file, or from a file whose
+    /// EXIF does not carry one): `(image id, path)`.
+    pub fn images_missing_dimensions(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare("SELECT id, path FROM images WHERE width IS NULL OR height IS NULL ORDER BY id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    pub fn set_image_dimensions(&self, image_id: i64, width: u32, height: u32) -> Result<()> {
+        self.conn.execute("UPDATE images SET width = ?2, height = ?3 WHERE id = ?1", params![image_id, width, height])?;
+        Ok(())
+    }
+
     /// Library grid data: one row per image, its primary (first,
     /// non-virtual-copy) version's culling state. Newest imports first.
     pub fn list_images(&self) -> Result<Vec<ImageSummary>> {
@@ -628,6 +641,19 @@ mod tests {
 
         assert_eq!(removed.len(), 2, "unknown id is a silent no-op, not an error");
         assert!(catalog.list_images().unwrap().is_empty());
+    }
+
+    #[test]
+    fn photos_without_a_recorded_size_are_listed_until_one_is_set() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let none = crate::metadata::ImageMetadata::default();
+        let sized = crate::metadata::ImageMetadata { width: Some(800), height: Some(600), ..Default::default() };
+        let a = catalog.add_image_with_edit_stack("/a.jpg", "ha", 1, &EditStack::empty(), &none).unwrap();
+        catalog.add_image_with_edit_stack("/b.jpg", "hb", 1, &EditStack::empty(), &sized).unwrap();
+        assert_eq!(catalog.images_missing_dimensions().unwrap(), vec![(a, "/a.jpg".to_string())]);
+        catalog.set_image_dimensions(a, 6000, 4000).unwrap();
+        assert!(catalog.images_missing_dimensions().unwrap().is_empty());
+        assert_eq!(catalog.get_image_dimensions(a).unwrap(), Some((6000, 4000)));
     }
 
     #[test]

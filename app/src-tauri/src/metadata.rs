@@ -57,8 +57,9 @@ pub fn extract_from_raw(image: &RawImage) -> ImageMetadata {
         exposure_bias: None,
         metering_mode: None,
         flash: None,
-        width: None,
-        height: None,
+        // LibRaw's own size, read from the header `open` already parsed (the same figure the decoder produces).
+        width: (image.width() > 0).then(|| image.width()),
+        height: (image.height() > 0).then(|| image.height()),
         latitude: None,
         longitude: None,
         altitude: None,
@@ -162,7 +163,39 @@ fn normalize_exif_datetime(s: &str) -> Option<String> {
     Some(format!("{}T{}", date.replace(':', "-"), time))
 }
 
+/// The pixel size of a JPEG from its own header, for files whose EXIF does not say (screenshots, exports, anything
+/// a tool stripped). Reads the header only.
+fn jpeg_header_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
+}
+
+/// The pixel size of a catalogued file read from the file itself: a JPEG by its header (cheap), a RAW by opening it
+/// with LibRaw (reads the whole file, so this is for a one-time backfill, not a hot path). `None` when the file is
+/// missing or unreadable.
+pub fn dimensions_from_file(path: &std::path::Path) -> Option<(u32, u32)> {
+    match crate::source_decode::ImageFormat::from_path(path)? {
+        crate::source_decode::ImageFormat::Jpeg => image::image_dimensions(path).ok(),
+        crate::source_decode::ImageFormat::Raw => {
+            let bytes = std::fs::read(path).ok()?;
+            let _lock = crate::raw_decode::LIBRAW_LOCK.lock().ok()?;
+            let raw = RawImage::open(&bytes).ok()?;
+            (raw.width() > 0 && raw.height() > 0).then(|| (raw.width(), raw.height()))
+        }
+    }
+}
+
 pub fn extract_from_jpeg(bytes: &[u8]) -> ImageMetadata {
+    let mut metadata = extract_jpeg_exif(bytes);
+    if metadata.width.is_none() || metadata.height.is_none() {
+        if let Some((w, h)) = jpeg_header_dimensions(bytes) {
+            metadata.width = Some(w);
+            metadata.height = Some(h);
+        }
+    }
+    metadata
+}
+
+fn extract_jpeg_exif(bytes: &[u8]) -> ImageMetadata {
     let mut reader = std::io::Cursor::new(bytes);
     let Ok(exif) = exif::Reader::new().read_from_container(&mut reader) else {
         return ImageMetadata::default();
@@ -345,6 +378,42 @@ mod tests {
         assert_eq!(metadata.camera_make, None);
         assert_eq!(metadata.iso, None);
         assert_eq!(metadata.captured_at, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Gated like the test above: a real RAW file's size comes from LibRaw's header, both at import and when the
+    /// backfill reads the file again, and the two agree.
+    #[test]
+    fn a_real_raw_files_size_is_read_at_import_and_by_the_backfill() {
+        let Ok(sample_path) = std::env::var("EMULSION_TEST_RAW_SAMPLE") else {
+            eprintln!("skipping: set EMULSION_TEST_RAW_SAMPLE=/path/to/file.DNG to run this test");
+            return;
+        };
+        let bytes = std::fs::read(&sample_path).unwrap();
+        let (w, h) = {
+            let _raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
+            let image = RawImage::open(&bytes).expect("real RAW sample should open");
+            let metadata = extract_from_raw(&image);
+            (metadata.width.expect("width"), metadata.height.expect("height"))
+        };
+        assert!(w > 100 && h > 100, "{w}x{h}");
+        assert_eq!(dimensions_from_file(std::path::Path::new(&sample_path)), Some((w, h)));
+        eprintln!("RAW size: {w}x{h}");
+    }
+
+    #[test]
+    fn a_jpeg_whose_exif_has_no_size_gets_it_from_its_header() {
+        let dir = std::env::temp_dir().join("emulsion-metadata-test-header-size");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("plain.jpg");
+        image::RgbImage::from_pixel(20, 10, image::Rgb([1, 2, 3])).save(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+
+        let metadata = extract_from_jpeg(&bytes);
+        assert_eq!((metadata.width, metadata.height), (Some(20), Some(10)));
+        assert_eq!(dimensions_from_file(&path), Some((20, 10)));
+        assert_eq!(dimensions_from_file(&dir.join("missing.jpg")), None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

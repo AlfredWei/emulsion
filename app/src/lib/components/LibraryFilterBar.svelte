@@ -333,7 +333,10 @@
   .filter-bar {
     display: flex;
     align-items: center;
-    gap: 8px;
+    /* Wrap rather than scroll: a window too narrow for one row gets a second row, so no control is cut off and no
+       scrollbar track shows as a black bar above the grid. */
+    flex-wrap: wrap;
+    gap: 6px 8px;
     padding: 6px 14px;
     background: var(--bg-panel);
     border-bottom: 1px solid var(--border-subtle);
@@ -341,7 +344,6 @@
     font-size: 11.5px;
     min-height: 36px;
     box-sizing: border-box;
-    overflow-x: auto;
   }
   .search-box {
     position: relative;

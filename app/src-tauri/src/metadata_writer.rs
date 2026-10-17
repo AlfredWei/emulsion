@@ -97,6 +97,20 @@ pub fn apply(
     Ok(jpeg)
 }
 
+/// The enlargement note of RFC-0029 §3.6: records in the JPEG's own EXIF (`Software`, `ImageDescription`) that a
+/// model enlarged the picture. Separate from [`apply`] because it is not user metadata the export dialog chooses;
+/// the enlarge dialog's check box does. Adds to whatever EXIF the file has (none, for a fresh enlargement).
+pub fn add_enlargement_note(mut jpeg: Vec<u8>, software: &str, description: &str) -> Result<Vec<u8>, MetadataWriteError> {
+    if !jpeg.starts_with(&[0xFF, 0xD8]) {
+        return Err(MetadataWriteError::NotJpeg);
+    }
+    let mut meta = Metadata::new();
+    meta.set_tag(ExifTag::Software(software.to_string()));
+    meta.set_tag(ExifTag::ImageDescription(description.to_string()));
+    meta.write_to_vec(&mut jpeg, FileExtension::JPEG).map_err(|e| MetadataWriteError::Exif(e.to_string()))?;
+    Ok(jpeg)
+}
+
 fn rational(value: f64, denominator: u32) -> uR64 {
     uR64 {
         nominator: (value * denominator as f64).round() as u32,
@@ -351,6 +365,19 @@ mod tests {
             pos += 2 + len;
         }
         Vec::new()
+    }
+
+    #[test]
+    fn the_enlargement_note_lands_in_the_files_own_exif_and_the_picture_still_decodes() {
+        let out = add_enlargement_note(blank_jpeg(), "Emulsion", "Enlarged x4 with AI (m, strength 45%)").unwrap();
+        let meta = Metadata::new_from_vec(&out, FileExtension::JPEG).unwrap();
+        let text = |tag: ExifTag| -> Option<String> {
+            meta.get_tag(&tag).next().map(|t| format!("{t:?}"))
+        };
+        assert!(text(ExifTag::Software(String::new())).unwrap().contains("Emulsion"));
+        assert!(text(ExifTag::ImageDescription(String::new())).unwrap().contains("Enlarged x4 with AI"));
+        assert_eq!(image::load_from_memory(&out).unwrap().width(), 32);
+        assert!(matches!(add_enlargement_note(vec![1, 2, 3], "a", "b"), Err(MetadataWriteError::NotJpeg)));
     }
 
     #[test]

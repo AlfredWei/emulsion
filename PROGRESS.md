@@ -2,6 +2,13 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Filter bar wraps on a narrow window (2026-10-18)
+
+The Library filter bar had `overflow-x: auto` and never wrapped, so a narrow window cut off the date range and the
+count and showed the scrollbar track as a black bar above the grid. It now wraps onto a second row
+(`LibraryFilterBar.svelte`). Checked: svelte-check and vitest pass. **Not verified:** the look in the real window at
+narrow widths (the dev server renders nothing outside Tauri); a CSS-only change, so no new unit test.
+
 ## Enlarge Preview (slice 4d-2, 2026-10-18)
 
 Branch `feature/upscale-preview`; RFC-0029 §16. **Preview 1:1** in the Enlarge dialog: about 1 MP of *result* (a source rectangle of 1000 / scale px a side: 250 px at 4x, 500 px at 2x) around the middle of the photo, shown as a plain Lanczos resize on the left and the model blended at the chosen Strength on the right, with a draggable split, *Fit* / 1:1, and a **navigator** (the photo's thumbnail with the rectangle; click to move it).

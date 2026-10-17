@@ -30,6 +30,7 @@ mod keywords;
 mod merge_sources;
 mod presets;
 mod schema;
+mod upscale_sources;
 #[cfg(test)]
 mod test_support;
 
@@ -41,6 +42,9 @@ pub use faces::{FaceRow, PersonRow};
 pub use keywords::{KeywordRef, KeywordNode, ImageKeywordAssignment};
 pub use collections::CollectionSummary;
 pub use backup::{BackupOutcome, BackupSettings};
+// `edit_stack_hash` / `EnlargementInput` are used by the enlarge job command of slice 4d.
+#[allow(unused_imports)]
+pub use upscale_sources::{edit_stack_hash, EnlargementInput, EnlargementLink, EnlargementOrigin};
 
 pub struct Catalog {
     conn: Connection,

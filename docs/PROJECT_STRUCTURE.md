@@ -76,7 +76,7 @@ src-tauri/
 │   ├── main.rs             Entry point, just calls into lib.rs
 │   ├── lib.rs               Tauri command definitions + app setup (catalog opened here)
 │   ├── catalog/             SQLite catalog, one file per domain: mod.rs (Catalog struct, open), schema.rs (migrate),
-│   │                        images, merge_sources, culling, geo, faces, keywords, collections, backup, edit_stack,
+│   │                        images, merge_sources, upscale_sources (AI enlargement provenance and links), culling, geo, faces, keywords, collections, backup, edit_stack,
 │   │                        presets, export_plugins (each with its own tests; test_support.rs = shared fixtures)
 │   ├── develop_engine/      CPU edit-stack interpreter (the reference the GPU shaders must match): pipeline.rs
 │   │                        (`apply_edit_stack`), color, tone, hsl_split, effects, detail, masks (incl. composable-mask modifiers), crop, lens,

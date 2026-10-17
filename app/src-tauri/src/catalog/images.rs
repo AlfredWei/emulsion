@@ -298,6 +298,13 @@ impl Catalog {
                 "DELETE FROM panorama_merge_sources WHERE result_image_id = ?1 OR source_image_id = ?1",
                 params![image_id],
             )?;
+            // M6 (AI enlargement, RFC-0029 §3.1): a removed *result* loses its provenance row; a removed
+            // *original* only blanks the link (the enlargement is its own photo and stays).
+            tx.execute("DELETE FROM upscale_sources WHERE result_image_id = ?1", params![image_id])?;
+            tx.execute(
+                "UPDATE upscale_sources SET source_image_id = NULL, source_version_id = NULL WHERE source_image_id = ?1",
+                params![image_id],
+            )?;
             // M5 Slice 6 (face detection, RFC-0005 §3.4): one-directional,
             // same explicit discipline as image_versions/image_keywords/
             // collection_images above -- a face row always belongs to

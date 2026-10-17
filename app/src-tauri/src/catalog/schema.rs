@@ -232,6 +232,26 @@ impl Catalog {
                 PRIMARY KEY (result_image_id, source_image_id)
             );
 
+            -- AI enlargement (M6, RFC-0029 §3.1): pure provenance, like the two merge tables above -- which
+            -- original (and which of its versions) a model-enlarged photo came from, at what strength, and the
+            -- hash of the original's edit stack at that moment (so \"edited since\" is a comparison, not a
+            -- guess). Never read by a render path. `source_image_id` is NULL once the original is removed from
+            -- the catalog (set by remove_images): the enlargement is its own photo and must survive, and a
+            -- dangling id could point at a different photo later, because SQLite reuses the largest row id.
+            CREATE TABLE IF NOT EXISTS upscale_sources (
+                result_image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                source_image_id INTEGER,
+                source_version_id INTEGER,
+                scale REAL NOT NULL,
+                strength INTEGER NOT NULL,
+                model_id TEXT NOT NULL,
+                source_stack_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_upscale_sources_source
+                ON upscale_sources(source_image_id);
+
             -- Face detection / People view (M5 Slice 6, RFC-0005 §3.4).
             -- Schema only at this point -- no detection/embedding model has
             -- been chosen yet (RFC-0005 §5 open questions), so nothing

@@ -2,6 +2,13 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Slice 4c (super-resolution): the catalog connection (2026-10-16)
+
+Branch `feature/upscale-catalog`; RFC-0029 §12. #238 (4b) is merged. `catalog/upscale_sources.rs`: the `upscale_sources` table (the link is NULLed, not dangling, when the original is removed), `add_enlargement` (one transaction: new photo with an empty stack, capture metadata / GPS / copyright / contact / caption / keywords inherited, collections only on request, rating / flag / label not), reading both sides with **`edited_since`** (order-insensitive stack hash), `is_enlargement`, the Tauri command `get_upscale_links`, `result_stem` and a streamed `fingerprint` in `upscale_job.rs`. 10 new lib tests (571 total).
+- **Large-JPEG measurement (§4), release build, M1 Pro:** Library thumbnail and Develop draft are fine at 150 MP (about 1 GB, about 1 s). **Export / Print render needs about 55-63 MB per megapixel and 0.33 s per megapixel: 3.8 GB / 20 s at 60 MP, 8.1 GB / 50 s at 150 MP** (existing behaviour; an enlargement makes it routine). 4d's very-large warning must say so; a streamed export render is the real fix and is a separate decision.
+- **Not verified** (add to the milestone-end backlog): Develop in the real window with a 60 / 150 MP JPEG; a real camera-sized 150 MP file; heavier stacks (masks, lens, AI denoise) at that size; Windows; a 16 GB machine at 8 GB.
+- **Next:** 4d (the dialog and the job command), which also needs the model registry entry (4b part 2b) and your licence decision; 4e can start earlier (it only needs `get_upscale_links` and a link field in `list_images`).
+
 ## Slice 4b, part 1 (super-resolution): the engine (2026-10-15)
 
 Branch `feature/upscale-engine`; RFC-0029 §10. #237 (the bake-off) is merged. The helper op **`upscale_run`**: a band-streamed 4x tiler (256 px tiles, 32 px overlap; only a few tile rows of output in memory), a streaming Lanczos resampler (2x / long edge / the plain baseline), the Strength blend, and a **row-pulling JPEG writer** (new dependency `jpeg-encoder` 0.6.1, pure Rust; this answered RFC §3.3's open question, so **no size cap**, the limit is 65,535 px a side). Cancel and errors leave no file; `run_job` in the helper now serves denoise and upscale alike.

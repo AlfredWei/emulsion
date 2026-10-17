@@ -1178,6 +1178,23 @@ fn get_edit_stack(state: State<'_, AppState>, version_id: i64) -> Result<EditSta
     catalog.get_edit_stack(version_id).map_err(|e| e.to_string())
 }
 
+/// Both sides of the AI-enlargement connection for one photo (M6, RFC-0029 §3.1, §3.2's Connected photos
+/// block): where it came from if it is an enlargement, and the enlargements made from it.
+#[derive(serde::Serialize)]
+struct UpscaleLinks {
+    origin: Option<catalog::EnlargementOrigin>,
+    enlargements: Vec<catalog::EnlargementLink>,
+}
+
+#[tauri::command]
+fn get_upscale_links(state: State<'_, AppState>, image_id: i64) -> Result<UpscaleLinks, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    Ok(UpscaleLinks {
+        origin: catalog.get_enlargement_origin(image_id).map_err(|e| e.to_string())?,
+        enlargements: catalog.get_enlargements_of(image_id).map_err(|e| e.to_string())?,
+    })
+}
+
 /// Matches a photo's camera+lens EXIF against the bundled lens-correction
 /// database (M3: Lens Corrections). Takes the metadata directly (not an
 /// image_id) -- the frontend already holds every field on the
@@ -2074,6 +2091,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            get_upscale_links,
             segment_commands::segment_model_status,
             segment_commands::segment_download_models,
             segment_commands::segment_import_model_files,

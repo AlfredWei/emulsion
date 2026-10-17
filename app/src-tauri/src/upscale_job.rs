@@ -67,6 +67,24 @@ pub fn tile_count(w: u32, h: u32) -> u32 {
     crate::ai::tiling::tile_count(w as usize, h as usize, crate::ai::upscale_pipeline::TILE, crate::ai::upscale_pipeline::OVERLAP) as u32
 }
 
+/// The file stem of the result, next to the original: `<stem>-Enlarged-4x`, `-2x` or `-6000px` for a long edge
+/// (RFC-0029 §3.1). The caller makes it unique with `export::unique_output_path`.
+pub fn result_stem(source_stem: &str, target: Target) -> String {
+    match target {
+        Target::Scale(n) => format!("{source_stem}-Enlarged-{n}x"),
+        Target::LongEdge(px) => format!("{source_stem}-Enlarged-{px}px"),
+    }
+}
+
+/// Content hash and size of the written result, streamed: a 150 MP JPEG is far too big to read into memory
+/// just to hash it.
+pub fn fingerprint(path: &Path) -> std::io::Result<(String, u64)> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = blake3::Hasher::new();
+    let size = std::io::copy(&mut file, &mut hasher)?;
+    Ok((hasher.finalize().to_hex().to_string(), size))
+}
+
 /// Everything one job needs besides the helper.
 #[derive(Debug, Clone)]
 pub struct Spec<'a> {
@@ -139,6 +157,24 @@ mod tests {
         assert_eq!(output_size(3000, 2000, Target::LongEdge(65_535)).map(|s| s.0), Ok(65_535));
         // 4x of a 20,000 px edge is past the JPEG limit.
         assert!(output_size(20_000, 100, Target::Scale(4)).is_err());
+    }
+
+    #[test]
+    fn the_result_is_named_after_the_original_and_the_target() {
+        assert_eq!(result_stem("IMG_0042", Target::Scale(4)), "IMG_0042-Enlarged-4x");
+        assert_eq!(result_stem("IMG_0042", Target::Scale(2)), "IMG_0042-Enlarged-2x");
+        assert_eq!(result_stem("IMG_0042", Target::LongEdge(6000)), "IMG_0042-Enlarged-6000px");
+    }
+
+    #[test]
+    fn the_fingerprint_is_the_same_hash_import_uses_and_the_size() {
+        let d = std::env::temp_dir().join(format!("emulsion-fingerprint-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("f.bin");
+        let bytes: Vec<u8> = (0..300_000u32).map(|i| (i * 31 % 251) as u8).collect();
+        std::fs::write(&p, &bytes).unwrap();
+        assert_eq!(fingerprint(&p).unwrap(), (blake3::hash(&bytes).to_hex().to_string(), 300_000));
+        assert!(fingerprint(&d.join("missing")).is_err());
     }
 
     #[test]
@@ -237,5 +273,56 @@ mod tests {
         let stack = EditStack::empty();
         let r = run_enlargement(&spec(&d.join("none.jpg"), &stack, &d.join("s"), &d.join("x.jpg"), Target::Scale(2)), 5, |_| panic!("must not send"));
         assert!(r.is_err());
+    }
+
+    /// RFC-0029 §4 / slice 4c: what the rest of the app does with a very large JPEG (the enlargement is one).
+    /// One step per run, so `/usr/bin/time -l` gives that step's own peak memory:
+    /// `LARGE_JPEG=/path/150mp.jpg LARGE_STEP=decode cargo test --release --lib -- --ignored --nocapture large_jpeg_probe`
+    /// with `LARGE_STEP` one of `decode`, `thumbnail`, `develop_preview`, `full_preview`, `render`, `export`.
+    #[test]
+    #[ignore]
+    fn large_jpeg_probe() {
+        let path = PathBuf::from(std::env::var("LARGE_JPEG").expect("LARGE_JPEG"));
+        let step = std::env::var("LARGE_STEP").expect("LARGE_STEP");
+        let out = dir("large-probe");
+        let started = std::time::Instant::now();
+        let note = match step.as_str() {
+            "decode" => {
+                let d = crate::source_decode::decode_preview(&path).unwrap();
+                format!("{}x{}", d.width, d.height)
+            }
+            "thumbnail" => {
+                // What `import::generate_thumbnail_file` does: full decode, then a Triangle downscale to the grid size.
+                let d = crate::source_decode::decode_preview(&path).unwrap();
+                let src = image::RgbImage::from_raw(d.width, d.height, d.rgb).unwrap();
+                let scale = 400.0 / src.width().max(src.height()) as f64;
+                let t = image::imageops::resize(&src, (src.width() as f64 * scale) as u32, (src.height() as f64 * scale) as u32, image::imageops::FilterType::Triangle);
+                format!("{}x{}", t.width(), t.height())
+            }
+            "develop_preview" => {
+                let i = crate::preview_cache::ensure_develop_preview_for_hash(&path, "probe-hash", &out).unwrap();
+                format!("{}x{}", i.width, i.height)
+            }
+            "full_preview" => {
+                let i = crate::preview_cache::ensure_develop_full_preview_for_hash(&path, "probe-hash", &out).unwrap();
+                format!("{}x{}", i.width, i.height)
+            }
+            "render" | "export" => {
+                let stack = EditStack {
+                    schema_version: 1,
+                    ops: vec![serde_json::json!({"op": "exposure", "value": 0.3}), serde_json::json!({"op": "contrast", "value": 10}), serde_json::json!({"op": "sharpen", "amount": 40, "radius": 1.0})],
+                };
+                if step == "render" {
+                    let img = render_full_resolution(&path, &stack, None).unwrap();
+                    format!("{}x{}", img.width(), img.height())
+                } else {
+                    let opts: crate::export::ExportOptions = serde_json::from_value(serde_json::json!({"destination_dir": out.to_string_lossy(), "long_edge": null, "quality": 90, "plugin_id": null})).unwrap();
+                    let (p, _) = crate::export::export_one(&path, &stack, &opts, None, None).unwrap();
+                    format!("{} bytes", std::fs::metadata(p).unwrap().len())
+                }
+            }
+            other => panic!("unknown LARGE_STEP {other}"),
+        };
+        eprintln!("LARGE_PROBE {step}: {} ms ({note})", started.elapsed().as_millis());
     }
 }

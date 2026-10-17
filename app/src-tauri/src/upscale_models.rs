@@ -4,11 +4,11 @@
 //! streamed to a `.part` file while hashing and renamed into place, never committed, with a manual **import** path
 //! for machines that must not or cannot download.
 //!
-//! The file is our own conversion (`docs/rfc/RFC-0029-appendix/convert.py`) of the upstream `.pth`, so it would be
-//! **hosted by this project** as a GitHub release asset (tag below) rather than by a third party; provenance and
-//! the licence reading are in `models/UPSCALE_MODEL.md`. **The release asset does not exist yet**: publishing it
-//! (and shipping the model at all) waits for the project owner's decision on the weights' implicit licence
-//! (RFC-0029 §8, §9). Until then a download fails with an HTTP error and the import path is the way in.
+//! The file is our own conversion (`docs/rfc/RFC-0029-appendix/convert.py`) of the upstream `.pth`; provenance and
+//! the licence reading are in `models/UPSCALE_MODEL.md`. At 4.8 MB it is **committed in `models/` and shipped in the
+//! installer** (user decision, 2026-10-17), installed on first use by `bundled_models`. The download below (a
+//! GitHub release asset under the tag below) is the fallback and **the asset does not exist yet**: a 404 is
+//! reported as "not published", and the import path is the way in on a build without the bundled copy.
 
 use crate::segment_models::sha256_file;
 use serde::Serialize;
@@ -59,6 +59,8 @@ pub enum UpscaleModelError {
     Download(reqwest::Error),
     #[error("download of {FILENAME} returned HTTP {0}")]
     HttpStatus(u16),
+    #[error("the enlargement model is not published for download yet (HTTP 404). Use \"I have the file\" and choose {FILENAME} from the models folder of the Emulsion source, or install a release build, which includes it")]
+    NotPublished,
     #[error("download cancelled")]
     Cancelled,
 }
@@ -138,7 +140,7 @@ async fn fetch(
         if have > 0 && status == 416 {
             let _ = std::fs::remove_file(&tmp);
         }
-        return Err(UpscaleModelError::HttpStatus(status));
+        return Err(if status == 404 { UpscaleModelError::NotPublished } else { UpscaleModelError::HttpStatus(status) });
     }
     let mut hasher = Sha256::new();
     let mut done = 0u64;
@@ -342,6 +344,33 @@ mod tests {
         let err = fetch(&url, &dir, &sha, size, &AtomicBool::new(false), |_, _| {}).await.unwrap_err();
         assert!(matches!(err, UpscaleModelError::ChecksumMismatch(..)), "{err}");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a failed checksum leaves neither file");
+    }
+
+    #[tokio::test]
+    async fn a_404_is_reported_as_not_published_and_any_other_status_as_itself() {
+        use std::io::Read;
+        for (code, text) in [(404u16, "Not Found"), (503, "Service Unavailable")] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/file", listener.local_addr().unwrap());
+            std::thread::spawn(move || {
+                let (mut conn, _) = listener.accept().unwrap();
+                let mut head = Vec::new();
+                let mut b = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && conn.read(&mut b).unwrap() > 0 {
+                    head.push(b[0]);
+                }
+                let _ = write!(conn, "HTTP/1.1 {code} {text}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            });
+            let dir = test_dir(&format!("status-{code}"));
+            let err = fetch(&url, &dir, SHA256, SIZE, &AtomicBool::new(false), |_, _| {}).await.unwrap_err();
+            match code {
+                404 => {
+                    assert!(matches!(err, UpscaleModelError::NotPublished), "{err}");
+                    assert!(err.to_string().contains("not published for download yet") && err.to_string().contains("I have the file"), "{err}");
+                }
+                _ => assert!(matches!(err, UpscaleModelError::HttpStatus(503)), "{err}"),
+            }
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "comment": "Model files shipped inside the installer (bundle.resources, see app/src-tauri/tauri.bundle-models.conf.json). Fetched into app/src-tauri/bundled-models/ by app/scripts/fetch-bundled-models.mjs before a release build. A Rust test (bundled_models.rs) checks every entry against the constants the app verifies models with, so this list cannot drift from them.",
+  "comment": "Model files shipped inside the installer (bundle.resources, see app/src-tauri/tauri.bundle-models.conf.json). Fetched into app/src-tauri/bundled-models/ by app/scripts/fetch-bundled-models.mjs before a release build (an entry with a url is downloaded; one with a path is copied from this models/ folder, where the file is committed). A Rust test (bundled_models.rs) checks every entry against the constants the app verifies models with, so this list cannot drift from them.",
   "files": [
     {
       "name": "nafnet_sidd_w32.onnx",
@@ -18,6 +18,12 @@
       "size": 20640886,
       "sha256": "f5a4bd656c143899fb7f52d64ed81e6f6aeb37d477a0b6da50146ac7cf2187bf",
       "url": "https://huggingface.co/vietanhdev/segment-anything-2-onnx-models/resolve/071f58077599431edd0e5d2ac52ecca4c78f1cab/sam2_hiera_tiny.decoder.onnx"
+    },
+    {
+      "name": "realesr_general_x4v3.onnx",
+      "size": 4866388,
+      "sha256": "a337283437fd0fc12e6882a4f4cc0467cf2f275782e8290f487d755f806137fb",
+      "path": "realesr_general_x4v3.onnx"
     }
   ]
 }

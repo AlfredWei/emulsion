@@ -135,7 +135,15 @@ fn plan_for_version(catalog: &Catalog, version_id: i64, target: Target, jpeg_qua
     if catalog.is_enlargement(source.image_id).map_err(|e| e.to_string())? {
         return Err(ENLARGEMENT_OF_ENLARGEMENT.to_string());
     }
-    let (w, h) = catalog.get_image_dimensions(source.image_id).map_err(|e| e.to_string())?.ok_or("the photo's size is not known")?;
+    let (w, h) = match catalog.get_image_dimensions(source.image_id).map_err(|e| e.to_string())? {
+        Some(size) => size,
+        // Imported before the size was read from the file (or from a file whose EXIF has none): read it now and keep it.
+        None => {
+            let size = crate::metadata::dimensions_from_file(Path::new(&source.path)).ok_or("the photo's size could not be read from its file")?;
+            let _ = catalog.set_image_dimensions(source.image_id, size.0, size.1);
+            size
+        }
+    };
     let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
     let (cw, ch) = crate::develop_engine::cropped_dimensions(w, h, &stack);
     upscale_job::plan((cw, ch), target, jpeg_quality, ms_per_tile)
@@ -414,7 +422,23 @@ mod tests {
         let unknown = Catalog::open_in_memory().unwrap();
         let image = unknown.add_image_with_edit_stack("/x.jpg", "hx", 1, &EditStack::empty(), &crate::metadata::ImageMetadata::default()).unwrap();
         let version = unknown.list_images().unwrap().iter().find(|i| i.image_id == image).unwrap().version_id;
-        assert!(plan_for_version(&unknown, version, Target::Scale(2), 95, 550.0).unwrap_err().contains("not known"));
+        // No recorded size and no readable file: say so.
+        assert!(plan_for_version(&unknown, version, Target::Scale(2), 95, 550.0).unwrap_err().contains("could not be read"));
+    }
+
+    #[test]
+    fn a_photo_without_a_recorded_size_is_measured_from_its_file_and_the_size_is_kept() {
+        let d = std::env::temp_dir().join("emulsion-upscale-plan-unsized");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let file = jpeg_file(&d, "p.jpg"); // 48 x 32
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image = catalog.add_image_with_edit_stack(&file.to_string_lossy(), "hp", 1, &EditStack::empty(), &crate::metadata::ImageMetadata::default()).unwrap();
+        let version = catalog.list_images().unwrap().iter().find(|i| i.image_id == image).unwrap().version_id;
+        let plan = plan_for_version(&catalog, version, Target::Scale(2), 95, 550.0).unwrap();
+        assert_eq!((plan.source_width, plan.source_height, plan.out_width, plan.out_height), (48, 32, 96, 64));
+        assert_eq!(catalog.get_image_dimensions(image).unwrap(), Some((48, 32)), "kept for the next time");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     fn jpeg_file(d: &Path, name: &str) -> PathBuf {

@@ -234,6 +234,28 @@ async fn backfill_missing_thumbnails(app: AppHandle, state: State<'_, AppState>,
     .map_err(|e| e.to_string())
 }
 
+/// Fills in the pixel size of photos the catalog has none for (imported before it was read from the file itself,
+/// or from a file whose EXIF carries none), reading each file's header. Returns how many were filled; the
+/// frontend refreshes its list when it is above zero. Safe to call at every startup: a catalog that is complete
+/// costs one indexed query. The catalog lock is not held while files are read.
+#[tauri::command]
+async fn backfill_image_dimensions(state: State<'_, AppState>) -> Result<usize, String> {
+    let catalog = state.catalog.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let missing = catalog.lock().map_err(|e| e.to_string())?.images_missing_dimensions().map_err(|e| e.to_string())?;
+        let mut filled = 0;
+        for (id, path) in missing {
+            let Some((w, h)) = metadata::dimensions_from_file(std::path::Path::new(&path)) else { continue };
+            if catalog.lock().map_err(|e| e.to_string())?.set_image_dimensions(id, w, h).is_ok() {
+                filled += 1;
+            }
+        }
+        Ok::<usize, String>(filled)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// On-demand "jump the queue" thumbnail generation for one image (see
 /// import.rs's `ensure_thumbnail` for the full reasoning): called when the
 /// frontend opens Loupe or Develop on a photo whose `thumbnail_path` is
@@ -2124,6 +2146,7 @@ pub fn run() {
             import_folder,
             import_files,
             backfill_missing_thumbnails,
+            backfill_image_dimensions,
             ensure_thumbnail,
             detect_faces_for_import_batch,
             detect_faces_for_images,

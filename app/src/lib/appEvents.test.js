@@ -8,7 +8,7 @@ const tauri = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: tauri.getCurrentWindow }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: tauri.getCurrentWebview }));
-const catalog = vi.hoisted(() => ({ listAllImageKeywords: vi.fn() }));
+const catalog = vi.hoisted(() => ({ listAllImageKeywords: vi.fn(), backfillImageDimensions: vi.fn() }));
 vi.mock("$lib/api/catalog.js", () => catalog);
 const backup = vi.hoisted(() => ({ getBackupSettings: vi.fn(), isBackupDue: vi.fn() }));
 vi.mock("$lib/api/backup.js", () => backup);
@@ -83,6 +83,7 @@ beforeEach(async () => {
   });
   lib.refresh.mockResolvedValue(undefined);
   catalog.listAllImageKeywords.mockResolvedValue([{ image_id: 1, keyword_id: 2 }]);
+  catalog.backfillImageDimensions.mockResolvedValue(0);
   backup.getBackupSettings.mockResolvedValue(settings);
   backup.isBackupDue.mockReturnValue(false);
   shell.activeModule = "library";
@@ -122,6 +123,29 @@ describe("startup", () => {
     release();
     await tick();
     expect(imp.pollUntilThumbnailsReadyOnStartup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("startup: pixel sizes", () => {
+  it("asks for missing pixel sizes to be filled in, and reads the list again only when some were", async () => {
+    await tick();
+    expect(catalog.backfillImageDimensions).toHaveBeenCalledTimes(1);
+    expect(lib.refresh).toHaveBeenCalledTimes(1); // only the startup refresh
+
+    vi.clearAllMocks();
+    catalog.backfillImageDimensions.mockResolvedValue(3);
+    installAppEvents({ handleMenuAction });
+    await tick();
+    await tick();
+    expect(lib.refresh).toHaveBeenCalledTimes(2); // startup + after the backfill
+  });
+
+  it("a failed backfill is ignored", async () => {
+    vi.clearAllMocks();
+    catalog.backfillImageDimensions.mockRejectedValue(new Error("db"));
+    installAppEvents({ handleMenuAction });
+    await tick();
+    expect(lib.refresh).toHaveBeenCalledTimes(1);
   });
 });
 

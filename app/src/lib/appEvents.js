@@ -16,7 +16,7 @@ import { faces } from "$lib/state/faces.svelte.js";
 import { importFlow } from "$lib/state/importFlow.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
 import { develop } from "$lib/state/develop.svelte.js";
-import { listAllImageKeywords } from "$lib/api/catalog.js";
+import { listAllImageKeywords, backfillImageDimensions } from "$lib/api/catalog.js";
 import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
 import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
 import { refresh, refreshCollections, handleBatchThumbnailsComplete } from "$lib/actions/libraryActions.js";
@@ -34,6 +34,11 @@ export function installAppEvents({ handleMenuAction }) {
   // import's own refresh() races against its own background trigger.
   refresh().then(pollUntilThumbnailsReadyOnStartup);
   refreshCollections();
+  // Photos catalogued without a pixel size (older imports, files whose EXIF has none) get it from the file, then the
+  // list is read again so the grid and the Enlarge dialog show it.
+  backfillImageDimensions()
+    .then((filled) => (filled > 0 ? refresh() : undefined))
+    .catch(() => {});
   refreshPresets();
   listAllImageKeywords().then((assignments) => (library.allImageKeywords = assignments));
 

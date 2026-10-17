@@ -47,6 +47,15 @@ import { listen } from "@tauri-apps/api/event";
  * @property {boolean} metadataNote - write "enlarged with AI" into the JPEG's own EXIF
  */
 
+/** @typedef {Object} UpscalePreview
+ * @property {string} before_path - the plain (model-free) enlargement of the region, a PNG
+ * @property {string} after_path - the model's result at full strength, a JPEG
+ * @property {number} width - both pictures' size, in pixels of the result
+ * @property {number} height
+ * @property {{ x: number, y: number, w: number, h: number }} region - the rectangle of the photo they show, in its pixels
+ * @property {number} ms
+ */
+
 /** Whether the enlargement model file is installed and valid, and what a download costs.
  * @returns {Promise<UpscaleModelStatus>} */
 export function upscaleModelStatus() {
@@ -84,6 +93,21 @@ export function upscalePlan(versionId, target, jpegQuality) {
  * @returns {Promise<UpscaleJobResult>} */
 export function upscaleRun(versionId, { target, strength, jpegQuality, fileName, addToCollections, metadataNote }) {
   return invoke("upscale_run", { versionId, target, strength, jpegQuality, fileName, addToCollections, metadataNote });
+}
+
+/** About one megapixel of the result at 1:1 around `centre` (0..1 of the photo on both axes): the plain enlargement
+ * and the model's picture, to blend on screen. Shares the job slot with `upscaleRun`; `upscaleCancel` stops it.
+ * Rejects with "upscale cancelled" or the cause.
+ * @param {number} versionId @param {UpscaleTarget} target @param {[number, number]} centre
+ * @returns {Promise<UpscalePreview>} */
+export function upscalePreview(versionId, target, centre) {
+  return invoke("upscale_preview", { versionId, target, centreX: centre[0], centreY: centre[1] });
+}
+
+/** Deletes the preview pictures (the dialog calls it when it closes).
+ * @returns {Promise<void>} */
+export function upscalePreviewClear() {
+  return invoke("upscale_preview_clear");
 }
 
 /** Stops the running job at its next tile. A no-op when none runs.

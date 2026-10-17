@@ -2,6 +2,15 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Enlarge Preview (slice 4d-2, 2026-10-18)
+
+Branch `feature/upscale-preview`; RFC-0029 §16. **Preview 1:1** in the Enlarge dialog: about 1 MP of *result* (a source rectangle of 1000 / scale px a side: 250 px at 4x, 500 px at 2x) around the middle of the photo, shown as a plain Lanczos resize on the left and the model blended at the chosen Strength on the right, with a draggable split, *Fit* / 1:1, and a **navigator** (the photo's thumbnail with the rectangle; click to move it).
+- **How:** `upscale_preview` renders the photo like a real job, cuts the rectangle, makes the plain picture with the *same* resampler the pipeline blends with (so "left" is exactly Strength 0), and runs the helper once at full strength on just the crop. **Strength never re-runs the model**: `plain + (model - plain) * s` is alpha compositing, so the slider sets the model image's opacity. Moving the rectangle or changing the scale is a new run; the Preview shares the job slot with Enlarge (one at a time), Cancel / Esc stop it, closing the dialog deletes its pictures.
+- **Verified:** `cargo test --lib --bins --tests` all pass (lib 598; new: region maths, the plain resize, the preview request and cleanup, sweeping); a real-model preview on `Smiling-woman-pink-shirt-portrait.jpg` (ignored test `real_model_preview`; 4x at the centre and 2x at (0.2, 0.7), both aligned, model differs from plain by 1.8-2.2 / 255 on average; I looked at the pair); vitest 1067 (13 new), svelte-check 0 errors; the compare view, Strength opacity and a navigator click in the dev server with the real pictures and faked IPC.
+- **Not verified:** the Preview in the real window (asset-protocol loading of the pictures from the previews folder in particular); release-build timing (the real-model run used a *debug* helper, so about 0.8 s for the 4x crop and 5.7 s for the 2x are not representative); a RAW or an edited photo; the rectangle on a photo whose crop changes the aspect; Windows.
+- **Cost to know:** every Preview renders the whole photo first (about 0.33 s per megapixel and about 60 MB per megapixel, like Export), then the crop is cheap. A cached render between previews is the obvious next step if that is felt on 24 MP+ photos; not done.
+- **Test-harness note:** `target/release/emulsion-ai` here is from Oct 9 (before the upscale op), so a real-model test run with it just times out; use the debug helper or rebuild.
+
 ## Pixel size on every photo (2026-10-17)
 
 Branch `feature/resolution-everywhere`. Every **Library grid cell** now shows "6000×4000 · 24 MP" under the file name (hidden when the size is not known), and the **Develop info bar** shows the open photo's size at its right. Pure wording in `lib/resolution.js`; the info panel keeps its longer line. Chosen because an enlargement is only recognisable by its size.

@@ -2142,6 +2142,8 @@ pub fn run() {
             upscale_commands::upscale_plan,
             upscale_commands::upscale_run,
             upscale_commands::upscale_cancel,
+            upscale_commands::upscale_preview,
+            upscale_commands::upscale_preview_clear,
             report_spike_result,
             import_folder,
             import_files,

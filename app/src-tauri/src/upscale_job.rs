@@ -182,6 +182,113 @@ pub fn run_enlargement(spec: &Spec, id: u64, send: impl FnOnce(Request) -> Resul
     result.map(|result| Enlarged { result, source_size })
 }
 
+/// The preview shows about one megapixel of *output* at 1:1 (RFC-0029 §3.4): a source rectangle of `1000 / scale`
+/// pixels a side, so a 4x preview reads 250 px of the photo and a 2x one 500 px, and either costs a few seconds.
+pub const PREVIEW_OUTPUT_SIDE: f64 = 1000.0;
+/// Never smaller than this many source pixels a side, so a huge scale still shows something to judge.
+const PREVIEW_MIN_SIDE: u32 = 32;
+
+/// A rectangle of the rendered photo, in its pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Region {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// The source rectangle the preview enlarges: about `PREVIEW_OUTPUT_SIDE / scale` pixels a side, centred on `centre`
+/// (0..1 of the photo, both axes), moved inward when it would stick out, and the whole picture when it is smaller.
+pub fn preview_region(source: (u32, u32), scale: f64, centre: (f64, f64)) -> Region {
+    let side = ((PREVIEW_OUTPUT_SIDE / scale.max(1.0)).round() as u32).max(PREVIEW_MIN_SIDE);
+    let (w, h) = (side.min(source.0), side.min(source.1));
+    let place = |c: f64, size: u32, total: u32| ((c.clamp(0.0, 1.0) * total as f64 - size as f64 / 2.0).round().max(0.0) as u32).min(total - size);
+    Region { x: place(centre.0, w, source.0), y: place(centre.1, h, source.1), w, h }
+}
+
+/// A plain (model-free) enlargement of `img` to `size`, with the same Lanczos-3 resampler the helper's pipeline
+/// blends the model with, so the preview's "before" is exactly the Strength-0 end of the real result.
+pub fn plain_enlargement(img: &image::RgbImage, (out_w, out_h): (u32, u32)) -> Result<image::RgbImage, String> {
+    use crate::ai::resample::RowResampler;
+    let (w, h) = img.dimensions();
+    let mut resampler = RowResampler::new(w as usize, h as usize, out_w as usize, out_h as usize);
+    let mut out = Vec::with_capacity(out_w as usize * out_h as usize * 3);
+    let mut row = vec![0f32; w as usize * 3];
+    for y in 0..h as usize {
+        for (d, s) in row.iter_mut().zip(&img.as_raw()[y * w as usize * 3..(y + 1) * w as usize * 3]) {
+            *d = *s as f32 / 255.0;
+        }
+        resampler.push(&row, |r| out.extend(r.iter().map(|&v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)));
+    }
+    image::RgbImage::from_raw(out_w, out_h, out).ok_or_else(|| "the plain enlargement came out the wrong size".to_string())
+}
+
+/// What one preview needs besides the helper.
+#[derive(Debug, Clone)]
+pub struct PreviewSpec<'a> {
+    pub source_path: &'a Path,
+    pub stack: &'a EditStack,
+    pub denoise_dir: Option<&'a Path>,
+    pub scratch_dir: &'a Path,
+    pub model: &'a Path,
+    pub target: Target,
+    /// Where in the photo, 0..1 on both axes.
+    pub centre: (f64, f64),
+    /// The plain enlargement of the region (a lossless PNG) and the model's result (a JPEG at quality 100); both
+    /// are written by this, and both are the size of `PreviewOutcome`.
+    pub before_path: &'a Path,
+    pub after_path: &'a Path,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewOutcome {
+    /// The rectangle of the (rendered, cropped) photo that was enlarged, in its pixels.
+    pub region: Region,
+    pub width: u32,
+    pub height: u32,
+    pub ms: u64,
+}
+
+/// Renders the picture like a real job, cuts the preview rectangle out of it, enlarges that with the plain resampler
+/// (`before_path`) and through the helper at full strength (`after_path`). The Strength slider is not an input:
+/// the dialog blends the two on screen (`plain + (model - plain) * strength`, which is alpha compositing), so
+/// moving it never runs the model again.
+pub fn run_preview(spec: &PreviewSpec, id: u64, send: impl FnOnce(Request) -> Result<UpscaleResult, String>) -> Result<PreviewOutcome, String> {
+    let image = render_full_resolution(spec.source_path, spec.stack, spec.denoise_dir).map_err(|e| e.to_string())?;
+    let (sw, sh) = (image.width(), image.height());
+    let (out_w, out_h) = output_size(sw, sh, spec.target)?;
+    let scale = out_w as f64 / sw as f64;
+    let region = preview_region((sw, sh), scale, spec.centre);
+    let size = ((region.w as f64 * out_w as f64 / sw as f64).round().max(1.0) as u32, (region.h as f64 * out_h as f64 / sh as f64).round().max(1.0) as u32);
+    let crop = image::imageops::crop_imm(&image, region.x, region.y, region.w, region.h).to_image();
+    drop(image);
+
+    std::fs::create_dir_all(spec.scratch_dir).map_err(|e| format!("could not create {}: {e}", spec.scratch_dir.display()))?;
+    write_png_fast(&plain_enlargement(&crop, size)?, spec.before_path)?;
+    let input: PathBuf = spec.scratch_dir.join(format!("enlarge-preview-input-{id}.png"));
+    let result = write_png_fast(&crop, &input).and_then(|()| {
+        drop(crop);
+        send(Request::UpscaleRun {
+            model: spec.model.to_path_buf(),
+            image_path: input.clone(),
+            out_path: spec.after_path.to_path_buf(),
+            out_width: size.0,
+            out_height: size.1,
+            strength: 100,
+            jpeg_quality: 100,
+            region: None,
+        })
+    });
+    let _ = std::fs::remove_file(&input);
+    match result {
+        Ok(r) => Ok(PreviewOutcome { region, width: size.0, height: size.1, ms: r.ms }),
+        Err(e) => {
+            let _ = std::fs::remove_file(spec.before_path); // half a preview is no preview
+            Err(e)
+        }
+    }
+}
+
 /// A finished job: the helper's answer and the size of the picture it enlarged (the render of the original).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Enlarged {
@@ -326,6 +433,64 @@ mod tests {
             Ok(UpscaleResult { width: out_width, height: out_height, tiles: 1, ms: 1 })
         });
         assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn the_preview_region_is_about_a_megapixel_of_output_centred_and_kept_inside_the_photo() {
+        // 4x: 250 px of the photo (1000 px of output); 2x: 500.
+        assert_eq!(preview_region((6000, 4000), 4.0, (0.5, 0.5)), Region { x: 2875, y: 1875, w: 250, h: 250 });
+        assert_eq!(preview_region((6000, 4000), 2.0, (0.5, 0.5)), Region { x: 2750, y: 1750, w: 500, h: 500 });
+        // Moved inward at the edges, never outside.
+        assert_eq!(preview_region((6000, 4000), 4.0, (0.0, 0.0)), Region { x: 0, y: 0, w: 250, h: 250 });
+        assert_eq!(preview_region((6000, 4000), 4.0, (1.0, 1.0)), Region { x: 5750, y: 3750, w: 250, h: 250 });
+        assert_eq!(preview_region((6000, 4000), 4.0, (7.0, -3.0)), Region { x: 5750, y: 0, w: 250, h: 250 });
+        // A photo smaller than the region is shown whole; a huge scale still keeps a readable minimum.
+        assert_eq!(preview_region((120, 80), 2.0, (0.5, 0.5)), Region { x: 0, y: 0, w: 120, h: 80 });
+        assert_eq!(preview_region((6000, 4000), 60.0, (0.5, 0.5)).w, 32);
+    }
+
+    #[test]
+    fn a_plain_enlargement_has_the_size_asked_for_and_keeps_flat_colour_flat() {
+        let flat = image::RgbImage::from_pixel(10, 6, image::Rgb([200, 100, 50]));
+        let big = plain_enlargement(&flat, (40, 24)).unwrap();
+        assert_eq!(big.dimensions(), (40, 24));
+        assert!(big.pixels().all(|p| p.0 == [200, 100, 50]));
+        assert_eq!(plain_enlargement(&flat, (25, 15)).unwrap().dimensions(), (25, 15));
+    }
+
+    #[test]
+    fn the_preview_enlarges_only_the_region_and_leaves_a_plain_and_a_model_picture_of_the_same_size() {
+        let d = dir("preview");
+        let source = jpeg_source(&d, 2000, 1200);
+        let stack = EditStack::empty();
+        let scratch = d.join("scratch");
+        let (before, after) = (d.join("before.png"), d.join("after.jpg"));
+        let spec = PreviewSpec { source_path: &source, stack: &stack, denoise_dir: None, scratch_dir: &scratch, model: Path::new("m.onnx"), target: Target::Scale(4), centre: (0.5, 0.5), before_path: &before, after_path: &after };
+        let r = run_preview(&spec, 9, |req| {
+            let Request::UpscaleRun { image_path, out_path, out_width, out_height, strength, jpeg_quality, region, .. } = req else { panic!("wrong request") };
+            assert_eq!(image::image_dimensions(&image_path).unwrap(), (250, 250), "only the region goes to the model");
+            assert_eq!((out_width, out_height, strength, jpeg_quality, region), (1000, 1000, 100, 100, None));
+            std::fs::write(&out_path, b"jpeg").unwrap();
+            Ok(UpscaleResult { width: out_width, height: out_height, tiles: 2, ms: 1800 })
+        })
+        .unwrap();
+        assert_eq!((r.region, r.width, r.height, r.ms), (Region { x: 875, y: 475, w: 250, h: 250 }, 1000, 1000, 1800));
+        assert_eq!(image::image_dimensions(&before).unwrap(), (1000, 1000));
+        assert!(after.exists());
+        assert!(std::fs::read_dir(&scratch).unwrap().next().is_none(), "no stray intermediate");
+    }
+
+    #[test]
+    fn a_failed_preview_leaves_nothing_behind() {
+        let d = dir("preview-fail");
+        let source = jpeg_source(&d, 600, 400);
+        let stack = EditStack::empty();
+        let scratch = d.join("scratch");
+        let (before, after) = (d.join("b.png"), d.join("a.jpg"));
+        let spec = PreviewSpec { source_path: &source, stack: &stack, denoise_dir: None, scratch_dir: &scratch, model: Path::new("m.onnx"), target: Target::Scale(2), centre: (0.2, 0.8), before_path: &before, after_path: &after };
+        assert_eq!(run_preview(&spec, 1, |_| Err("upscale cancelled".into())).unwrap_err(), "upscale cancelled");
+        assert!(!before.exists() && !after.exists());
+        assert!(std::fs::read_dir(&scratch).unwrap().next().is_none());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defaultSettings, parseLongEdge, targetOf, formatEstimate, formatSize, planRows, veryLargeWarning, defaultStem, folderOf } from "./enlarge.js";
+import { defaultSettings, parseLongEdge, targetOf, formatEstimate, formatSize, planRows, veryLargeWarning, defaultStem, folderOf, regionFractions, centreFromClick, targetKey } from "./enlarge.js";
 
 /** @param {Partial<import('$lib/api/upscale.js').UpscalePlan>} over */
 const plan = (over = {}) => ({ source_width: 6000, source_height: 4000, out_width: 24000, out_height: 16000, megapixels: 384, tiles: 460, seconds: 300, file_bytes: 345_600_000, very_large: false, export_gb: 23, ...over });
@@ -68,5 +68,24 @@ describe("names", () => {
     expect(folderOf("/a/b/c.jpg")).toBe("/a/b");
     expect(folderOf("C:\\a\\c.jpg")).toBe("C:\\a");
     expect(folderOf("c.jpg")).toBe("c.jpg");
+  });
+});
+
+describe("the preview navigator", () => {
+  it("draws the region as fractions of the photo", () => {
+    expect(regionFractions({ x: 1500, y: 1000, w: 750, h: 500 }, 6000, 4000)).toEqual({ left: 0.25, top: 0.25, width: 0.125, height: 0.125 });
+    expect(regionFractions({ x: 0, y: 0, w: 10, h: 10 }, 0, 0)).toEqual({ left: 0, top: 0, width: 1, height: 1 });
+  });
+
+  it("turns a click into a centre inside 0..1", () => {
+    expect(centreFromClick(32, 20, 64, 40)).toEqual([0.5, 0.5]);
+    expect(centreFromClick(-5, 100, 64, 40)).toEqual([0, 1]);
+    expect(centreFromClick(1, 1, 0, 0)).toEqual([0.5, 0.5]);
+  });
+
+  it("names a target so a preview of another scale can be told apart", () => {
+    expect(targetKey({ kind: "scale", value: 4 })).toBe("scale:4");
+    expect(targetKey({ kind: "long_edge", value: 8000 })).toBe("long_edge:8000");
+    expect(targetKey(null)).toBe("");
   });
 });

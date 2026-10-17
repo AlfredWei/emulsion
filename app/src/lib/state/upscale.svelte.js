@@ -18,6 +18,16 @@ export class UpscaleStore {
   /** Why there is no plan ("a long edge of N px is not larger than the photo's…"), or "". */
   planError = $state("");
 
+  /** The Preview (RFC-0029 §3.4): about 1 MP of the result around `previewCentre`, plain and model, blended on screen
+   * by Strength. `previewKey` names the target it was made for, so a different scale discards it.
+   * @type {import('$lib/api/upscale.js').UpscalePreview | null} */
+  preview = $state(null);
+  previewKey = "";
+  previewing = $state(false);
+  previewError = $state("");
+  /** Where in the photo the preview is centred, 0..1 on both axes. */
+  previewCentre = $state(/** @type {[number, number]} */ ([0.5, 0.5]));
+
   /** Model consent / progress / failure dialog; null = closed.
    * @type {null | "consent" | "downloading" | "failed"} */
   modelDialog = $state(null);

@@ -2,6 +2,12 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Pixel size on every photo (2026-10-17)
+
+Branch `feature/resolution-everywhere`. Every **Library grid cell** now shows "6000×4000 · 24 MP" under the file name (hidden when the size is not known), and the **Develop info bar** shows the open photo's size at its right. Pure wording in `lib/resolution.js`; the info panel keeps its longer line. Chosen because an enlargement is only recognisable by its size.
+- **Verified:** vitest 1054 (3 new), svelte-check 0 errors; the grid looked at in the dev server with fake photos (24 MP, a ×4 enlargement at 384 MP, 8 MP, an unknown size).
+- **Not verified:** the Develop info bar (not looked at); the filmstrips (too small, left alone); the grid at the smallest and largest thumbnail sizes; the real app.
+
 ## Enlarge model bundled in the installer (2026-10-17)
 
 Branch `feature/upscale-bundle-model`. Decision (user): the 4.8 MB model is **committed in `models/` and shipped in the installer**, so Enlarge (AI) works with no download. `models/bundled-models.json` gained a `path` entry kind (copied from `models/` by `fetch-bundled-models.mjs`, no network); `bundled_models::UPSCALE` seeds it into `upscale_models/` on first use and at startup; a **debug build seeds from the source checkout's `models/`**, so `tauri dev` works without an import; a download 404 now reads "not published for download yet … use *I have the file*" instead of "HTTP 404". The download fallback and its release asset stay unpublished.

@@ -85,6 +85,8 @@
 
   // The Filmstrip shows filtered images, falling back if active Develop photo is excluded
   let developFilmstripImages = $derived(developFilmstripList());
+  // The open photo as the catalog lists it, for what Develop itself does not carry (its pixel size).
+  let developImage = $derived(library.images.find((img) => img.version_id === develop.versionId));
 
 
   // Print module (M4, final scope item): ephemeral view state, same
@@ -409,7 +411,7 @@
   {/if}
 
   {#if shell.activeModule === "develop" && develop.imagePath}
-    <DevelopInfoBar imagePath={develop.imagePath} />
+    <DevelopInfoBar imagePath={develop.imagePath} width={developImage?.width} height={developImage?.height} />
   {/if}
 
   {#if shell.activeModule === "library"}

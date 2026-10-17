@@ -1,8 +1,13 @@
 <script>
+  import { resolutionLine } from "$lib/resolution.js";
+
   /**
-   * @type {{ imagePath: string }}
+   * `width` / `height` are the photo's own pixel size (not the crop's).
+   * @type {{ imagePath: string, width?: number | null, height?: number | null }}
    */
-  let { imagePath } = $props();
+  let { imagePath, width = null, height = null } = $props();
+
+  let resolution = $derived(resolutionLine(width, height));
 
   let filename = $derived(imagePath.split("/").pop() ?? imagePath);
   let dirPath = $derived(
@@ -28,6 +33,7 @@
     {/if}
     <span class="filename">{filename}</span>
   </div>
+  {#if resolution}<span class="resolution" data-testid="info-bar-resolution">{resolution}</span>{/if}
   {#if imagePath}
     <button class="copy-btn" type="button" title="Copy full path to clipboard" onclick={copyPath}>
       {copied ? "Copied ✓" : "Copy Path"}
@@ -71,6 +77,13 @@
     font-family: var(--font-mono);
     font-size: 11px;
     flex-shrink: 0;
+  }
+  .resolution {
+    margin-left: auto;
+    flex: none;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
   }
   .copy-btn {
     all: unset;

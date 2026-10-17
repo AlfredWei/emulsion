@@ -127,7 +127,7 @@ src/
 │   │                        CatalogRail, LibraryGrid/GridCell, LibraryToolbar, LibraryFilterBar, LibraryImageViewer,
 │   │                        LibraryCompareView, LibrarySurveyView, LibraryMapView (Leaflet; loaded on first open), LibraryHistogram, MetadataPanel. Develop:
 │   │                        DevelopCanvas (WebGPU), DevelopPanel, DevelopInfoBar, Filmstrip, Histogram,
-│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, ModelDownloadDialog (AI model consent/download/import, wording per feature: Select Subject, AI Denoise), AiDenoiseControls + AiDenoiseCompare (the AI Denoise block of the Noise Reduction panel and its before/after crop view), DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
+│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, ModelDownloadDialog (AI model consent/download/import, wording per feature: Select Subject, AI Denoise), ConnectedPhotos (AI-enlargement links in the info panel), AiDenoiseControls + AiDenoiseCompare (the AI Denoise block of the Noise Reduction panel and its before/after crop view), DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
 │   │                        PrintLayoutView. Dialogs: SettingsDialog, ExportDialog, ConfirmDialog,
 │   │                        TextPromptDialog, SmartCollectionDialog, CopySettingsDialog, BackupPromptDialog
 │   ├── gpu/                 Develop WebGPU code, split out of DevelopCanvas: gpuHandles.js (handle object +
@@ -160,7 +160,7 @@ src/
 │   │                        importActions.js (import/merge runners, thumbnail regeneration + startup poll; faceActions.js
 │   │                        also holds the face-detection runners), developActions.js (adjustment/crop/WB/tone handlers,
 │   │                        readout setters, peeks, snapshots), metadataActions.js (rating/flag/label, IPTC saves);
-│   │                        libraryActions.js also holds handleRemoveConfirmed; segmentActions.js (Select Subject: arm, click, candidates, accept/cancel, model download/import), denoiseActions.js (AI Denoise: Amount, crop preview, whole-photo job, remove, model download/import),
+│   │                        libraryActions.js also holds handleRemoveConfirmed; segmentActions.js (Select Subject: arm, click, candidates, accept/cancel, model download/import), upscaleActions.js (Go to Original / Show Enlargements: select the linked photos, clearing scope and filters only if they hide them), denoiseActions.js (AI Denoise: Amount, crop preview, whole-photo job, remove, model download/import),
 │   │                        maskActions.js (mask create/update/delete, resample,
 │   │                        eyedropper, GPU fallback), presetActions.js (preset list, apply/import/export, copy/paste/sync settings),
 │   │                        autoSyncActions.js (Auto Sync: the switch, targets, the flush hook that writes changed ops to the other selected photos),
@@ -174,6 +174,7 @@ src/
 │   │                        commands actions/contextMenuActions.js. Tested via the *.test.js beside each
 │   ├── autoSync.js          Pure Auto Sync diff (RFC-0028 §3.5): the syncable ops that changed between two edit stacks, per-photo ops excluded
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
+│   ├── upscaleLinks.js      Pure wording of the AI-enlargement cues (the x-N chip, the Connected photos lines)
 │   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering, viewport filter (M5.5)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)

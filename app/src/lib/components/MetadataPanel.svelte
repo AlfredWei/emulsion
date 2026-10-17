@@ -10,6 +10,7 @@
   import { geocodeSearch, setGeoLocationBatch, getMapSettings, reverseGeocode } from "$lib/api/map.js";
   import { revealInFileManager } from "$lib/api/system.js";
   import LibraryHistogram from "$lib/components/LibraryHistogram.svelte";
+  import ConnectedPhotos from "$lib/components/ConnectedPhotos.svelte";
 
   /**
    * `targetImageIds` is who a newly-typed keyword gets assigned to --
@@ -527,6 +528,9 @@
         <span class="val font-mono">{dimensionsLine}</span>
       </div>
     {/if}
+
+    <!-- AI enlargement links (RFC-0029): nothing for an ordinary photo -->
+    <ConnectedPhotos {image} />
 
     <!-- Camera & Lens -->
     <div class="section-label">Camera & Lens</div>

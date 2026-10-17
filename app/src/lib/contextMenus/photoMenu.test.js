@@ -8,7 +8,7 @@ const img = (/** @type {number} */ id, /** @type {object} */ extra = {}) =>
 
 const COMMANDS = [
   "openInDevelop", "openInLoupe", "compare", "survey", "setRating", "setFlag", "setColorLabel", "addToCollection", "removeFromCollection",
-  "copySettings", "syncSettings", "toggleAutoSync", "pasteSettings", "applyPreset", "resetSettings", "exportPhotos", "reveal", "copyPath", "detectFaces", "removeFromCatalog",
+  "copySettings", "syncSettings", "toggleAutoSync", "pasteSettings", "applyPreset", "resetSettings", "exportPhotos", "reveal", "copyPath", "detectFaces", "removeFromCatalog", "goToOriginal", "showEnlargements",
 ];
 function commands() {
   return /** @type {any} */ (Object.fromEntries(COMMANDS.map((c) => [c, vi.fn()])));
@@ -38,6 +38,40 @@ function find(entries, id) {
   return undefined;
 }
 const ids = (/** @type {import('./model.js').MenuEntry[]} */ entries) => entries.filter(isItem).map((e) => e.id);
+
+describe("photo menu: AI enlargement links", () => {
+  it("offers Go to Original on an enlargement and runs it with the photo's own id", () => {
+    const cmd = commands();
+    const menu = buildPhotoMenu(input({ images: [img(2, { enlarged_scale: 4, enlarged_from: 1 })] }), cmd);
+    const item = find(menu, "go-original");
+    expect(item).toMatchObject({ label: "Go to Original", disabled: false });
+    item?.run?.();
+    expect(cmd.goToOriginal).toHaveBeenCalledWith(2);
+    expect(find(menu, "show-enlargements")).toBeUndefined();
+  });
+
+  it("greys Go to Original with the reason once the original was removed", () => {
+    const menu = buildPhotoMenu(input({ images: [img(2, { enlarged_scale: 4, enlarged_from: null })] }), commands());
+    expect(find(menu, "go-original")).toMatchObject({ disabled: true, reason: "The original was removed from the catalog" });
+  });
+
+  it("offers Show Enlargement(s) on an original, singular for one", () => {
+    const cmd = commands();
+    const one = buildPhotoMenu(input({ images: [img(1, { enlargement_count: 1 })] }), cmd);
+    expect(find(one, "show-enlargements")?.label).toBe("Show Enlargement");
+    find(one, "show-enlargements")?.run?.();
+    expect(cmd.showEnlargements).toHaveBeenCalledWith(1);
+    const two = buildPhotoMenu(input({ images: [img(1, { enlargement_count: 2 })] }), commands());
+    expect(find(two, "show-enlargements")?.label).toBe("Show Enlargements");
+  });
+
+  it("offers neither on an ordinary photo or on a multi-selection", () => {
+    const plain = buildPhotoMenu(input(), commands());
+    expect(find(plain, "go-original") ?? find(plain, "show-enlargements")).toBeUndefined();
+    const many = buildPhotoMenu(input({ images: [img(1, { enlargement_count: 1 }), img(2, { enlarged_scale: 4, enlarged_from: 1 })] }), commands());
+    expect(find(many, "go-original") ?? find(many, "show-enlargements")).toBeUndefined();
+  });
+});
 
 describe("photo menu: one photo, Library", () => {
   const menu = buildPhotoMenu(input(), commands());

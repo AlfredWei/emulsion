@@ -51,6 +51,7 @@ import { isPanelHidden, PANEL_IDS, listModifiers, OVERLAY_CAPABLE_MASK_OPS } fro
 import { openDevelop, switchModule, handleDevelopFilmstripSelect } from "$lib/actions/navigation.js";
 import { revealInFileManager } from "$lib/api/system.js";
 import { buildPhotoMenu } from "$lib/contextMenus/photoMenu.js";
+import { goToOriginal, showEnlargements } from "$lib/actions/upscaleActions.js";
 import { buildGridBackgroundMenu } from "$lib/contextMenus/gridMenu.js";
 import { buildPanelHeaderMenu, buildCanvasMenu, buildMaskMenu, buildShapeMenu } from "$lib/contextMenus/developMenus.js";
 import { buildCollectionMenu, buildPersonMenu, buildSnapshotMenu, buildPresetMenu, buildPresetListMenu } from "$lib/contextMenus/railMenus.js";
@@ -190,6 +191,12 @@ export function photoCommands(images, module) {
     detectFaces: () => (images.length > 1 ? handleDetectFacesForSelection() : handleDetectFacesForSelected()),
     removeFromCatalog: () => {
       library.confirmingRemoval = true;
+    },
+    goToOriginal: (imageId) => {
+      goToOriginal(imageId);
+    },
+    showEnlargements: (imageId) => {
+      showEnlargements(imageId);
     },
   };
 }

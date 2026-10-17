@@ -42,6 +42,8 @@ import { formatKeyDisplay } from "$lib/shortcuts.js";
  * @property {(path: string) => void} copyPath
  * @property {() => void} detectFaces
  * @property {() => void} removeFromCatalog
+ * @property {(imageId: number) => void} goToOriginal  AI enlargement (RFC-0029 §3.2): select the photo this one was enlarged from
+ * @property {(imageId: number) => void} showEnlargements  select the enlargements made from this photo
  */
 
 const COLOR_LABELS = [
@@ -95,6 +97,19 @@ export function buildPhotoMenu(input, cmd) {
         { id: "compare", label: "Compare the first two", disabled: false, run: cmd.compare },
         { id: "survey", label: "Survey", shortcut: key("viewSurvey"), run: cmd.survey },
       ],
+    },
+    // AI enlargement links (RFC-0029 §3.2): only on a single photo that has one.
+    !many && first.enlarged_scale != null && {
+      id: "go-original",
+      label: "Go to Original",
+      disabled: first.enlarged_from == null,
+      reason: first.enlarged_from == null ? "The original was removed from the catalog" : undefined,
+      run: () => cmd.goToOriginal(first.image_id),
+    },
+    !many && (first.enlargement_count ?? 0) > 0 && {
+      id: "show-enlargements",
+      label: first.enlargement_count === 1 ? "Show Enlargement" : "Show Enlargements",
+      run: () => cmd.showEnlargements(first.image_id),
     },
     SEPARATOR,
 

@@ -58,6 +58,14 @@ pub struct ImageSummary {
     /// "does this photo/folder still need on-demand detection" without a
     /// separate query.
     pub faces_scanned: bool,
+    /// AI enlargement (M6, RFC-0029 §3.2): the factor when this photo is a model enlargement (the grid's "x4"
+    /// chip), else `None`. One extra read of `upscale_sources` per row; the table is tiny.
+    pub enlarged_scale: Option<f64>,
+    /// The original's image id for an enlargement; `None` for an ordinary photo and for an enlargement whose
+    /// original was removed (the "Go to Original" entry reads that as "original removed").
+    pub enlarged_from: Option<i64>,
+    /// How many enlargements were made from this photo (the grid's link glyph), 0 for most.
+    pub enlargement_count: u32,
 }
 
 /// What `remove_images` hands back per deleted row, so the command layer
@@ -359,7 +367,10 @@ impl Catalog {
                     i.camera_make, i.camera_model, i.lens_model, i.iso, i.aperture, i.shutter_speed, i.focal_length,
                     i.exposure_bias, i.metering_mode, i.flash, i.width, i.height, i.latitude, i.longitude, i.altitude,
                     i.file_size, i.captured_at,
-                    v.caption, i.copyright, i.contact, i.import_batch, i.faces_scanned
+                    v.caption, i.copyright, i.contact, i.import_batch, i.faces_scanned,
+                    (SELECT scale FROM upscale_sources WHERE result_image_id = i.id),
+                    (SELECT source_image_id FROM upscale_sources WHERE result_image_id = i.id),
+                    (SELECT count(*) FROM upscale_sources WHERE source_image_id = i.id)
              FROM images i
              JOIN image_versions v ON v.id = (
                  SELECT id FROM image_versions
@@ -401,6 +412,9 @@ impl Catalog {
                 contact: row.get(28)?,
                 import_batch: row.get(29)?,
                 faces_scanned: row.get(30)?,
+                enlarged_scale: row.get(31)?,
+                enlarged_from: row.get(32)?,
+                enlargement_count: row.get(33)?,
             })
         })?;
         rows.collect()

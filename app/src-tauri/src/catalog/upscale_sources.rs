@@ -221,6 +221,29 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_listing_carries_the_chip_and_the_link_glyph_data() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let (orig, version) = original(&catalog);
+        let stack = catalog.get_edit_stack(version).unwrap();
+        let big = catalog.add_enlargement(&input(version, &stack, false)).unwrap();
+        let mut again = input(version, &stack, false);
+        again.path = "/orig-Enlarged-4x-2.jpg".into();
+        again.content_hash = "hash-big-2".into();
+        again.scale = 2.5;
+        let second = catalog.add_enlargement(&again).unwrap();
+        let rows = catalog.list_images().unwrap();
+        let row = |id: i64| rows.iter().find(|i| i.image_id == id).unwrap();
+        assert_eq!((row(orig).enlarged_scale, row(orig).enlargement_count), (None, 2), "the original: no chip, two enlargements");
+        assert_eq!((row(big).enlarged_scale, row(big).enlargement_count, row(big).enlarged_from), (Some(4.0), 0, Some(orig)));
+        assert_eq!(row(orig).enlarged_from, None);
+        assert_eq!((row(second).enlarged_scale, row(second).enlargement_count), (Some(2.5), 0));
+        catalog.remove_images(&[orig]).unwrap();
+        let rows = catalog.list_images().unwrap();
+        let after = rows.iter().find(|i| i.image_id == big).unwrap();
+        assert_eq!((after.enlarged_scale, after.enlarged_from), (Some(4.0), None), "the chip survives the original's removal; the link reads 'original removed'");
+    }
+
+    #[test]
     fn the_hash_ignores_op_order_but_not_values() {
         let a = EditStack { schema_version: 1, ops: vec![json!({"op": "exposure", "value": 1}), json!({"op": "contrast", "value": 2})] };
         let b = EditStack { schema_version: 1, ops: vec![json!({"op": "contrast", "value": 2}), json!({"op": "exposure", "value": 1})] };

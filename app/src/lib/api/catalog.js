@@ -36,7 +36,39 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {string | null} copyright
  * @property {string | null} contact
  * @property {boolean} faces_scanned
+ * @property {number | null} [enlarged_scale]  x-factor when this photo is an AI enlargement (RFC-0029)
+ * @property {number | null} [enlarged_from]  the original's image id; null once the original was removed
+ * @property {number} [enlargement_count]  how many enlargements were made from this photo
  */
+
+/**
+ * @typedef {Object} EnlargementLink  an enlargement, as seen from its original
+ * @property {number} result_image_id
+ * @property {number} scale
+ * @property {number} strength
+ * @property {string} model_id
+ * @property {string} created_at
+ * @property {boolean | null} edited_since  the original changed after it was enlarged; null = cannot tell
+ *
+ * @typedef {Object} EnlargementOrigin  the original, as seen from an enlargement
+ * @property {number | null} source_image_id  null = the original was removed from the catalog
+ * @property {number | null} source_version_id
+ * @property {number} scale
+ * @property {number} strength
+ * @property {string} model_id
+ * @property {string} created_at
+ * @property {boolean | null} edited_since
+ *
+ * @typedef {Object} UpscaleLinks
+ * @property {EnlargementOrigin | null} origin
+ * @property {EnlargementLink[]} enlargements
+ */
+
+/** Both sides of the AI-enlargement connection of one photo (RFC-0029 §3.1).
+ * @returns {Promise<UpscaleLinks>} */
+export function getUpscaleLinks(/** @type {number} */ imageId) {
+  return invoke("get_upscale_links", { imageId });
+}
 
 /**
  * @typedef {Object} ImportSummary

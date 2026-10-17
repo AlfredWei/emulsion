@@ -7,6 +7,7 @@
    *   ratingOp: ">=" | "=",
    *   colorLabelFilter: string,
    *   fileTypeFilter: "all" | "raw" | "jpeg",
+   *   enlargedFilter: boolean,
    *   cameraFilter: string,
    *   lensFilter: string,
    *   dateFrom: string,
@@ -20,6 +21,7 @@
    *   onRatingChange: (rating: number, op: ">=" | "=") => void,
    *   onColorLabelChange: (label: string) => void,
    *   onFileTypeChange: (type: "all" | "raw" | "jpeg") => void,
+   *   onEnlargedChange: (on: boolean) => void,
    *   onCameraChange: (camera: string) => void,
    *   onLensChange: (lens: string) => void,
    *   onDateRangeChange: (from: string, to: string) => void,
@@ -33,6 +35,7 @@
     ratingOp,
     colorLabelFilter,
     fileTypeFilter,
+    enlargedFilter,
     cameraFilter,
     lensFilter,
     dateFrom,
@@ -46,6 +49,7 @@
     onRatingChange,
     onColorLabelChange,
     onFileTypeChange,
+    onEnlargedChange,
     onCameraChange,
     onLensChange,
     onDateRangeChange,
@@ -68,6 +72,7 @@
       minRating > 0 ||
       colorLabelFilter !== "all" ||
       fileTypeFilter !== "all" ||
+      enlargedFilter ||
       cameraFilter !== "all" ||
       lensFilter !== "all" ||
       Boolean(dateFrom) ||
@@ -243,6 +248,20 @@
       onclick={() => onFileTypeChange("jpeg")}
     >
       JPEG
+    </button>
+  </div>
+
+  <!-- AI enlarged: a toggle of its own, not one of the radio choices above -->
+  <div class="btn-group" role="group" aria-label="AI enlargement filter">
+    <button
+      type="button"
+      class="filter-btn"
+      class:active={enlargedFilter}
+      aria-pressed={enlargedFilter}
+      title="Photos made with Enlarge (AI)"
+      onclick={() => onEnlargedChange(!enlargedFilter)}
+    >
+      AI enlarged
     </button>
   </div>
 

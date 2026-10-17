@@ -31,6 +31,7 @@ const NO_FILTERS = {
   ratingOp: /** @type {const} */ (">="),
   colorLabelFilter: "all",
   fileTypeFilter: /** @type {const} */ ("all"),
+  enlargedFilter: false,
   cameraFilter: "all",
   lensFilter: "all",
   dateFrom: "",
@@ -230,5 +231,22 @@ describe("cameraOptionsFor / lensOptionsFor", () => {
     expect(cameraOptionsFor(images)).toEqual(["Canon R5", "Nikon Z6"]);
     expect(lensOptionsFor(images)).toEqual(["RF 50", "Z 24-70"]);
     expect(cameraOptionsFor([])).toEqual([]);
+  });
+});
+
+describe("applyLibraryFilters: AI enlarged", () => {
+  const photos = [img({ image_id: 1 }), img({ image_id: 2, enlarged_scale: 4, enlarged_from: 1 }), img({ image_id: 3, enlarged_scale: 2, enlarged_from: null }), img({ image_id: 4, enlargement_count: 2 })];
+
+  it("keeps only the enlargements, including one whose original was removed", () => {
+    expect(ids(applyLibraryFilters(filterInputs(photos, { enlargedFilter: true })))).toEqual([2, 3]);
+  });
+
+  it("is off by default and leaves everything", () => {
+    expect(ids(applyLibraryFilters(filterInputs(photos)))).toEqual([1, 2, 3, 4]);
+  });
+
+  it("combines with the other filters", () => {
+    const rated = [img({ image_id: 1, rating: 3, enlarged_scale: 4 }), img({ image_id: 2, rating: 0, enlarged_scale: 4 })];
+    expect(ids(applyLibraryFilters(filterInputs(rated, { enlargedFilter: true, minRating: 3 })))).toEqual([1]);
   });
 });

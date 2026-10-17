@@ -1,5 +1,6 @@
 //! Model files shipped inside the installer (user decision, 2026-10-09): the denoise model and the two Select
-//! Subject files, so both features work straight after installation with no download.
+//! Subject files, so both features work straight after installation with no download. The AI enlargement model
+//! (4.8 MB, committed in `models/`) joined them on 2026-10-17 (user decision).
 //!
 //! A release build (`npm run build:release`) puts them in the app's resources under `models/`. On first use they
 //! are **copied into the same model directories the downloads use** (verified by size and SHA-256 on the way), so
@@ -26,13 +27,20 @@ pub const SEGMENT: [Shipped; 2] = [
     Shipped { name: crate::segment_models::DECODER.filename, size: crate::segment_models::DECODER.size, sha256: crate::segment_models::DECODER.sha256 },
 ];
 
+pub const UPSCALE: [Shipped; 1] = [Shipped { name: crate::upscale_models::FILENAME, size: crate::upscale_models::SIZE, sha256: crate::upscale_models::SHA256 }];
+
 /// One seeding at a time: the startup pass and a status check must not both write a `.part` file, and a status
 /// check that arrives mid-copy waits for it rather than reporting "missing" and opening the download dialog.
 static SEED_LOCK: Mutex<()> = Mutex::new(());
 
 /// The `models/` folder of the app's resources, if this build carries one.
 pub fn bundled_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().resource_dir().ok().map(|d| d.join("models")).filter(|d| d.is_dir())
+    let shipped = app.path().resource_dir().ok().map(|d| d.join("models")).filter(|d| d.is_dir());
+    // A development build (`tauri dev`) has no resources, but a source checkout has the small committed models
+    // (`models/*.onnx`), so the feature works there without an import. Release builds never look here.
+    #[cfg(debug_assertions)]
+    let shipped = shipped.or_else(|| Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models")).filter(|d| d.is_dir()));
+    shipped
 }
 
 fn valid(path: &Path, f: &Shipped) -> bool {
@@ -126,18 +134,25 @@ mod tests {
     #[test]
     fn the_bundle_manifest_matches_the_constants_the_app_verifies_models_with() {
         let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../models/bundled-models.json")).unwrap();
-        let listed: Vec<(String, u64, String, String)> = manifest["files"]
+        let listed: Vec<(String, u64, String, String, Option<String>)> = manifest["files"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|f| (f["name"].as_str().unwrap().into(), f["size"].as_u64().unwrap(), f["sha256"].as_str().unwrap().into(), f["url"].as_str().unwrap().into()))
+            .map(|f| (f["name"].as_str().unwrap().into(), f["size"].as_u64().unwrap(), f["sha256"].as_str().unwrap().into(), f["url"].as_str().unwrap_or("").to_string(), f["path"].as_str().map(String::from)))
             .collect();
-        let known: Vec<&Shipped> = DENOISE.iter().chain(SEGMENT.iter()).collect();
+        let known: Vec<&Shipped> = DENOISE.iter().chain(SEGMENT.iter()).chain(UPSCALE.iter()).collect();
         assert_eq!(listed.len(), known.len());
-        for (name, size, sha, url) in &listed {
+        for (name, size, sha, url, path) in &listed {
             let k = known.iter().find(|k| k.name == name).unwrap_or_else(|| panic!("{name} is not a model the app verifies"));
             assert_eq!((k.size, k.sha256), (*size, sha.as_str()), "{name}");
-            assert!(url.starts_with("https://") && url.ends_with(name.as_str()), "{url}");
+            match path {
+                // A small model committed in models/: the file must be there and be the one the app verifies.
+                Some(rel) => {
+                    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models").join(rel);
+                    assert!(valid(&file, k), "{rel} is missing from models/ or does not match its pin");
+                }
+                None => assert!(url.starts_with("https://") && url.ends_with(name.as_str()), "{url}"),
+            }
         }
     }
 }

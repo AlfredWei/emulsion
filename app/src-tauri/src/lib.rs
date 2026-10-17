@@ -2077,6 +2077,7 @@ pub fn run() {
                     let Ok(root) = resolve_cache_root(&handle, &catalog_for_models) else { return };
                     bundled_models::seed_from_app(&handle, &root.join("denoise_models"), &bundled_models::DENOISE);
                     bundled_models::seed_from_app(&handle, &root.join("segment_models"), &bundled_models::SEGMENT);
+                    bundled_models::seed_from_app(&handle, &root.join("upscale_models"), &bundled_models::UPSCALE);
                 });
             }
 

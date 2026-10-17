@@ -4,6 +4,9 @@
 //
 //   node scripts/fetch-bundled-models.mjs                   download what is missing
 //   node scripts/fetch-bundled-models.mjs --from <dir>      copy what is missing from <dir> first (no network)
+//
+// An entry with a "path" instead of a "url" is a small model committed in models/ itself: it is copied from there
+// (and verified) with no network use.
 
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, copyFileSync } from "node:fs";
@@ -42,6 +45,13 @@ for (const file of manifest.files) {
   const dest = join(outDir, file.name);
   if (await valid(dest, file)) {
     console.log(`ok       ${file.name}`);
+    continue;
+  }
+  if (file.path) {
+    const committed = resolve(here, "../../models", file.path);
+    if (!(await valid(committed, file))) throw new Error(`${file.path}: the committed model file is missing or fails size/SHA-256 verification`);
+    copyFileSync(committed, dest);
+    console.log(`copied   ${file.name} (committed in models/)`);
     continue;
   }
   const local = fromDir ? join(fromDir, file.name) : null;

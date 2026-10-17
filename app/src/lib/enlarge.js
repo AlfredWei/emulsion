@@ -97,6 +97,26 @@ export function defaultStem(path, target) {
   return target.kind === "scale" ? `${stem}-Enlarged-${target.value}x` : `${stem}-Enlarged-${target.value}px`;
 }
 
+/** Where the preview's region sits in the photo, as fractions for the navigator's rectangle.
+ * @param {{ x: number, y: number, w: number, h: number }} region @param {number} sourceWidth @param {number} sourceHeight */
+export function regionFractions(region, sourceWidth, sourceHeight) {
+  if (!(sourceWidth > 0 && sourceHeight > 0)) return { left: 0, top: 0, width: 1, height: 1 };
+  return { left: region.x / sourceWidth, top: region.y / sourceHeight, width: region.w / sourceWidth, height: region.h / sourceHeight };
+}
+
+/** A click in the navigator (pixel offsets inside its box) as a centre for the preview, 0..1 on both axes.
+ * @param {number} offsetX @param {number} offsetY @param {number} boxWidth @param {number} boxHeight @returns {[number, number]} */
+export function centreFromClick(offsetX, offsetY, boxWidth, boxHeight) {
+  const clamp = (/** @type {number} */ v) => Math.min(1, Math.max(0, v));
+  return boxWidth > 0 && boxHeight > 0 ? [clamp(offsetX / boxWidth), clamp(offsetY / boxHeight)] : [0.5, 0.5];
+}
+
+/** A key naming a target, so a preview made for another scale can be told apart.
+ * @param {import('$lib/api/upscale.js').UpscaleTarget | null} target */
+export function targetKey(target) {
+  return target ? `${target.kind}:${target.value}` : "";
+}
+
 /** The directory the result is written to, for the "saved next to the original" line. @param {string} path */
 export function folderOf(path) {
   const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));

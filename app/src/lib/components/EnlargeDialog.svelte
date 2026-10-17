@@ -5,14 +5,17 @@
    * choices are the same next time. The first use asks to download the model (ModelDownloadDialog, mounted beside).
    */
   import { upscale } from "$lib/state/upscale.svelte.js";
-  import { closeEnlargeDialog, refreshEnlargePlan, handleEnlarge } from "$lib/actions/enlargeActions.js";
+  import { closeEnlargeDialog, refreshEnlargePlan, handleEnlarge, handleEnlargePreview } from "$lib/actions/enlargeActions.js";
+  import EnlargeCompare from "$lib/components/EnlargeCompare.svelte";
+  import { library } from "$lib/state/library.svelte.js";
   import { targetOf, planRows, veryLargeWarning, defaultStem, folderOf, MAX_SIDE } from "$lib/enlarge.js";
 
   let photo = $derived(upscale.target);
   let target = $derived(targetOf(upscale.settings));
   let warning = $derived(upscale.plan ? veryLargeWarning(upscale.plan) : "");
   let modelMissing = $derived(upscale.modelStatus?.state === "missing");
-  let canEnlarge = $derived(upscale.plan !== null && upscale.job === null);
+  let canEnlarge = $derived(upscale.plan !== null && upscale.job === null && !upscale.previewing);
+  let thumbnail = $derived(photo ? (library.images.find((i) => i.version_id === photo.versionId)?.thumbnail_path ?? null) : null);
 
   /** @param {string} value */
   function chooseScale(value) {
@@ -66,6 +69,27 @@
           lower the strength if fine regular patterns look wrong (look at the railings).
         </p>
       </div>
+
+      {#if upscale.preview}
+        <EnlargeCompare
+          preview={upscale.preview}
+          strength={upscale.settings.strength}
+          sourceWidth={upscale.plan?.source_width ?? 0}
+          sourceHeight={upscale.plan?.source_height ?? 0}
+          {thumbnail}
+          busy={upscale.previewing}
+          onMove={(centre) => handleEnlargePreview(centre)}
+          onClose={() => (upscale.preview = null)}
+        />
+      {:else}
+        <div class="preview-row">
+          <button class="secondary-btn" type="button" onclick={() => handleEnlargePreview()} disabled={!canEnlarge} data-testid="enlarge-preview">
+            {upscale.previewing ? "Previewing…" : "Preview 1:1"}
+          </button>
+          <span class="hint">About 1 MP of the result around the middle of the photo, so you can judge the detail before committing.</span>
+        </div>
+      {/if}
+      {#if upscale.previewError}<p class="err" role="alert">{upscale.previewError}</p>{/if}
 
       <div class="summary" aria-live="polite" data-testid="enlarge-summary">
         {#if upscale.plan}
@@ -329,6 +353,29 @@
     font-size: 11px;
     color: var(--text-secondary);
     cursor: pointer;
+  }
+  .preview-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .secondary-btn {
+    all: unset;
+    flex: none;
+    cursor: pointer;
+    padding: 5px 12px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+  }
+  .secondary-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .secondary-btn:focus-visible {
+    outline: 2px solid var(--accent);
   }
   .actions {
     display: flex;

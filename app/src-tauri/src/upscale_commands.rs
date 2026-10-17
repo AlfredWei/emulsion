@@ -6,7 +6,7 @@
 use crate::ai::protocol::{Progress, Request};
 use crate::ai::supervisor::{AiError, AiHelper};
 use crate::catalog::{edit_stack_hash, Catalog, EnlargementInput};
-use crate::upscale_job::{self, Enlarged, Plan, Spec, Target};
+use crate::upscale_job::{self, Enlarged, Plan, PreviewOutcome, PreviewSpec, Spec, Target};
 use crate::upscale_models::{self, ModelStatus, MODEL_ID};
 use crate::{export, import, metadata_writer, preview_cache, resolve_cache_root, resolve_denoise_dir, resolve_previews_dir, resolve_thumbnail_dir, AppState};
 use serde::{Deserialize, Serialize};
@@ -323,6 +323,120 @@ fn run_job(
     Ok(UpscaleJobResult { image_id, version_id: new_version, path: out_path.to_string_lossy().to_string(), width: enlarged.result.width, height: enlarged.result.height, ms: enlarged.result.ms })
 }
 
+/// A finished preview: the plain and the model picture of the same rectangle, as files the webview can load.
+#[derive(Serialize)]
+pub struct UpscalePreviewResult {
+    /// The plain (model-free) enlargement, a PNG.
+    pub before_path: String,
+    /// The model's result at full strength, a JPEG at quality 100.
+    pub after_path: String,
+    pub width: u32,
+    pub height: u32,
+    /// The rectangle of the (rendered, cropped) photo they show, in its pixels.
+    pub region: upscale_job::Region,
+    pub ms: u64,
+}
+
+const PREVIEW_PREFIX: &str = "enlarge-preview-";
+static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Deletes the preview pictures in `dir` (all of them, or all but those whose name starts with `keep`).
+fn sweep_previews(dir: &Path, keep: Option<&str>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with(PREVIEW_PREFIX) && !keep.is_some_and(|k| name.starts_with(k)) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// The dialog's Preview (RFC-0029 §3.4): about one megapixel of the result at 1:1, around `centre_x` / `centre_y`
+/// (0..1 of the photo), as a plain enlargement and the model's picture to blend on screen. Shares the job slot with
+/// `upscale_run` (one at a time) and `upscale_cancel` stops it. Writes only into the previews folder.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn upscale_preview(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    helper: State<'_, Arc<AiHelper>>,
+    version_id: i64,
+    target: TargetArg,
+    centre_x: f64,
+    centre_y: f64,
+) -> Result<UpscalePreviewResult, String> {
+    let models = models_dir(&app, &state)?;
+    let denoise_dir = resolve_denoise_dir(&app, &state.catalog)?;
+    let scratch = resolve_cache_root(&app, &state.catalog)?.join("enlarge_tmp");
+    let previews = resolve_previews_dir(&app, &state.catalog)?;
+    let catalog = state.catalog.clone();
+    let helper = helper.inner().clone();
+    let id = helper.reserve_id();
+    if RUNNING_JOB.compare_exchange(0, id, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return Err("an enlargement is already running".to_string());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        run_preview_job(&catalog, &helper, id, &models, &denoise_dir, &scratch, &previews, version_id, target.into(), (centre_x, centre_y))
+    })
+    .await;
+    RUNNING_JOB.store(0, Ordering::SeqCst);
+    result.map_err(|e| e.to_string())?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_preview_job(
+    catalog: &Arc<std::sync::Mutex<Catalog>>,
+    helper: &Arc<AiHelper>,
+    id: u64,
+    models: &Path,
+    denoise_dir: &Path,
+    scratch: &Path,
+    previews: &Path,
+    version_id: i64,
+    target: Target,
+    centre: (f64, f64),
+) -> Result<UpscalePreviewResult, String> {
+    let model = upscale_models::ready_path(models).ok_or_else(|| "the AI enlargement model is not installed".to_string())?;
+    let (source_path, stack) = {
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
+        if catalog.is_enlargement(source.image_id).map_err(|e| e.to_string())? {
+            return Err(ENLARGEMENT_OF_ENLARGEMENT.to_string());
+        }
+        (PathBuf::from(source.path), catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?)
+    };
+    std::fs::create_dir_all(previews).map_err(|e| format!("could not create {}: {e}", previews.display()))?;
+    // A new name every time, so the webview never shows the previous picture from its cache.
+    let stem = format!("{PREVIEW_PREFIX}{version_id}-{}", PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed));
+    let (before, after) = (previews.join(format!("{stem}-before.png")), previews.join(format!("{stem}-after.jpg")));
+    let spec = PreviewSpec { source_path: &source_path, stack: &stack, denoise_dir: Some(denoise_dir), scratch_dir: scratch, model: &model, target, centre, before_path: &before, after_path: &after };
+    let outcome: PreviewOutcome = upscale_job::run_preview(&spec, id, |req: Request| {
+        helper
+            .request_with_id(id, req, SILENCE_TIMEOUT, |_: Progress| {})
+            .map_err(|e| match e {
+                AiError::Remote { code, .. } if code == "cancelled" => "upscale cancelled".to_string(),
+                other => other.to_string(),
+            })
+            .and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string()))
+    })?;
+    sweep_previews(previews, Some(&stem)); // only the newest pair is kept
+    Ok(UpscalePreviewResult {
+        before_path: before.to_string_lossy().to_string(),
+        after_path: after.to_string_lossy().to_string(),
+        width: outcome.width,
+        height: outcome.height,
+        region: outcome.region,
+        ms: outcome.ms,
+    })
+}
+
+/// Deletes the preview pictures; the dialog calls it when it closes. A no-op when there are none.
+#[tauri::command]
+pub async fn upscale_preview_clear(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let previews = resolve_previews_dir(&app, &state.catalog)?;
+    tauri::async_runtime::spawn_blocking(move || sweep_previews(&previews, None)).await.map_err(|e| e.to_string())
+}
+
 /// Stops the running job at its next tile (about half a second). A no-op when none is running.
 #[tauri::command]
 pub async fn upscale_cancel(helper: State<'_, Arc<AiHelper>>) -> Result<(), String> {
@@ -441,6 +555,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    #[test]
+    fn sweeping_removes_only_preview_files_and_can_keep_the_newest_pair() {
+        let d = dir("sweep");
+        for n in ["enlarge-preview-1-1-before.png", "enlarge-preview-1-1-after.jpg", "enlarge-preview-1-2-before.png", "enlarge-preview-1-2-after.jpg", "photo-Enlarged-4x.jpg", "blend-x.png"] {
+            std::fs::write(d.join(n), b"x").unwrap();
+        }
+        sweep_previews(&d, Some("enlarge-preview-1-2"));
+        let mut left: Vec<String> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, ["blend-x.png", "enlarge-preview-1-2-after.jpg", "enlarge-preview-1-2-before.png", "photo-Enlarged-4x.jpg"]);
+        sweep_previews(&d, None);
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 2, "the user's pictures and other caches are untouched");
+    }
+
     fn jpeg_file(d: &Path, name: &str) -> PathBuf {
         let p = d.join(name);
         image::RgbImage::from_pixel(48, 32, image::Rgb([100, 120, 80])).save(&p).unwrap();
@@ -527,6 +655,45 @@ mod tests {
         assert!(c.is_enlargement(job.image_id).unwrap());
         assert_eq!(c.get_enlargement_origin(job.image_id).unwrap().unwrap().scale, 2.0);
         assert!(std::fs::read_dir(d.join("scratch")).unwrap().next().is_none(), "no intermediate left");
+        helper.shutdown();
+    }
+
+    /// The real model's preview of a real photo: `UPSCALE_MODEL`, `UPSCALE_HELPER`, `UPSCALE_IMAGE` as for
+    /// `real_model_end_to_end`.
+    #[test]
+    #[ignore]
+    fn real_model_preview() {
+        let model_src = PathBuf::from(std::env::var("UPSCALE_MODEL").expect("UPSCALE_MODEL"));
+        let helper_exe = PathBuf::from(std::env::var("UPSCALE_HELPER").expect("UPSCALE_HELPER"));
+        let image = PathBuf::from(std::env::var("UPSCALE_IMAGE").expect("UPSCALE_IMAGE"));
+        let d = dir("preview-e2e");
+        let models = d.join("models");
+        upscale_models::import_file(&models, &model_src).expect("the pinned model");
+        let photo = d.join("photo.jpg");
+        std::fs::copy(&image, &photo).unwrap();
+        let (w, h) = image::image_dimensions(&photo).unwrap();
+        let catalog = Arc::new(std::sync::Mutex::new(Catalog::open_in_memory().unwrap()));
+        let version = {
+            let c = catalog.lock().unwrap();
+            let meta = crate::metadata::ImageMetadata { width: Some(w), height: Some(h), ..Default::default() };
+            let id = c.add_image_with_edit_stack(&photo.to_string_lossy(), "h", 1, &EditStack::empty(), &meta).unwrap();
+            c.list_images().unwrap().iter().find(|i| i.image_id == id).unwrap().version_id
+        };
+        let helper = Arc::new(AiHelper::new(helper_exe, 0));
+        let previews = d.join("previews");
+        for (target, centre) in [(Target::Scale(4), (0.5, 0.5)), (Target::Scale(2), (0.2, 0.7))] {
+            let id = helper.reserve_id();
+            let t = std::time::Instant::now();
+            let p = run_preview_job(&catalog, &helper, id, &models, &d.join("denoise"), &d.join("scratch"), &previews, version, target, centre).expect("preview");
+            eprintln!("{target:?} {centre:?}: region {:?} -> {}x{} in {} ms (helper), {} ms total", p.region, p.width, p.height, p.ms, t.elapsed().as_millis());
+            let (before, after) = (image::open(&p.before_path).unwrap().to_rgb8(), image::open(&p.after_path).unwrap().to_rgb8());
+            assert_eq!(before.dimensions(), after.dimensions());
+            assert_eq!(before.dimensions(), (p.width, p.height));
+            let diff: f64 = before.as_raw().iter().zip(after.as_raw()).map(|(a, b)| (*a as f64 - *b as f64).abs()).sum::<f64>() / before.as_raw().len() as f64;
+            eprintln!("mean |model - plain| = {diff:.2} / 255");
+            assert!(diff > 0.2, "the model result should differ from a plain resize");
+            assert_eq!(std::fs::read_dir(&previews).unwrap().count(), 2, "only the newest pair is kept");
+        }
         helper.shutdown();
     }
 }

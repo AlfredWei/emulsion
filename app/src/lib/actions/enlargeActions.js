@@ -17,6 +17,8 @@ import {
   upscaleCancelDownload,
   upscaleImportModel,
   upscalePlan,
+  upscalePreview,
+  upscalePreviewClear,
   upscaleRun,
   upscaleCancel,
   onUpscaleModelProgress,
@@ -26,7 +28,7 @@ import {
 } from "$lib/api/upscale.js";
 import { refresh, refreshCollections, selectCollection, prioritizeThumbnail } from "$lib/actions/libraryActions.js";
 import { revealPhotos } from "$lib/actions/upscaleActions.js";
-import { targetOf } from "$lib/enlarge.js";
+import { targetOf, targetKey } from "$lib/enlarge.js";
 import { scaleLabel } from "$lib/upscaleLinks.js";
 import { formatDuration } from "$lib/actions/denoiseActions.js";
 
@@ -59,6 +61,8 @@ export function openEnlargeDialog(image) {
     return;
   }
   upscale.fileName = "";
+  discardPreview();
+  upscale.previewCentre = [0.5, 0.5];
   upscale.plan = null;
   upscale.planError = "";
   upscale.error = "";
@@ -70,10 +74,48 @@ export function openEnlargeDialog(image) {
   void refreshEnlargePlan();
 }
 
-/** Closes the dialog without doing anything. */
+/** Closes the dialog without doing anything (a running preview is stopped, its pictures deleted). */
 export function closeEnlargeDialog() {
+  if (upscale.previewing) upscaleCancel().catch(() => {});
+  discardPreview();
+  upscalePreviewClear().catch(() => {});
   upscale.target = null;
   upscale.error = "";
+}
+
+function discardPreview() {
+  upscale.preview = null;
+  upscale.previewKey = "";
+  upscale.previewError = "";
+}
+
+/** The dialog's Preview: about 1 MP of the result at 1:1, around `centre` (the navigator's click) or where the last one
+ * was. Strength is not an input: the dialog blends the two pictures on screen, so moving the slider never re-runs it.
+ * @param {[number, number]} [centre] */
+export async function handleEnlargePreview(centre) {
+  const photo = upscale.target;
+  const target = targetOf(upscale.settings);
+  if (!photo || !target || upscale.plan === null || upscale.job !== null || upscale.previewing) return;
+  if (centre) upscale.previewCentre = centre;
+  upscale.previewError = "";
+  if (upscale.modelStatus?.state === "missing") {
+    upscale.previewError = "The enlargement model is not installed yet. Press Enlarge to install it (you will be asked first).";
+    return;
+  }
+  const key = targetKey(target);
+  upscale.previewing = true;
+  try {
+    const result = await upscalePreview(photo.versionId, target, upscale.previewCentre);
+    // The dialog may have been closed, or moved to another photo or scale, while it ran.
+    if (upscale.target?.versionId === photo.versionId && targetKey(targetOf(upscale.settings)) === key) {
+      upscale.preview = result;
+      upscale.previewKey = key;
+    }
+  } catch (e) {
+    if (!isUpscaleJobCancelled(e)) upscale.previewError = message(e);
+  } finally {
+    upscale.previewing = false;
+  }
 }
 
 let planSeq = 0;
@@ -84,6 +126,8 @@ export async function refreshEnlargePlan() {
   const seq = ++planSeq;
   const photo = upscale.target;
   const target = targetOf(upscale.settings);
+  // A preview belongs to the scale it was made for.
+  if (upscale.preview && upscale.previewKey !== targetKey(target)) discardPreview();
   if (!photo || !target) {
     upscale.plan = null;
     upscale.planError = "";
@@ -105,7 +149,7 @@ export async function refreshEnlargePlan() {
 export async function handleEnlarge() {
   const photo = upscale.target;
   const target = targetOf(upscale.settings);
-  if (!photo || !target || upscale.plan === null || upscale.job !== null) return;
+  if (!photo || !target || upscale.plan === null || upscale.job !== null || upscale.previewing) return;
   /** @type {import('$lib/api/upscale.js').UpscaleRunOptions} */
   const options = {
     target,
@@ -132,7 +176,7 @@ export async function handleEnlarge() {
     upscale.error = message(e);
     return;
   }
-  upscale.target = null;
+  closeEnlargeDialog();
   await runJob(photo, label, scale, options);
 }
 
@@ -241,7 +285,7 @@ async function modelInstalled(status) {
   const photo = upscale.target;
   upscale.pendingRun = null;
   if (!pending || !photo || photo.versionId !== pending.versionId) return;
-  upscale.target = null;
+  closeEnlargeDialog();
   await runJob(photo, pending.label, pending.scale, pending.options);
 }
 

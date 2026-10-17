@@ -7,6 +7,8 @@ vi.mock("$lib/api/upscale.js", () => ({
   upscaleCancelDownload: vi.fn(async () => {}),
   upscaleImportModel: vi.fn(),
   upscalePlan: vi.fn(),
+  upscalePreview: vi.fn(),
+  upscalePreviewClear: vi.fn(async () => {}),
   upscaleRun: vi.fn(),
   upscaleCancel: vi.fn(async () => {}),
   onUpscaleModelProgress: vi.fn(async () => () => {}),
@@ -40,6 +42,7 @@ const READY = { state: "ready", download_bytes: 0, host: "github.com" };
 const MISSING = { state: "missing", download_bytes: 4_866_388, host: "github.com" };
 const PLAN = { source_width: 6000, source_height: 4000, out_width: 24000, out_height: 16000, megapixels: 384, tiles: 460, seconds: 300, file_bytes: 1, very_large: false, export_gb: 23 };
 const RESULT = { image_id: 9, version_id: 90, path: "/photos/a-Enlarged-4x.jpg", width: 24000, height: 16000, ms: 101_000 };
+const PREVIEW = { before_path: "/p/before.png", after_path: "/p/after.jpg", width: 1000, height: 1000, region: { x: 875, y: 475, w: 250, h: 250 }, ms: 1800 };
 const photo = (/** @type {object} */ extra = {}) => /** @type {any} */ ({ image_id: 1, version_id: 10, path: "/photos/a.jpg", ...extra });
 
 /** @type {ReturnType<typeof vi.spyOn>} */
@@ -59,6 +62,11 @@ beforeEach(() => {
   upscale.pendingRun = null;
   upscale.job = null;
   upscale.error = "";
+  upscale.preview = null;
+  upscale.previewKey = "";
+  upscale.previewing = false;
+  upscale.previewError = "";
+  upscale.previewCentre = [0.5, 0.5];
   library.images = /** @type {any} */ ([photo()]);
   library.activeCollectionId = null;
   shell.activeModule = "library";
@@ -66,6 +74,7 @@ beforeEach(() => {
   m.upscaleModelStatus.mockResolvedValue(READY);
   m.upscalePlan.mockResolvedValue(PLAN);
   m.upscaleRun.mockResolvedValue(RESULT);
+  m.upscalePreview.mockResolvedValue(PREVIEW);
 });
 
 describe("openEnlargeDialog", () => {
@@ -308,5 +317,96 @@ describe("the model dialog", () => {
     A.handleEnlargeModelCancel();
     expect(upscale.modelDialog).toBeNull();
     expect(upscale.pendingRun).toBeNull();
+  });
+});
+
+describe("the preview", () => {
+  async function opened() {
+    A.openEnlargeDialog(photo());
+    await vi.waitFor(() => expect(upscale.plan).not.toBeNull());
+    await vi.waitFor(() => expect(upscale.modelStatus).toEqual(READY));
+  }
+
+  it("asks for the middle of the photo at the chosen target and keeps the result", async () => {
+    await opened();
+    await A.handleEnlargePreview();
+    expect(m.upscalePreview).toHaveBeenCalledWith(10, { kind: "scale", value: 4 }, [0.5, 0.5]);
+    expect(upscale.preview).toEqual(PREVIEW);
+    expect(upscale.previewing).toBe(false);
+    expect(upscale.previewError).toBe("");
+  });
+
+  it("moves the preview to where the navigator was clicked, and remembers it", async () => {
+    await opened();
+    await A.handleEnlargePreview([0.2, 0.8]);
+    expect(m.upscalePreview).toHaveBeenCalledWith(10, expect.anything(), [0.2, 0.8]);
+    expect(upscale.previewCentre).toEqual([0.2, 0.8]);
+  });
+
+  it("is dropped when the scale changes, and kept when only Strength does", async () => {
+    await opened();
+    await A.handleEnlargePreview();
+    upscale.settings.strength = 40;
+    await A.refreshEnlargePlan();
+    expect(upscale.preview).not.toBeNull();
+    upscale.settings.scale = "2";
+    await A.refreshEnlargePlan();
+    expect(upscale.preview).toBeNull();
+  });
+
+  it("shows a failure, and a stopped preview is not a failure", async () => {
+    await opened();
+    m.upscalePreview.mockRejectedValueOnce(new Error("the helper crashed"));
+    await A.handleEnlargePreview();
+    expect(upscale.previewError).toBe("the helper crashed");
+    expect(upscale.preview).toBeNull();
+    m.upscalePreview.mockRejectedValueOnce(new Error("upscale cancelled"));
+    await A.handleEnlargePreview();
+    expect(upscale.previewError).toBe("");
+  });
+
+  it("does not ask for the model to be downloaded: it says Enlarge will", async () => {
+    await opened();
+    upscale.modelStatus = /** @type {any} */ (MISSING);
+    await A.handleEnlargePreview();
+    expect(m.upscalePreview).not.toHaveBeenCalled();
+    expect(upscale.previewError).toMatch(/Press Enlarge to install it/);
+  });
+
+  it("ignores an answer that arrives after the dialog moved on", async () => {
+    await opened();
+    /** @type {(v: unknown) => void} */
+    let finish = () => {};
+    m.upscalePreview.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    const running = A.handleEnlargePreview();
+    expect(upscale.previewing).toBe(true);
+    A.closeEnlargeDialog();
+    finish(PREVIEW);
+    await running;
+    expect(upscale.preview).toBeNull();
+    expect(upscale.previewing).toBe(false);
+  });
+
+  it("closing the dialog stops a running preview and deletes the pictures; Enlarge waits for it", async () => {
+    await opened();
+    /** @type {(v: unknown) => void} */
+    let finish = () => {};
+    m.upscalePreview.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    const running = A.handleEnlargePreview();
+    await A.handleEnlarge();
+    expect(m.upscaleRun).not.toHaveBeenCalled();
+    A.closeEnlargeDialog();
+    expect(m.upscaleCancel).toHaveBeenCalled();
+    expect(m.upscalePreviewClear).toHaveBeenCalled();
+    finish(PREVIEW);
+    await running;
+  });
+
+  it("starting the job clears the preview pictures", async () => {
+    await opened();
+    await A.handleEnlargePreview();
+    await A.handleEnlarge();
+    expect(m.upscalePreviewClear).toHaveBeenCalled();
+    expect(upscale.preview).toBeNull();
   });
 });

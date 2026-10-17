@@ -55,7 +55,7 @@ use masks::*;
 use crop::*;
 
 pub(crate) use ai_denoise::{ai_denoise_amount, blend_denoised};
-pub(crate) use crop::apply_crop;
+pub(crate) use crop::{apply_crop, cropped_dimensions};
 pub(crate) use lens::apply_lens_correction;
 pub(crate) use perspective::apply_perspective;
 pub(crate) use pipeline::{apply_edit_stack, effective_stack_for_render};

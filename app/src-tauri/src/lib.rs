@@ -30,7 +30,9 @@ mod denoise_models;
 mod denoise_preview;
 mod segment_commands;
 mod segment_models;
+mod upscale_commands;
 mod upscale_job;
+mod upscale_models;
 mod print;
 mod raw_decode;
 mod soft_proof;
@@ -2110,6 +2112,13 @@ pub fn run() {
             denoise_commands::denoise_remove_cache,
             denoise_commands::get_denoised_develop_preview,
             denoise_commands::denoise_missing_for_export,
+            upscale_commands::upscale_model_status,
+            upscale_commands::upscale_download_model,
+            upscale_commands::upscale_cancel_download,
+            upscale_commands::upscale_import_model,
+            upscale_commands::upscale_plan,
+            upscale_commands::upscale_run,
+            upscale_commands::upscale_cancel,
             report_spike_result,
             import_folder,
             import_files,

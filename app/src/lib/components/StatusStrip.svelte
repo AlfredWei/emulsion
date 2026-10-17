@@ -11,6 +11,8 @@
    *   mergingHdr: boolean,
    *   hdrMergeProgress: { current: number, total: number } | null,
    *   statusMessage: string,
+   *   enlargeJob?: { label: string, done: number, total: number } | null,
+   *   onEnlargeCancel?: () => void,
    * }}
    */
   let {
@@ -22,6 +24,8 @@
     mergingHdr,
     hdrMergeProgress,
     statusMessage,
+    enlargeJob = null,
+    onEnlargeCancel = () => {},
   } = $props();
 </script>
 
@@ -65,6 +69,22 @@
       {hdrMergeProgress ? `Merging HDR bracket ${hdrMergeProgress.current} / ${hdrMergeProgress.total}…` : "Merging HDR bracket…"}
     </span>
   </div>
+{:else if enlargeJob}
+  <div
+    class="import-progress"
+    role="progressbar"
+    aria-label="Enlarging"
+    aria-valuenow={enlargeJob.done}
+    aria-valuemin="0"
+    aria-valuemax={enlargeJob.total}
+    data-testid="enlarge-progress"
+  >
+    <div class="import-progress-bar" style={`width: ${enlargeJob.total > 0 ? (enlargeJob.done / enlargeJob.total) * 100 : 0}%`}></div>
+    <span class="import-progress-label">
+      {enlargeJob.total > 0 ? `Enlarging ${enlargeJob.label}: tile ${enlargeJob.done} of ${enlargeJob.total}…` : `Enlarging ${enlargeJob.label}…`}
+      <button class="stop" type="button" onclick={onEnlargeCancel}>Stop</button>
+    </span>
+  </div>
 {:else if statusMessage}
   <div class="status">{statusMessage}</div>
 {/if}
@@ -103,5 +123,17 @@
 }
 .import-progress-label {
   position: relative;
+}
+.stop {
+  all: unset;
+  cursor: pointer;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+.stop:focus-visible {
+  outline: 2px solid var(--accent);
 }
 </style>

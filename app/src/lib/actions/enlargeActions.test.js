@@ -1,0 +1,312 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("$lib/api/upscale.js", () => ({
+  upscaleModelStatus: vi.fn(),
+  upscaleDownloadModel: vi.fn(),
+  upscaleCancelDownload: vi.fn(async () => {}),
+  upscaleImportModel: vi.fn(),
+  upscalePlan: vi.fn(),
+  upscaleRun: vi.fn(),
+  upscaleCancel: vi.fn(async () => {}),
+  onUpscaleModelProgress: vi.fn(async () => () => {}),
+  onUpscaleProgress: vi.fn(async () => () => {}),
+  isUpscaleDownloadCancelled: (/** @type {unknown} */ e) => String(e).includes("download cancelled"),
+  isUpscaleJobCancelled: (/** @type {unknown} */ e) => String(e).includes("upscale cancelled"),
+}));
+vi.mock("$lib/actions/libraryActions.js", () => ({
+  refresh: vi.fn(async () => {}),
+  refreshCollections: vi.fn(async () => {}),
+  selectCollection: vi.fn(async () => {}),
+  prioritizeThumbnail: vi.fn(),
+}));
+vi.mock("$lib/actions/upscaleActions.js", () => ({ revealPhotos: vi.fn(async () => true) }));
+vi.mock("$lib/actions/denoiseActions.js", () => ({ formatDuration: (/** @type {number} */ ms) => `${Math.round(ms / 1000)} s` }));
+
+import * as A from "./enlargeActions.js";
+import * as api from "$lib/api/upscale.js";
+import * as lib from "$lib/actions/libraryActions.js";
+import * as nav from "$lib/actions/upscaleActions.js";
+import { open } from "@tauri-apps/plugin-dialog";
+import { upscale } from "$lib/state/upscale.svelte.js";
+import { library } from "$lib/state/library.svelte.js";
+import { selection } from "$lib/state/selection.svelte.js";
+import { shell } from "$lib/state/shell.svelte.js";
+import { defaultSettings } from "$lib/enlarge.js";
+
+const m = /** @type {Record<string, import('vitest').Mock>} */ (/** @type {any} */ (api));
+const l = /** @type {Record<string, import('vitest').Mock>} */ (/** @type {any} */ (lib));
+const READY = { state: "ready", download_bytes: 0, host: "github.com" };
+const MISSING = { state: "missing", download_bytes: 4_866_388, host: "github.com" };
+const PLAN = { source_width: 6000, source_height: 4000, out_width: 24000, out_height: 16000, megapixels: 384, tiles: 460, seconds: 300, file_bytes: 1, very_large: false, export_gb: 23 };
+const RESULT = { image_id: 9, version_id: 90, path: "/photos/a-Enlarged-4x.jpg", width: 24000, height: 16000, ms: 101_000 };
+const photo = (/** @type {object} */ extra = {}) => /** @type {any} */ ({ image_id: 1, version_id: 10, path: "/photos/a.jpg", ...extra });
+
+/** @type {ReturnType<typeof vi.spyOn>} */
+let notify;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  notify = vi.spyOn(shell, "notify").mockImplementation(() => {});
+  upscale.target = null;
+  upscale.settings = defaultSettings();
+  upscale.fileName = "";
+  upscale.plan = null;
+  upscale.planError = "";
+  upscale.modelDialog = null;
+  upscale.modelStatus = null;
+  upscale.dialogError = "";
+  upscale.pendingRun = null;
+  upscale.job = null;
+  upscale.error = "";
+  library.images = /** @type {any} */ ([photo()]);
+  library.activeCollectionId = null;
+  shell.activeModule = "library";
+  selection.selectedIds = new Set([10]);
+  m.upscaleModelStatus.mockResolvedValue(READY);
+  m.upscalePlan.mockResolvedValue(PLAN);
+  m.upscaleRun.mockResolvedValue(RESULT);
+});
+
+describe("openEnlargeDialog", () => {
+  it("opens for the photo and fills in the plan", async () => {
+    A.openEnlargeDialog(photo());
+    expect(upscale.target).toEqual({ versionId: 10, imageId: 1, path: "/photos/a.jpg" });
+    await vi.waitFor(() => expect(upscale.plan).toEqual(PLAN));
+    expect(m.upscalePlan).toHaveBeenCalledWith(10, { kind: "scale", value: 4 }, 95);
+    await vi.waitFor(() => expect(upscale.modelStatus).toEqual(READY));
+  });
+
+  it("refuses an enlargement, with the reason in the status line", () => {
+    A.openEnlargeDialog(photo({ enlarged_scale: 4 }));
+    expect(upscale.target).toBeNull();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/compounding invented detail/));
+  });
+
+  it("refuses while a job runs", () => {
+    upscale.job = { label: "x", done: 0, total: 0 };
+    A.openEnlargeDialog(photo());
+    expect(upscale.target).toBeNull();
+    expect(notify).toHaveBeenCalledWith("An enlargement is already running");
+  });
+
+  it("keeps the form's settings between uses but not the file name", () => {
+    upscale.settings.strength = 60;
+    upscale.fileName = "mine";
+    A.openEnlargeDialog(photo());
+    expect(upscale.settings.strength).toBe(60);
+    expect(upscale.fileName).toBe("");
+  });
+});
+
+describe("refreshEnlargePlan", () => {
+  it("shows the backend's reason when there is no plan", async () => {
+    A.openEnlargeDialog(photo());
+    await vi.waitFor(() => expect(upscale.plan).not.toBeNull());
+    m.upscalePlan.mockRejectedValue(new Error("a long edge of 100 px is not larger than the photo's 6000 px"));
+    upscale.settings.scale = "long_edge";
+    upscale.settings.longEdge = "100";
+    await A.refreshEnlargePlan();
+    expect(upscale.plan).toBeNull();
+    expect(upscale.planError).toBe("a long edge of 100 px is not larger than the photo's 6000 px");
+  });
+
+  it("asks nothing while the long edge is empty", async () => {
+    A.openEnlargeDialog(photo());
+    await vi.waitFor(() => expect(upscale.plan).not.toBeNull());
+    m.upscalePlan.mockClear();
+    upscale.settings.scale = "long_edge";
+    await A.refreshEnlargePlan();
+    expect(m.upscalePlan).not.toHaveBeenCalled();
+    expect(upscale.plan).toBeNull();
+  });
+
+  it("drops an answer that arrives after a newer one", async () => {
+    A.openEnlargeDialog(photo());
+    await vi.waitFor(() => expect(upscale.plan).not.toBeNull());
+    /** @type {(p: unknown) => void} */
+    let slow = () => {};
+    m.upscalePlan.mockImplementationOnce(() => new Promise((r) => (slow = r)));
+    const first = A.refreshEnlargePlan();
+    m.upscalePlan.mockResolvedValueOnce({ ...PLAN, out_width: 12000 });
+    await A.refreshEnlargePlan();
+    slow({ ...PLAN, out_width: 99 });
+    await first;
+    expect(upscale.plan?.out_width).toBe(12000);
+  });
+});
+
+describe("handleEnlarge", () => {
+  async function open_() {
+    A.openEnlargeDialog(photo());
+    await vi.waitFor(() => expect(upscale.plan).not.toBeNull());
+  }
+
+  it("runs the job with the form's choices, closes the dialog, and reports", async () => {
+    await open_();
+    upscale.settings.strength = 70;
+    upscale.settings.quality = 100;
+    upscale.settings.addToCollections = true;
+    upscale.fileName = "  big one ";
+    await A.handleEnlarge();
+    expect(m.upscaleRun).toHaveBeenCalledWith(10, {
+      target: { kind: "scale", value: 4 },
+      strength: 70,
+      jpegQuality: 100,
+      fileName: "big one",
+      addToCollections: true,
+      metadataNote: true,
+    });
+    expect(upscale.target).toBeNull();
+    expect(upscale.job).toBeNull();
+    expect(l.refresh).toHaveBeenCalled();
+    expect(l.refreshCollections).toHaveBeenCalled();
+    expect(l.prioritizeThumbnail).toHaveBeenCalledWith(90);
+    expect(notify).toHaveBeenCalledWith("Enlarged a.jpg ×4 (24000 × 16000 px) in 101 s.");
+  });
+
+  it("sends no file name when the field is empty, and leaves collections alone when not asked", async () => {
+    await open_();
+    await A.handleEnlarge();
+    expect(m.upscaleRun.mock.calls[0][1]).toMatchObject({ fileName: null, addToCollections: false });
+    expect(l.refreshCollections).not.toHaveBeenCalled();
+  });
+
+  it("selects the new photo only while the user is still on the original", async () => {
+    await open_();
+    await A.handleEnlarge();
+    expect(nav.revealPhotos).toHaveBeenCalledWith([9]);
+
+    vi.mocked(nav.revealPhotos).mockClear();
+    await open_();
+    selection.selectedIds = new Set([11]);
+    await A.handleEnlarge();
+    expect(nav.revealPhotos).not.toHaveBeenCalled();
+  });
+
+  it("tracks progress while it runs", async () => {
+    await open_();
+    /** @type {(p: { done: number, total: number }) => void} */
+    let push = () => {};
+    m.onUpscaleProgress.mockImplementationOnce(async (/** @type {typeof push} */ h) => ((push = h), () => {}));
+    /** @type {(v: unknown) => void} */
+    let finish = () => {};
+    m.upscaleRun.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    const done = A.handleEnlarge();
+    await vi.waitFor(() => expect(upscale.job).toEqual({ label: "a.jpg", done: 0, total: 0 }));
+    await vi.waitFor(() => expect(m.upscaleRun).toHaveBeenCalled());
+    push({ done: 3, total: 460 });
+    expect(upscale.job).toEqual({ label: "a.jpg", done: 3, total: 460 });
+    finish(RESULT);
+    await done;
+    expect(upscale.job).toBeNull();
+  });
+
+  it("says a stopped job wrote nothing", async () => {
+    await open_();
+    m.upscaleRun.mockRejectedValue(new Error("upscale cancelled"));
+    await A.handleEnlarge();
+    expect(notify).toHaveBeenCalledWith("Enlargement stopped. Nothing was written.");
+    expect(l.refresh).not.toHaveBeenCalled();
+    expect(upscale.job).toBeNull();
+  });
+
+  it("reports a failure and clears the job", async () => {
+    await open_();
+    m.upscaleRun.mockRejectedValue(new Error("the helper crashed"));
+    await A.handleEnlarge();
+    expect(notify).toHaveBeenCalledWith("Enlarge failed: the helper crashed");
+    expect(upscale.job).toBeNull();
+  });
+
+  it("does nothing without a plan", async () => {
+    A.openEnlargeDialog(photo());
+    upscale.plan = null;
+    await A.handleEnlarge();
+    expect(m.upscaleRun).not.toHaveBeenCalled();
+  });
+
+  it("Stop calls the backend only while a job runs", () => {
+    A.handleEnlargeCancel();
+    expect(m.upscaleCancel).not.toHaveBeenCalled();
+    upscale.job = { label: "x", done: 0, total: 0 };
+    A.handleEnlargeCancel();
+    expect(m.upscaleCancel).toHaveBeenCalled();
+  });
+});
+
+describe("the model dialog", () => {
+  async function pending() {
+    m.upscaleModelStatus.mockResolvedValue(MISSING);
+    A.openEnlargeDialog(photo());
+    await vi.waitFor(() => expect(upscale.plan).not.toBeNull());
+    await A.handleEnlarge();
+  }
+
+  it("asks before downloading, keeping the Enlarge dialog open underneath", async () => {
+    await pending();
+    expect(upscale.modelDialog).toBe("consent");
+    expect(upscale.target).not.toBeNull();
+    expect(m.upscaleRun).not.toHaveBeenCalled();
+    expect(upscale.pendingRun).toMatchObject({ versionId: 10, label: "a.jpg", scale: 4 });
+  });
+
+  it("runs the job once the download lands", async () => {
+    await pending();
+    m.upscaleDownloadModel.mockResolvedValue(READY);
+    await A.handleEnlargeModelDownload();
+    expect(upscale.modelDialog).toBeNull();
+    expect(m.upscaleRun).toHaveBeenCalledWith(10, expect.objectContaining({ strength: 100 }));
+    expect(upscale.target).toBeNull();
+  });
+
+  it("backs out quietly when the download is cancelled", async () => {
+    await pending();
+    m.upscaleDownloadModel.mockRejectedValue(new Error("download cancelled"));
+    await A.handleEnlargeModelDownload();
+    expect(upscale.modelDialog).toBeNull();
+    expect(upscale.pendingRun).toBeNull();
+    expect(upscale.target).not.toBeNull();
+    expect(m.upscaleRun).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed download with its cause and lets the user retry", async () => {
+    await pending();
+    m.upscaleDownloadModel.mockRejectedValue(new Error("no network"));
+    await A.handleEnlargeModelDownload();
+    expect(upscale.modelDialog).toBe("failed");
+    expect(upscale.dialogError).toBe("no network");
+    A.handleEnlargeModelRetry();
+    expect(upscale.modelDialog).toBe("consent");
+  });
+
+  it("imports a chosen file and runs the job", async () => {
+    await pending();
+    vi.mocked(open).mockResolvedValue("/x/realesr_general_x4v3.onnx");
+    m.upscaleImportModel.mockResolvedValue(READY);
+    await A.handleEnlargeModelImport();
+    expect(m.upscaleImportModel).toHaveBeenCalledWith("/x/realesr_general_x4v3.onnx");
+    expect(m.upscaleRun).toHaveBeenCalled();
+  });
+
+  it("an import that is refused is shown as a failure", async () => {
+    await pending();
+    vi.mocked(open).mockResolvedValue("/x/other.onnx");
+    m.upscaleImportModel.mockRejectedValue(new Error("not the expected model file"));
+    await A.handleEnlargeModelImport();
+    expect(upscale.modelDialog).toBe("failed");
+    expect(upscale.dialogError).toBe("not the expected model file");
+  });
+
+  it("Cancel closes the consent dialog and forgets the job; during a download it stops the download instead", async () => {
+    await pending();
+    upscale.modelDialog = "downloading";
+    A.handleEnlargeModelCancel();
+    expect(m.upscaleCancelDownload).toHaveBeenCalled();
+    expect(upscale.modelDialog).toBe("downloading");
+    upscale.modelDialog = "consent";
+    A.handleEnlargeModelCancel();
+    expect(upscale.modelDialog).toBeNull();
+    expect(upscale.pendingRun).toBeNull();
+  });
+});

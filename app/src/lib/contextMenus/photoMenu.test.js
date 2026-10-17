@@ -8,7 +8,7 @@ const img = (/** @type {number} */ id, /** @type {object} */ extra = {}) =>
 
 const COMMANDS = [
   "openInDevelop", "openInLoupe", "compare", "survey", "setRating", "setFlag", "setColorLabel", "addToCollection", "removeFromCollection",
-  "copySettings", "syncSettings", "toggleAutoSync", "pasteSettings", "applyPreset", "resetSettings", "exportPhotos", "reveal", "copyPath", "detectFaces", "removeFromCatalog", "goToOriginal", "showEnlargements",
+  "copySettings", "syncSettings", "toggleAutoSync", "pasteSettings", "applyPreset", "resetSettings", "exportPhotos", "reveal", "copyPath", "detectFaces", "removeFromCatalog", "goToOriginal", "showEnlargements", "enlarge",
 ];
 function commands() {
   return /** @type {any} */ (Object.fromEntries(COMMANDS.map((c) => [c, vi.fn()])));
@@ -77,7 +77,7 @@ describe("photo menu: one photo, Library", () => {
   const menu = buildPhotoMenu(input(), commands());
 
   it("offers the common operations in a stable order, with no header", () => {
-    expect(ids(menu)).toEqual(["open-develop", "open-loupe", "rating", "flag", "color-label", "add-to-collection", "develop-settings", "export", "reveal", "copy-path", "detect-faces", "remove-from-catalog"]);
+    expect(ids(menu)).toEqual(["open-develop", "open-loupe", "rating", "flag", "color-label", "add-to-collection", "develop-settings", "export", "enlarge", "reveal", "copy-path", "detect-faces", "remove-from-catalog"]);
     expect("header" in menu[0]).toBe(false);
   });
 
@@ -157,7 +157,7 @@ describe("photo menu: several photos", () => {
   it("names the target in a header and keeps the same shape (plus Compare / Survey)", () => {
     expect(menu[0]).toEqual({ header: "3 photos" });
     expect(ids(menu)).toContain("compare-survey");
-    expect(ids(menu)).toEqual(expect.arrayContaining(["rating", "flag", "develop-settings", "export", "reveal", "copy-path", "remove-from-catalog"]));
+    expect(ids(menu)).toEqual(expect.arrayContaining(["rating", "flag", "develop-settings", "export", "enlarge", "reveal", "copy-path", "remove-from-catalog"]));
   });
 
   it("disables what needs a single photo, with a reason, instead of hiding it", () => {
@@ -250,5 +250,26 @@ describe("grid background menu", () => {
     expect(find(m, "select-all")?.disabled).toBe(false);
     const empty = buildGridBackgroundMenu({ photoCount: 0, selectedCount: 0 }, cmd);
     expect(find(empty, "select-all")?.disabled).toBe(true);
+  });
+});
+
+describe("photo menu: Enlarge (AI)", () => {
+  it("offers Enlarge (AI)… on one photo and runs it with the photo's version id", () => {
+    const cmd = commands();
+    const item = find(buildPhotoMenu(input({ images: [img(1)] }), cmd), "enlarge");
+    expect(item).toMatchObject({ label: "Enlarge (AI)…", disabled: false });
+    item?.run?.();
+    expect(cmd.enlarge).toHaveBeenCalledWith(10);
+  });
+
+  it("is greyed on an enlargement, with the reason", () => {
+    const item = find(buildPhotoMenu(input({ images: [img(2, { enlarged_scale: 4, enlarged_from: 1 })] }), commands()), "enlarge");
+    expect(item).toMatchObject({ disabled: true });
+    expect(item?.reason).toMatch(/compounding invented detail/);
+  });
+
+  it("is greyed on several photos: enlarging is one at a time", () => {
+    const item = find(buildPhotoMenu(input({ images: [img(1), img(2)] }), commands()), "enlarge");
+    expect(item).toMatchObject({ disabled: true, reason: "Choose a single photo" });
   });
 });

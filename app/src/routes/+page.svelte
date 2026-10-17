@@ -18,6 +18,8 @@
     import { masks } from "$lib/state/masks.svelte.js";
   import { segment } from "$lib/state/segment.svelte.js";
   import { denoise } from "$lib/state/denoise.svelte.js";
+  import { upscale } from "$lib/state/upscale.svelte.js";
+  import { handleEnlargeCancel } from "$lib/actions/enlargeActions.js";
   import { handleSegmentAccept, handleSegmentCancel, handleSegmentCycleCandidate } from "$lib/actions/segmentActions.js";
   import { softProof } from "$lib/state/softProof.svelte.js";
   import { presets } from "$lib/state/presets.svelte.js";
@@ -392,6 +394,8 @@
     mergingHdr={importFlow.mergingHdr}
     hdrMergeProgress={importFlow.hdrMergeProgress}
     statusMessage={shell.statusMessage}
+    enlargeJob={upscale.job}
+    onEnlargeCancel={handleEnlargeCancel}
   />
 
   {#if shell.activeModule === "library"}

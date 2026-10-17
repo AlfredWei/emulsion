@@ -161,6 +161,25 @@ impl Catalog {
             .collect()
     }
 
+    /// The version the grid shows for a photo (its first non-virtual one): what a caller that has just created an
+    /// image needs to select it.
+    pub fn get_primary_version_id(&self, image_id: i64) -> Result<i64> {
+        self.conn.query_row(
+            "SELECT id FROM image_versions WHERE image_id = ?1 AND is_virtual_copy = 0 ORDER BY id ASC LIMIT 1",
+            params![image_id],
+            |r| r.get(0),
+        )
+    }
+
+    /// The pixel size the catalog recorded for a photo (the enlarge dialog's size summary starts from it).
+    pub fn get_image_dimensions(&self, image_id: i64) -> Result<Option<(u32, u32)>> {
+        let row: Option<(Option<u32>, Option<u32>)> = self
+            .conn
+            .query_row("SELECT width, height FROM images WHERE id = ?1", params![image_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        Ok(row.and_then(|(w, h)| Some((w?, h?))))
+    }
+
     /// Whether this photo is a model enlargement (RFC-0029 §7.6: Enlarge is disabled on one, in the first cut).
     #[allow(dead_code)] // used by the Enlarge menu entry of slice 4e
     pub fn is_enlargement(&self, image_id: i64) -> Result<bool> {

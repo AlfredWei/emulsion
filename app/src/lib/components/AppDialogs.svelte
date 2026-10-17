@@ -6,6 +6,10 @@
   import SmartCollectionDialog from "$lib/components/SmartCollectionDialog.svelte";
   import CopySettingsDialog from "$lib/components/CopySettingsDialog.svelte";
   import BackupPromptDialog from "$lib/components/BackupPromptDialog.svelte";
+  import EnlargeDialog from "$lib/components/EnlargeDialog.svelte";
+  import ModelDownloadDialog from "$lib/components/ModelDownloadDialog.svelte";
+  import { upscale } from "$lib/state/upscale.svelte.js";
+  import { handleEnlargeModelDownload, handleEnlargeModelImport, handleEnlargeModelCancel, handleEnlargeModelRetry } from "$lib/actions/enlargeActions.js";
 
   /**
    * AppDialogs: every app-level modal (settings, export, confirmations, name prompts, backup prompt)
@@ -111,6 +115,28 @@
 <SettingsDialog open={settingsOpen} onClose={onCloseSettings} />
 
 <ExportDialog items={exportItems} onClose={onCloseExport} />
+
+<EnlargeDialog />
+<ModelDownloadDialog
+  dialog={upscale.modelDialog}
+  host={upscale.modelStatus?.host ?? ""}
+  downloadBytes={upscale.modelStatus?.download_bytes ?? 0}
+  downloaded={upscale.download.downloaded}
+  total={upscale.download.total}
+  error={upscale.dialogError}
+  onDownload={handleEnlargeModelDownload}
+  onImport={handleEnlargeModelImport}
+  onCancel={handleEnlargeModelCancel}
+  onRetry={handleEnlargeModelRetry}
+  title="Enlarge (AI) needs a one-time download"
+  ariaLabel="Enlarge (AI) model"
+  testId="enlarge-model-dialog"
+  what="enlargement model"
+  offlineNote="Nothing about your photos is sent, and enlarging itself runs entirely on this computer."
+  importLabel="I have the file"
+  importTitle="Choose the realesr_general_x4v3.onnx model file you already have"
+  cancelNote="Cancelling keeps what has arrived, and the next download carries on from there."
+/>
 
 <CopySettingsDialog
   open={copySettingsDialogOpen}

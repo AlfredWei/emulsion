@@ -67,6 +67,60 @@ pub fn tile_count(w: u32, h: u32) -> u32 {
     crate::ai::tiling::tile_count(w as usize, h as usize, crate::ai::upscale_pipeline::TILE, crate::ai::upscale_pipeline::OVERLAP) as u32
 }
 
+/// What the dialog shows before anything runs (RFC-0029 §3.2): the output size, how long it will take on this
+/// computer and how big the file will be. The figures are rules of thumb from RFC §9 / §12, not promises.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Plan {
+    pub source_width: u32,
+    pub source_height: u32,
+    pub out_width: u32,
+    pub out_height: u32,
+    pub megapixels: f64,
+    pub tiles: u32,
+    pub seconds: f64,
+    /// Rough JPEG size at the chosen quality (see `bytes_per_pixel`).
+    pub file_bytes: u64,
+    pub very_large: bool,
+    /// What exporting or printing the result later needs (RFC §12: about 60 MB per megapixel).
+    pub export_gb: f64,
+}
+
+/// Model time per 256 px tile on the reference machine (M1 Pro, CPU, RFC §10): 550 ms, which already includes
+/// the resampling and the JPEG encode. The commands replace it with what the last job on this computer measured.
+pub const DEFAULT_MS_PER_TILE: f64 = 550.0;
+/// Rendering the original at native size before the model runs (RFC §12: about 0.33 s per megapixel).
+const RENDER_SECONDS_PER_MP: f64 = 0.33;
+const EXPORT_MB_PER_MP: f64 = 60.0;
+
+/// JPEG bytes per pixel: a coarse guess (about 0.9 at quality 95, about 2 at 100, a photo with ordinary detail);
+/// the real size depends on the picture, and a smooth one comes out several times smaller (RFC §12's test file).
+fn bytes_per_pixel(quality: u8) -> f64 {
+    match quality {
+        0..=89 => 0.5,
+        90..=97 => 0.9,
+        _ => 2.0,
+    }
+}
+
+pub fn plan(source: (u32, u32), target: Target, jpeg_quality: u8, ms_per_tile: f64) -> Result<Plan, String> {
+    let out = output_size(source.0, source.1, target)?;
+    let tiles = tile_count(source.0, source.1);
+    let out_mp = megapixels(out);
+    let source_mp = megapixels(source);
+    Ok(Plan {
+        source_width: source.0,
+        source_height: source.1,
+        out_width: out.0,
+        out_height: out.1,
+        megapixels: out_mp,
+        tiles,
+        seconds: tiles as f64 * ms_per_tile.max(1.0) / 1000.0 + source_mp * RENDER_SECONDS_PER_MP,
+        file_bytes: (out_mp * 1_000_000.0 * bytes_per_pixel(jpeg_quality)) as u64,
+        very_large: is_very_large(out),
+        export_gb: out_mp * EXPORT_MB_PER_MP / 1000.0,
+    })
+}
+
 /// The file stem of the result, next to the original: `<stem>-Enlarged-4x`, `-2x` or `-6000px` for a long edge
 /// (RFC-0029 §3.1). The caller makes it unique with `export::unique_output_path`.
 pub fn result_stem(source_stem: &str, target: Target) -> String {
@@ -105,9 +159,10 @@ pub struct Spec<'a> {
 /// Renders the picture, asks the helper (through `send`) to enlarge it, and cleans up the intermediate.
 /// `send` performs the round trip for the request it is given, reporting progress itself; a `cancelled`
 /// answer should come back as `Err("cancelled")`-style text from the caller, this only passes errors on.
-pub fn run_enlargement(spec: &Spec, id: u64, send: impl FnOnce(Request) -> Result<UpscaleResult, String>) -> Result<UpscaleResult, String> {
+pub fn run_enlargement(spec: &Spec, id: u64, send: impl FnOnce(Request) -> Result<UpscaleResult, String>) -> Result<Enlarged, String> {
     let image = render_full_resolution(spec.source_path, spec.stack, spec.denoise_dir).map_err(|e| e.to_string())?;
-    let (out_width, out_height) = output_size(image.width(), image.height(), spec.target)?;
+    let source_size = (image.width(), image.height());
+    let (out_width, out_height) = output_size(source_size.0, source_size.1, spec.target)?;
     std::fs::create_dir_all(spec.scratch_dir).map_err(|e| format!("could not create {}: {e}", spec.scratch_dir.display()))?;
     let input: PathBuf = spec.scratch_dir.join(format!("enlarge-input-{id}.png"));
     let result = write_png_fast(&image, &input).and_then(|()| {
@@ -124,7 +179,14 @@ pub fn run_enlargement(spec: &Spec, id: u64, send: impl FnOnce(Request) -> Resul
         })
     });
     let _ = std::fs::remove_file(&input);
-    result
+    result.map(|result| Enlarged { result, source_size })
+}
+
+/// A finished job: the helper's answer and the size of the picture it enlarged (the render of the original).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Enlarged {
+    pub result: UpscaleResult,
+    pub source_size: (u32, u32),
 }
 
 #[cfg(test)]
@@ -157,6 +219,27 @@ mod tests {
         assert_eq!(output_size(3000, 2000, Target::LongEdge(65_535)).map(|s| s.0), Ok(65_535));
         // 4x of a 20,000 px edge is past the JPEG limit.
         assert!(output_size(20_000, 100, Target::Scale(4)).is_err());
+    }
+
+    #[test]
+    fn the_plan_gives_sizes_time_and_a_very_large_flag_for_the_dialog() {
+        let p = plan((6000, 4000), Target::Scale(2), 95, DEFAULT_MS_PER_TILE).unwrap();
+        assert_eq!((p.out_width, p.out_height, p.tiles), (12_000, 8_000, 27 * 18));
+        assert_eq!(p.megapixels, 96.0);
+        assert!(!p.very_large);
+        // 486 tiles x 0.55 s + 24 MP x 0.33 s.
+        assert!((p.seconds - (486.0 * 0.55 + 24.0 * 0.33)).abs() < 1e-9, "{}", p.seconds);
+        assert_eq!(p.file_bytes, (96.0 * 1e6 * 0.9) as u64);
+        assert!((p.export_gb - 5.76).abs() < 1e-9);
+        let big = plan((6000, 4000), Target::Scale(4), 95, DEFAULT_MS_PER_TILE).unwrap();
+        assert!(big.very_large && big.megapixels == 384.0);
+        // A faster machine's measured figure shortens the estimate; a nonsense one cannot make it negative.
+        assert!(plan((6000, 4000), Target::Scale(2), 95, 200.0).unwrap().seconds < p.seconds);
+        assert!(plan((6000, 4000), Target::Scale(2), 95, -5.0).unwrap().seconds > 0.0);
+        // Quality 100 is a bigger file than 95, which is bigger than 80.
+        let size = |q| plan((3000, 2000), Target::Scale(2), q, 550.0).unwrap().file_bytes;
+        assert!(size(100) > size(95) && size(95) > size(80));
+        assert!(plan((3000, 2000), Target::LongEdge(2000), 95, 550.0).is_err());
     }
 
     #[test]
@@ -221,7 +304,7 @@ mod tests {
             Ok(UpscaleResult { width: out_width, height: out_height, tiles: 1, ms: 5 })
         })
         .unwrap();
-        assert_eq!((r.width, r.height), (480, 320));
+        assert_eq!((r.result.width, r.result.height, r.source_size), (480, 320, (120, 80)));
         let (input, dims) = seen.unwrap();
         assert_eq!(dims, (120, 80));
         assert!(!input.exists(), "the intermediate must not outlive the job");

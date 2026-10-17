@@ -95,7 +95,8 @@ src-tauri/
 │   ├── bundled_models.rs        Models shipped inside the installer (release builds): copied into the model folders on first use, verified by SHA-256; models/bundled-models.json lists them (a test keeps it in step with the pinned constants)
 │   ├── segment_models.rs, segment_commands.rs   Click-select (RFC-0026): model fetch/verify/import, Tauri commands
 │   ├── denoise_models.rs, denoise_cache.rs, denoise_commands.rs, denoise_preview.rs   AI denoise (RFC-0027): the model file (verified resumable download, or import), the cache of finished results, Tauri commands (model status/download/import, run/cancel job, cache info/remove, the Develop preview blend), and the blend of a preview with the kept copy
-│   ├── upscale_job.rs           AI enlargement (RFC-0029), app side: the output-size rules (2x / 4x / long edge, JPEG limit), the render of the graded crop to a lossless intermediate, and the helper round trip as a closure (no Tauri, no catalog)
+│   ├── upscale_job.rs           AI enlargement (RFC-0029), app side: the output-size rules (2x / 4x / long edge, JPEG limit), the render of the graded crop to a lossless intermediate, and the helper round trip as a closure (no Tauri, no catalog); `plan()` (the dialog's size / time / file-size figures) and `run_enlargement` (the whole job, returns the source size too)
+│   ├── upscale_models.rs, upscale_commands.rs   Enlarge (AI) (RFC-0029): the pinned model file (verified resumable download, or import; the release asset is not published yet, `models/UPSCALE_MODEL.md`) and the Tauri commands (model status / download / import, `upscale_plan`, `upscale_run` which registers the result as a connected photo, `upscale_cancel`)
 │   ├── ai/                      AI helper process, app side: protocol.rs (JSON-lines wire types, shared with the helper), supervisor.rs (lazy spawn, retry, idle respawn, progress streaming, cancel), tiling.rs (overlapping-tile inference and feathered blend, shared with the helper), upscale_tiling.rs / resample.rs / upscale_pipeline.rs (RFC-0029: the band-streamed 4x tiler, the streaming Lanczos resampler, and the pull-style pipeline that blends the model with a plain enlargement; all pure, shared with the helper)
 │   ├── bin/emulsion-ai/         The long-lived AI helper binary: main.rs (request loop with a stdin reader thread, idle exit), segment.rs (SAM 2 Tiny on `ort`, CPU), denoise.rs (tiled NAFNet denoise), upscale.rs (4x super-resolution streamed row by row into a JPEG) -- the only code that links ONNX Runtime
 │   ├── lens_profile.rs          Lens-profile matching for Lens Corrections
@@ -121,13 +122,13 @@ src/
 │   └── m*-spike / m*-smoke/   Throwaway diagnostic routes (see note below), not part of the app
 ├── lib/
 │   ├── api/                 Thin wrappers around invoke(): the only place that knows Tauri command names/shapes
-│   │                        (catalog, develop, export, faces, map, print, storage, backup, system, segment, denoise)
+│   │                        (catalog, develop, export, faces, map, print, storage, backup, system, segment, denoise, upscale)
 │   ├── components/          Svelte components. App shell: AppTitlebar, AppDialogs, StatusStrip; module
 │   │                        bodies picked by +page.svelte: LibraryModule, DevelopModule, PrintModule (prop-less, import the stores/actions they use; RFC-0009 P8). Library:
 │   │                        CatalogRail, LibraryGrid/GridCell, LibraryToolbar, LibraryFilterBar, LibraryImageViewer,
 │   │                        LibraryCompareView, LibrarySurveyView, LibraryMapView (Leaflet; loaded on first open), LibraryHistogram, MetadataPanel. Develop:
 │   │                        DevelopCanvas (WebGPU), DevelopPanel, DevelopInfoBar, Filmstrip, Histogram,
-│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, ModelDownloadDialog (AI model consent/download/import, wording per feature: Select Subject, AI Denoise), ConnectedPhotos (AI-enlargement links in the info panel), AiDenoiseControls + AiDenoiseCompare (the AI Denoise block of the Noise Reduction panel and its before/after crop view), DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
+│   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, ModelDownloadDialog (AI model consent/download/import, wording per feature: Select Subject, AI Denoise), ConnectedPhotos (AI-enlargement links in the info panel), EnlargeDialog (Enlarge (AI): scale, Strength, the numbers, where it goes), AiDenoiseControls + AiDenoiseCompare (the AI Denoise block of the Noise Reduction panel and its before/after crop view), DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
 │   │                        PrintLayoutView. Dialogs: SettingsDialog, ExportDialog, ConfirmDialog,
 │   │                        TextPromptDialog, SmartCollectionDialog, CopySettingsDialog, BackupPromptDialog
 │   ├── gpu/                 Develop WebGPU code, split out of DevelopCanvas: gpuHandles.js (handle object +
@@ -148,7 +149,7 @@ src/
 │   │                        canvas readouts, edit-stack persistence), developView.svelte.js (per-adjustment derived
 │   │                        views of the edit stack), masks.svelte.js (mask tool/selection state, brush options, resample/eyedropper
 │   │                        targets; `install()` self-cleaning effects), segment.svelte.js (Select Subject session: phase, clicks,
-│   │                        candidates, model dialog; its `install()` ends the session with the tool), denoise.svelte.js (AI Denoise: model dialog, the open photo's kept copy, the running job, the crop preview; its `install()` follows the open photo), softProof.svelte.js (proof settings + debounced
+│   │                        candidates, model dialog; its `install()` ends the session with the tool), denoise.svelte.js (AI Denoise: model dialog, the open photo's kept copy, the running job, the crop preview; its `install()` follows the open photo), upscale.svelte.js (Enlarge (AI): the photo the dialog is open for, the form's settings, the plan, the model dialog, the running job), softProof.svelte.js (proof settings + debounced
 │   │                        preview effect), presets.svelte.js (preset list + Develop dialog flags), exportFlow.svelte.js (Export dialog items + what Export/Print
 │   │                        would act on); more land per RFC-0009 P7+.
 │   │                        Tested via lib/state/*.test.js
@@ -160,7 +161,7 @@ src/
 │   │                        importActions.js (import/merge runners, thumbnail regeneration + startup poll; faceActions.js
 │   │                        also holds the face-detection runners), developActions.js (adjustment/crop/WB/tone handlers,
 │   │                        readout setters, peeks, snapshots), metadataActions.js (rating/flag/label, IPTC saves);
-│   │                        libraryActions.js also holds handleRemoveConfirmed; segmentActions.js (Select Subject: arm, click, candidates, accept/cancel, model download/import), upscaleActions.js (Go to Original / Show Enlargements: select the linked photos, clearing scope and filters only if they hide them), denoiseActions.js (AI Denoise: Amount, crop preview, whole-photo job, remove, model download/import),
+│   │                        libraryActions.js also holds handleRemoveConfirmed; segmentActions.js (Select Subject: arm, click, candidates, accept/cancel, model download/import), enlargeActions.js (Enlarge (AI): open the dialog, the plan, the job, model download/import), upscaleActions.js (Go to Original / Show Enlargements: select the linked photos, clearing scope and filters only if they hide them), denoiseActions.js (AI Denoise: Amount, crop preview, whole-photo job, remove, model download/import),
 │   │                        maskActions.js (mask create/update/delete, resample,
 │   │                        eyedropper, GPU fallback), presetActions.js (preset list, apply/import/export, copy/paste/sync settings),
 │   │                        autoSyncActions.js (Auto Sync: the switch, targets, the flush hook that writes changed ops to the other selected photos),
@@ -175,6 +176,7 @@ src/
 │   ├── autoSync.js          Pure Auto Sync diff (RFC-0028 §3.5): the syncable ops that changed between two edit stacks, per-photo ops excluded
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── upscaleLinks.js      Pure wording of the AI-enlargement cues (the x-N chip, the Connected photos lines)
+│   ├── enlarge.js           Pure side of the Enlarge (AI) dialog: the target the form describes, the plan in words, the very-large warning, the default name
 │   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering, viewport filter (M5.5)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)

@@ -167,6 +167,17 @@ pub(super) fn crop_rect_px(width: u32, height: u32, c: &Crop) -> (u32, u32, u32,
     (px, py, pw, ph)
 }
 
+/// The size of a `width x height` picture after `apply_crop`: what the render's output measures, known without
+/// rendering (the enlarge dialog's size summary).
+pub(crate) fn cropped_dimensions(width: u32, height: u32, stack: &EditStack) -> (u32, u32) {
+    let crop = crop_op(&stack.ops);
+    if crop_is_identity(&crop) || width == 0 || height == 0 {
+        return (width, height);
+    }
+    let (_, _, pw, ph) = crop_rect_px(width, height, &crop);
+    (pw, ph)
+}
+
 /// Applies Crop & Straighten to `image` in place (rotate, then crop --
 /// matching this module's own doc comment on why crop-then-resize, not
 /// resize-then-crop, in the two real callers). Skipped ENTIRELY at

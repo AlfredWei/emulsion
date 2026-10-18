@@ -923,3 +923,237 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 }
+
+/// Measurements behind docs/rfc/RFC-0030-import-speed.md. Not a unit test: ignored unless asked for, prints a table.
+///
+///   IMPORT_PROBE_DIR=/path/with/jpegs-and-raws cargo test --release --lib speed_probe -- --ignored --nocapture
+///
+/// Files are read once to warm the page cache first (the numbers are CPU and memory, not a cold disk), each stage is
+/// the best of three runs, and the parallel part runs the whole directory several times over through N workers.
+#[cfg(test)]
+mod speed_probe {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    const TARGET: u32 = 512;
+
+    fn best<T>(mut f: impl FnMut() -> T) -> (Duration, T) {
+        let mut best: Option<(Duration, T)> = None;
+        for _ in 0..3 {
+            let t = Instant::now();
+            let v = f();
+            let d = t.elapsed();
+            if best.as_ref().is_none_or(|(b, _)| d < *b) {
+                best = Some((d, v));
+            }
+        }
+        best.unwrap()
+    }
+
+    fn ms(d: Duration) -> f64 {
+        d.as_secs_f64() * 1000.0
+    }
+
+    fn files(dir: &Path, exts: &[&str]) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.contains(&e.to_lowercase().as_str())))
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn orientation(bytes: &[u8]) -> u32 {
+        let mut c = std::io::Cursor::new(bytes);
+        exif::Reader::new()
+            .read_from_container(&mut c)
+            .ok()
+            .and_then(|e| e.get_field(exif::Tag::Orientation, exif::In::PRIMARY).and_then(|f| f.value.get_uint(0)))
+            .filter(|v| (1..=8).contains(v))
+            .unwrap_or(1)
+    }
+
+    fn orient(img: image::RgbImage, o: u32) -> image::RgbImage {
+        use image::imageops::*;
+        match o {
+            2 => flip_horizontal(&img),
+            3 => rotate180(&img),
+            4 => flip_vertical(&img),
+            5 => flip_horizontal(&rotate90(&img)),
+            6 => rotate90(&img),
+            7 => flip_horizontal(&rotate270(&img)),
+            8 => rotate270(&img),
+            _ => img,
+        }
+    }
+
+    /// Exact k x k box average, row by row (cheap, no float weights): the prefilter of the fast path.
+    fn box_down(src: &image::RgbImage, k: u32) -> image::RgbImage {
+        let (w, h) = (src.width() / k, src.height() / k);
+        let sw = src.width() as usize;
+        let raw = src.as_raw();
+        let mut out = vec![0u8; (w * h * 3) as usize];
+        let kk = k * k;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let mut acc = [0u32; 3];
+                for dy in 0..k as usize {
+                    let row = ((y * k as usize + dy) * sw + x * k as usize) * 3;
+                    for dx in 0..k as usize {
+                        let p = row + dx * 3;
+                        acc[0] += raw[p] as u32;
+                        acc[1] += raw[p + 1] as u32;
+                        acc[2] += raw[p + 2] as u32;
+                    }
+                }
+                let o = (y * w as usize + x) * 3;
+                out[o] = (acc[0] / kk) as u8;
+                out[o + 1] = (acc[1] / kk) as u8;
+                out[o + 2] = (acc[2] / kk) as u8;
+            }
+        }
+        image::RgbImage::from_raw(w, h, out).unwrap()
+    }
+
+    fn encode(img: &image::RgbImage, q: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        jpeg_encoder::Encoder::new(&mut out, q).encode(img.as_raw(), img.width() as u16, img.height() as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+        out
+    }
+
+    /// What the app does today for a JPEG's grid thumbnail (see `generate_thumbnail_file` + `jpeg_decode::decode`).
+    fn current(bytes: &[u8]) -> Vec<u8> {
+        let o = orientation(bytes);
+        let full = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).unwrap().to_rgb8();
+        let full = orient(full, o);
+        let (w, h) = (full.width(), full.height());
+        let small = if w.max(h) > 1024 {
+            let s = 1024.0 / w.max(h) as f64;
+            image::imageops::resize(&full, (w as f64 * s).round() as u32, (h as f64 * s).round() as u32, image::imageops::FilterType::Triangle)
+        } else {
+            full
+        };
+        let mut out = Vec::new();
+        small.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg).unwrap();
+        out
+    }
+
+    /// The candidate: full decode (the only decoder in the tree), box prefilter, triangle for the remainder, orient
+    /// the SMALL picture, encode with jpeg-encoder at `TARGET`.
+    fn candidate(bytes: &[u8]) -> Vec<u8> {
+        let o = orientation(bytes);
+        let full = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).unwrap().to_rgb8();
+        let k = (full.width().max(full.height()) / (TARGET * 2)).max(1);
+        let pre = if k > 1 { box_down(&full, k) } else { full };
+        let (w, h) = (pre.width(), pre.height());
+        let small = if w.max(h) > TARGET {
+            let s = TARGET as f64 / w.max(h) as f64;
+            image::imageops::resize(&pre, (w as f64 * s).round().max(1.0) as u32, (h as f64 * s).round().max(1.0) as u32, image::imageops::FilterType::Triangle)
+        } else {
+            pre
+        };
+        encode(&orient(small, o), 82)
+    }
+
+    #[test]
+    #[ignore = "measurement, needs IMPORT_PROBE_DIR"]
+    fn jpeg_stages() {
+        let dir = PathBuf::from(std::env::var("IMPORT_PROBE_DIR").expect("IMPORT_PROBE_DIR"));
+        println!("\nJPEG per-file stages, ms (best of 3, warm cache), {} cores", std::thread::available_parallelism().unwrap());
+        println!("{:<34} {:>5} {:>5} | {:>6} {:>6} {:>6} | {:>7} {:>7} {:>7} {:>7} | {:>8} {:>8}", "file", "MB", "MP", "read", "hash", "exif", "decode", "orient", "resize", "encode", "current", "cand.");
+        let (mut tot_cur, mut tot_cand) = (0.0, 0.0);
+        for p in files(&dir, &["jpg", "jpeg"]) {
+            let (t_read, bytes) = best(|| std::fs::read(&p).unwrap());
+            let (t_hash, _) = best(|| blake3::hash(&bytes));
+            let (t_exif, o) = best(|| {
+                let _ = metadata::extract_from_jpeg(&bytes);
+                orientation(&bytes)
+            });
+            let (t_dec, full) = best(|| image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).unwrap().to_rgb8());
+            let (t_or, full) = best(|| orient(full.clone(), o));
+            let mp = full.width() as f64 * full.height() as f64 / 1e6;
+            let (t_rs, small) = best(|| {
+                let s = 1024.0 / full.width().max(full.height()) as f64;
+                image::imageops::resize(&full, (full.width() as f64 * s).round() as u32, (full.height() as f64 * s).round() as u32, image::imageops::FilterType::Triangle)
+            });
+            let (t_enc, _) = best(|| {
+                let mut out = Vec::new();
+                small.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg).unwrap();
+                out
+            });
+            let (t_cur, cur) = best(|| current(&bytes));
+            let (t_cand, cand) = best(|| candidate(&bytes));
+            tot_cur += ms(t_cur);
+            tot_cand += ms(t_cand);
+            println!(
+                "{:<34} {:>5.1} {:>5.1} | {:>6.1} {:>6.1} {:>6.1} | {:>7.1} {:>7.1} {:>7.1} {:>7.1} | {:>8.1} {:>8.1}   thumb {} KB -> {} KB",
+                p.file_name().unwrap().to_string_lossy().chars().take(34).collect::<String>(),
+                bytes.len() as f64 / 1e6, mp, ms(t_read), ms(t_hash), ms(t_exif), ms(t_dec), ms(t_or), ms(t_rs), ms(t_enc), ms(t_cur), ms(t_cand),
+                cur.len() / 1000, cand.len() / 1000
+            );
+        }
+        println!("total per-set thumbnail time: current {tot_cur:.0} ms, candidate {tot_cand:.0} ms");
+    }
+
+    #[test]
+    #[ignore = "measurement, needs IMPORT_PROBE_DIR"]
+    fn raw_stages() {
+        let dir = PathBuf::from(std::env::var("IMPORT_PROBE_DIR").expect("IMPORT_PROBE_DIR"));
+        println!("\nRAW per-file stages, ms (best of 3, warm cache)");
+        for p in files(&dir, &["cr2", "cr3", "dng", "nef", "arw"]) {
+            let (t_read, bytes) = best(|| std::fs::read(&p).unwrap());
+            let (t_hash, _) = best(|| blake3::hash(&bytes));
+            let (t_open, _) = best(|| RawImage::open(&bytes).map(|_| ()).is_ok());
+            let mut raw = RawImage::open(&bytes).unwrap();
+            let (t_thumbs, sizes) = best(|| raw.extract_thumbs().map(|t| t.iter().map(|x| (x.width, x.height, x.data.len())).collect::<Vec<_>>()).unwrap_or_default());
+            let largest = raw.extract_thumbs().unwrap();
+            let largest = largest.last().unwrap();
+            let (t_dec, img) = best(|| image::load_from_memory_with_format(&largest.data, image::ImageFormat::Jpeg).unwrap().to_rgb8());
+            let (t_small, _) = best(|| {
+                let k = (img.width().max(img.height()) / (TARGET * 2)).max(1);
+                let pre = if k > 1 { box_down(&img, k) } else { img.clone() };
+                let s = TARGET as f64 / pre.width().max(pre.height()) as f64;
+                encode(&image::imageops::resize(&pre, (pre.width() as f64 * s).round() as u32, (pre.height() as f64 * s).round() as u32, image::imageops::FilterType::Triangle), 82)
+            });
+            println!(
+                "{:<30} {:>5.1} MB | read {:>5.1} hash {:>5.1} open {:>6.1} extract_thumbs {:>6.1} | embedded {:?} | decode-embedded {:>6.1} -> 512px+encode {:>6.1}",
+                p.file_name().unwrap().to_string_lossy(), bytes.len() as f64 / 1e6, ms(t_read), ms(t_hash), ms(t_open), ms(t_thumbs), sizes, ms(t_dec), ms(t_small)
+            );
+        }
+    }
+
+    /// Whole-set throughput through N workers pulling from one queue (the shape the fast path would have).
+    #[test]
+    #[ignore = "measurement, needs IMPORT_PROBE_DIR"]
+    fn parallel_scaling() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = PathBuf::from(std::env::var("IMPORT_PROBE_DIR").expect("IMPORT_PROBE_DIR"));
+        let paths: Vec<PathBuf> = std::iter::repeat_n(files(&dir, &["jpg", "jpeg"]), 4).flatten().collect();
+        let warm: u64 = paths.iter().map(|p| std::fs::metadata(p).unwrap().len()).sum();
+        println!("\nparallel scaling over {} JPEG files ({:.0} MB), read + hash + exif + thumbnail, ms to finish all / to the FIRST thumbnail", paths.len(), warm as f64 / 1e6);
+        for (label, f) in [("current", current as fn(&[u8]) -> Vec<u8>), ("candidate", candidate as fn(&[u8]) -> Vec<u8>)] {
+            for workers in [1usize, 2, 4, 8, 10] {
+                let next = AtomicUsize::new(0);
+                let first = std::sync::Mutex::new(None::<Duration>);
+                let start = Instant::now();
+                std::thread::scope(|s| {
+                    for _ in 0..workers {
+                        s.spawn(|| loop {
+                            let i = next.fetch_add(1, Ordering::SeqCst);
+                            let Some(p) = paths.get(i) else { break };
+                            let bytes = std::fs::read(p).unwrap();
+                            let _ = blake3::hash(&bytes);
+                            let _ = metadata::extract_from_jpeg(&bytes);
+                            let _ = f(&bytes);
+                            first.lock().unwrap().get_or_insert(start.elapsed());
+                        });
+                    }
+                });
+                let total = start.elapsed();
+                println!("  {label:<9} workers {workers:>2}: all {:>7.0} ms ({:>5.1} files/s), first thumbnail {:>6.0} ms", ms(total), paths.len() as f64 / total.as_secs_f64(), ms(first.lock().unwrap().unwrap()));
+            }
+        }
+    }
+}

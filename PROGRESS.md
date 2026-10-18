@@ -2,6 +2,21 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Import and export speed study (2026-10-19)
+
+Asked by the user: make thumbnails ready as soon as possible. Study only, nothing in the product changes; the write-up is
+[RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md), the tool is the ignored `import::speed_probe` test in
+`import.rs` (`IMPORT_PROBE_DIR=<dir> cargo test --release --lib speed_probe -- --ignored --nocapture`). Findings: (1) the
+grid is refreshed only after the **whole** thumbnail pass, so nothing shows until the last thumbnail exists; (2) the
+pass is serial, and 8 workers finish a 40-JPEG set 7.8x sooner (first thumbnail at ~20 ms); (3) JPEG decode is bounded
+by entropy decoding, so DCT-scaled decode (`djpeg -scale`) saves only 5 to 20% and `sips` is slower: no decoder swap;
+(4) cheaper pixel work (box prefilter, orient after resize) is worth ~25% only; (5) RAW thumbnails are already 2 ms
+(embedded JPEG written as is); (6) export is serial with no per-file progress. Proposed slices: A stream
+`thumbnail-ready` to the grid, B worker pool, C thumbnails during import with per-row locking, E cheaper pixels (+ the
+1024 vs 640 px decision), F memory-bounded parallel export with progress. **Not verified:** the real app end to end, a
+cold disk or card reader, Windows, any visual comparison of the candidate thumbnails; the 500-photo figures are a model
+from stage timings. Backlog: those four, at the end of the slices.
+
 ## A JPEG's size comes from its header, not from EXIF (2026-10-18)
 
 Found in the real-window check (backlog 16): the AI Denoise result of `stairs_ISO6400_native.jpg` was 2460x2843 while the

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defaultSettings, parseLongEdge, targetOf, formatEstimate, formatSize, planRows, veryLargeWarning, defaultStem, folderOf, regionFractions, centreFromClick, targetKey } from "./enlarge.js";
+import { defaultSettings, parseLongEdge, targetOf, formatEstimate, formatSize, planRows, veryLargeWarning, defaultStem, folderOf, regionFractions, centreFromClick, targetKey, splitEnlargeable, batchRows, batchVeryLargeWarning, batchSourceLine, jobLabel, batchOutcome } from "./enlarge.js";
 
 /** @param {Partial<import('$lib/api/upscale.js').UpscalePlan>} over */
 const plan = (over = {}) => ({ source_width: 6000, source_height: 4000, out_width: 24000, out_height: 16000, megapixels: 384, tiles: 460, seconds: 300, file_bytes: 345_600_000, very_large: false, export_gb: 23, ...over });
@@ -87,5 +87,47 @@ describe("the preview navigator", () => {
     expect(targetKey({ kind: "scale", value: 4 })).toBe("scale:4");
     expect(targetKey({ kind: "long_edge", value: 8000 })).toBe("long_edge:8000");
     expect(targetKey(null)).toBe("");
+  });
+});
+
+describe("batch", () => {
+  const img = (/** @type {number} */ id, /** @type {number | null} */ scale = null) => /** @type {any} */ ({ image_id: id, enlarged_scale: scale });
+  const dur = (/** @type {number} */ ms) => `${Math.round(ms / 1000)} s`;
+
+  it("leaves enlargements out of a selection and counts them", () => {
+    const { photos, skipped } = splitEnlargeable([img(1), img(2, 4), img(3), img(4, 2)]);
+    expect(photos.map((p) => p.image_id)).toEqual([1, 3]);
+    expect(skipped).toBe(2);
+  });
+
+  it("totals the plans and says how many photos cannot take the size", () => {
+    const rows = batchRows([plan({ megapixels: 40, seconds: 100, file_bytes: 30_000_000 }), plan({ megapixels: 20, seconds: 50, file_bytes: 15_000_000 })], 3);
+    expect(rows).toEqual([
+      { label: "Photos", value: "2 photos (1 photo cannot be enlarged to this size)" },
+      { label: "Output", value: "60.0 MP in total" },
+      { label: "Time", value: "about 3 min on this computer" },
+      { label: "Files", value: "about 45 MB in total" },
+    ]);
+    expect(batchRows([plan()], 1)[0].value).toBe("1 photo");
+  });
+
+  it("warns only when some result is very large", () => {
+    expect(batchVeryLargeWarning([plan(), plan()])).toBe("");
+    expect(batchVeryLargeWarning([plan({ very_large: true }), plan()])).toMatch(/^1 photo would come out very large/);
+  });
+
+  it("words the source line and the job label", () => {
+    expect(batchSourceLine(5, 0)).toBe("5 photos");
+    expect(batchSourceLine(3, 1)).toBe("3 photos (1 enlargement is left out)");
+    expect(batchSourceLine(3, 2)).toBe("3 photos (2 enlargements are left out)");
+    expect(jobLabel("a.jpg", 1, 5)).toBe("a.jpg (2 of 5)");
+    expect(jobLabel("a.jpg", 0, 1)).toBe("a.jpg");
+  });
+
+  it("reports how a batch ended", () => {
+    expect(batchOutcome({ done: 4, count: 4, failed: [], stopped: false, ms: 12000 }, dur)).toBe("Enlarged 4 of 4 photos in 12 s.");
+    expect(batchOutcome({ done: 3, count: 4, failed: [{ name: "b.jpg", reason: "no memory" }], stopped: false, ms: 3000 }, dur)).toBe("Enlarged 3 of 4 photos in 3 s. 1 failed: b.jpg (no memory).");
+    expect(batchOutcome({ done: 2, count: 5, failed: [], stopped: true, ms: 1000 }, dur)).toBe("Stopped after 2 of 5 photos. The finished ones are in the catalog.");
+    expect(batchOutcome({ done: 0, count: 5, failed: [], stopped: true, ms: 1000 }, dur)).toBe("Stopped after 0 of 5 photos.");
   });
 });

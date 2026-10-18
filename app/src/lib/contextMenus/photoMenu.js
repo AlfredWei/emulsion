@@ -44,7 +44,7 @@ import { formatKeyDisplay } from "$lib/shortcuts.js";
  * @property {() => void} removeFromCatalog
  * @property {(imageId: number) => void} goToOriginal  AI enlargement (RFC-0029 §3.2): select the photo this one was enlarged from
  * @property {(imageId: number) => void} showEnlargements  select the enlargements made from this photo
- * @property {(versionId: number) => void} enlarge  open the Enlarge (AI) dialog for this photo
+ * @property {(versionIds: number[]) => void} enlarge  open the Enlarge (AI) dialog for these photos (a batch when several)
  */
 
 const COLOR_LABELS = [
@@ -192,13 +192,14 @@ export function buildPhotoMenu(input, cmd) {
     SEPARATOR,
 
     { id: "export", label: "Export…", run: cmd.exportPhotos },
-    // Enlarge (AI) (RFC-0029): one photo at a time, and not on an enlargement (compounding invented detail).
+    // Enlarge (AI) (RFC-0029): a selection is enlarged as a batch (§18); enlargements are left out of it (compounding
+    // invented detail), and the entry is greyed when nothing else is left.
     {
       id: "enlarge",
       label: "Enlarge (AI)…",
-      disabled: many || first.enlarged_scale != null,
-      reason: many ? singleOnly : first.enlarged_scale != null ? "Enlarge (AI) is turned off on an enlargement, to avoid compounding invented detail" : undefined,
-      run: () => cmd.enlarge(first.version_id),
+      disabled: images.every((i) => i.enlarged_scale != null),
+      reason: images.every((i) => i.enlarged_scale != null) ? "Enlarge (AI) is turned off on an enlargement, to avoid compounding invented detail" : undefined,
+      run: () => cmd.enlarge(images.map((i) => i.version_id)),
     },
     { id: "reveal", label: `Show in ${fileManager}`, disabled: many, reason: singleOnly, run: () => cmd.reveal(first.path) },
     { id: "copy-path", label: "Copy Path", disabled: many, reason: singleOnly, run: () => cmd.copyPath(first.path) },

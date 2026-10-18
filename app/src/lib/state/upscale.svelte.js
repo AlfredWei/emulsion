@@ -10,6 +10,11 @@ export class UpscaleStore {
   /** The photo the dialog is open for; null = closed.
    * @type {null | { versionId: number, imageId: number, path: string }} */
   target = $state(null);
+  /** Set when the dialog enlarges several photos at once (RFC-0029 §18): `target` is then the first of them and only
+   * says the dialog is open. `items` are the photos that can be enlarged to the chosen size, with their plans (null
+   * until the first answer); `skipped` counts the enlargements the selection held, which are left out.
+   * @type {null | { photos: { versionId: number, imageId: number, path: string }[], skipped: number, items: null | { photo: { versionId: number, imageId: number, path: string }, plan: import('$lib/api/upscale.js').UpscalePlan }[] }} */
+  batch = $state(null);
   settings = $state(defaultSettings());
   /** The result name typed in the dialog; empty = the default. Reset for every photo. */
   fileName = $state("");
@@ -35,11 +40,12 @@ export class UpscaleStore {
   modelStatus = $state(null);
   download = $state({ downloaded: 0, total: 0 });
   dialogError = $state("");
-  /** The job the model dialog was opened for; it starts once the model is installed.
-   * @type {null | { versionId: number, label: string, scale: number, options: import('$lib/api/upscale.js').UpscaleRunOptions }} */
+  /** The jobs the model dialog was opened for; they start once the model is installed.
+   * @type {null | { queue: { photo: { versionId: number, imageId: number, path: string }, name: string, scale: number }[], options: import('$lib/api/upscale.js').UpscaleRunOptions }} */
   pendingRun = null;
 
-  /** The running job, or null. One at a time; it keeps running when the dialog is closed.
+  /** The running job, or null. One at a time (a batch runs its photos one after another); it keeps running when the
+   * dialog is closed.
    * @type {null | { label: string, done: number, total: number }} */
   job = $state(null);
   /** A failure shown in the dialog when it is still open. */

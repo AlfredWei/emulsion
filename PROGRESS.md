@@ -2,6 +2,21 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## A JPEG's size comes from its header, not from EXIF (2026-10-18)
+
+Found in the real-window check (backlog 16): the AI Denoise result of `stairs_ISO6400_native.jpg` was 2460x2843 while the
+grid and Develop said 2463x2845. The file really is 2460x2843; its EXIF `PixelXDimension`/`PixelYDimension` are stale
+(a crop that did not update them), and the catalog took the EXIF value first. Every label and every Enlarge plan built
+on the recorded size was therefore a few pixels off (an enlargement's target size is computed from it). Fixed:
+`extract_from_jpeg` now takes the header's size and keeps EXIF only for the other fields; the startup backfill
+(`backfill_image_dimensions`) also re-checks every JPEG row **once per catalog** against its file (a `settings` row
+`jpeg_dimensions_checked` records it) and corrects the stale ones. Tests: a JPEG whose EXIF says 99x77 and whose pixels
+are 40x20 gets 40x20; the check lists JPEGs only (case-insensitive extension) and runs once; the full CI test command
+passes (602 lib, 47 + 51 integration). **Verified in the real app** on a throwaway catalog: `stairs` 2463x2845 became
+2460x2843 and `tree1` 2232 wide became 2230 on the first launch, and the marker was set. **Not verified:** the user's
+own catalog (it corrects itself on the next launch of this build); RAW files (LibRaw's size is used there, unchanged);
+photos with an EXIF orientation of 5-8 (the header gives the stored size, as the EXIF tags did).
+
 ## The installer ships the AI helper (2026-10-18)
 
 The real-window check (backlog 19) found that a bundle built from the stock config has no `emulsion-ai`, so Enlarge, AI
@@ -334,7 +349,7 @@ Status after the 2026-10-05 verification round:
 13. **AI denoise 3a (RFC-0027 §8)** — OPEN: NAFNet-SIDD-width32 on other cameras and RAW-domain noise, on Windows (speed, memory), its checkpoint compared with the upstream file, the ONNX export against PyTorch output, a real tiled 24 MP run (time, seams), more than six scenes.
 14. **AI denoise 3b (RFC-0027 §9)** — OPEN: the real model on Windows, peak memory at 24 MP and the memory-pattern setting, stale hand-off files after a crash, Print honouring `ai_denoise` (done in 3d part 3).
 15. **FIXED 2026-10-09 (PR #219; GPU parity for NR still unverified) -- Bug, user-reported 2026-10-08**: "the noise reduction seems not working" / "the effect pipeline is broken, fix it later". Not reproduced. To investigate: Develop's Noise Reduction (Luminance, Color) and the effects pipeline on high-ISO photos such as `test_image/nind-iso6400/`, preview (GPU) vs export (CPU).
-16. **AI denoise 3c (RFC-0027 §10)** — OPEN: Windows (UI, helper, speed); graded previews (Library thumbnails, Loupe, soft proof) and the no-WebGPU Develop preview do not show `ai_denoise`; the crop preview follows the photo's middle, not the view; default Amount 70 untuned; a 24 MP whole-photo job through the UI; a visual check of the block at narrow panel widths; the dialog's live Download click.
+16. **AI denoise 3c (RFC-0027 §10)** — PARTLY DONE 2026-10-18 in a real `.app` on a throwaway catalog: the AI Denoise block renders cleanly at the default panel width, the bundled NAFNet was seeded (no download prompt), and *Denoise whole photo* on a 7 MP high-ISO JPEG ran through the bundled helper and finished in under a minute, "Denoised with NAFNet (SIDD), 2460x2843" (this also exposed the stale-EXIF size bug above). Still OPEN: Windows (UI, helper, speed); graded previews (Library thumbnails, Loupe, soft proof) and the no-WebGPU Develop preview do not show `ai_denoise`; the crop preview follows the photo's middle, not the view; default Amount 70 untuned; a 24 MP whole-photo job through the UI; a visual check of the block at narrow panel widths; the dialog's live Download click.
 
 17. **AI super-resolution, engine and catalog (RFC-0029 §10-§12)** — PARTLY DONE 2026-10-18: a **24 MP input to a 384 MP output** through the real helper binary (rebuilt release, `realesr-general-x4v3`, M1 Pro, CPU, Strength 50, JPEG 95): 6000x4000 to 24000x16000 in 486 tiles, **271 s (557 ms per tile), peak RSS 914 MB** (against 771 MB for 10 MP to 42 MP: memory follows the input band, not the output), a valid JPEG of the right size (a smooth, resized-up test input, so its 32 MB file size says nothing). The dialog's estimate for that job (486 x 550 ms + 0.33 s per source MP) is about 275 s: **within 2%**. Still OPEN: a *real* 24 MP camera file for seams and quality; GPU / CoreML; Windows (speed, memory, helper); the 32 px tile overlap by eye against 16 / 64; the `jpeg-encoder` IJG licence part against the project's licence policy; Develop in the real window with a 60 / 150 MP JPEG and heavier stacks (masks, lens, AI denoise) at that size; a 16 GB machine at 8 GB.
 18. **AI super-resolution, Library connection (§13, slice 4e)** — MOSTLY DONE 2026-10-18 in the real window (a debug `.app` bundle, the user's catalog): the ×N chip and link glyph on the grid, the *AI enlarged* filter (4 of 24 photos, Clear Filters link), *Show enlargement* selecting the result and both Connected-photos blocks (origin: "Enlarged ×4 (AI) from ..., the original has been edited since, Go to original"; original: "1 enlargement: ×4, Edited since ..."). Still OPEN: the grid's scroll-to-selection for a result far down a long grid (here it was in view), a screen reader on the chip and glyph, the Develop info bar has no Connected photos block.

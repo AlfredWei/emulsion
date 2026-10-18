@@ -367,6 +367,31 @@ impl Catalog {
         rows.collect()
     }
 
+    /// JPEG photos with the size the catalog holds for them, for the one-time check against the files' own headers
+    /// (earlier imports took the size from EXIF, which a crop can leave stale).
+    pub fn jpeg_images_with_dimensions(&self) -> Result<Vec<(i64, String, Option<u32>, Option<u32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, width, height FROM images WHERE lower(path) LIKE '%.jpg' OR lower(path) LIKE '%.jpeg' ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        rows.collect()
+    }
+
+    /// Whether the one-time check of recorded JPEG sizes has run on this catalog.
+    pub fn jpeg_dimension_check_done(&self) -> Result<bool> {
+        let done: Option<String> =
+            self.conn.query_row("SELECT value FROM settings WHERE key = 'jpeg_dimensions_checked'", [], |r| r.get(0)).optional()?;
+        Ok(done.is_some())
+    }
+
+    pub fn mark_jpeg_dimension_check_done(&self) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('jpeg_dimensions_checked', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub fn set_image_dimensions(&self, image_id: i64, width: u32, height: u32) -> Result<()> {
         self.conn.execute("UPDATE images SET width = ?2, height = ?3 WHERE id = ?1", params![image_id, width, height])?;
         Ok(())
@@ -654,6 +679,23 @@ mod tests {
         catalog.set_image_dimensions(a, 6000, 4000).unwrap();
         assert!(catalog.images_missing_dimensions().unwrap().is_empty());
         assert_eq!(catalog.get_image_dimensions(a).unwrap(), Some((6000, 4000)));
+    }
+
+    #[test]
+    fn the_jpeg_size_check_lists_jpegs_only_and_runs_once() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let sized = crate::metadata::ImageMetadata { width: Some(800), height: Some(600), ..Default::default() };
+        let a = catalog.add_image_with_edit_stack("/a.JPG", "ha", 1, &EditStack::empty(), &sized).unwrap();
+        catalog.add_image_with_edit_stack("/b.cr2", "hb", 1, &EditStack::empty(), &sized).unwrap();
+        let b = catalog.add_image_with_edit_stack("/c.jpeg", "hc", 1, &EditStack::empty(), &crate::metadata::ImageMetadata::default()).unwrap();
+        assert_eq!(
+            catalog.jpeg_images_with_dimensions().unwrap(),
+            vec![(a, "/a.JPG".to_string(), Some(800), Some(600)), (b, "/c.jpeg".to_string(), None, None)]
+        );
+        assert!(!catalog.jpeg_dimension_check_done().unwrap());
+        catalog.mark_jpeg_dimension_check_done().unwrap();
+        catalog.mark_jpeg_dimension_check_done().unwrap();
+        assert!(catalog.jpeg_dimension_check_done().unwrap());
     }
 
     #[test]

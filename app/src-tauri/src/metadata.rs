@@ -186,11 +186,12 @@ pub fn dimensions_from_file(path: &std::path::Path) -> Option<(u32, u32)> {
 
 pub fn extract_from_jpeg(bytes: &[u8]) -> ImageMetadata {
     let mut metadata = extract_jpeg_exif(bytes);
-    if metadata.width.is_none() || metadata.height.is_none() {
-        if let Some((w, h)) = jpeg_header_dimensions(bytes) {
-            metadata.width = Some(w);
-            metadata.height = Some(h);
-        }
+    // The file's own header is the truth. EXIF's PixelXDimension / PixelYDimension are only a note the writer made: a
+    // tool that cropped the file without updating them (found on the NIND test photos: 2463x2845 in EXIF, 2460x2843
+    // in the pixels) leaves a size the picture does not have, and every plan and label built on it is a little off.
+    if let Some((w, h)) = jpeg_header_dimensions(bytes) {
+        metadata.width = Some(w);
+        metadata.height = Some(h);
     }
     metadata
 }
@@ -462,6 +463,29 @@ mod tests {
         assert_eq!(metadata.shutter_speed, Some(1.0 / 250.0));
         assert_eq!(metadata.focal_length, Some(50.0));
         assert_eq!(metadata.captured_at.as_deref(), Some("2024-03-15T10:30:00"));
+    }
+
+    /// A stale EXIF size (a crop that did not update it) must not win over the picture's own header.
+    #[test]
+    fn the_jpeg_header_size_wins_over_a_stale_exif_size() {
+        use little_exif::exif_tag::ExifTag;
+        use little_exif::filetype::FileExtension;
+        use little_exif::metadata::Metadata;
+
+        let mut image_bytes = Vec::new();
+        image::RgbImage::from_pixel(40, 20, image::Rgb([120, 80, 60]))
+            .write_to(&mut std::io::Cursor::new(&mut image_bytes), image::ImageFormat::Jpeg)
+            .unwrap();
+        let mut exif = Metadata::new();
+        exif.set_tag(ExifTag::ExifImageWidth(vec![99]));
+        exif.set_tag(ExifTag::ExifImageHeight(vec![77]));
+        exif.write_to_vec(&mut image_bytes, FileExtension::JPEG).unwrap();
+        // The tags are really there, and really wrong...
+        let raw = extract_jpeg_exif(&image_bytes);
+        assert_eq!((raw.width, raw.height), (Some(99), Some(77)));
+        // ...and the catalog gets the picture's size.
+        let metadata = extract_from_jpeg(&image_bytes);
+        assert_eq!((metadata.width, metadata.height), (Some(40), Some(20)));
     }
 
     #[test]

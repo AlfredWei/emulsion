@@ -235,22 +235,34 @@ async fn backfill_missing_thumbnails(app: AppHandle, state: State<'_, AppState>,
 }
 
 /// Fills in the pixel size of photos the catalog has none for (imported before it was read from the file itself,
-/// or from a file whose EXIF carries none), reading each file's header. Returns how many were filled; the
-/// frontend refreshes its list when it is above zero. Safe to call at every startup: a catalog that is complete
-/// costs one indexed query. The catalog lock is not held while files are read.
+/// or from a file whose EXIF carries none), reading each file's header, and, once per catalog, corrects JPEG sizes
+/// recorded from a stale EXIF note (see `metadata::extract_from_jpeg`). Returns how many were changed; the frontend
+/// refreshes its list when it is above zero. Safe to call at every startup: a complete, checked catalog costs two
+/// indexed queries. The catalog lock is not held while files are read.
 #[tauri::command]
 async fn backfill_image_dimensions(state: State<'_, AppState>) -> Result<usize, String> {
     let catalog = state.catalog.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let missing = catalog.lock().map_err(|e| e.to_string())?.images_missing_dimensions().map_err(|e| e.to_string())?;
-        let mut filled = 0;
+        let mut changed = 0;
         for (id, path) in missing {
             let Some((w, h)) = metadata::dimensions_from_file(std::path::Path::new(&path)) else { continue };
             if catalog.lock().map_err(|e| e.to_string())?.set_image_dimensions(id, w, h).is_ok() {
-                filled += 1;
+                changed += 1;
             }
         }
-        Ok::<usize, String>(filled)
+        let checked = catalog.lock().map_err(|e| e.to_string())?.jpeg_dimension_check_done().map_err(|e| e.to_string())?;
+        if !checked {
+            let recorded = catalog.lock().map_err(|e| e.to_string())?.jpeg_images_with_dimensions().map_err(|e| e.to_string())?;
+            for (id, path, w, h) in recorded {
+                let Some((fw, fh)) = metadata::dimensions_from_file(std::path::Path::new(&path)) else { continue };
+                if (Some(fw), Some(fh)) != (w, h) && catalog.lock().map_err(|e| e.to_string())?.set_image_dimensions(id, fw, fh).is_ok() {
+                    changed += 1;
+                }
+            }
+            catalog.lock().map_err(|e| e.to_string())?.mark_jpeg_dimension_check_done().map_err(|e| e.to_string())?;
+        }
+        Ok::<usize, String>(changed)
     })
     .await
     .map_err(|e| e.to_string())?

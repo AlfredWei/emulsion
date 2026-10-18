@@ -8,13 +8,18 @@
   import { closeEnlargeDialog, refreshEnlargePlan, handleEnlarge, handleEnlargePreview } from "$lib/actions/enlargeActions.js";
   import EnlargeCompare from "$lib/components/EnlargeCompare.svelte";
   import { library } from "$lib/state/library.svelte.js";
-  import { targetOf, planRows, veryLargeWarning, defaultStem, folderOf, MAX_SIDE } from "$lib/enlarge.js";
+  import { targetOf, planRows, veryLargeWarning, defaultStem, folderOf, batchRows, batchVeryLargeWarning, batchSourceLine, MAX_SIDE } from "$lib/enlarge.js";
 
   let photo = $derived(upscale.target);
   let target = $derived(targetOf(upscale.settings));
-  let warning = $derived(upscale.plan ? veryLargeWarning(upscale.plan) : "");
+  let batch = $derived(upscale.batch);
+  let warning = $derived(batch ? (batch.items ? batchVeryLargeWarning(batch.items.map((i) => i.plan)) : "") : upscale.plan ? veryLargeWarning(upscale.plan) : "");
+  let rows = $derived(
+    batch ? (batch.items && batch.items.length > 0 ? batchRows(batch.items.map((i) => i.plan), batch.photos.length) : []) : upscale.plan ? planRows(upscale.plan) : [],
+  );
   let modelMissing = $derived(upscale.modelStatus?.state === "missing");
-  let canEnlarge = $derived(upscale.plan !== null && upscale.job === null && !upscale.previewing);
+  let hasPlan = $derived(batch ? (batch.items?.length ?? 0) > 0 : upscale.plan !== null);
+  let canEnlarge = $derived(hasPlan && upscale.job === null && !upscale.previewing);
   let thumbnail = $derived(photo ? (library.images.find((i) => i.version_id === photo.versionId)?.thumbnail_path ?? null) : null);
 
   /** @param {string} value */
@@ -30,7 +35,11 @@
   <div class="overlay">
     <div class="dialog" role="dialog" aria-modal="true" aria-label="Enlarge (AI)" data-testid="enlarge-dialog">
       <h2>Enlarge (AI)</h2>
-      <p class="source" title={photo.path}>{photo.path.split(/[\\/]/).pop()}</p>
+      {#if batch}
+        <p class="source" data-testid="enlarge-batch-source">{batchSourceLine(batch.photos.length, batch.skipped)}</p>
+      {:else}
+        <p class="source" title={photo.path}>{photo.path.split(/[\\/]/).pop()}</p>
+      {/if}
 
       <fieldset class="group">
         <legend class="label">Scale</legend>
@@ -70,7 +79,9 @@
         </p>
       </div>
 
-      {#if upscale.preview}
+      {#if batch}
+        <!-- A batch has no Preview: the same settings apply to every photo, so judge them on one first. -->
+      {:else if upscale.preview}
         <EnlargeCompare
           preview={upscale.preview}
           strength={upscale.settings.strength}
@@ -92,8 +103,8 @@
       {#if upscale.previewError}<p class="err" role="alert">{upscale.previewError}</p>{/if}
 
       <div class="summary" aria-live="polite" data-testid="enlarge-summary">
-        {#if upscale.plan}
-          {#each planRows(upscale.plan) as row (row.label)}
+        {#if rows.length > 0}
+          {#each rows as row (row.label)}
             <div class="line"><span class="k">{row.label}</span><span class="v">{row.value}</span></div>
           {/each}
         {:else if upscale.planError}
@@ -127,14 +138,18 @@
             </label>
           {/each}
         </div>
-        <input
-          type="text"
-          aria-label="File name"
-          placeholder={defaultStem(photo.path, target)}
-          bind:value={upscale.fileName}
-          data-testid="enlarge-name"
-        />
-        <p class="hint">Saved next to the original ({folderOf(photo.path).split(/[\\/]/).pop()}), added to the catalog and linked to it.</p>
+        {#if batch}
+          <p class="hint">Each result is named like <em>{defaultStem(photo.path, target)}</em>, saved next to its original, added to the catalog and linked to it.</p>
+        {:else}
+          <input
+            type="text"
+            aria-label="File name"
+            placeholder={defaultStem(photo.path, target)}
+            bind:value={upscale.fileName}
+            data-testid="enlarge-name"
+          />
+          <p class="hint">Saved next to the original ({folderOf(photo.path).split(/[\\/]/).pop()}), added to the catalog and linked to it.</p>
+        {/if}
       </fieldset>
 
       <label class="check">
@@ -154,11 +169,11 @@
       {/if}
       {#if upscale.error}<p class="err" role="alert">{upscale.error}</p>{/if}
 
-      <p class="hint foot">Nothing is written until you press Enlarge. The original is never changed.</p>
+      <p class="hint foot">Nothing is written until you press Enlarge. The originals are never changed.</p>
       <div class="actions">
         <button class="secondary" type="button" onclick={closeEnlargeDialog}>Cancel</button>
         <button class="primary" type="button" onclick={handleEnlarge} disabled={!canEnlarge} data-testid="enlarge-go">
-          {modelMissing ? "Download model and enlarge" : "Enlarge"}
+          {modelMissing ? "Download model and enlarge" : batch && batch.items ? `Enlarge ${batch.items.length} photos` : "Enlarge"}
         </button>
       </div>
     </div>

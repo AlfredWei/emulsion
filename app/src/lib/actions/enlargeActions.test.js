@@ -52,6 +52,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   notify = vi.spyOn(shell, "notify").mockImplementation(() => {});
   upscale.target = null;
+  upscale.batch = null;
   upscale.settings = defaultSettings();
   upscale.fileName = "";
   upscale.plan = null;
@@ -257,7 +258,7 @@ describe("the model dialog", () => {
     expect(upscale.modelDialog).toBe("consent");
     expect(upscale.target).not.toBeNull();
     expect(m.upscaleRun).not.toHaveBeenCalled();
-    expect(upscale.pendingRun).toMatchObject({ versionId: 10, label: "a.jpg", scale: 4 });
+    expect(upscale.pendingRun?.queue).toMatchObject([{ photo: { versionId: 10 }, name: "a.jpg", scale: 4 }]);
   });
 
   it("runs the job once the download lands", async () => {
@@ -408,5 +409,112 @@ describe("the preview", () => {
     await A.handleEnlarge();
     expect(m.upscalePreviewClear).toHaveBeenCalled();
     expect(upscale.preview).toBeNull();
+  });
+});
+
+describe("a batch (RFC-0029 §18)", () => {
+  const p = (/** @type {number} */ n, /** @type {object} */ extra = {}) => photo({ image_id: n, version_id: n * 10, path: `/photos/p${n}.jpg`, ...extra });
+  const SECOND = { ...RESULT, image_id: 8, version_id: 80 };
+
+  async function openBatch(/** @type {any[]} */ images = [p(1), p(2), p(3)]) {
+    A.openEnlarge(images);
+    await vi.waitFor(() => expect(upscale.batch?.items).not.toBeNull());
+  }
+
+  it("opens one dialog for several photos, leaving out the enlargements", async () => {
+    await openBatch([p(1), p(2), p(3, { enlarged_scale: 4 })]);
+    expect(upscale.batch?.photos.map((x) => x.versionId)).toEqual([10, 20]);
+    expect(upscale.batch?.skipped).toBe(1);
+    expect(upscale.batch?.items).toHaveLength(2);
+    expect(m.upscalePlan).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens the single dialog when one photo is left, and refuses a selection of enlargements only", () => {
+    A.openEnlarge([p(1), p(2, { enlarged_scale: 4 })]);
+    expect(upscale.batch).toBeNull();
+    expect(upscale.target?.versionId).toBe(10);
+    expect(notify).toHaveBeenCalledWith("1 enlargement was left out.");
+    A.closeEnlargeDialog();
+    notify.mockClear();
+    A.openEnlarge([p(1, { enlarged_scale: 4 }), p(2, { enlarged_scale: 2 })]);
+    expect(upscale.target).toBeNull();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/compounding invented detail/));
+  });
+
+  it("drops the photos that cannot take the size from the totals", async () => {
+    m.upscalePlan.mockImplementation(async (/** @type {number} */ id) => {
+      if (id === 20) throw new Error("a long edge of 8000 px is not larger than the photo's 8000 px");
+      return PLAN;
+    });
+    await openBatch();
+    expect(upscale.batch?.items?.map((i) => i.photo.versionId)).toEqual([10, 30]);
+    expect(upscale.planError).toBe("");
+  });
+
+  it("runs every photo in turn with default names and reports the total", async () => {
+    m.upscaleRun.mockResolvedValueOnce(RESULT).mockResolvedValueOnce(SECOND).mockResolvedValueOnce({ ...RESULT, image_id: 7, version_id: 70 });
+    await openBatch();
+    upscale.fileName = "ignored";
+    selection.selectedIds = new Set([10, 20, 30]);
+    await A.handleEnlarge();
+    expect(m.upscaleRun.mock.calls.map((c) => c[0])).toEqual([10, 20, 30]);
+    expect(m.upscaleRun.mock.calls.every((c) => c[1].fileName === null)).toBe(true);
+    expect(upscale.job).toBeNull();
+    expect(l.refresh).toHaveBeenCalledTimes(1);
+    expect(nav.revealPhotos).toHaveBeenCalledWith([9, 8, 7]);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/^Enlarged 3 of 3 photos in /));
+  });
+
+  it("names the photo and its place in the status strip", async () => {
+    await openBatch();
+    /** @type {string[]} */
+    const labels = [];
+    m.upscaleRun.mockImplementation(async () => {
+      labels.push(upscale.job?.label ?? "");
+      return RESULT;
+    });
+    await A.handleEnlarge();
+    expect(labels).toEqual(["p1.jpg (1 of 3)", "p2.jpg (2 of 3)", "p3.jpg (3 of 3)"]);
+  });
+
+  it("carries on after a photo fails and says which", async () => {
+    m.upscaleRun.mockResolvedValueOnce(RESULT).mockRejectedValueOnce(new Error("out of memory")).mockResolvedValueOnce(SECOND);
+    await openBatch();
+    await A.handleEnlarge();
+    expect(m.upscaleRun).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/Enlarged 2 of 3 photos in .* 1 failed: p2\.jpg \(out of memory\)\./));
+  });
+
+  it("Stop ends the batch and keeps what was finished", async () => {
+    m.upscaleRun.mockImplementation(async (/** @type {number} */ id) => {
+      if (id === 20) {
+        A.handleEnlargeCancel();
+        throw new Error("upscale cancelled");
+      }
+      return RESULT;
+    });
+    await openBatch();
+    await A.handleEnlarge();
+    expect(m.upscaleRun.mock.calls.map((c) => c[0])).toEqual([10, 20]);
+    expect(m.upscaleCancel).toHaveBeenCalled();
+    expect(l.refresh).toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith("Stopped after 1 of 3 photos. The finished ones are in the catalog.");
+  });
+
+  it("asks for the model once, then runs the whole queue", async () => {
+    m.upscaleModelStatus.mockResolvedValue(MISSING);
+    await openBatch([p(1), p(2)]);
+    await A.handleEnlarge();
+    expect(upscale.modelDialog).toBe("consent");
+    expect(upscale.pendingRun?.queue).toHaveLength(2);
+    m.upscaleDownloadModel.mockResolvedValue(READY);
+    await A.handleEnlargeModelDownload();
+    expect(m.upscaleRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("has no Preview", async () => {
+    await openBatch();
+    await A.handleEnlargePreview();
+    expect(m.upscalePreview).not.toHaveBeenCalled();
   });
 });

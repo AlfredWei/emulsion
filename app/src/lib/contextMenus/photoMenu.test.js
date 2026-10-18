@@ -259,7 +259,7 @@ describe("photo menu: Enlarge (AI)", () => {
     const item = find(buildPhotoMenu(input({ images: [img(1)] }), cmd), "enlarge");
     expect(item).toMatchObject({ label: "Enlarge (AI)…", disabled: false });
     item?.run?.();
-    expect(cmd.enlarge).toHaveBeenCalledWith(10);
+    expect(cmd.enlarge).toHaveBeenCalledWith([10]);
   });
 
   it("is greyed on an enlargement, with the reason", () => {
@@ -268,8 +268,16 @@ describe("photo menu: Enlarge (AI)", () => {
     expect(item?.reason).toMatch(/compounding invented detail/);
   });
 
-  it("is greyed on several photos: enlarging is one at a time", () => {
-    const item = find(buildPhotoMenu(input({ images: [img(1), img(2)] }), commands()), "enlarge");
-    expect(item).toMatchObject({ disabled: true, reason: "Choose a single photo" });
+  it("enlarges a selection as a batch, enlargements included in what it passes on (the action leaves them out)", () => {
+    const cmd = commands();
+    const item = find(buildPhotoMenu(input({ images: [img(1), img(2), img(3, { enlarged_scale: 4, enlarged_from: 1 })] }), cmd), "enlarge");
+    expect(item).toMatchObject({ disabled: false });
+    item?.run?.();
+    expect(cmd.enlarge).toHaveBeenCalledWith([10, 20, 30]);
+  });
+
+  it("is greyed on a selection of enlargements only", () => {
+    const item = find(buildPhotoMenu(input({ images: [img(2, { enlarged_scale: 4, enlarged_from: 1 }), img(3, { enlarged_scale: 2, enlarged_from: 1 })] }), commands()), "enlarge");
+    expect(item).toMatchObject({ disabled: true });
   });
 });

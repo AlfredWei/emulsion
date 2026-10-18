@@ -28,7 +28,7 @@ import {
 } from "$lib/api/upscale.js";
 import { refresh, refreshCollections, selectCollection, prioritizeThumbnail } from "$lib/actions/libraryActions.js";
 import { revealPhotos } from "$lib/actions/upscaleActions.js";
-import { targetOf, targetKey } from "$lib/enlarge.js";
+import { targetOf, targetKey, splitEnlargeable, jobLabel, batchOutcome } from "$lib/enlarge.js";
 import { scaleLabel } from "$lib/upscaleLinks.js";
 import { formatDuration } from "$lib/actions/denoiseActions.js";
 
@@ -60,18 +60,59 @@ export function openEnlargeDialog(image) {
     shell.notify("An enlargement is already running");
     return;
   }
+  resetForOpen();
+  upscale.target = toTarget(image);
+  // The dialog says up front whether the model is installed; a failed lookup is retried when Enlarge is pressed.
+  upscaleModelStatus()
+    .then((s) => (upscale.modelStatus = s))
+    .catch(() => {});
+  void refreshEnlargePlan();
+}
+
+/** The entry point of the menu and the info panel: one photo opens the dialog for it; several open it for the batch
+ * (RFC-0029 §18), leaving out the enlargements among them.
+ * @param {import('$lib/api/catalog.js').ImageSummary[]} images */
+export function openEnlarge(images) {
+  if (images.length === 1) {
+    openEnlargeDialog(images[0]);
+    return;
+  }
+  const { photos, skipped } = splitEnlargeable(images);
+  if (photos.length === 0) {
+    shell.notify("Enlarge (AI) is turned off on an enlargement, to avoid compounding invented detail");
+    return;
+  }
+  if (photos.length === 1) {
+    shell.notify(`${skipped} enlargement${skipped === 1 ? " was" : "s were"} left out.`);
+    openEnlargeDialog(photos[0]);
+    return;
+  }
+  if (upscale.job !== null) {
+    shell.notify("An enlargement is already running");
+    return;
+  }
+  resetForOpen();
+  upscale.batch = { photos: photos.map(toTarget), skipped, items: null };
+  upscale.target = upscale.batch.photos[0];
+  upscaleModelStatus()
+    .then((s) => (upscale.modelStatus = s))
+    .catch(() => {});
+  void refreshEnlargePlan();
+}
+
+/** @param {import('$lib/api/catalog.js').ImageSummary} image */
+function toTarget(image) {
+  return { versionId: image.version_id, imageId: image.image_id, path: image.path };
+}
+
+function resetForOpen() {
   upscale.fileName = "";
   discardPreview();
   upscale.previewCentre = [0.5, 0.5];
   upscale.plan = null;
   upscale.planError = "";
   upscale.error = "";
-  upscale.target = { versionId: image.version_id, imageId: image.image_id, path: image.path };
-  // The dialog says up front whether the model is installed; a failed lookup is retried when Enlarge is pressed.
-  upscaleModelStatus()
-    .then((s) => (upscale.modelStatus = s))
-    .catch(() => {});
-  void refreshEnlargePlan();
+  upscale.batch = null;
 }
 
 /** Closes the dialog without doing anything (a running preview is stopped, its pictures deleted). */
@@ -80,6 +121,7 @@ export function closeEnlargeDialog() {
   discardPreview();
   upscalePreviewClear().catch(() => {});
   upscale.target = null;
+  upscale.batch = null;
   upscale.error = "";
 }
 
@@ -95,7 +137,7 @@ function discardPreview() {
 export async function handleEnlargePreview(centre) {
   const photo = upscale.target;
   const target = targetOf(upscale.settings);
-  if (!photo || !target || upscale.plan === null || upscale.job !== null || upscale.previewing) return;
+  if (!photo || !target || upscale.batch !== null || upscale.plan === null || upscale.job !== null || upscale.previewing) return;
   if (centre) upscale.previewCentre = centre;
   upscale.previewError = "";
   if (upscale.modelStatus?.state === "missing") {
@@ -131,6 +173,24 @@ export async function refreshEnlargePlan() {
   if (!photo || !target) {
     upscale.plan = null;
     upscale.planError = "";
+    if (upscale.batch) upscale.batch.items = null;
+    return;
+  }
+  const batch = upscale.batch;
+  if (batch) {
+    // Pure arithmetic per photo; the ones that cannot take the size (a long edge below theirs) drop out of the totals.
+    const answers = await Promise.all(
+      batch.photos.map((p) =>
+        upscalePlan(p.versionId, target, upscale.settings.quality).then(
+          (plan) => ({ photo: p, plan, error: "" }),
+          (e) => ({ photo: p, plan: null, error: message(e) }),
+        ),
+      ),
+    );
+    if (seq !== planSeq || upscale.batch !== batch) return;
+    const items = answers.flatMap((a) => (a.plan ? [{ photo: a.photo, plan: a.plan }] : []));
+    batch.items = items;
+    upscale.planError = items.length === 0 ? (answers[0]?.error ?? "") : "";
     return;
   }
   try {
@@ -145,29 +205,35 @@ export async function refreshEnlargePlan() {
   }
 }
 
-/** The dialog's Enlarge button. */
+/** The dialog's Enlarge button: one photo, or every photo of a batch that can take the chosen size. */
 export async function handleEnlarge() {
   const photo = upscale.target;
   const target = targetOf(upscale.settings);
-  if (!photo || !target || upscale.plan === null || upscale.job !== null || upscale.previewing) return;
+  if (!photo || !target || upscale.job !== null || upscale.previewing) return;
+  const planned = upscale.batch ? upscale.batch.items : upscale.plan ? [{ photo, plan: upscale.plan }] : null;
+  if (!planned || planned.length === 0) return;
   /** @type {import('$lib/api/upscale.js').UpscaleRunOptions} */
   const options = {
     target,
     strength: Math.min(100, Math.max(1, Math.round(upscale.settings.strength))),
     jpegQuality: upscale.settings.quality,
-    fileName: upscale.fileName.trim() === "" ? null : upscale.fileName.trim(),
+    // A batch names every result by the default rule (the backend avoids clashes).
+    fileName: upscale.batch || upscale.fileName.trim() === "" ? null : upscale.fileName.trim(),
     addToCollections: upscale.settings.addToCollections,
     metadataNote: upscale.settings.metadataNote,
   };
-  const label = baseName(photo.path);
-  const scale = Math.max(upscale.plan.out_width, upscale.plan.out_height) / Math.max(upscale.plan.source_width, upscale.plan.source_height);
+  const queue = planned.map(({ photo: p, plan }) => ({
+    photo: p,
+    name: baseName(p.path),
+    scale: Math.max(plan.out_width, plan.out_height) / Math.max(plan.source_width, plan.source_height),
+  }));
   upscale.error = "";
   try {
     const status = await upscaleModelStatus();
     upscale.modelStatus = status;
     if (status.state !== "ready") {
-      // Ask first; the job starts when the model is in. The Enlarge dialog stays open underneath.
-      upscale.pendingRun = { versionId: photo.versionId, label, scale, options };
+      // Ask first; the jobs start when the model is in. The Enlarge dialog stays open underneath.
+      upscale.pendingRun = { queue, options };
       upscale.dialogError = "";
       upscale.modelDialog = "consent";
       return;
@@ -177,13 +243,30 @@ export async function handleEnlarge() {
     return;
   }
   closeEnlargeDialog();
-  await runJob(photo, label, scale, options);
+  await runJobs(queue, options);
 }
 
-/** @param {{ versionId: number, imageId: number, path: string }} photo @param {string} label
- * @param {number} scale the planned enlargement factor @param {import('$lib/api/upscale.js').UpscaleRunOptions} options */
-async function runJob(photo, label, scale, options) {
-  upscale.job = { label, done: 0, total: 0 };
+/** Set by Stop; the batch loop reads it between photos (the running photo is stopped through the helper). */
+let stopRequested = false;
+
+/** Enlarges the queued photos one after another (RFC-0029 §18). One photo that fails does not stop the others; Stop
+ * does, and what was finished stays. A single photo gets the single-photo wording.
+ * @param {{ photo: { versionId: number, imageId: number, path: string }, name: string, scale: number }[]} queue
+ * @param {import('$lib/api/upscale.js').UpscaleRunOptions} options */
+async function runJobs(queue, options) {
+  const count = queue.length;
+  // Move the selection to the results only when the user is still looking at what was enlarged.
+  const asked = new Set(queue.map((q) => q.photo.versionId));
+  const stillOnSelection =
+    shell.activeModule === "library" && selection.selectedIds.size === asked.size && [...selection.selectedIds].every((id) => asked.has(id));
+  stopRequested = false;
+  upscale.job = { label: jobLabel(queue[0].name, 0, count), done: 0, total: 0 };
+  const started = Date.now();
+  /** @type {import('$lib/api/upscale.js').UpscaleJobResult[]} */
+  const results = [];
+  /** @type {{ name: string, reason: string }[]} */
+  const failed = [];
+  let stopped = false;
   /** @type {(() => void) | null} */
   let unlisten = null;
   try {
@@ -193,37 +276,61 @@ async function runJob(photo, label, scale, options) {
         upscale.job.total = p.total;
       }
     });
-    const r = await upscaleRun(photo.versionId, options);
-    await finished(photo, label, scale, options, r);
+    for (let i = 0; i < count; i++) {
+      if (stopRequested) {
+        stopped = true;
+        break;
+      }
+      upscale.job = { label: jobLabel(queue[i].name, i, count), done: 0, total: 0 };
+      try {
+        results.push(await upscaleRun(queue[i].photo.versionId, options));
+      } catch (e) {
+        if (isUpscaleJobCancelled(e)) {
+          stopped = true;
+          break;
+        }
+        failed.push({ name: queue[i].name, reason: message(e) });
+      }
+    }
   } catch (e) {
-    if (isUpscaleJobCancelled(e)) shell.notify("Enlargement stopped. Nothing was written.");
-    else shell.notify(`Enlarge failed: ${message(e)}`);
+    failed.push({ name: queue[0].name, reason: message(e) });
   } finally {
     unlisten?.();
     upscale.job = null;
   }
+  if (results.length > 0) await showResults(results, options, stillOnSelection);
+  const ms = Date.now() - started;
+  if (count === 1) {
+    if (results.length === 1) {
+      const r = results[0];
+      shell.notify(`Enlarged ${queue[0].name} ${scaleLabel(queue[0].scale)} (${r.width} × ${r.height} px) in ${formatDuration(r.ms)}.`);
+    } else if (failed.length > 0) shell.notify(`Enlarge failed: ${failed[0].reason}`);
+    else shell.notify("Enlargement stopped. Nothing was written.");
+  } else {
+    shell.notify(batchOutcome({ done: results.length, count, failed, stopped, ms }, formatDuration));
+  }
 }
 
-/** The new photo is in the catalog: show it in the list, and select it when the user is still looking at the
- * original (anywhere else, moving their selection would be a surprise).
- * @param {{ versionId: number }} photo @param {string} label @param {number} scale
- * @param {import('$lib/api/upscale.js').UpscaleRunOptions} options @param {import('$lib/api/upscale.js').UpscaleJobResult} r */
-async function finished(photo, label, scale, options, r) {
-  const stillOnOriginal = shell.activeModule === "library" && selection.selectedIds.size === 1 && selection.selectedIds.has(photo.versionId);
+/** The new photos are in the catalog: show them in the list, and select them when the user is still looking at the
+ * originals (anywhere else, moving their selection would be a surprise).
+ * @param {import('$lib/api/upscale.js').UpscaleJobResult[]} results @param {import('$lib/api/upscale.js').UpscaleRunOptions} options
+ * @param {boolean} select */
+async function showResults(results, options, select) {
   await refresh();
   if (options.addToCollections) {
     await refreshCollections();
     library.manualMembership = new Map();
     if (library.activeCollectionId !== null) await selectCollection(library.activeCollectionId);
   }
-  prioritizeThumbnail(r.version_id);
-  if (stillOnOriginal) await revealPhotos([r.image_id]);
-  shell.notify(`Enlarged ${label} ${scaleLabel(scale)} (${r.width} × ${r.height} px) in ${formatDuration(r.ms)}.`);
+  for (const r of results) prioritizeThumbnail(r.version_id);
+  if (select) await revealPhotos(results.map((r) => r.image_id));
 }
 
-/** Stop in the status strip: ends the running job at its next tile. Nothing is written from a stopped job. */
+/** Stop in the status strip: ends the running job at its next tile, and the rest of a batch with it. Nothing is
+ * written from the stopped photo; the ones already finished stay. */
 export function handleEnlargeCancel() {
   if (upscale.job === null) return;
+  stopRequested = true;
   upscaleCancel().catch(() => {});
 }
 
@@ -282,11 +389,10 @@ async function modelInstalled(status) {
   }
   upscale.modelDialog = null;
   const pending = upscale.pendingRun;
-  const photo = upscale.target;
   upscale.pendingRun = null;
-  if (!pending || !photo || photo.versionId !== pending.versionId) return;
+  if (!pending || !upscale.target) return;
   closeEnlargeDialog();
-  await runJob(photo, pending.label, pending.scale, pending.options);
+  await runJobs(pending.queue, pending.options);
 }
 
 /** Cancel / Esc on the model dialog: closes it. While a download runs it stops the download instead (the download

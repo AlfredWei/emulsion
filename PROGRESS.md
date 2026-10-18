@@ -2,6 +2,16 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Slice 4f: batch enlargement and the user guide (2026-10-18)
+
+*Enlarge (AI)…* in the photo menu works on a selection: one dialog (no Preview, no name field) with the totals, the
+photos run one after another through the existing job (progress "p2.jpg (2 of 5): tile 7 of 20", one model consent,
+a failure carries on, **Stop** keeps the finished ones); enlargements in the selection are left out. Frontend only
+(`enlarge.js`, `enlargeActions.js` `openEnlarge`/`runJobs`, `EnlargeDialog.svelte`, `photoMenu.js`). User guide: a new
+*Enlarge (AI)* section. RFC-0029 §18. Checked: svelte-check and vitest (1085) pass. **Not verified:** a batch in the
+real window (layout, status text, result selection), a long batch's memory and time, no e2e. RFC-0029 4f is now
+done apart from the optional render cache between Previews; the milestone-end verification of the whole feature is next.
+
 ## Enlarge from the info panel, and Enlarge again (2026-10-18)
 
 The Library info panel (`ConnectedPhotos.svelte`) now has an **Enlarge (AI)…** button: on an ordinary photo under an

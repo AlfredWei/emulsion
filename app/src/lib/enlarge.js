@@ -122,3 +122,72 @@ export function folderOf(path) {
   const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return cut > 0 ? path.slice(0, cut) : path;
 }
+
+/**
+ * Splits a selection into the photos Enlarge (AI) accepts and the count it leaves out (enlargements are not enlarged
+ * again, RFC-0029 §3.2).
+ * @param {import('$lib/api/catalog.js').ImageSummary[]} images
+ * @returns {{ photos: import('$lib/api/catalog.js').ImageSummary[], skipped: number }}
+ */
+export function splitEnlargeable(images) {
+  const photos = images.filter((i) => i.enlarged_scale == null);
+  return { photos, skipped: images.length - photos.length };
+}
+
+/** "1 photo" / "5 photos". @param {number} n */
+function photos(n) {
+  return `${n} photo${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * The summary card's rows for a batch: the totals over the photos that can be enlarged to the chosen size.
+ * @param {import('$lib/api/upscale.js').UpscalePlan[]} plans  one per photo that can be enlarged
+ * @param {number} chosen  how many photos the dialog was opened for
+ * @returns {{ label: string, value: string }[]}
+ */
+export function batchRows(plans, chosen) {
+  const sum = (/** @type {(p: import('$lib/api/upscale.js').UpscalePlan) => number} */ f) => plans.reduce((a, p) => a + f(p), 0);
+  const left = chosen - plans.length;
+  return [
+    { label: "Photos", value: left > 0 ? `${photos(plans.length)} (${photos(left)} cannot be enlarged to this size)` : photos(plans.length) },
+    { label: "Output", value: `${formatMegapixels(sum((p) => p.megapixels))} in total` },
+    { label: "Time", value: `about ${formatEstimate(sum((p) => p.seconds))} on this computer` },
+    { label: "Files", value: `about ${formatSize(sum((p) => p.file_bytes))} in total` },
+  ];
+}
+
+/** The warning under a batch summary when some results are very large, or "".
+ * @param {import('$lib/api/upscale.js').UpscalePlan[]} plans */
+export function batchVeryLargeWarning(plans) {
+  const n = plans.filter((p) => p.very_large).length;
+  if (n === 0) return "";
+  return `${photos(n)} would come out very large (over 100 MP): each needs several GB of disk and most editors cannot open them.`;
+}
+
+/** The line under the dialog's title in a batch.
+ * @param {number} count the photos that will be enlarged @param {number} skipped enlargements left out of the selection */
+export function batchSourceLine(count, skipped) {
+  return skipped > 0 ? `${photos(count)} (${skipped} ${skipped === 1 ? "enlargement is" : "enlargements are"} left out)` : photos(count);
+}
+
+/** The job's name in the status strip: the file, and where it is in a batch.
+ * @param {string} name @param {number} index 0-based @param {number} count */
+export function jobLabel(name, index, count) {
+  return count > 1 ? `${name} (${index + 1} of ${count})` : name;
+}
+
+/**
+ * What a batch's notification says when it ends.
+ * @param {{ done: number, count: number, failed: { name: string, reason: string }[], stopped: boolean, ms: number }} r
+ * @param {(ms: number) => string} formatDuration
+ */
+export function batchOutcome(r, formatDuration) {
+  const parts = [];
+  parts.push(r.stopped ? `Stopped after ${r.done} of ${r.count} photos.` : `Enlarged ${r.done} of ${photos(r.count)} in ${formatDuration(r.ms)}.`);
+  if (r.failed.length > 0) {
+    const first = r.failed[0];
+    parts.push(`${r.failed.length} failed: ${first.name} (${first.reason})${r.failed.length > 1 ? " and more" : ""}.`);
+  }
+  if (r.stopped && r.done > 0) parts.push("The finished ones are in the catalog.");
+  return parts.join(" ");
+}

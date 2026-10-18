@@ -2,6 +2,23 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## The installer ships the AI helper (2026-10-18)
+
+The real-window check (backlog 19) found that a bundle built from the stock config has no `emulsion-ai`, so Enlarge, AI
+Denoise and Select Subject would all fail at first use. Fixed for the release build: `app/scripts/prepare-ai-helper.mjs`
+builds the helper and copies it to `src-tauri/binaries/emulsion-ai-<target-triple>`; the overlay
+`tauri.bundle-helper.conf.json` adds `bundle.externalBin`, which puts it beside the app executable (where
+`AiHelper::default_exe` looks); `npm run build:release` now runs both overlays. The overlay is separate because
+`tauri-build` refuses to compile when a configured sidecar is missing, which would break every plain build and test
+run. Two Rust tests pin the pieces (`supervisor::tests`: the overlay names `binaries/emulsion-ai`, the supervisor
+looks for `emulsion-ai`, and the main config has no `externalBin`).
+**Verified:** a debug `.app` built with both overlays has `Contents/MacOS/emulsion-ai` with no manual copying, and that
+file answers `hello` (protocol 1). **Not verified:** a full `npm run build:release` (it downloads the 155 MB SAM 2
+files, not run here); code signing and notarization of the sidecar (Tauri signs `externalBin` with the app's identity
+when a signing identity is configured; none is); **Windows**: the sidecar name with `.exe` and whether the helper
+there needs a loose `onnxruntime.dll` beside it (on macOS it links ORT statically and needs only system frameworks);
+an installer launched on a machine without the dev tree.
+
 ## Slice 4f: batch enlargement and the user guide (2026-10-18)
 
 *Enlarge (AI)…* in the photo menu works on a selection: one dialog (no Preview, no name field) with the totals, the
@@ -311,7 +328,7 @@ Status after the 2026-10-05 verification round:
 7. **Product vs min/max** — DONE: product family kept (RFC-0025 verification round).
 8. **Older builds ignore `modifiers`** — DONE by reading the pre-1a parser (`Value::get`, unknown fields ignored); no schema bump.
 9. **Undo/redo and snapshot restore through shape ops in the real app** — OPEN (covered by action and persistence tests only).
-10. **Click-select 2a (RFC-0026 §7)** — OPEN: SAM 2 CPU speed and memory on a real Windows machine; the live 155 MB download through `segment_download_models` (only HEAD-verified so far); **installer bundling and signing of the `emulsion-ai` helper** on both platforms.
+10. **Click-select 2a (RFC-0026 §7)** — OPEN: SAM 2 CPU speed and memory on a real Windows machine; the live 155 MB download through `segment_download_models` (only HEAD-verified so far); **installer bundling and signing of the `emulsion-ai` helper** on both platforms (bundling FIXED 2026-10-18 for the release build, see "The installer ships the AI helper"; signing / notarization and Windows still OPEN).
 11. **Click-select 2b (RFC-0026 §8)** — OPEN: segment masks on a second GPU (Windows/D3D), with all 8 raster layers in use and at the native-resolution tier, and a real export timing of the CPU path.
 12. **Click-select 2c/2d (RFC-0026 §9, §10)** — mostly DONE (a real-model session through the UI, cancellable download and resume-refine were verified in 2d). Still OPEN: Windows (Alt-click, helper spawn/kill, CPU speed, memory), the live *Download button* fetch of 155 MB through the dialog (install by import was real), a narrow window's tool strip, Add shape ▸ Subject with the real model, and quality over a range of photos.
 13. **AI denoise 3a (RFC-0027 §8)** — OPEN: NAFNet-SIDD-width32 on other cameras and RAW-domain noise, on Windows (speed, memory), its checkpoint compared with the upstream file, the ONNX export against PyTorch output, a real tiled 24 MP run (time, seams), more than six scenes.

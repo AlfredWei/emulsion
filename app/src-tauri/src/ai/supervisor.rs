@@ -273,3 +273,29 @@ impl AiHelper {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A release build ships the helper as a Tauri sidecar, which the bundler places beside the app executable under
+    /// the name without the target triple. If this drifts, an installer starts without a helper and every AI feature
+    /// fails at first use (found in the M6 real-window check, 2026-10-18).
+    #[test]
+    fn the_release_bundle_ships_the_helper_under_the_name_the_supervisor_looks_for() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.bundle-helper.conf.json")).unwrap();
+        let listed: Vec<&str> = conf["bundle"]["externalBin"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(listed, ["binaries/emulsion-ai"]);
+        let wanted = AiHelper::default_exe();
+        let stem = wanted.file_stem().unwrap().to_str().unwrap();
+        assert_eq!(stem, "emulsion-ai", "the supervisor must look for the file the bundler produces");
+    }
+
+    #[test]
+    fn the_main_config_does_not_require_the_sidecar() {
+        // tauri-build refuses to compile when a configured sidecar is missing, which would break every plain build and
+        // test run; the helper is only added by the release overlay.
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        assert!(conf["bundle"].get("externalBin").is_none());
+    }
+}

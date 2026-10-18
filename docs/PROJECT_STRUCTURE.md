@@ -106,7 +106,9 @@ src-tauri/
 │   └── default.json      Which Tauri APIs the webview is allowed to call
 ├── icons/                 App icons for bundling
 ├── Cargo.toml              Rust dependencies
-└── tauri.conf.json          App config: window, identifier, asset protocol, bundle targets
+├── tauri.conf.json          App config: window, identifier, asset protocol, bundle targets
+├── tauri.bundle-models.conf.json  Release overlay: ships bundled-models/ inside the installer (npm run build:release)
+└── tauri.bundle-helper.conf.json  Release overlay: ships the emulsion-ai helper as a sidecar (`bundle.externalBin`), copied by app/scripts/prepare-ai-helper.mjs into binaries/ (git-ignored)
 ```
 
 Every file in `src/` has real unit tests colocated in a `#[cfg(test)] mod tests` block at the bottom — run them with `make test` (`cargo test --lib`). Tests that need a real RAW file are gated behind an `EMULSION_TEST_RAW_SAMPLE` env var rather than a committed fixture (see ADR-0003) — they skip cleanly without it, both locally and in CI (where the CI workflow fetches a sample first).

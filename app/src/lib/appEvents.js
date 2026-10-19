@@ -19,7 +19,7 @@ import { develop } from "$lib/state/develop.svelte.js";
 import { listAllImageKeywords, backfillImageDimensions } from "$lib/api/catalog.js";
 import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
 import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
-import { refresh, refreshCollections, handleBatchThumbnailsComplete, handleThumbnailsReady } from "$lib/actions/libraryActions.js";
+import { refresh, refreshCollections, handleBatchThumbnailsComplete, handleThumbnailsReady, refreshWhileImporting } from "$lib/actions/libraryActions.js";
 import { handleDropImport, regenerateThumbnailFor, pollUntilThumbnailsReadyOnStartup } from "$lib/actions/importActions.js";
 import { refreshPresets } from "$lib/actions/presetActions.js";
 
@@ -166,6 +166,8 @@ export function installAppEvents({ handleMenuAction }) {
   try {
     listen("import-progress", (/** @type {{ payload: { current: number, total: number } }} */ event) => {
       importFlow.catalogProgress = event.payload;
+      // The rows that have landed so far show in the grid while the import goes on (throttled).
+      refreshWhileImporting();
     }).then((fn) => {
       unlistenImportProgress = fn;
     });

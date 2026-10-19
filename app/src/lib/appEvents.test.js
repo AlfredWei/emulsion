@@ -14,7 +14,7 @@ const backup = vi.hoisted(() => ({ getBackupSettings: vi.fn(), isBackupDue: vi.f
 vi.mock("$lib/api/backup.js", () => backup);
 const queue = vi.hoisted(() => ({ flushThumbnailBatch: vi.fn() }));
 vi.mock("$lib/thumbnailBatchQueue.js", () => queue);
-const lib = vi.hoisted(() => ({ refresh: vi.fn(), refreshCollections: vi.fn(), handleBatchThumbnailsComplete: vi.fn(), handleThumbnailsReady: vi.fn() }));
+const lib = vi.hoisted(() => ({ refresh: vi.fn(), refreshCollections: vi.fn(), handleBatchThumbnailsComplete: vi.fn(), handleThumbnailsReady: vi.fn(), refreshWhileImporting: vi.fn() }));
 vi.mock("$lib/actions/libraryActions.js", () => lib);
 const imp = vi.hoisted(() => ({ handleDropImport: vi.fn(), regenerateThumbnailFor: vi.fn(), pollUntilThumbnailsReadyOnStartup: vi.fn() }));
 vi.mock("$lib/actions/importActions.js", () => imp);
@@ -357,6 +357,13 @@ describe("progress streams", () => {
       }
     },
   );
+});
+
+describe("import-progress while importing", () => {
+  it("asks for a (throttled) grid refresh so landed rows show before the import ends", () => {
+    listeners["import-progress"]({ payload: { current: 2, total: 9 } });
+    expect(lib.refreshWhileImporting).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("thumbnail-ready", () => {

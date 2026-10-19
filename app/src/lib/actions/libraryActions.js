@@ -146,6 +146,38 @@ export async function refresh() {
   library.images = await listImages();
 }
 
+// While an import runs the catalog is no longer locked for its whole length (RFC-0030 slice C), so the grid can show
+// the rows as they land. Called on every `import-progress` event: at most one refresh is pending or running, and after
+// one the next waits three times as long as it took (at least 500 ms), so a big catalog's full list is never asked
+// for faster than the app can take it. The last rows are shown by the refresh `runImport` makes when it ends.
+let importRefreshTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+let importRefreshRunning = false;
+let importRefreshNotBefore = 0;
+
+export function refreshWhileImporting() {
+  if (importRefreshTimer !== null || importRefreshRunning) return;
+  importRefreshTimer = setTimeout(async () => {
+    importRefreshTimer = null;
+    importRefreshRunning = true;
+    const started = Date.now();
+    try {
+      await refresh();
+    } catch {
+      // the import's own final refresh reports a real failure
+    } finally {
+      importRefreshRunning = false;
+      importRefreshNotBefore = Date.now() + Math.max(500, 3 * (Date.now() - started));
+    }
+  }, Math.max(0, importRefreshNotBefore - Date.now()));
+}
+
+/** Ends the throttled refreshing (the import finished): drops a pending one and the cool-down. */
+export function stopRefreshingWhileImporting() {
+  if (importRefreshTimer !== null) clearTimeout(importRefreshTimer);
+  importRefreshTimer = null;
+  importRefreshNotBefore = 0;
+}
+
 // Optimistic local update (UX-DESIGN.md §5) so culling feels instant --
 // the write still goes to the real catalog, this just avoids waiting on
 // a round trip + full refetch before the UI reflects the change.

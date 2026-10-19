@@ -1,6 +1,6 @@
 # RFC-0030: Import and export speed: thumbnails visible as soon as possible
 
-- Status: Study with measurements, proposal for review (nothing implemented)
+- Status: Study with measurements; plan decided with the user 2026-10-19 (§7); slices land as separate PRs
 - Date: 2026-10-19
 - Asked by the user: "study how to accelerate import/export speed. The key is to let thumbnails ready as asap."
 - Relates to: the import pipeline in `import.rs`, `jpeg_decode.rs`, `source_decode.rs`, `export.rs`, the `import-progress` / `thumbnail-progress` events in `lib.rs`, `importActions.js`
@@ -90,13 +90,19 @@ The backfill emits a `thumbnail-ready {image_id, thumbnail_path}` event (batched
 
 Import becomes a two-stage pipeline: stage 1 workers read + hash + extract EXIF + (JPEG) decode and write the thumbnail; stage 2 (one thread) dedupes by hash and inserts the catalog row with a **per-row** lock, not one lock for the whole import. The row is announced with `image-added` (batched), which lets the grid fill **during** the import instead of after it; the thumbnail event of Slice A follows. This removes the "import, then backfill" phases and lets disk reads (the actual limit on a card) overlap with CPU. Larger change, so only after A and B are measured in the app. A thumbnail for a file that turns out to be a duplicate is deleted again (rare, bounded waste).
 
-### 5.4 Slice D (optional): a tier-0 picture for JPEGs
+### 5.4 Slices D and E: tiered thumbnails (decided with the user, 2026-10-19)
 
-Camera JPEGs carry a 160x120 EXIF thumbnail (RAW files have one too). Extracting it costs well under 1 ms. It would show as a blurred placeholder in the first frame of an import for every camera JPEG, replaced by the real thumbnail. Only worth doing if A and B leave a visible gap on slow disks; edited or exported JPEGs often have a stale or missing EXIF thumbnail, so it can never be the only one.
+Decision: show a **small** picture first and make the **larger** one in the background. The measurements shape *how*: decode is the cost and a smaller output does not make it cheaper (§4.1), so a "small pass, then a large pass" over the same file would decode every JPEG twice. Only the EXIF thumbnail is genuinely cheaper to get than the real decode. Hence three tiers, each one stored as its own file and each one the catalog's `thumbnail_path` until a better one replaces it (every consumer, the grid, filmstrip, survey, compare, viewer placeholder, histogram and map, keeps reading the one column; no schema change):
 
-### 5.5 Slice E: cheaper pixel work (≈25%, plus a decision for you)
+| tier | what | size | made by | cost | when |
+|---|---|---|---|---|---|
+| 0 | the JPEG's own EXIF thumbnail, turned to the photo's orientation; skipped when missing, or when its shape does not match the photo's | ~160 px, `{id}-t.jpg` | the cataloguing step (Slice C: right after reading the file) | < 1 ms | the first frame of the import |
+| 1 | the grid thumbnail | 512 px, `{id}-s.jpg` | the worker pool (Slice B), from the one decode, with the cheaper pixel path | the decode + ~25 ms | as soon as a worker reaches the file |
+| 2 | the large thumbnail | 1024 px, `{id}.jpg` (the name every existing catalog already uses) | a **low-priority** background pass (2 workers, yields while an import or tier-1 work is queued), a second decode | like today's | after all tier-1 work is done, on demand when Survey, Compare or the viewer needs it for a photo that has only tier 1 |
 
-Box prefilter before `Triangle`, orient after the resize, `jpeg-encoder` instead of the `image` encoder: 15 to 60% less time per file with a result that should look the same in the grid (**not yet compared by eye**: the probe checks times and file sizes only, a visual A/B on the test set is part of the slice). Separately, the thumbnail's **maximum size** (1024 px today) drives half of the cost and the file size: at 512 px the files shrink from 60 to 260 KB to 20 to 65 KB (3 to 4x), which also makes the grid scroll lighter. **Decision for you:** the largest cell the grid can show and whether Loupe/Develop already use their own preview (they do, via `preview_cache`). If nothing needs 1024 px, 640 is the proposed value; if the biggest grid zoom on a 5K display is shown at 1024 px, keep it and take the 25% only.
+A RAW file keeps its embedded 1936 px JPEG, written as is (2 ms): it is already tier 2 and needs no lower tier. Old catalogs already hold tier 2 files, so nothing is regenerated for them. "Needs the large one" is `thumbnail_path` ending in `-t.jpg` / `-s.jpg`; when tier 2 is written the catalog is updated to `{id}.jpg` and the smaller file deleted; a quit in between just resumes at the next startup (the startup catch-up already scans for missing thumbnails, it learns the suffix rule). Each swap is a `thumbnail-ready` event with the new path (the path changes, so the webview cache needs no busting). Slice E also lands the cheaper pixel path (box prefilter, orient after the resize, `jpeg-encoder`), which is what makes tier 1 cheap; its result is **compared by eye on the test set** before it replaces the `image` crate resize.
+
+Order of work: **A** (streaming) and **B** (pool) first with the single existing tier, so each is measured alone; **C** adds overlap with cataloguing; **D** adds tier 0; **E** adds tiers 1/2 and the cheaper pixels; **F** is independent.
 
 ### 5.6 Slice F: export in parallel, with progress
 
@@ -120,10 +126,4 @@ Box prefilter before `Triangle`, orient after the resize, `jpeg-encoder` instead
 
 ## 7. Plan and verification
 
-Four to five PRs: A (+ a small harness script that times first-thumbnail in the bundled app), B, C, E, F. Each lands with the probe re-run and its numbers in `PROGRESS.md`. The M6 milestone-end backlog gets: Windows timing (the two slow cores and Defender scanning the cache dir change the picture), a cold-disk/card import, and a 2,000-photo import for memory.
-
-## 8. Open questions for you
-
-1. Order: A → B → C → E → F as above, or export (F) earlier?
-2. Thumbnail size: keep 1024, or 640 (or 512) if nothing needs more? (§5.5)
-3. Is a placeholder from the EXIF thumbnail (D) wanted, or is "blank cell, then picture" fine once pictures arrive within ~50 ms each?
+Decisions (user, 2026-10-19): order **A → B → C → D → E → F** as above; tiered thumbnails, small first and the larger decoded in the background (§5.4); the EXIF-thumbnail tier is wanted. One PR per slice, each with the probe re-run and its numbers in `PROGRESS.md`. The M6 milestone-end backlog gets: Windows timing (the efficiency cores and Defender scanning the cache directory change the picture), a cold-disk / card import, a 2,000-photo import for memory, and the by-eye comparison of the cheaper thumbnails.

@@ -2,6 +2,28 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Import and export speed slice F: parallel export (2026-10-20)
+
+Last slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md). The Export dialog already sent one photo per call
+(M4.5) but waited for each. Now `lib/exportPool.js` (`runPool`, `exportConcurrency`) keeps up to 8 calls in flight, results
+in item order, with a **Stop** button (the running photos finish, no new one starts, "Stopped: exported N of M"); one photo's
+failure becomes its own failed result instead of ending the batch. The backend decides how many actually render at once:
+`export::ExportBudget` (cores minus two, at most 8, and 100 MP in flight; a single photo always runs) which
+`export_batch` draws on per photo, sized from the catalog's recorded width and height (`Catalog::version_megapixels`, 24 MP
+if unknown). Free memory is **not** probed (no such code exists in the app); the budget is a conservative constant. A real
+race had to be closed first: `IMG_0001.CR2` and `IMG_0001.JPG` both export to `IMG_0001.jpg`, and with calls in parallel the
+old check-then-write could overwrite one; `write_unique` now claims the name atomically (`create_new`). **Measured** (release,
+10 files: 7 JPEGs of 7 to 24 MP and 3 CR2, native resolution, an exposure edit; ignored test `export::export_throughput`):
+1 thread 34.6 s (peak 1.36 GB), 2 threads 18.6 s, 4 threads 9.9 s (2.31 GB), **8 threads 6.9 s (5x, 2.82 GB)**; the first file
+is written after about 3 s at any count. **Verified in the real window** (bundled debug build, throwaway catalog): the 10
+files imported, selected, exported from the dialog: "Exported 10 of 10", 10 distinct output JPEGs, no error in the log
+(about 40 s in a debug build). Tests: atomic naming with 8 racing writers, the budget (cores, memory, an oversize photo
+runs alone), six same-named photos exported at once get six files, the pool (order, concurrency cap, stop, hooks); Rust
+627 lib + 47 + 51, frontend 1103, type check, clippy pass. **Not verified:** the Stop button in the real window, a batch
+of RAW files only (LibRaw's lock serialises the decode part, so the gain there is smaller: the 3 CR2 in this mix are the
+reason the speed-up is 5x and not more), 24 MP-only batches against the 100 MP budget, a low-memory machine, Windows,
+exports with a plugin or metadata options on (unchanged code, not re-timed).
+
 ## Import speed slice E: small thumbnails first, the large ones in the background (2026-10-19)
 
 Fifth slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md), the user's tiered design. `ThumbTier` {Small 512 px

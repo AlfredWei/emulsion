@@ -131,5 +131,5 @@ Decisions (user, 2026-10-19): order **A → B → C → D → E → F** as above
 ## 9. Status (2026-10-19)
 
 Slices A (streaming `thumbnail-ready`), B (thread pool), C (thumbnails during the import, catalog locked per step), D (tier 0,
-the EXIF picture) and E (tiers 512 px / 1024 px, cheaper pixels) are implemented in PRs #255 to #259 with their measurements in
-`PROGRESS.md`. Slice F (parallel export with progress) and the "visible rows first" ordering of §5.2 are not done.
+the EXIF picture) and E (tiers 512 px / 1024 px, cheaper pixels) are implemented and merged in PRs #255 to #259 with their measurements in
+`PROGRESS.md`. Slice F (parallel export, PR #260) is implemented too. The "visible rows first" ordering of §5.2 is not done.

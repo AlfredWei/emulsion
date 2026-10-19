@@ -95,6 +95,82 @@ pub(crate) fn unique_output_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     }
 }
 
+/// Writes `bytes` to the first free `{stem}.{ext}`, `{stem}-1.{ext}`, ... in `dir`, claiming the name atomically
+/// (`create_new`), so two exports running at once (RFC-0030 slice F) that want the same name (`IMG_0001.CR2` and
+/// `IMG_0001.JPG` both make `IMG_0001.jpg`) get different files instead of one overwriting the other. A failed write
+/// removes the half-made file.
+pub(crate) fn write_unique(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let mut n = 0u32;
+    loop {
+        let name = if n == 0 { format!("{stem}.{ext}") } else { format!("{stem}-{n}.{ext}") };
+        let candidate = dir.join(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(mut file) => {
+                return match file.write_all(bytes).and_then(|_| file.flush()) {
+                    Ok(()) => Ok(candidate),
+                    Err(e) => {
+                        drop(file);
+                        let _ = std::fs::remove_file(&candidate);
+                        Err(e)
+                    }
+                };
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// How many exports may render at once, and how much picture they may hold between them (RFC-0030 slice F). A render
+/// keeps the decoded photo, the edited copy and the encoded bytes: measured on this machine, 8 threads over a mix of
+/// 7 to 24 MP photos peaked at 2.8 GB (1 thread: 1.4 GB), about 35 MB per megapixel in flight; the budget assumes up
+/// to 60 MB. The system's free memory is not probed (no such code exists in the app yet), so the budget is a
+/// conservative constant: a single photo always runs, even above it.
+pub(crate) struct ExportBudget {
+    state: std::sync::Mutex<(usize, f64)>,
+    freed: std::sync::Condvar,
+    max_running: usize,
+    max_megapixels: f64,
+}
+
+pub(crate) struct ExportSlot<'a> {
+    budget: &'a ExportBudget,
+    megapixels: f64,
+}
+
+impl ExportBudget {
+    pub(crate) fn new(max_running: usize, max_megapixels: f64) -> Self {
+        Self { state: std::sync::Mutex::new((0, 0.0)), freed: std::sync::Condvar::new(), max_running: max_running.max(1), max_megapixels }
+    }
+
+    /// Waits until `megapixels` more fit (or nothing else is running), then holds that share until the slot drops.
+    pub(crate) fn acquire(&self, megapixels: f64) -> ExportSlot<'_> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        while state.0 > 0 && (state.0 >= self.max_running || state.1 + megapixels > self.max_megapixels) {
+            state = self.freed.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        state.0 += 1;
+        state.1 += megapixels;
+        ExportSlot { budget: self, megapixels }
+    }
+}
+
+impl Drop for ExportSlot<'_> {
+    fn drop(&mut self) {
+        let mut state = self.budget.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.0 -= 1;
+        state.1 = (state.1 - self.megapixels).max(0.0);
+        self.budget.freed.notify_all();
+    }
+}
+
+/// The app-wide budget every export draws on: cores minus two renders at once (at least 1, at most 8), 100 MP in flight.
+fn export_budget() -> &'static ExportBudget {
+    static BUDGET: std::sync::OnceLock<ExportBudget> = std::sync::OnceLock::new();
+    BUDGET.get_or_init(|| ExportBudget::new(std::thread::available_parallelism().map_or(1, |n| n.get()).saturating_sub(2).clamp(1, 8), 100.0))
+}
+
 /// The full-resolution decode-through-crop pipeline shared by `export_one`
 /// below and `print.rs`'s print-ready raster generation -- both need the
 /// SAME final-quality, native-resolution rendered image (per ADR-0004: no
@@ -196,7 +272,6 @@ pub fn export_one(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("export");
-    let out_path = unique_output_path(destination_dir, stem, "jpg");
 
     let quality = options.quality.clamp(1, 100);
     let mut bytes = Vec::new();
@@ -209,14 +284,26 @@ pub fn export_one(
             Err(e) => warning = Some(e.to_string()),
         }
     }
-    std::fs::write(&out_path, &bytes)?;
+    let out_path = write_unique(destination_dir, stem, "jpg", &bytes)?;
 
     Ok((out_path, warning))
 }
 
-/// Sequential, accepting a `Vec` from the start so batch export is a
-/// frontend-only follow-up (multi-select UI) later, not a backend
-/// rewrite, even though the frontend only ever sends one item this slice.
+/// One photo to export, resolved by the caller (this module stays catalog-free): where it is, its edit stack, the
+/// metadata to embed (if asked for), and its size in megapixels (what a render of it holds in memory).
+pub struct ExportJob {
+    pub path: PathBuf,
+    pub stack: EditStack,
+    pub metadata: Option<ExportMetadata>,
+    pub megapixels: f64,
+}
+
+/// What a photo of unknown size is assumed to be, for the memory budget.
+pub const DEFAULT_MEGAPIXELS: f64 = 24.0;
+
+/// Exports the jobs in order. The app's frontend sends one photo per call and runs several calls at once (RFC-0030
+/// slice F), so each photo waits here for a share of the app-wide budget (`export_budget`: cores and memory) before
+/// it renders; a lone batch call behaves as before.
 ///
 /// `plugin`, if set, is invoked once per successfully exported file (not
 /// once per batch) via `export_plugin::invoke` -- fire-and-forget, so a
@@ -224,33 +311,48 @@ pub fn export_one(
 /// (RFC-0006 §3.3). A file that failed to export is never handed to the
 /// plugin at all.
 pub fn export_batch(
-    items: Vec<(PathBuf, EditStack, Option<ExportMetadata>)>,
+    items: Vec<ExportJob>,
     options: &ExportOptions,
     plugin: Option<&ExportPlugin>,
     denoise_dir: Option<&Path>,
 ) -> Vec<ExportResult> {
+    export_batch_with_budget(items, options, plugin, denoise_dir, export_budget())
+}
+
+pub(crate) fn export_batch_with_budget(
+    items: Vec<ExportJob>,
+    options: &ExportOptions,
+    plugin: Option<&ExportPlugin>,
+    denoise_dir: Option<&Path>,
+    budget: &ExportBudget,
+) -> Vec<ExportResult> {
     items
         .into_iter()
-        .map(|(path, stack, metadata)| match export_one(&path, &stack, options, metadata.as_ref(), denoise_dir) {
-            Ok((out_path, metadata_warning)) => {
-                let plugin_error = plugin
-                    .and_then(|p| export_plugin::invoke(p, &out_path).err())
-                    .map(|e| e.to_string());
-                ExportResult {
-                    source_path: path.to_string_lossy().to_string(),
-                    output_path: Some(out_path.to_string_lossy().to_string()),
-                    error: None,
-                    plugin_error,
-                    metadata_warning,
+        .map(|job| {
+            let ExportJob { path, stack, metadata, megapixels } = job;
+            let exported = {
+                let _share = budget.acquire(megapixels);
+                export_one(&path, &stack, options, metadata.as_ref(), denoise_dir)
+            };
+            match exported {
+                Ok((out_path, metadata_warning)) => {
+                    let plugin_error = plugin.and_then(|p| export_plugin::invoke(p, &out_path).err()).map(|e| e.to_string());
+                    ExportResult {
+                        source_path: path.to_string_lossy().to_string(),
+                        output_path: Some(out_path.to_string_lossy().to_string()),
+                        error: None,
+                        plugin_error,
+                        metadata_warning,
+                    }
                 }
+                Err(e) => ExportResult {
+                    source_path: path.to_string_lossy().to_string(),
+                    output_path: None,
+                    error: Some(e.to_string()),
+                    plugin_error: None,
+                    metadata_warning: None,
+                },
             }
-            Err(e) => ExportResult {
-                source_path: path.to_string_lossy().to_string(),
-                output_path: None,
-                error: Some(e.to_string()),
-                plugin_error: None,
-                metadata_warning: None,
-            },
         })
         .collect()
 }
@@ -265,6 +367,103 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
+
+    #[test]
+    fn exports_claim_their_names_atomically_even_when_they_all_want_the_same_one() {
+        let dir = temp_dir("write-unique");
+        let names: Vec<PathBuf> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8u8).map(|n| {
+                let dir = &dir;
+                scope.spawn(move || write_unique(dir, "IMG_0001", "jpg", &[n; 4]).unwrap())
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut distinct = names.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 8, "eight writers, eight different files");
+        // Each file holds exactly one writer's bytes.
+        let mut contents: Vec<u8> = names.iter().map(|p| { let b = std::fs::read(p).unwrap(); assert_eq!(b.len(), 4); assert!(b.iter().all(|x| *x == b[0])); b[0] }).collect();
+        contents.sort_unstable();
+        assert_eq!(contents, (0..8).collect::<Vec<u8>>());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_budget_admits_up_to_its_cores_and_memory_and_always_one_photo() {
+        use std::sync::mpsc;
+        let budget = std::sync::Arc::new(ExportBudget::new(2, 50.0));
+        let a = budget.acquire(20.0);
+        let b = budget.acquire(20.0);
+
+        // A third does not fit (two running already): it waits until one is released.
+        let (tx, rx) = mpsc::channel();
+        let waiter = {
+            let budget = budget.clone();
+            std::thread::spawn(move || {
+                let _c = budget.acquire(5.0);
+                tx.send(()).unwrap();
+            })
+        };
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(200)).is_err(), "still waiting");
+        drop(a);
+        rx.recv_timeout(std::time::Duration::from_secs(5)).expect("admitted once a slot freed");
+        waiter.join().unwrap();
+        drop(b);
+
+        // Memory counts too: 30 + 30 > 50, so the second waits for the first even with a free core.
+        let big = budget.acquire(30.0);
+        let (tx, rx) = mpsc::channel();
+        let waiter = {
+            let budget = budget.clone();
+            std::thread::spawn(move || {
+                let _x = budget.acquire(30.0);
+                tx.send(()).unwrap();
+            })
+        };
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(200)).is_err());
+        drop(big);
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        waiter.join().unwrap();
+
+        // A photo bigger than the whole budget still runs, alone.
+        let huge = budget.acquire(500.0);
+        drop(huge);
+    }
+
+    /// RFC-0030 slice F: many export calls at once, all from photos with the same file name, each get a file of
+    /// their own and all succeed (this is the shape of the frontend's pool: one photo per call, several calls live).
+    #[test]
+    fn concurrent_single_photo_exports_do_not_overwrite_each_other() {
+        let root = temp_dir("concurrent");
+        let dest = root.join("out");
+        let budget = ExportBudget::new(3, 100.0);
+        let options = ExportOptions { destination_dir: dest.to_string_lossy().to_string(), long_edge: Some(64), quality: 80, plugin_id: None, metadata: MetadataWriteOptions::default() };
+        let sources: Vec<PathBuf> = (0..6u8).map(|n| {
+            let d = root.join(format!("src{n}"));
+            std::fs::create_dir_all(&d).unwrap();
+            let p = d.join("IMG_0001.jpg");
+            image::RgbImage::from_pixel(200, 120, image::Rgb([n * 40, 90, 30])).save(&p).unwrap();
+            p
+        }).collect();
+
+        let results: Vec<ExportResult> = std::thread::scope(|scope| {
+            let handles: Vec<_> = sources.iter().map(|p| {
+                let (options, budget) = (&options, &budget);
+                scope.spawn(move || export_batch_with_budget(vec![ExportJob { path: p.clone(), stack: EditStack::empty(), metadata: None, megapixels: 0.02 }], options, None, None, budget).remove(0))
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        assert!(results.iter().all(|r| r.error.is_none()), "{:?}", results.iter().map(|r| &r.error).collect::<Vec<_>>());
+        let mut outputs: Vec<&String> = results.iter().map(|r| r.output_path.as_ref().unwrap()).collect();
+        outputs.sort();
+        outputs.dedup();
+        assert_eq!(outputs.len(), 6, "six different output files");
+        assert!(outputs.iter().all(|p| image::open(p).unwrap().width() <= 64));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
 
     #[test]
     fn unique_output_path_avoids_collisions() {
@@ -445,5 +644,41 @@ mod tests {
         let plain = render_full_resolution(&source, &EditStack::empty(), Some(&dir)).unwrap();
         assert_eq!(none, plain, "a hidden panel's op must not render");
         assert!(shown.get_pixel(0, 0).0[2] > plain.get_pixel(0, 0).0[2] + 100, "the cached result must show: {:?} vs {:?}", shown.get_pixel(0, 0), plain.get_pixel(0, 0));
+    }
+
+    /// Measures batch export through N threads (RFC-0030 slice F): every JPEG/RAW in `EXPORT_PROBE_DIR` is exported
+    /// at native resolution with a basic exposure edit, once per thread count in `EXPORT_PROBE_THREADS` (default
+    /// "1,2,4,8"). Run under `/usr/bin/time -l` with one thread count to read the peak memory.
+    ///   EXPORT_PROBE_DIR=<dir> EXPORT_PROBE_THREADS=4 cargo test --release --lib export_throughput -- --ignored --nocapture
+    #[test]
+    #[ignore = "measurement, needs EXPORT_PROBE_DIR"]
+    fn export_throughput() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = PathBuf::from(std::env::var("EXPORT_PROBE_DIR").expect("EXPORT_PROBE_DIR"));
+        let counts: Vec<usize> = std::env::var("EXPORT_PROBE_THREADS").unwrap_or_else(|_| "1,2,4,8".into()).split(',').filter_map(|n| n.trim().parse().ok()).collect();
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| source_decode::ImageFormat::from_path(p).is_some()).collect();
+        files.sort();
+        let stack = EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "exposure", "amount": 30})] };
+        println!("\nexport of {} files at native resolution (decode, edit, encode, write)", files.len());
+        for threads in counts {
+            let dest = temp_dir(&format!("throughput-{threads}"));
+            let options = ExportOptions { destination_dir: dest.to_string_lossy().to_string(), long_edge: None, quality: 90, plugin_id: None, metadata: MetadataWriteOptions::default() };
+            let next = AtomicUsize::new(0);
+            let first = std::sync::Mutex::new(None::<std::time::Duration>);
+            let start = std::time::Instant::now();
+            std::thread::scope(|scope| {
+                for _ in 0..threads {
+                    scope.spawn(|| loop {
+                        let i = next.fetch_add(1, Ordering::SeqCst);
+                        let Some(path) = files.get(i) else { break };
+                        export_one(path, &stack, &options, None, None).expect("export");
+                        first.lock().unwrap().get_or_insert(start.elapsed());
+                    });
+                }
+            });
+            let total = start.elapsed();
+            println!("  threads {threads:>2}: {:>7.0} ms total ({:.2} files/s), first file after {:>5.0} ms", total.as_secs_f64() * 1000.0, files.len() as f64 / total.as_secs_f64(), first.lock().unwrap().unwrap().as_secs_f64() * 1000.0);
+            let _ = std::fs::remove_dir_all(&dest);
+        }
     }
 }

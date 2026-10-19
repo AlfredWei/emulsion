@@ -1788,7 +1788,9 @@ async fn export_images(
                     } else {
                         None
                     };
-                    (std::path::PathBuf::from(item.path), stack, metadata)
+                    // What a render of this photo holds in memory (the catalog's recorded size; unknown = a big one).
+                    let megapixels = catalog.version_megapixels(item.version_id).unwrap_or(export::DEFAULT_MEGAPIXELS);
+                    export::ExportJob { path: std::path::PathBuf::from(item.path), stack, metadata, megapixels }
                 })
                 .collect::<Vec<_>>();
             // Resolved here, under the same brief lock as the edit stacks

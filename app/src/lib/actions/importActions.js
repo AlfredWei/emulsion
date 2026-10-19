@@ -5,7 +5,7 @@
 
 import { importFlow } from "$lib/state/importFlow.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
-import { refresh, prioritizeThumbnail, handleBatchThumbnailsComplete } from "$lib/actions/libraryActions.js";
+import { refresh, prioritizeThumbnail, handleBatchThumbnailsComplete, stopRefreshingWhileImporting } from "$lib/actions/libraryActions.js";
 import {
   backfillMissingThumbnails,
   importFolder,
@@ -47,6 +47,7 @@ export async function runImport(/** @type {() => Promise<import('$lib/api/catalo
     const summary = await doImport();
     if (!summary) return; // user cancelled the dialog
     shell.notify(`Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`);
+    stopRefreshingWhileImporting();
     await refresh();
     // Cataloging (importProgress, tracked above) is only half of "import
     // done" from the user's perspective -- a freshly-imported JPEG has
@@ -85,6 +86,7 @@ export async function runImport(/** @type {() => Promise<import('$lib/api/catalo
   } catch (/** @type {any} */ e) {
     shell.notify(`Import failed: ${e}`);
   } finally {
+    stopRefreshingWhileImporting();
     importFlow.importing = false;
     importFlow.catalogProgress = null;
     importFlow.thumbnailProgress = null;

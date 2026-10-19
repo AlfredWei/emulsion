@@ -116,25 +116,115 @@ pub fn import_paths(paths: &[PathBuf], catalog: &Catalog, thumbnail_dir: &Path) 
     import_paths_with_progress(paths, catalog, thumbnail_dir, |_, _| {})
 }
 
-/// Same as `import_paths`, but calls `on_progress(files_done, total_files)`
-/// after every candidate file is processed (imported, skipped, or failed) --
-/// lib.rs's Tauri commands use this to emit the `import-progress` event a
-/// frontend progress bar listens for.
-pub fn import_paths_with_progress<F: FnMut(usize, usize)>(
-    paths: &[PathBuf],
-    catalog: &Catalog,
-    thumbnail_dir: &Path,
-    mut on_progress: F,
-) -> ImportSummary {
-    // One id for every image landed by this call -- backs the Library
-    // sidebar's "Last Import" source (`import_batch == max(import_batch)`).
-    // Wall-clock millis, not an autoincrement counter, since there's no
-    // dedicated batch table to hand one out from.
-    let import_batch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+/// How the per-file import reaches the catalog. The plain form borrows one `Catalog` for the whole call (the tests, and
+/// any caller that already holds the lock); the shared form locks it for each single step (RFC-0030 slice C), so the
+/// rest of the app can use the catalog while a long import runs. `None` means the catalog could not be reached (a
+/// poisoned lock), which the import counts as a failure of that file.
+trait CatalogAccess {
+    fn with<R>(&self, f: impl FnOnce(&Catalog) -> R) -> Option<R>;
+}
 
+struct Direct<'a>(&'a Catalog);
+
+impl CatalogAccess for Direct<'_> {
+    fn with<R>(&self, f: impl FnOnce(&Catalog) -> R) -> Option<R> {
+        Some(f(self.0))
+    }
+}
+
+struct Shared<'a>(&'a Mutex<Catalog>);
+
+impl CatalogAccess for Shared<'_> {
+    fn with<R>(&self, f: impl FnOnce(&Catalog) -> R) -> Option<R> {
+        self.0.lock().ok().map(|c| f(&c))
+    }
+}
+
+/// What importing one file came to.
+enum FileOutcome {
+    /// Cataloged. `needs_thumbnail` is true when no thumbnail was written on the spot (every JPEG, and a RAW whose
+    /// embedded picture was not a JPEG), so something still has to make one.
+    Imported { image_id: i64, needs_thumbnail: bool },
+    Duplicate,
+    Failed,
+}
+
+/// One id for every image landed by one import call: wall-clock millis, since there is no dedicated batch table to
+/// hand one out from. Backs the Library sidebar's "Last Import" source (`import_batch == max(import_batch)`).
+fn new_import_batch() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// The per-file core shared by every import entry point: read, hash, skip a known hash, catalog (one transaction),
+/// and for a RAW file write its embedded thumbnail. A JPEG's thumbnail is a full decode, categorically heavier than
+/// RAW's cheap embedded-picture extraction, so it is made by whoever called this (the background pass, or the pool of
+/// `import_paths_streaming`), never here.
+fn import_one<A: CatalogAccess>(path: &Path, access: &A, thumbnail_dir: &Path, import_batch: i64) -> FileOutcome {
+    let Ok(bytes) = std::fs::read(path) else { return FileOutcome::Failed };
+    let hash = blake3::hash(&bytes).to_hex().to_string();
+
+    match access.with(|c| c.find_by_hash(&hash)) {
+        Some(Ok(Some(_))) => return FileOutcome::Duplicate,
+        Some(Ok(None)) => {}
+        Some(Err(_)) | None => return FileOutcome::Failed,
+    }
+
+    let Some(format) = ImageFormat::from_path(path) else { return FileOutcome::Failed };
+    let path_str = path.to_string_lossy().to_string();
+
+    match format {
+        ImageFormat::Raw => {
+            // See raw_decode::LIBRAW_LOCK's own comment: LibRaw isn't safely reentrant across threads, and this open
+            // (plus extract_and_write_thumbnail's extract_thumbs() below) can run concurrently with a Develop
+            // preview decode, an HDR merge, or an on-demand priority thumbnail on another spawn_blocking task.
+            // Metadata extraction reads only already-open header fields (no further LibRaw calls), so the lock
+            // doesn't need to span it.
+            let raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
+            let Ok(mut raw_image) = RawImage::open(&bytes) else { return FileOutcome::Failed };
+            drop(raw_lock);
+
+            // M2 Slice 2: free to call here -- RawImage::open() already populated the header fields this reads, no
+            // unpack()/process() needed (confirmed against rsraw's own source).
+            let file_metadata = metadata::extract_from_raw(&raw_image);
+
+            // Atomic (M1 Slice 6): both rows (+ metadata, M2 Slice 2) in one transaction, so a crash partway through
+            // can't leave a permanently-orphaned or inconsistently-tagged row.
+            let added = access.with(|c| {
+                let id = c.add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty(), &file_metadata).ok()?;
+                let _ = c.set_import_batch(id, import_batch);
+                Some(id)
+            });
+            let Some(Some(image_id)) = added else { return FileOutcome::Failed };
+
+            let raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
+            let thumb_result = extract_and_write_thumbnail(&mut raw_image, image_id, thumbnail_dir);
+            drop(raw_lock);
+            let recorded = thumb_result.is_some_and(|thumb_path| {
+                access.with(|c| c.set_thumbnail_path(image_id, &thumb_path.to_string_lossy()).is_ok()).unwrap_or(false)
+            });
+            FileOutcome::Imported { image_id, needs_thumbnail: !recorded }
+        }
+        ImageFormat::Jpeg => {
+            if !jpeg_bytes_look_valid(&bytes) {
+                return FileOutcome::Failed;
+            }
+            // M2 Slice 2: a fresh EXIF read, deliberately not shared with jpeg_decode.rs's orientation read.
+            let file_metadata = metadata::extract_from_jpeg(&bytes);
+            let added = access.with(|c| {
+                let id = c.add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty(), &file_metadata).ok()?;
+                let _ = c.set_import_batch(id, import_batch);
+                Some(id)
+            });
+            match added {
+                Some(Some(image_id)) => FileOutcome::Imported { image_id, needs_thumbnail: true },
+                _ => FileOutcome::Failed,
+            }
+        }
+    }
+}
+
+/// The files an import call will look at: a directory is walked recursively, anything else is taken as it is.
+fn candidates_of(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut candidate_paths = Vec::new();
     for p in paths {
         if p.is_dir() {
@@ -143,124 +233,117 @@ pub fn import_paths_with_progress<F: FnMut(usize, usize)>(
             candidate_paths.push(p.clone());
         }
     }
+    candidate_paths
+}
 
+fn count(summary: &mut ImportSummary, outcome: &FileOutcome) {
+    match outcome {
+        FileOutcome::Imported { .. } => summary.imported += 1,
+        FileOutcome::Duplicate => summary.skipped_duplicates += 1,
+        FileOutcome::Failed => summary.failed += 1,
+    }
+}
+
+/// Same as `import_paths`, but calls `on_progress(files_done, total_files)`
+/// after every candidate file is processed (imported, skipped, or failed) --
+/// lib.rs's Tauri commands use this to emit the `import-progress` event a
+/// frontend progress bar listens for. Makes no thumbnails for JPEGs (see
+/// `import_one`): the caller runs `generate_missing_thumbnails*` afterwards.
+/// The app itself uses `import_paths_streaming` below; this is the form for
+/// callers that hold one `&Catalog` (the tests).
+#[allow(dead_code)]
+pub fn import_paths_with_progress<F: FnMut(usize, usize)>(
+    paths: &[PathBuf],
+    catalog: &Catalog,
+    thumbnail_dir: &Path,
+    mut on_progress: F,
+) -> ImportSummary {
+    let import_batch = new_import_batch();
+    let candidate_paths = candidates_of(paths);
     let mut summary = ImportSummary { import_batch, ..Default::default() };
     let _ = std::fs::create_dir_all(thumbnail_dir);
     let total = candidate_paths.len();
+    let access = Direct(catalog);
 
-    // A labeled block, not the loop itself, so every early-exit path below
-    // (`break 'file`, one per failure/skip case) still falls through to the
-    // single `on_progress` call at the end of each iteration -- the loop
-    // itself never `continue`s, so progress is reported for every candidate
-    // exactly once, regardless of outcome.
     for (i, path) in candidate_paths.iter().enumerate() {
-        'file: {
-            let Ok(bytes) = std::fs::read(path) else {
-                summary.failed += 1;
-                break 'file;
-            };
-
-            let hash = blake3::hash(&bytes).to_hex().to_string();
-
-            match catalog.find_by_hash(&hash) {
-                Ok(Some(_)) => {
-                    summary.skipped_duplicates += 1;
-                    break 'file;
-                }
-                Err(_) => {
-                    summary.failed += 1;
-                    break 'file;
-                }
-                Ok(None) => {}
-            }
-
-            let Some(format) = ImageFormat::from_path(path) else {
-                summary.failed += 1;
-                break 'file;
-            };
-            let path_str = path.to_string_lossy().to_string();
-
-            match format {
-                ImageFormat::Raw => {
-                    // See raw_decode::LIBRAW_LOCK's own comment: LibRaw isn't
-                    // safely reentrant across threads, and this open (plus
-                    // extract_and_write_thumbnail's extract_thumbs() below)
-                    // can run concurrently with a Develop preview decode, an
-                    // HDR merge, or an on-demand priority thumbnail on
-                    // another spawn_blocking task. Metadata extraction reads
-                    // only already-open header fields (no further LibRaw
-                    // calls), so the lock doesn't need to span it.
-                    let raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
-                    let Ok(mut raw_image) = RawImage::open(&bytes) else {
-                        summary.failed += 1;
-                        break 'file;
-                    };
-                    drop(raw_lock);
-
-                    // M2 Slice 2: free to call here -- RawImage::open() already
-                    // populated the header fields this reads, no unpack()/
-                    // process() needed (confirmed against rsraw's own source).
-                    let file_metadata = metadata::extract_from_raw(&raw_image);
-
-                    // Atomic (M1 Slice 6): both rows (+ metadata, M2 Slice 2)
-                    // in one transaction, so a crash partway through can't
-                    // leave a permanently-orphaned or inconsistently-tagged row.
-                    let Ok(image_id) = catalog.add_image_with_edit_stack(
-                        &path_str,
-                        &hash,
-                        bytes.len() as i64,
-                        &EditStack::empty(),
-                        &file_metadata,
-                    ) else {
-                        summary.failed += 1;
-                        break 'file;
-                    };
-                    let _ = catalog.set_import_batch(image_id, import_batch);
-
-                    let raw_lock = crate::raw_decode::LIBRAW_LOCK.lock().unwrap();
-                    let thumb_result = extract_and_write_thumbnail(&mut raw_image, image_id, thumbnail_dir);
-                    drop(raw_lock);
-                    if let Some(thumb_path) = thumb_result {
-                        let _ = catalog.set_thumbnail_path(image_id, &thumb_path.to_string_lossy());
-                    }
-                }
-                ImageFormat::Jpeg => {
-                    if !jpeg_bytes_look_valid(&bytes) {
-                        summary.failed += 1;
-                        break 'file;
-                    }
-
-                    // M2 Slice 2: a fresh EXIF read, deliberately not shared
-                    // with jpeg_decode.rs's orientation read -- that one only
-                    // happens later, during the background thumbnail pass, not
-                    // here at import time.
-                    let file_metadata = metadata::extract_from_jpeg(&bytes);
-
-                    // thumbnail_path stays NULL here -- generate_missing_thumbnails
-                    // fills it in on a background pass. A full JPEG decode is
-                    // categorically heavier than RAW's cheap embedded-thumb
-                    // extraction (no demosaic to skip); running it synchronously
-                    // inside this loop would visibly slow a JPEG-heavy import
-                    // with zero progress feedback, unlike RAW's import path today.
-                    match catalog
-                        .add_image_with_edit_stack(&path_str, &hash, bytes.len() as i64, &EditStack::empty(), &file_metadata)
-                    {
-                        Ok(image_id) => {
-                            let _ = catalog.set_import_batch(image_id, import_batch);
-                        }
-                        Err(_) => {
-                            summary.failed += 1;
-                            break 'file;
-                        }
-                    }
-                }
-            }
-
-            summary.imported += 1;
-        }
-
+        let outcome = import_one(path, &access, thumbnail_dir, import_batch);
+        count(&mut summary, &outcome);
         on_progress(i + 1, total);
     }
+    summary
+}
+
+/// The import the app runs (RFC-0030 slice C): the same per-file core, but
+///
+/// - the catalog is locked for each single step, not for the whole import, so listing photos, rating or opening one
+///   keeps working while a long import runs and the grid can show the rows as they land;
+/// - a pool of threads (`thumbnail_worker_count`) makes each picture's thumbnail while the next files are still being
+///   read, instead of a separate pass afterwards. Every JPEG's thumbnail is ready within moments of its row.
+///
+/// `on_ready(image_id, path)` fires for each thumbnail written by the pool, from the calling thread, once the catalog
+/// holds the path. The call returns when every file is catalogued and every queued thumbnail is made.
+pub fn import_paths_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
+    paths: &[PathBuf],
+    catalog: &Arc<Mutex<Catalog>>,
+    thumbnail_dir: &Path,
+    workers: Option<usize>,
+    mut on_progress: F,
+    mut on_ready: R,
+) -> ImportSummary {
+    let import_batch = new_import_batch();
+    let candidate_paths = candidates_of(paths);
+    let mut summary = ImportSummary { import_batch, ..Default::default() };
+    let _ = std::fs::create_dir_all(thumbnail_dir);
+    let total = candidate_paths.len();
+    if total == 0 {
+        return summary;
+    }
+    let workers = workers.unwrap_or_else(|| thumbnail_worker_count(std::thread::available_parallelism().map_or(1, |n| n.get()), total));
+    let access = Shared(catalog);
+
+    let (job_tx, job_rx) = std::sync::mpsc::channel::<(i64, PathBuf)>();
+    let job_rx = Mutex::new(job_rx);
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<(i64, PathBuf)>();
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let ready_tx = ready_tx.clone();
+            let job_rx = &job_rx;
+            scope.spawn(move || loop {
+                // The lock is held only while waiting for the next job; the picture itself is made outside it.
+                let job = { job_rx.lock().ok().and_then(|rx| rx.recv().ok()) };
+                let Some((image_id, path)) = job else { break };
+                let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| generate_thumbnail_file(image_id, &path, thumbnail_dir)))
+                    .unwrap_or_else(|_| {
+                        eprintln!("thumbnail generation panicked for {}", path.display());
+                        None
+                    });
+                let Some(out) = made else { continue };
+                let recorded = catalog.lock().ok().is_some_and(|c| c.set_thumbnail_path(image_id, &out.to_string_lossy()).is_ok());
+                if recorded && ready_tx.send((image_id, out)).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(ready_tx);
+
+        for (i, path) in candidate_paths.iter().enumerate() {
+            let outcome = import_one(path, &access, thumbnail_dir, import_batch);
+            count(&mut summary, &outcome);
+            if let FileOutcome::Imported { image_id, needs_thumbnail: true } = outcome {
+                let _ = job_tx.send((image_id, path.clone()));
+            }
+            // Pictures finished while this file was being read go out now, not at the end.
+            while let Ok((id, out)) = ready_rx.try_recv() {
+                on_ready(id, &out);
+            }
+            on_progress(i + 1, total);
+        }
+        drop(job_tx);
+        for (id, out) in ready_rx.iter() {
+            on_ready(id, &out);
+        }
+    });
 
     summary
 }
@@ -277,6 +360,7 @@ pub fn scan_and_import(dir: &Path, catalog: &Catalog, thumbnail_dir: &Path) -> I
 
 /// Same as `scan_and_import`, but forwards per-file progress -- see
 /// `import_paths_with_progress`.
+#[allow(dead_code)]
 pub fn scan_and_import_with_progress<F: FnMut(usize, usize)>(
     dir: &Path,
     catalog: &Catalog,
@@ -284,6 +368,17 @@ pub fn scan_and_import_with_progress<F: FnMut(usize, usize)>(
     on_progress: F,
 ) -> ImportSummary {
     import_paths_with_progress(&collect_candidate_files(dir), catalog, thumbnail_dir, on_progress)
+}
+
+/// `import_paths_streaming` over everything found under `dir`.
+pub fn scan_and_import_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
+    dir: &Path,
+    catalog: &Arc<Mutex<Catalog>>,
+    thumbnail_dir: &Path,
+    on_progress: F,
+    on_ready: R,
+) -> ImportSummary {
+    import_paths_streaming(&collect_candidate_files(dir), catalog, thumbnail_dir, None, on_progress, on_ready)
 }
 
 /// Background pass (M2 Slice 1): fills in `thumbnail_path` for any
@@ -886,6 +981,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
+    /// RFC-0030 slice C: the streaming import catalogs every file, makes every JPEG's thumbnail before it returns, and
+    /// announces each one once; a duplicate and a corrupt file are counted, not made into pictures.
+    #[test]
+    fn the_streaming_import_catalogs_and_thumbnails_every_jpeg_before_it_returns() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("streaming-import");
+        for n in 0..9u8 {
+            image::RgbImage::from_pixel(160 + n as u32, 90, image::Rgb([n * 25, 80, 40])).save(dir.join(format!("s{n}.jpg"))).unwrap();
+        }
+        std::fs::copy(dir.join("s0.jpg"), dir.join("s0-copy.jpg")).unwrap(); // same bytes: a duplicate
+        std::fs::write(dir.join("broken.jpg"), b"not a jpeg").unwrap();
+        let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
+
+        let progress = std::cell::RefCell::new(Vec::new());
+        let ready = std::cell::RefCell::new(Vec::new());
+        let summary = import_paths_streaming(
+            std::slice::from_ref(&dir),
+            &catalog,
+            &thumb_dir,
+            Some(3),
+            |c, t| progress.borrow_mut().push((c, t)),
+            |id, path| {
+                assert!(path.exists());
+                ready.borrow_mut().push(id);
+            },
+        );
+
+        assert_eq!((summary.imported, summary.skipped_duplicates, summary.failed), (9, 1, 1));
+        let progress = progress.into_inner();
+        assert_eq!(progress.len(), 11);
+        assert!(progress.iter().enumerate().all(|(i, &(c, t))| (c, t) == (i + 1, 11)));
+        let images = catalog.lock().unwrap().list_images().unwrap();
+        assert_eq!(images.len(), 9);
+        assert!(images.iter().all(|i| i.thumbnail_path.is_some() && i.import_batch == Some(summary.import_batch)));
+        let mut ready = ready.into_inner();
+        ready.sort_unstable();
+        ready.dedup();
+        assert_eq!(ready.len(), 9, "each thumbnail announced once");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// The point of the per-step lock: while the import runs, the rest of the app can read the catalog and sees the
+    /// rows that have landed so far. (With the old whole-import lock this would deadlock or only ever see the end.)
+    #[test]
+    fn the_catalog_is_free_between_files_of_a_streaming_import() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("streaming-free");
+        for n in 0..5u8 {
+            image::RgbImage::from_pixel(100, 60, image::Rgb([n * 40, 5, 5])).save(dir.join(format!("f{n}.jpg"))).unwrap();
+        }
+        let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
+        let seen = std::cell::RefCell::new(Vec::new());
+        import_paths_streaming(std::slice::from_ref(&dir), &catalog, &thumb_dir, Some(1), |_, _| {
+            seen.borrow_mut().push(catalog.lock().unwrap().list_images().unwrap().len());
+        }, |_, _| {});
+        assert_eq!(seen.into_inner(), vec![1, 2, 3, 4, 5]);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// A RAW file keeps its on-the-spot embedded thumbnail (no pool job, no announcement) in the streaming import too.
+    #[test]
+    fn a_raw_file_in_a_streaming_import_gets_its_embedded_thumbnail_at_once() {
+        let raw = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test_image/hdr-bracket-cc-by/setup1_complex_gt1.cr2");
+        if !raw.exists() {
+            eprintln!("skipping: {} not present", raw.display());
+            return;
+        }
+        let (dir, thumb_dir) = scan_and_thumb_dirs("streaming-raw");
+        std::fs::copy(&raw, dir.join("one.cr2")).unwrap();
+        let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
+        let announced = std::cell::Cell::new(0);
+        let summary = import_paths_streaming(std::slice::from_ref(&dir), &catalog, &thumb_dir, Some(2), |_, _| {}, |_, _| announced.set(announced.get() + 1));
+        assert_eq!(summary.imported, 1);
+        assert_eq!(announced.get(), 0, "written during cataloguing, so it arrives with the row");
+        assert!(catalog.lock().unwrap().list_images().unwrap()[0].thumbnail_path.is_some());
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
     /// Real regression guard for the backlog this scoping was added to fix
     /// (see `generate_missing_thumbnails_with_progress`'s own doc comment):
     /// a `Some(import_batch)` pass must touch ONLY images tagged with that
@@ -1399,6 +1570,24 @@ mod speed_probe {
                 summary.imported,
                 ms(first.get().unwrap_or_default()),
                 ms(t.elapsed())
+            );
+            let _ = std::fs::remove_dir_all(&thumbs);
+        }
+        println!("overlapped (slice C): thumbnails are made while the files are still being read");
+        for workers in [1, 4, thumbnail_worker_count(cores, usize::MAX)] {
+            let thumbs = std::env::temp_dir().join(format!("emulsion-probe-thumbs-c{workers}"));
+            let _ = std::fs::remove_dir_all(&thumbs);
+            let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
+            let first = std::cell::Cell::new(None::<Duration>);
+            let t = Instant::now();
+            let summary = import_paths_streaming(std::slice::from_ref(&dir), &catalog, &thumbs, Some(workers), |_, _| {}, |_, _| {
+                first.set(first.get().or(Some(t.elapsed())));
+            });
+            println!(
+                "  workers {workers:>2}: imported {} and every thumbnail made in {:>6.0} ms, first picture {:>5.0} ms",
+                summary.imported,
+                ms(t.elapsed()),
+                ms(first.get().unwrap_or_default())
             );
             let _ = std::fs::remove_dir_all(&thumbs);
         }

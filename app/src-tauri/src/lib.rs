@@ -129,15 +129,20 @@ async fn import_folder(
         let catalog = catalog.clone();
         let progress_app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let catalog = catalog.lock().map_err(|e| e.to_string())?;
-            Ok::<_, String>(import::scan_and_import_with_progress(
+            // The catalog is locked per step inside the import (RFC-0030 slice C), not here for the whole call, and
+            // the thumbnails are made by a pool while the files are still being read.
+            let mut ready = ReadyEmitter::new(progress_app.clone());
+            let summary = import::scan_and_import_streaming(
                 std::path::Path::new(&path),
                 &catalog,
                 &thumbnail_dir,
                 |current, total| {
                     let _ = progress_app.emit("import-progress", ImportProgress { current, total });
                 },
-            ))
+                |image_id, path| ready.push(image_id, path),
+            );
+            ready.finish();
+            Ok::<_, String>(summary)
         })
         .await
         .map_err(|e| e.to_string())?
@@ -162,7 +167,7 @@ async fn import_folder(
 /// Multi-file import (M2 Slice 1, see import.rs): the picker-dialog
 /// alternative to `import_folder`'s whole-directory walk -- takes an
 /// explicit list of user-selected file paths instead. Shares the same
-/// per-file core (`import::import_paths`) and the same background-trigger
+/// per-file core (`import::import_paths_streaming`) and the same background-trigger
 /// pattern as `import_folder`.
 #[tauri::command]
 async fn import_files(
@@ -178,15 +183,20 @@ async fn import_files(
         let progress_app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let paths: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
-            let catalog = catalog.lock().map_err(|e| e.to_string())?;
-            Ok::<_, String>(import::import_paths_with_progress(
+            // Locked per step inside the import, with a thumbnail pool: see import_folder.
+            let mut ready = ReadyEmitter::new(progress_app.clone());
+            let summary = import::import_paths_streaming(
                 &paths,
                 &catalog,
                 &thumbnail_dir,
+                None,
                 |current, total| {
                     let _ = progress_app.emit("import-progress", ImportProgress { current, total });
                 },
-            ))
+                |image_id, path| ready.push(image_id, path),
+            );
+            ready.finish();
+            Ok::<_, String>(summary)
         })
         .await
         .map_err(|e| e.to_string())?

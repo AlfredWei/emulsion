@@ -2,6 +2,37 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Import speed slice C: thumbnails during the import, the catalog locked per step (2026-10-19)
+
+Third slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md). `import_folder` / `import_files` used to hold
+the catalog lock for the whole import (so listing, rating or opening a photo waited for it) and made JPEG thumbnails in
+a separate pass afterwards. Now: (1) the per-file work is one function (`import_one`) reaching the catalog through a
+small `CatalogAccess` trait, `Shared` (one short lock per step) for the app and `Direct` (one borrowed `Catalog`) for
+the tests and older callers; (2) `import_paths_streaming` queues each new JPEG (and any RAW without an embedded JPEG)
+to the slice-B thread pool while the next files are still being read, announces each finished picture
+(`thumbnail-ready`) and returns when all are made; (3) the grid shows the rows as they land: every `import-progress`
+event asks for a refresh (`refreshWhileImporting`: one pending at a time, the next no sooner than 500 ms or three times
+the last one's duration), and `runImport` ends it and makes the final refresh. The old pass `backfill_missing_thumbnails`
+still runs after (it finds nothing unless a picture failed) and the startup catch-up is unchanged. **Measured**
+(release, warm cache, 40 JPEGs, 8 workers): the separate phases took 212 + 876 ms; overlapped, everything is done in
+881 ms and the first picture is 154 ms after the start instead of ~290 ms: about 20% here, and more on a slow disk or
+card because reading now overlaps decoding. Tests: every JPEG catalogued and thumbnailed before the call returns, once
+each, duplicate and corrupt counted; **the catalog can be read between files** (rows 1,2,3,4,5 seen as they land); a RAW
+keeps its on-the-spot thumbnail; the throttle (one refresh for twenty events, cool-down, no overlap, stop, failure
+swallowed). Rust 610 lib + 47 + 51, frontend 1093, type check, clippy: pass. **Verified in the real window** (bundled
+debug app of slices A to C, throwaway catalog, folder import of the 40 JPEGs, 271 MB): the 40 rows appeared in the grid
+about a second after the import started, while the status strip still said "Importing 40 / 40"; the thumbnails then
+filled in a few at a time (the first around 3 s, nearly all by ~10 s, in a debug build where decode is several times
+slower than release); the strip ended "Imported 40, 0 already in library, 0 failed"; 40 thumbnail files on disk; no
+errors in the app log. **Not verified:** the grid's behaviour while rows are inserted mid-list (a refresh re-sorts, so
+the view can shift as files land; seen only as a screenshot sequence, not scrolling or selecting during the import);
+a very large catalog's refresh cost; cold disk; Windows. WebdriverIO E2E runs in CI (a PR whose base is not main gets no
+CI until it is retargeted, so #257 had none until then). **CI found one real consequence:** the E2E spec
+`thumbnail-backfill` expected `import_files` to leave the JPEG without a thumbnail and the backfill to emit exactly one
+`thumbnail-progress` event; with slice C the import makes the thumbnail itself, so the backfill has no candidate. The spec
+now checks the new contract (the image has its thumbnail when the import resolves, `thumbnail-ready` announced it, no
+progress events); the backfill's own progress contract stays covered by the Rust unit tests.
+
 ## Import speed slice B: a pool of threads makes the thumbnails (2026-10-19)
 
 Second slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md). The thumbnail pass
@@ -31,7 +62,7 @@ thumbnail once with the catalog already holding the path (this found and fixed a
 batcher's grouping, the frontend patching (by `image_id`, one reassignment, untouched rows keep identity), the
 listener; the full frontend suite (1088) and type check pass; the `import::` Rust tests pass. **Not verified:** in the
 real window (the screen was locked when I tried; the bundled debug app built fine) and a measured first-picture time
-in the app; both are on the M6 milestone-end list.
+in the app; slice C's check below covers the whole A to C flow in a real window.
 
 ## Import and export speed study (2026-10-19)
 

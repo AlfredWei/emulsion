@@ -30,6 +30,8 @@ import {
   patchLocal,
   handleBatchThumbnailsComplete,
   handleThumbnailsReady,
+  refreshWhileImporting,
+  stopRefreshingWhileImporting,
   prioritizeThumbnail,
   handleCreateCollection,
   handleCreateSmartCollection,
@@ -344,6 +346,64 @@ describe("local image patches", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(library.images[0].thumbnail_path).toBeNull();
+  });
+});
+
+describe("refreshWhileImporting", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    catalog.listImages.mockReset();
+    catalog.listImages.mockResolvedValue([img(1)]);
+    stopRefreshingWhileImporting();
+  });
+  afterEach(() => {
+    stopRefreshingWhileImporting();
+    vi.useRealTimers();
+  });
+
+  it("refreshes once however many progress events come, then waits before the next", async () => {
+    for (let i = 0; i < 20; i++) refreshWhileImporting();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(catalog.listImages).toHaveBeenCalledTimes(1);
+    expect(library.images.map((i) => i.image_id)).toEqual([1]);
+
+    refreshWhileImporting(); // inside the cool-down: scheduled for after it, not run now
+    await vi.advanceTimersByTimeAsync(400);
+    expect(catalog.listImages).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(catalog.listImages).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not start a second refresh while one is still running", async () => {
+    let finish = /** @type {(v: any) => void} */ (() => {});
+    catalog.listImages.mockReturnValue(new Promise((r) => (finish = r)));
+    refreshWhileImporting();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshWhileImporting();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(catalog.listImages).toHaveBeenCalledTimes(1);
+    finish([img(7)]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(library.images.map((i) => i.image_id)).toEqual([7]);
+  });
+
+  it("stopping drops a pending refresh and the cool-down", async () => {
+    refreshWhileImporting();
+    stopRefreshingWhileImporting();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(catalog.listImages).not.toHaveBeenCalled();
+    refreshWhileImporting(); // the next import starts straight away
+    await vi.advanceTimersByTimeAsync(0);
+    expect(catalog.listImages).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed refresh is swallowed and the throttle keeps working", async () => {
+    catalog.listImages.mockRejectedValueOnce(new Error("busy"));
+    refreshWhileImporting();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshWhileImporting();
+    await vi.advanceTimersByTimeAsync(600);
+    expect(catalog.listImages).toHaveBeenCalledTimes(2);
   });
 });
 

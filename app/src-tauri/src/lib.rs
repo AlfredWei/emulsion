@@ -124,6 +124,7 @@ async fn import_folder(
 ) -> Result<ImportSummary, String> {
     let catalog = state.catalog.clone();
     let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
+    let thumbnail_dir_for_large = thumbnail_dir.clone();
 
     let summary = {
         let catalog = catalog.clone();
@@ -147,6 +148,8 @@ async fn import_folder(
         .await
         .map_err(|e| e.to_string())?
     }?;
+    // The grid thumbnails are all made; the 1024 px ones follow quietly in the background (RFC-0030 slice E).
+    spawn_large_thumbnail_pass(app.clone(), catalog.clone(), thumbnail_dir_for_large, Some(summary.import_batch));
 
     // Fire-and-forget: pre-generate Develop previews for the whole catalog
     // in the background, rather than making every Develop open pay for a
@@ -177,6 +180,7 @@ async fn import_files(
 ) -> Result<ImportSummary, String> {
     let catalog = state.catalog.clone();
     let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
+    let thumbnail_dir_for_large = thumbnail_dir.clone();
 
     let summary = {
         let catalog = catalog.clone();
@@ -201,6 +205,8 @@ async fn import_files(
         .await
         .map_err(|e| e.to_string())?
     }?;
+    // The grid thumbnails are all made; the 1024 px ones follow quietly in the background (RFC-0030 slice E).
+    spawn_large_thumbnail_pass(app.clone(), catalog.clone(), thumbnail_dir_for_large, Some(summary.import_batch));
 
     // See import_folder's own comment: preview pregeneration stays
     // fire-and-forget, thumbnail backfill is now a separate awaited step.
@@ -241,6 +247,7 @@ async fn backfill_missing_thumbnails(app: AppHandle, state: State<'_, AppState>,
             &catalog,
             &thumbnail_dir,
             Some(import_batch),
+            import::ThumbTier::Small,
             |current, total| {
                 let _ = app.emit("thumbnail-progress", ImportProgress { current, total });
             },
@@ -250,6 +257,18 @@ async fn backfill_missing_thumbnails(app: AppHandle, state: State<'_, AppState>,
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// The quiet upgrade behind an import (RFC-0030 slice E): the grid thumbnails (512 px) are ready when the import
+/// returns; this makes each photo's 1024 px one afterwards, with two threads, yielding to any import or
+/// small-thumbnail pass that starts meanwhile, and announces each with `thumbnail-ready`. Fire-and-forget: nothing
+/// waits for it, and a quit mid-way is finished by the startup catch-up.
+fn spawn_large_thumbnail_pass(app: AppHandle, catalog: std::sync::Arc<std::sync::Mutex<catalog::Catalog>>, thumbnail_dir: std::path::PathBuf, import_batch: Option<i64>) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut ready = ReadyEmitter::new(app);
+        import::generate_missing_thumbnails_streaming(&catalog, &thumbnail_dir, import_batch, import::ThumbTier::Large, |_, _| {}, |id, path| ready.push(id, path));
+        ready.finish();
+    });
 }
 
 /// Sends the `"thumbnail-ready"` event (RFC-0030 slice A): the images whose thumbnails were just written, so the
@@ -2148,7 +2167,10 @@ pub fn run() {
             let handle_for_thumbs = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
                 let mut ready = ReadyEmitter::new(handle_for_thumbs);
-                import::generate_missing_thumbnails_streaming(&catalog_for_thumbs, &thumbnail_dir, None, |_, _| {}, |id, path| ready.push(id, path));
+                // Small ones for everything that has none first (the grid), then the large ones.
+                for tier in [import::ThumbTier::Small, import::ThumbTier::Large] {
+                    import::generate_missing_thumbnails_streaming(&catalog_for_thumbs, &thumbnail_dir, None, tier, |_, _| {}, |id, path| ready.push(id, path));
+                }
                 ready.finish();
             });
 

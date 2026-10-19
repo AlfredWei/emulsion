@@ -307,6 +307,8 @@ pub fn import_paths_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
     }
     let workers = workers.unwrap_or_else(|| thumbnail_worker_count(std::thread::available_parallelism().map_or(1, |n| n.get()), total));
     let access = Shared(catalog);
+    // The user is waiting for this import: the background large-thumbnail pass yields until it is over.
+    let _foreground = ForegroundWork::begin();
 
     let (job_tx, job_rx) = std::sync::mpsc::channel::<(i64, PathBuf)>();
     let job_rx = Mutex::new(job_rx);
@@ -320,15 +322,15 @@ pub fn import_paths_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
                 // The lock is held only while waiting for the next job; the picture itself is made outside it.
                 let job = { job_rx.lock().ok().and_then(|rx| rx.recv().ok()) };
                 let Some((image_id, path)) = job else { break };
-                let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| generate_thumbnail_file(image_id, &path, thumbnail_dir)))
+                let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| generate_thumbnail_file(image_id, &path, thumbnail_dir, ThumbTier::Small)))
                     .unwrap_or_else(|_| {
                         eprintln!("thumbnail generation panicked for {}", path.display());
                         None
                     });
                 let Some(out) = made else { continue };
-                let recorded = catalog.lock().ok().is_some_and(|c| record_thumbnail(&c, image_id, &out));
+                let recorded = catalog.lock().ok().is_some_and(|c| record_thumbnail(&c, image_id, &out, ThumbTier::Small));
                 if recorded {
-                    remove_placeholder_file(thumbnail_dir, image_id);
+                    remove_lower_tier_files(thumbnail_dir, image_id, ThumbTier::Small);
                     if ready_tx.send((image_id, out)).is_err() {
                         break;
                     }
@@ -404,37 +406,162 @@ pub fn scan_and_import_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
 /// result. `GridCell.svelte` already renders a placeholder for a NULL
 /// `thumbnail_path`, so no frontend change is needed for the gap between
 /// import and this pass completing.
-/// Shared with `regenerate_edited_thumbnail` below, so an edited
-/// thumbnail is capped at the same size as an unedited one -- no visible
-/// size/quality mismatch between the two in the same grid.
-const THUMBNAIL_MAX_DIMENSION: u32 = 1024;
+/// The tiers a thumbnail goes through (RFC-0030 slices D and E): the camera's own small EXIF picture (tier 0, written
+/// as `{id}-t.jpg` at cataloguing), a 512 px grid thumbnail (`{id}-s.jpg`, made first by the worker pool), and the
+/// 1024 px thumbnail (`{id}.jpg`, the name every existing catalog already uses, made afterwards in the background).
+/// The file's name says which tier it is, so the catalog needs no extra column: a path ending `-t.jpg` or `-s.jpg` is
+/// provisional and the next tier is still to come. Every consumer reads the one `thumbnail_path`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThumbTier {
+    Small,
+    Large,
+}
 
-/// A tier-0 picture (RFC-0030 slice D) is the JPEG's own EXIF thumbnail, written as `{image_id}-t.jpg` the moment the
-/// file is catalogued and shown until the real thumbnail (`{image_id}.jpg`) replaces it. The name is the marker: a
-/// catalog whose `thumbnail_path` ends this way still needs its real thumbnail (the app was closed mid-import), and
-/// the frontend (`lib/thumbnails.js`) uses the same rule.
+impl ThumbTier {
+    /// Where it sits in the order none (0) < tier 0 (1) < small (2) < large (3).
+    fn rank(self) -> u8 {
+        match self {
+            ThumbTier::Small => 2,
+            ThumbTier::Large => 3,
+        }
+    }
+
+    fn max_dimension(self) -> u32 {
+        match self {
+            ThumbTier::Small => 512,
+            ThumbTier::Large => 1024,
+        }
+    }
+
+    fn file_name(self, image_id: i64) -> String {
+        match self {
+            ThumbTier::Small => format!("{image_id}{SMALL_SUFFIX}"),
+            ThumbTier::Large => format!("{image_id}.jpg"),
+        }
+    }
+}
+
 const PLACEHOLDER_SUFFIX: &str = "-t.jpg";
+const SMALL_SUFFIX: &str = "-s.jpg";
 
-pub(crate) fn is_placeholder_thumbnail(path: &str) -> bool {
-    path.ends_with(PLACEHOLDER_SUFFIX)
+/// 0 = none, 1 = tier 0 (the camera's picture), 2 = small, 3 = large or anything else (an edited picture, a RAW's
+/// embedded JPEG, every thumbnail made before tiers existed): final.
+pub(crate) fn thumbnail_rank(path: Option<&str>) -> u8 {
+    match path {
+        None => 0,
+        Some(p) if p.ends_with(PLACEHOLDER_SUFFIX) => 1,
+        Some(p) if p.ends_with(SMALL_SUFFIX) => 2,
+        Some(_) => 3,
+    }
 }
 
-/// True when the catalog has no thumbnail for the image, or only the tier-0 picture.
-fn needs_real_thumbnail(current: Option<&str>) -> bool {
-    current.is_none_or(is_placeholder_thumbnail)
+/// True when a better thumbnail is still to come (tier 0 or small).
+pub(crate) fn is_provisional_thumbnail(path: &str) -> bool {
+    thumbnail_rank(Some(path)) < 3
 }
 
-/// Records `path` as the image's thumbnail unless a real one is already there (an `ensure_thumbnail` that got in
-/// first, or an edited picture): never replaces a real thumbnail, may replace nothing or a tier-0 one. Returns
-/// whether it recorded.
-fn record_thumbnail(catalog: &Catalog, image_id: i64, path: &Path) -> bool {
+/// Whether making `target` would improve on what the catalog holds.
+fn wants(current: Option<&str>, target: ThumbTier) -> bool {
+    thumbnail_rank(current) < target.rank()
+}
+
+/// Records `path` as the image's thumbnail only if it improves on what is there: never replaces an equal or better
+/// tier (an edited picture, a large one that got in first). Returns whether it recorded.
+fn record_thumbnail(catalog: &Catalog, image_id: i64, path: &Path, target: ThumbTier) -> bool {
     let current = catalog.get_thumbnail_path(image_id).ok().flatten();
-    needs_real_thumbnail(current.as_deref()) && catalog.set_thumbnail_path(image_id, &path.to_string_lossy()).is_ok()
+    wants(current.as_deref(), target) && catalog.set_thumbnail_path(image_id, &path.to_string_lossy()).is_ok()
 }
 
-/// Deletes the tier-0 file once the real thumbnail is recorded (best effort: a leftover is a few KB).
-fn remove_placeholder_file(thumbnail_dir: &Path, image_id: i64) {
+/// Deletes the files of the tiers `target` replaced (best effort: a leftover is a few KB).
+fn remove_lower_tier_files(thumbnail_dir: &Path, image_id: i64, target: ThumbTier) {
     let _ = std::fs::remove_file(thumbnail_dir.join(format!("{image_id}{PLACEHOLDER_SUFFIX}")));
+    if target == ThumbTier::Large {
+        let _ = std::fs::remove_file(thumbnail_dir.join(format!("{image_id}{SMALL_SUFFIX}")));
+    }
+}
+
+/// Work the user is waiting for (an import, a small-thumbnail pass) is counted here, and the background large pass
+/// waits while it is non-zero, so the picture-making the user is watching never competes with the upgrade.
+static FOREGROUND_WORK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct ForegroundWork;
+
+impl ForegroundWork {
+    fn begin() -> Self {
+        FOREGROUND_WORK.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ForegroundWork
+    }
+}
+
+impl Drop for ForegroundWork {
+    fn drop(&mut self) {
+        FOREGROUND_WORK.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn wait_for_foreground_work() {
+    while FOREGROUND_WORK.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Exact k x k box average, so the expensive resize filter only has to take the picture the last factor of two
+/// (RFC-0030 §4.1: this and orienting later cut a thumbnail's cost by a quarter). Edge pixels beyond a multiple of
+/// `k` are dropped (less than `k` of them).
+fn box_down(src: &image::RgbImage, k: u32) -> image::RgbImage {
+    let (w, h) = (src.width() / k, src.height() / k);
+    let sw = src.width() as usize;
+    let raw = src.as_raw();
+    let area = k * k;
+    let mut out = vec![0u8; (w * h * 3) as usize];
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let mut acc = [0u32; 3];
+            for dy in 0..k as usize {
+                let row = ((y * k as usize + dy) * sw + x * k as usize) * 3;
+                for dx in 0..k as usize {
+                    let p = row + dx * 3;
+                    acc[0] += raw[p] as u32;
+                    acc[1] += raw[p + 1] as u32;
+                    acc[2] += raw[p + 2] as u32;
+                }
+            }
+            let o = (y * w as usize + x) * 3;
+            out[o] = (acc[0] / area) as u8;
+            out[o + 1] = (acc[1] / area) as u8;
+            out[o + 2] = (acc[2] / area) as u8;
+        }
+    }
+    image::RgbImage::from_raw(w, h, out).expect("the buffer is w * h * 3 long")
+}
+
+/// Shrinks `source` so its long edge is at most `max_dim`: a box average by the whole factor that leaves at least
+/// twice `max_dim`, then a triangle filter for the rest. The same function makes unedited and edited thumbnails, so
+/// the two never differ in look inside one grid.
+pub(crate) fn downscale_to(source: image::RgbImage, max_dim: u32) -> image::RgbImage {
+    let long = source.width().max(source.height());
+    if long <= max_dim {
+        return source;
+    }
+    let k = (long / (max_dim * 2)).max(1);
+    let pre = if k > 1 { box_down(&source, k) } else { source };
+    let (w, h) = (pre.width(), pre.height());
+    if w.max(h) <= max_dim {
+        return pre;
+    }
+    let scale = max_dim as f64 / w.max(h) as f64;
+    let target_w = ((w as f64) * scale).round().max(1.0) as u32;
+    let target_h = ((h as f64) * scale).round().max(1.0) as u32;
+    image::imageops::resize(&pre, target_w, target_h, image::imageops::FilterType::Triangle)
+}
+
+/// Writes a thumbnail picture as a JPEG with the dedicated encoder (faster than the `image` crate's, quality 82).
+fn write_thumbnail_jpeg(img: &image::RgbImage, out_path: &Path) -> std::io::Result<()> {
+    let mut bytes = Vec::new();
+    jpeg_encoder::Encoder::new(&mut bytes, 82)
+        .encode(img.as_raw(), img.width() as u16, img.height() as u16, jpeg_encoder::ColorType::Rgb)
+        .map_err(std::io::Error::other)?;
+    std::fs::write(out_path, bytes)
 }
 
 /// Writes the JPEG's own EXIF thumbnail as the tier-0 picture, when it has a usable one (`metadata::exif_thumbnail`).
@@ -483,6 +610,7 @@ impl ReadyBatcher {
     }
 }
 
+/// Makes the final (large) thumbnail for every image that has none or only a provisional one, with no progress.
 pub fn generate_missing_thumbnails(catalog: &Arc<Mutex<Catalog>>, thumbnail_dir: &Path) {
     generate_missing_thumbnails_with_progress(catalog, thumbnail_dir, None, |_, _| {})
 }
@@ -514,13 +642,16 @@ pub fn generate_missing_thumbnails_with_progress<F: FnMut(usize, usize)>(
     import_batch: Option<i64>,
     on_progress: F,
 ) {
-    generate_missing_thumbnails_streaming(catalog, thumbnail_dir, import_batch, on_progress, |_, _| {});
+    generate_missing_thumbnails_streaming(catalog, thumbnail_dir, import_batch, ThumbTier::Large, on_progress, |_, _| {});
 }
 
 /// How many threads make thumbnails (RFC-0030 slice B): the cores minus two (the interface and the file system keep
 /// theirs), at most 8 (measured: ten cores are no faster than eight, the extra two are the slow ones), at least one,
 /// and never more than there are images. Each worker holds one decoded photo (about 0.2 GB at 24 MP), so the cap is
 /// also the memory bound.
+/// Threads of the quiet large-thumbnail pass: two, so the upgrade never takes the machine from the user.
+const BACKGROUND_WORKERS: usize = 2;
+
 pub(crate) fn thumbnail_worker_count(cores: usize, images: usize) -> usize {
     cores.saturating_sub(2).clamp(1, 8).min(images).max(1)
 }
@@ -537,10 +668,11 @@ pub fn generate_missing_thumbnails_streaming<F: FnMut(usize, usize), R: FnMut(i6
     catalog: &Arc<Mutex<Catalog>>,
     thumbnail_dir: &Path,
     import_batch: Option<i64>,
+    tier: ThumbTier,
     on_progress: F,
     on_ready: R,
 ) {
-    generate_missing_thumbnails_with_workers(catalog, thumbnail_dir, import_batch, None, on_progress, on_ready);
+    generate_missing_thumbnails_with_workers(catalog, thumbnail_dir, import_batch, tier, None, on_progress, on_ready);
 }
 
 /// The pass with an explicit worker count (`None` = `thumbnail_worker_count` for this machine); tests and the speed
@@ -549,19 +681,22 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
     catalog: &Arc<Mutex<Catalog>>,
     thumbnail_dir: &Path,
     import_batch: Option<i64>,
+    tier: ThumbTier,
     workers: Option<usize>,
     mut on_progress: F,
     mut on_ready: R,
 ) {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // The user waits for a small-thumbnail pass; the large one is the quiet upgrade behind it (see FOREGROUND_WORK).
+    let _foreground = (tier == ThumbTier::Small).then(ForegroundWork::begin);
     let images: Vec<_> = {
         let Ok(catalog) = catalog.lock() else { return };
         catalog
             .list_images()
             .unwrap_or_default()
             .into_iter()
-            .filter(|image| needs_real_thumbnail(image.thumbnail_path.as_deref()))
+            .filter(|image| wants(image.thumbnail_path.as_deref(), tier))
             .filter(|image| import_batch.is_none_or(|batch| image.import_batch == Some(batch)))
             .collect()
     };
@@ -570,7 +705,12 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
     if total == 0 {
         return;
     }
-    let workers = workers.unwrap_or_else(|| thumbnail_worker_count(std::thread::available_parallelism().map_or(1, |n| n.get()), total)).clamp(1, total);
+    let workers = workers
+        .unwrap_or_else(|| match tier {
+            ThumbTier::Small => thumbnail_worker_count(std::thread::available_parallelism().map_or(1, |n| n.get()), total),
+            ThumbTier::Large => BACKGROUND_WORKERS,
+        })
+        .clamp(1, total);
 
     let next = AtomicUsize::new(0);
     // (image id, the file written, or None when there is nothing to record): every candidate sends exactly one.
@@ -581,6 +721,9 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
             let (images, next) = (&images, &next);
             scope.spawn(move || {
                 loop {
+                    if tier == ThumbTier::Large {
+                        wait_for_foreground_work();
+                    }
                     let i = next.fetch_add(1, Ordering::SeqCst);
                     let Some(image) = images.get(i) else { break };
                     // Re-check under the lock (cheap indexed lookup, not another full list_images() scan) rather
@@ -588,12 +731,12 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
                     // fill in exactly this image's thumbnail after the candidate list was captured, and
                     // re-decoding a large file just to overwrite a correct result is real wasted work.
                     let current = catalog.lock().ok().and_then(|c| c.get_thumbnail_path(image.image_id).ok()).flatten();
-                    let out = if !needs_real_thumbnail(current.as_deref()) {
+                    let out = if !wants(current.as_deref(), tier) {
                         None
                     } else {
                         // A decoder that panics on a hostile file costs that one picture, not the whole pass.
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            generate_thumbnail_file(image.image_id, Path::new(&image.path), thumbnail_dir)
+                            generate_thumbnail_file(image.image_id, Path::new(&image.path), thumbnail_dir, tier)
                         }))
                         .unwrap_or_else(|_| {
                             eprintln!("thumbnail generation panicked for {}", image.path);
@@ -612,11 +755,11 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
             if let Some(out_path) = out {
                 let recorded = {
                     let Ok(catalog) = catalog.lock() else { return };
-                    record_thumbnail(&catalog, image_id, &out_path)
+                    record_thumbnail(&catalog, image_id, &out_path, tier)
                 };
                 // After the lock is released, so the callback may use the catalog itself.
                 if recorded {
-                    remove_placeholder_file(thumbnail_dir, image_id);
+                    remove_lower_tier_files(thumbnail_dir, image_id, tier);
                     on_ready(image_id, &out_path);
                 }
             }
@@ -625,14 +768,11 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
     });
 }
 
-/// Decodes `path` fresh (unedited) and writes a `THUMBNAIL_MAX_DIMENSION`-
-/// capped JPEG thumbnail to `thumbnail_dir/{image_id}.jpg`. Pure
-/// filesystem/decode work, no catalog access -- callers persist the
-/// returned path themselves via `Catalog::set_thumbnail_path`. Shared by
-/// the background backfill pass above and the on-demand single-image path
-/// below (`ensure_thumbnail`), so both produce byte-for-byte the same kind
-/// of thumbnail regardless of which one actually generated it.
-fn generate_thumbnail_file(image_id: i64, path: &Path, thumbnail_dir: &Path) -> Option<PathBuf> {
+/// Decodes `path` fresh (unedited) and writes the `tier`'s JPEG thumbnail (512 px `{image_id}-s.jpg`, or 1024 px
+/// `{image_id}.jpg`) to `thumbnail_dir`. Pure filesystem/decode work, no catalog access -- callers persist the
+/// returned path themselves. Shared by the passes, the import's pool and the on-demand single-image path
+/// (`ensure_thumbnail`), so all of them make the same kind of thumbnail whichever generated it.
+fn generate_thumbnail_file(image_id: i64, path: &Path, thumbnail_dir: &Path, tier: ThumbTier) -> Option<PathBuf> {
     let decoded = match source_decode::decode_preview(path) {
         Ok(d) => d,
         Err(e) => {
@@ -645,18 +785,9 @@ fn generate_thumbnail_file(image_id: i64, path: &Path, thumbnail_dir: &Path) -> 
         return None;
     };
 
-    let (w, h) = (source.width(), source.height());
-    let resized = if w.max(h) > THUMBNAIL_MAX_DIMENSION {
-        let scale = THUMBNAIL_MAX_DIMENSION as f64 / w.max(h) as f64;
-        let target_w = ((w as f64) * scale).round().max(1.0) as u32;
-        let target_h = ((h as f64) * scale).round().max(1.0) as u32;
-        image::imageops::resize(&source, target_w, target_h, image::imageops::FilterType::Triangle)
-    } else {
-        source
-    };
-
-    let out_path = thumbnail_dir.join(format!("{image_id}.jpg"));
-    if let Err(e) = resized.save(&out_path) {
+    let resized = downscale_to(source, tier.max_dimension());
+    let out_path = thumbnail_dir.join(tier.file_name(image_id));
+    if let Err(e) = write_thumbnail_jpeg(&resized, &out_path) {
         eprintln!("thumbnail generation failed for {}: {e}", path.display());
         return None;
     }
@@ -683,23 +814,23 @@ fn generate_thumbnail_file(image_id: i64, path: &Path, thumbnail_dir: &Path) -> 
 pub fn ensure_thumbnail(catalog: &Arc<Mutex<Catalog>>, version_id: i64, thumbnail_dir: &Path) -> Option<String> {
     let source = catalog.lock().ok()?.get_version_source(version_id).ok()?;
     let current = catalog.lock().ok()?.get_thumbnail_path(source.image_id).ok().flatten();
-    if let Some(existing) = current.as_ref().filter(|p| !is_placeholder_thumbnail(p)) {
+    if let Some(existing) = current.as_ref().filter(|p| !is_provisional_thumbnail(p)) {
         return Some(existing.clone());
     }
 
     let _ = std::fs::create_dir_all(thumbnail_dir);
-    let out_path = generate_thumbnail_file(source.image_id, Path::new(&source.path), thumbnail_dir)?;
+    let out_path = generate_thumbnail_file(source.image_id, Path::new(&source.path), thumbnail_dir, ThumbTier::Large)?;
     let out_path_str = out_path.to_string_lossy().into_owned();
-    // A real thumbnail that landed meanwhile (the pool, an edit) wins; the answer is whatever the catalog holds.
+    // A final thumbnail that landed meanwhile (the background pass, an edit) wins; the answer is what the catalog holds.
     let held = {
         let catalog = catalog.lock().ok()?;
-        if record_thumbnail(&catalog, source.image_id, &out_path) {
+        if record_thumbnail(&catalog, source.image_id, &out_path, ThumbTier::Large) {
             out_path_str
         } else {
             catalog.get_thumbnail_path(source.image_id).ok().flatten().unwrap_or(out_path_str)
         }
     };
-    remove_placeholder_file(thumbnail_dir, source.image_id);
+    remove_lower_tier_files(thumbnail_dir, source.image_id, ThumbTier::Large);
     Some(held)
 }
 
@@ -751,21 +882,13 @@ pub fn regenerate_edited_thumbnail(
     let denoise_tag = crate::denoise_preview::graded_tag(crate::develop_engine::ai_denoise_amount(&effective), denoise_dir, content_hash);
     let stack = &effective;
 
-    let (w, h) = (decoded.width(), decoded.height());
-    let resized = if w.max(h) > THUMBNAIL_MAX_DIMENSION {
-        let scale = THUMBNAIL_MAX_DIMENSION as f64 / w.max(h) as f64;
-        let target_w = ((w as f64) * scale).round().max(1.0) as u32;
-        let target_h = ((h as f64) * scale).round().max(1.0) as u32;
-        image::imageops::resize(&decoded, target_w, target_h, image::imageops::FilterType::Triangle)
-    } else {
-        decoded
-    };
+    let resized = downscale_to(decoded, ThumbTier::Large.max_dimension());
 
     let stack_json = serde_json::to_string(stack).ok()?;
     let stack_hash = blake3::hash(stack_json.as_bytes()).to_hex().to_string();
     let out_path = thumbnail_dir.join(format!("{image_id}-{}{denoise_tag}.jpg", &stack_hash[..8]));
     let _ = std::fs::create_dir_all(thumbnail_dir);
-    resized.save(&out_path).ok()?;
+    write_thumbnail_jpeg(&resized, &out_path).ok()?;
     Some(out_path)
 }
 
@@ -940,7 +1063,7 @@ mod tests {
         let catalog = Arc::new(Mutex::new(catalog));
 
         let ready = std::cell::RefCell::new(Vec::new());
-        generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, |_, _| {}, |id, path| {
+        generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, ThumbTier::Large, |_, _| {}, |id, path| {
             // The catalog already holds the path when the event fires.
             let held = catalog.lock().unwrap().get_thumbnail_path(id).unwrap();
             ready.borrow_mut().push((id, path.to_path_buf(), held));
@@ -998,6 +1121,7 @@ mod tests {
             &catalog,
             &thumb_dir,
             None,
+            ThumbTier::Large,
             Some(4),
             |current, total| progress.borrow_mut().push((current, total)),
             |id, path| {
@@ -1030,7 +1154,7 @@ mod tests {
         let catalog = Arc::new(Mutex::new(catalog));
 
         let last = std::cell::Cell::new((0, 0));
-        generate_missing_thumbnails_with_workers(&catalog, &thumb_dir, None, Some(3), |c, t| last.set((c, t)), |_, _| {});
+        generate_missing_thumbnails_with_workers(&catalog, &thumb_dir, None, ThumbTier::Large, Some(3), |c, t| last.set((c, t)), |_, _| {});
 
         assert_eq!(last.get(), (5, 5));
         let done = catalog.lock().unwrap().list_images().unwrap().iter().filter(|i| i.thumbnail_path.is_some()).count();
@@ -1128,7 +1252,7 @@ mod tests {
         let with = images.iter().find(|i| i.path.ends_with("with.jpg")).unwrap();
         let without = images.iter().find(|i| i.path.ends_with("without.jpg")).unwrap();
         let tier0 = with.thumbnail_path.as_deref().expect("tier 0 recorded");
-        assert!(is_placeholder_thumbnail(tier0) && Path::new(tier0).exists());
+        assert!(thumbnail_rank(Some(tier0)) == 1 && Path::new(tier0).exists());
         assert!(without.thumbnail_path.is_none());
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
@@ -1145,18 +1269,19 @@ mod tests {
         let catalog = Arc::new(Mutex::new(catalog));
 
         let ready = std::cell::RefCell::new(Vec::new());
-        generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, |_, _| {}, |id, path| ready.borrow_mut().push((id, path.to_path_buf())));
+        generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, ThumbTier::Large, |_, _| {}, |id, path| ready.borrow_mut().push((id, path.to_path_buf())));
 
         let after = catalog.lock().unwrap().list_images().unwrap()[0].thumbnail_path.clone().unwrap();
-        assert!(!is_placeholder_thumbnail(&after) && Path::new(&after).exists());
+        assert!(thumbnail_rank(Some(&after)) == 3 && Path::new(&after).exists());
         assert!(!Path::new(&before).exists(), "the tier-0 file is removed");
         assert_eq!(ready.into_inner().len(), 1);
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
-    /// The streaming import does the same replacement itself (the pool), so every row ends with a real thumbnail.
+    /// The streaming import replaces tier 0 itself (the pool makes the small, 512 px one): every row ends with a
+    /// small thumbnail and no tier-0 file is left behind.
     #[test]
-    fn a_streaming_import_ends_with_real_thumbnails_even_where_tier_0_was_written() {
+    fn a_streaming_import_ends_with_small_thumbnails_even_where_tier_0_was_written() {
         let (dir, thumb_dir) = scan_and_thumb_dirs("tier0-streaming");
         for n in 0..4u32 {
             let mut file = crate::metadata::test_support::jpeg_with_exif_thumbnail((640 + n, 480), (160, 120), None);
@@ -1167,24 +1292,102 @@ mod tests {
         let summary = import_paths_streaming(std::slice::from_ref(&dir), &catalog, &thumb_dir, Some(2), |_, _| {}, |_, _| {});
         assert_eq!(summary.imported, 4);
         let images = catalog.lock().unwrap().list_images().unwrap();
-        assert!(images.iter().all(|i| i.thumbnail_path.as_deref().is_some_and(|p| !is_placeholder_thumbnail(p))));
+        assert!(images.iter().all(|i| thumbnail_rank(i.thumbnail_path.as_deref()) == 2));
         assert!(std::fs::read_dir(&thumb_dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with("-t.jpg")), "no tier-0 file is left behind");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
-    /// Recording never replaces a real thumbnail (an edited picture, or one `ensure_thumbnail` made first), and
-    /// may replace tier 0 or nothing.
+    /// RFC-0030 slice E: a big photo gets a 512 px thumbnail from the import and a 1024 px one from the background
+    /// pass, which replaces it, announces it and deletes the small file.
     #[test]
-    fn recording_a_thumbnail_never_replaces_a_real_one() {
+    fn the_large_pass_upgrades_small_thumbnails_and_removes_them() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("tiers");
+        image::RgbImage::from_fn(2400, 1600, |x, y| image::Rgb([(x / 10) as u8, (y / 8) as u8, 90])).save(dir.join("big.jpg")).unwrap();
+        let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
+        import_paths_streaming(std::slice::from_ref(&dir), &catalog, &thumb_dir, Some(1), |_, _| {}, |_, _| {});
+
+        let small = catalog.lock().unwrap().list_images().unwrap()[0].thumbnail_path.clone().unwrap();
+        assert!(small.ends_with("-s.jpg"));
+        assert_eq!(image::image_dimensions(&small).unwrap(), (512, 341));
+
+        let ready = std::cell::RefCell::new(Vec::new());
+        generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, ThumbTier::Large, |_, _| {}, |id, path| ready.borrow_mut().push((id, path.to_path_buf())));
+
+        let large = catalog.lock().unwrap().list_images().unwrap()[0].thumbnail_path.clone().unwrap();
+        assert_eq!(thumbnail_rank(Some(&large)), 3);
+        assert_eq!(image::image_dimensions(&large).unwrap(), (1024, 683));
+        assert!(!Path::new(&small).exists(), "the small file is removed");
+        assert_eq!(ready.into_inner().len(), 1);
+
+        // Nothing left to do: a second large pass announces nothing.
+        let again = std::cell::Cell::new(0);
+        generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, ThumbTier::Large, |_, _| {}, |_, _| again.set(again.get() + 1));
+        assert_eq!(again.get(), 0);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// The upgrade is quiet: while foreground work (an import, a small pass) is counted, the large pass waits.
+    #[test]
+    fn the_large_pass_waits_while_foreground_work_runs() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("tiers-yield");
+        image::RgbImage::from_pixel(1200, 800, image::Rgb([40, 80, 120])).save(dir.join("a.jpg")).unwrap();
+        let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
+        import_paths_streaming(std::slice::from_ref(&dir), &catalog, &thumb_dir, Some(1), |_, _| {}, |_, _| {});
+
+        let guard = ForegroundWork::begin();
+        let worker = {
+            let (catalog, thumb_dir) = (catalog.clone(), thumb_dir.clone());
+            std::thread::spawn(move || generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, ThumbTier::Large, |_, _| {}, |_, _| {}))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let held = catalog.lock().unwrap().list_images().unwrap()[0].thumbnail_path.clone().unwrap();
+        assert!(held.ends_with("-s.jpg"), "still the small one while foreground work runs");
+        drop(guard);
+        worker.join().unwrap();
+        let after = catalog.lock().unwrap().list_images().unwrap()[0].thumbnail_path.clone().unwrap();
+        assert_eq!(thumbnail_rank(Some(&after)), 3);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn downscaling_keeps_the_shape_never_enlarges_and_keeps_flat_colour() {
+        let big = image::RgbImage::from_pixel(6000, 4000, image::Rgb([200, 100, 50]));
+        let small = downscale_to(big, 512);
+        assert_eq!((small.width(), small.height()), (512, 341));
+        assert_eq!(small.get_pixel(256, 170).0, [200, 100, 50], "a flat colour survives the box average and the filter");
+
+        let tiny = image::RgbImage::from_pixel(300, 200, image::Rgb([1, 2, 3]));
+        assert_eq!(downscale_to(tiny, 512).dimensions(), (300, 200), "never enlarged");
+
+        let tall = image::RgbImage::from_pixel(1500, 3000, image::Rgb([9, 9, 9]));
+        assert_eq!(downscale_to(tall, 1024).dimensions(), (512, 1024));
+    }
+
+    #[test]
+    fn the_tier_of_a_thumbnail_is_read_from_its_name() {
+        assert_eq!(thumbnail_rank(None), 0);
+        assert_eq!(thumbnail_rank(Some("/t/5-t.jpg")), 1);
+        assert_eq!(thumbnail_rank(Some("/t/5-s.jpg")), 2);
+        assert_eq!(thumbnail_rank(Some("/t/5.jpg")), 3);
+        assert_eq!(thumbnail_rank(Some("/t/5-ab12cd34.jpg")), 3, "an edited picture is final");
+        assert!(is_provisional_thumbnail("/t/5-s.jpg") && !is_provisional_thumbnail("/t/5.jpg"));
+    }
+
+    /// Recording only ever improves: nothing, tier 0 or small may be replaced by a better tier; an equal or better
+    /// one is never replaced (an edited picture, a large one that got in first).
+    #[test]
+    fn recording_a_thumbnail_only_ever_improves_the_tier() {
         let (dir, thumb_dir) = scan_and_thumb_dirs("record-guard");
         image::RgbImage::from_pixel(64, 48, image::Rgb([9, 9, 9])).save(dir.join("a.jpg")).unwrap();
         let catalog = Catalog::open_in_memory().unwrap();
         scan_and_import(&dir, &catalog, &thumb_dir);
         let id = catalog.list_images().unwrap()[0].image_id;
 
-        assert!(record_thumbnail(&catalog, id, Path::new("/t/1-t.jpg")), "nothing there: recorded");
-        assert!(record_thumbnail(&catalog, id, Path::new("/t/1.jpg")), "tier 0 there: replaced");
-        assert!(!record_thumbnail(&catalog, id, Path::new("/t/other.jpg")), "a real one there: kept");
+        assert!(record_thumbnail(&catalog, id, Path::new("/t/1-s.jpg"), ThumbTier::Small), "nothing there: recorded");
+        assert!(!record_thumbnail(&catalog, id, Path::new("/t/1-s2.jpg"), ThumbTier::Small), "small over small: kept");
+        assert!(record_thumbnail(&catalog, id, Path::new("/t/1.jpg"), ThumbTier::Large), "small there: replaced by large");
+        assert!(!record_thumbnail(&catalog, id, Path::new("/t/1-s.jpg"), ThumbTier::Small), "large there: kept");
+        assert!(!record_thumbnail(&catalog, id, Path::new("/t/other.jpg"), ThumbTier::Large), "large over large: kept");
         assert_eq!(catalog.get_thumbnail_path(id).unwrap().as_deref(), Some("/t/1.jpg"));
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
@@ -1200,7 +1403,7 @@ mod tests {
         let catalog = Arc::new(Mutex::new(catalog));
 
         let path = ensure_thumbnail(&catalog, version_id, &thumb_dir).expect("a thumbnail");
-        assert!(!is_placeholder_thumbnail(&path) && Path::new(&path).exists());
+        assert!(thumbnail_rank(Some(&path)) == 3 && Path::new(&path).exists());
         assert_eq!(ensure_thumbnail(&catalog, version_id, &thumb_dir).as_deref(), Some(path.as_str()), "now a no-op");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
@@ -1710,7 +1913,7 @@ mod speed_probe {
             let catalog = Arc::new(Mutex::new(catalog));
             let first = std::cell::Cell::new(None::<Duration>);
             let t = Instant::now();
-            generate_missing_thumbnails_with_workers(&catalog, &thumbs, None, Some(workers), |_, _| {}, |_, _| {
+            generate_missing_thumbnails_with_workers(&catalog, &thumbs, None, ThumbTier::Large, Some(workers), |_, _| {}, |_, _| {
                 first.set(first.get().or(Some(t.elapsed())));
             });
             println!(
@@ -1758,6 +1961,37 @@ mod speed_probe {
                 }
                 None => println!("  {:<40} orientation {o}: none ({:.2} ms)", p.file_name().unwrap().to_string_lossy(), ms(t)),
             }
+        }
+    }
+
+    /// Writes the old thumbnail (image crate resize, 1024) and the new ones (box prefilter, 1024 and 512) of every
+    /// JPEG to `IMPORT_PROBE_OUT`, and prints how far the new 1024 is from the old (PSNR), for looking at by eye.
+    #[test]
+    #[ignore = "measurement, needs IMPORT_PROBE_DIR and IMPORT_PROBE_OUT"]
+    fn compare_thumbnails() {
+        let dir = PathBuf::from(std::env::var("IMPORT_PROBE_DIR").expect("IMPORT_PROBE_DIR"));
+        let out = PathBuf::from(std::env::var("IMPORT_PROBE_OUT").expect("IMPORT_PROBE_OUT"));
+        std::fs::create_dir_all(&out).unwrap();
+        println!("\nold 1024 vs new 1024 (PSNR, higher = closer; > 40 dB is visually identical)");
+        for p in files(&dir, &["jpg", "jpeg"]) {
+            let stem = p.file_stem().unwrap().to_string_lossy().into_owned();
+            let bytes = std::fs::read(&p).unwrap();
+            let old = current(&bytes);
+            std::fs::write(out.join(format!("{stem}-old1024.jpg")), &old).unwrap();
+            let full = crate::jpeg_decode::decode(&p).unwrap();
+            let full = image::RgbImage::from_raw(full.width, full.height, full.rgb).unwrap();
+            let new_large = downscale_to(full.clone(), 1024);
+            let new_small = downscale_to(full, 512);
+            write_thumbnail_jpeg(&new_large, &out.join(format!("{stem}-new1024.jpg"))).unwrap();
+            write_thumbnail_jpeg(&new_small, &out.join(format!("{stem}-new512.jpg"))).unwrap();
+            let old_img = image::load_from_memory(&old).unwrap().to_rgb8();
+            let new_img = image::open(out.join(format!("{stem}-new1024.jpg"))).unwrap().to_rgb8();
+            if old_img.dimensions() != new_img.dimensions() {
+                println!("  {stem:<40} different size {:?} vs {:?}", old_img.dimensions(), new_img.dimensions());
+                continue;
+            }
+            let mse = old_img.as_raw().iter().zip(new_img.as_raw()).map(|(a, b)| (*a as f64 - *b as f64).powi(2)).sum::<f64>() / old_img.as_raw().len() as f64;
+            println!("  {stem:<40} {:.1} dB   ({} KB -> {} KB; 512: {} KB)", 10.0 * (255.0f64 * 255.0 / mse.max(1e-9)).log10(), old.len() / 1000, std::fs::metadata(out.join(format!("{stem}-new1024.jpg"))).unwrap().len() / 1000, std::fs::metadata(out.join(format!("{stem}-new512.jpg"))).unwrap().len() / 1000);
         }
     }
 }

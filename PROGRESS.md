@@ -2,6 +2,30 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Import speed slice E: small thumbnails first, the large ones in the background (2026-10-19)
+
+Fifth slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md), the user's tiered design. `ThumbTier` {Small 512 px
+`{id}-s.jpg`, Large 1024 px `{id}.jpg`}; the file name is the tier (`thumbnail_rank`: none 0, `-t` 1, `-s` 2, anything else 3),
+so no schema change and every consumer still reads one `thumbnail_path`; a catalog thumbnail only ever improves
+(`record_thumbnail` never replaces an equal or better tier, and deletes the files of the tiers it replaced). The import's
+pool now makes the small one; when `import_folder` / `import_files` return, a quiet pass (`spawn_large_thumbnail_pass`: two
+threads, `ThumbTier::Large`, scoped to the batch) makes the large ones and announces each with `thumbnail-ready`; it waits
+while an import or a small pass runs (`FOREGROUND_WORK`). Startup runs a small pass then a large pass over everything
+missing; `ensure_thumbnail` (opening a photo) makes the large one directly; photos from before tiers already hold large
+ones and are untouched; a RAW keeps its embedded JPEG (large from the start). The pixel work is cheaper
+(`downscale_to`: an exact box average by the whole factor leaving at least twice the target, then the triangle filter;
+`write_thumbnail_jpeg` with `jpeg-encoder`, quality 82), and edited thumbnails use the same function so they match.
+**Measured** (release, warm cache, 40 JPEGs, 8 workers): the grid thumbnails of the whole import are done in 666 ms (slice
+C: 881 ms), with 1 worker 4272 ms (5630); the 512 px files are 20 to 65 KB against 62 to 251 KB for the 1024 px ones.
+**Compared by eye** against the old method on the test photos (the ISO 6400 bark and the bridge): practically identical;
+PSNR old vs new 1024 is 30 to 40 dB (the noisy files differ most, as the box average treats noise differently); the new one
+is slightly crisper on fine texture. Tests: tiers by name, the small then large upgrade (sizes 512 x 341 then 1024 x 683,
+the small file removed, nothing left for a second pass), the large pass waiting for foreground work, downscaling (shape,
+no enlarging, flat colour), the improve-only rule; Rust 624 lib + 47 + 51, frontend 1097, type check, clippy pass.
+**Not measured / not verified:** the large pass's own duration at two threads on a big import (a 40-file estimate from the
+2-worker figure is ~2.7 s), the real window, a very large catalog, cold disk, Windows; whether the grid at its biggest
+zoom on a 5K display looks soft with 512 px for the moment before the 1024 one (the user's call, RFC §8 question 2).
+
 ## Import speed slice D: the camera's own thumbnail shows at once (tier 0) (2026-10-19)
 
 Fourth slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md), the user's "show small first" tier. When a JPEG

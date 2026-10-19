@@ -29,8 +29,7 @@ function freshJpegFixture(/** @type {string} */ tmpDir) {
 }
 
 /**
- * Covers the two new backend pieces the import progress bar's "thumbnail"
- * phase and Loupe/Develop's "jump the queue" fix are built on:
+ * Covers the backend pieces behind the import's thumbnails and Loupe/Develop's "jump the queue" fix:
  * `backfill_missing_thumbnails` (lib.rs, wraps import.rs's
  * `generate_missing_thumbnails_with_progress`) and `ensure_thumbnail`
  * (lib.rs, wraps import.rs's `ensure_thumbnail`).
@@ -58,21 +57,30 @@ describe("Thumbnail backfill: progress events and end state", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("imports a fresh fixture, then backfill_missing_thumbnails leaves it with a real thumbnail on disk", async () => {
+  it("imports a fresh fixture with its thumbnail already made, and the backfill has nothing left to do", async () => {
     const freshPath = freshJpegFixture(tmpDir);
 
-    const { events, batchImages } = await browser.execute(async (p) => {
-      const summary = await window.__TAURI__.core.invoke("import_files", { paths: [p] });
-
-      const collected = [];
-      const unlisten = await window.__TAURI__.event.listen("thumbnail-progress", (event) => {
-        collected.push(event.payload);
+    // RFC-0030 slice C: the import itself makes every JPEG's thumbnail (a pool of threads, while the next files are
+    // read) and announces each one with `thumbnail-ready`, so by the time `import_files` resolves the image has its
+    // thumbnail and the follow-up `backfill_missing_thumbnails` finds no candidate (no `thumbnail-progress` events).
+    const { ready, progress, batchImages } = await browser.execute(async (p) => {
+      const readyEvents = [];
+      const progressEvents = [];
+      const unlistenReady = await window.__TAURI__.event.listen("thumbnail-ready", (event) => {
+        readyEvents.push(...event.payload);
       });
+      const unlistenProgress = await window.__TAURI__.event.listen("thumbnail-progress", (event) => {
+        progressEvents.push(event.payload);
+      });
+      const summary = await window.__TAURI__.core.invoke("import_files", { paths: [p] });
       await window.__TAURI__.core.invoke("backfill_missing_thumbnails", { importBatch: summary.import_batch });
-      unlisten();
+      // Events reach the page asynchronously; give the last ones a moment.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      unlistenReady();
+      unlistenProgress();
 
       const images = await window.__TAURI__.core.invoke("list_images");
-      return { events: collected, batchImages: images.filter((img) => img.import_batch === summary.import_batch) };
+      return { ready: readyEvents, progress: progressEvents, batchImages: images.filter((img) => img.import_batch === summary.import_batch) };
     }, freshPath);
 
     try {
@@ -81,13 +89,8 @@ describe("Thumbnail backfill: progress events and end state", () => {
       // the catalog has.
       expect(batchImages.length).toBe(1);
       expect(batchImages[0].thumbnail_path).not.toBeNull();
-
-      // current increases by exactly 1 each time, total never changes
-      // mid-sequence, and the last event reaches its own total -- same
-      // "fires once per candidate, total fixed" contract
-      // import-progress.e2e.js already checks for import-progress.
-      expect(events.length).toBe(1);
-      expect(events[0]).toEqual({ current: 1, total: 1 });
+      expect(ready.some((r) => r.image_id === batchImages[0].image_id && r.thumbnail_path === batchImages[0].thumbnail_path)).toBe(true);
+      expect(progress.length).toBe(0);
     } finally {
       // This spec deliberately synthesizes a fresh, never-before-seen
       // image on every run (see freshJpegFixture above) to dodge

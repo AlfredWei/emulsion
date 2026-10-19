@@ -48,7 +48,11 @@ slower than release); the strip ended "Imported 40, 0 already in library, 0 fail
 errors in the app log. **Not verified:** the grid's behaviour while rows are inserted mid-list (a refresh re-sorts, so
 the view can shift as files land; seen only as a screenshot sequence, not scrolling or selecting during the import);
 a very large catalog's refresh cost; cold disk; Windows. WebdriverIO E2E runs in CI (a PR whose base is not main gets no
-CI until it is retargeted, so #257 has had none yet).
+CI until it is retargeted, so #257 had none until then). **CI found one real consequence:** the E2E spec
+`thumbnail-backfill` expected `import_files` to leave the JPEG without a thumbnail and the backfill to emit exactly one
+`thumbnail-progress` event; with slice C the import makes the thumbnail itself, so the backfill has no candidate. The spec
+now checks the new contract (the image has its thumbnail when the import resolves, `thumbnail-ready` announced it, no
+progress events); the backfill's own progress contract stays covered by the Rust unit tests.
 
 ## Import speed slice B: a pool of threads makes the thumbnails (2026-10-19)
 

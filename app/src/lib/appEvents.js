@@ -19,7 +19,7 @@ import { develop } from "$lib/state/develop.svelte.js";
 import { listAllImageKeywords, backfillImageDimensions } from "$lib/api/catalog.js";
 import { flushThumbnailBatch } from "$lib/thumbnailBatchQueue.js";
 import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
-import { refresh, refreshCollections, handleBatchThumbnailsComplete } from "$lib/actions/libraryActions.js";
+import { refresh, refreshCollections, handleBatchThumbnailsComplete, handleThumbnailsReady } from "$lib/actions/libraryActions.js";
 import { handleDropImport, regenerateThumbnailFor, pollUntilThumbnailsReadyOnStartup } from "$lib/actions/importActions.js";
 import { refreshPresets } from "$lib/actions/presetActions.js";
 
@@ -188,6 +188,19 @@ export function installAppEvents({ handleMenuAction }) {
     // ignore outside Tauri
   }
 
+  // Each finished thumbnail, as the backend writes it (RFC-0030 slice A): the grid fills while the pass runs instead
+  // of all at once at its end. Also covers the startup catch-up pass.
+  let unlistenThumbnailReady = /** @type {(() => void) | undefined} */ (undefined);
+  try {
+    listen("thumbnail-ready", (/** @type {{ payload: { image_id: number, thumbnail_path: string }[] }} */ event) => {
+      handleThumbnailsReady(event.payload);
+    }).then((fn) => {
+      unlistenThumbnailReady = fn;
+    });
+  } catch {
+    // ignore outside Tauri
+  }
+
   // HDR merge progress bar: lib.rs's merge_hdr_bracket emits this once
   // per pipeline step (see hdrMergeProgress's own doc comment above).
   let unlistenHdrMergeProgress = /** @type {(() => void) | undefined} */ (undefined);
@@ -239,6 +252,7 @@ export function installAppEvents({ handleMenuAction }) {
     unlistenMenu?.();
     unlistenImportProgress?.();
     unlistenThumbnailProgress?.();
+    unlistenThumbnailReady?.();
     unlistenHdrMergeProgress?.();
     unlistenFaceDetectionProgress?.();
     unlistenFaceScanProgress?.();

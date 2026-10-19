@@ -98,7 +98,7 @@ export function getSupportedExtensions() {
 
 /** Backfills thumbnails for images tagged with `importBatch`
  * (ImportSummary.import_batch) that don't have one yet, emitting
- * "thumbnail-progress" events as it goes. Awaited by runImport right
+ * "thumbnail-progress" events as it goes (and "thumbnail-ready" with each picture the moment it is written, RFC-0030). Awaited by runImport right
  * after importFolder/importFiles resolves, so the import progress bar
  * stays up until that import's own photos are all backfilled -- scoped to
  * the batch, not the whole catalog, so an unrelated pre-existing backlog

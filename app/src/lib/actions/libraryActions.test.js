@@ -29,6 +29,7 @@ import {
   refresh,
   patchLocal,
   handleBatchThumbnailsComplete,
+  handleThumbnailsReady,
   prioritizeThumbnail,
   handleCreateCollection,
   handleCreateSmartCollection,
@@ -303,6 +304,26 @@ describe("local image patches", () => {
     library.images = [img(1, { thumbnail_path: "old" }), img(2, { thumbnail_path: "keep" }), img(3, { thumbnail_path: "gone" })];
     handleBatchThumbnailsComplete(new Map([[10, "/t/1.jpg"], [30, null]]));
     expect(library.images.map((i) => i.thumbnail_path)).toEqual(["/t/1.jpg", "keep", null]);
+  });
+
+  it("handleThumbnailsReady fills only photos without a thumbnail, by image id, in one reassignment", () => {
+    library.images = [img(1), img(2, { thumbnail_path: "/t/edited.jpg" }), img(3), img(4)];
+    const before = library.images;
+    handleThumbnailsReady([
+      { image_id: 1, thumbnail_path: "/t/1.jpg" },
+      { image_id: 2, thumbnail_path: "/t/2.jpg" }, // already has one (an edited picture): left alone
+      { image_id: 3, thumbnail_path: "/t/3.jpg" },
+      { image_id: 99, thumbnail_path: "/t/99.jpg" }, // not in the list
+    ]);
+    expect(library.images.map((i) => i.thumbnail_path)).toEqual(["/t/1.jpg", "/t/edited.jpg", "/t/3.jpg", null]);
+    expect(library.images[3]).toBe(before[3]); // untouched rows keep their identity
+  });
+
+  it("handleThumbnailsReady does not touch the list when nothing in it needs the group", () => {
+    library.images = [img(1, { thumbnail_path: "/t/1.jpg" })];
+    const before = library.images;
+    handleThumbnailsReady([{ image_id: 1, thumbnail_path: "/t/other.jpg" }, { image_id: 7, thumbnail_path: "/t/7.jpg" }]);
+    expect(library.images).toBe(before);
   });
 
   it("prioritizeThumbnail generates one only for an image that has none, then patches it in", async () => {

@@ -2,6 +2,22 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Import speed slice B: a pool of threads makes the thumbnails (2026-10-19)
+
+Second slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md). The thumbnail pass
+(`generate_missing_thumbnails_with_workers`) now runs `thumbnail_worker_count` threads (cores minus two, at most 8, at
+least 1, never more than there are pictures) over one shared index; the catalog writes and both callbacks stay on the
+calling thread, one picture at a time, so the catalog is only touched in short single-row steps. A decoder that panics
+costs that picture only (`catch_unwind`). `thumbnail-progress` still fires once per candidate with a count that only
+goes up; pictures now finish roughly, not exactly, in list order. **Measured end to end on this machine (release,
+warm cache, the real pass on 40 JPEGs, 271 MB, ignored test `speed_probe::real_pass`):** cataloguing 225 ms; thumbnails
+all done in 5608 ms with 1 worker, 2861 with 2, 1496 with 4, **845 ms with 8 (6.6x)**; first picture 25 ms with 8.
+Tests: the worker count's rules, every picture made and announced once with progress 1..=12, a vanished file costs one
+picture and the pass still counts all five; the whole Rust suite passes (607 lib, 47 + 51 integration), clippy clean.
+**Not done / not verified:** "rows the user is looking at first" (RFC §5.2) is left for later, it needs the grid to tell
+the backend which rows are visible; the real window (the screen was locked), a cold disk, memory with 24 MP files
+(8 workers is about 1.6 GB by estimate, not measured), Windows.
+
 ## Import speed slice A: thumbnails stream to the grid (2026-10-19)
 
 First slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md) (decided order A, B, C, D, E, F; tiered thumbnails

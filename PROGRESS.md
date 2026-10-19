@@ -19,10 +19,15 @@ still runs after (it finds nothing unless a picture failed) and the startup catc
 card because reading now overlaps decoding. Tests: every JPEG catalogued and thumbnailed before the call returns, once
 each, duplicate and corrupt counted; **the catalog can be read between files** (rows 1,2,3,4,5 seen as they land); a RAW
 keeps its on-the-spot thumbnail; the throttle (one refresh for twenty events, cool-down, no overlap, stop, failure
-swallowed). Rust 610 lib + 47 + 51, frontend 1093, type check, clippy: pass. **Not verified:** the real window (screen
-locked) and what the grid does while rows are inserted mid-list during an import (a refresh re-sorts, so the view can
-shift as files land; the final one does the same); a very large catalog's refresh cost; cold disk; Windows. WebdriverIO
-E2E runs in CI.
+swallowed). Rust 610 lib + 47 + 51, frontend 1093, type check, clippy: pass. **Verified in the real window** (bundled
+debug app of slices A to C, throwaway catalog, folder import of the 40 JPEGs, 271 MB): the 40 rows appeared in the grid
+about a second after the import started, while the status strip still said "Importing 40 / 40"; the thumbnails then
+filled in a few at a time (the first around 3 s, nearly all by ~10 s, in a debug build where decode is several times
+slower than release); the strip ended "Imported 40, 0 already in library, 0 failed"; 40 thumbnail files on disk; no
+errors in the app log. **Not verified:** the grid's behaviour while rows are inserted mid-list (a refresh re-sorts, so
+the view can shift as files land; seen only as a screenshot sequence, not scrolling or selecting during the import);
+a very large catalog's refresh cost; cold disk; Windows. WebdriverIO E2E runs in CI (a PR whose base is not main gets no
+CI until it is retargeted, so #257 has had none yet).
 
 ## Import speed slice B: a pool of threads makes the thumbnails (2026-10-19)
 
@@ -53,7 +58,7 @@ thumbnail once with the catalog already holding the path (this found and fixed a
 batcher's grouping, the frontend patching (by `image_id`, one reassignment, untouched rows keep identity), the
 listener; the full frontend suite (1088) and type check pass; the `import::` Rust tests pass. **Not verified:** in the
 real window (the screen was locked when I tried; the bundled debug app built fine) and a measured first-picture time
-in the app; both are on the M6 milestone-end list.
+in the app; slice C's check below covers the whole A to C flow in a real window.
 
 ## Import and export speed study (2026-10-19)
 

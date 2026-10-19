@@ -304,6 +304,44 @@ pub fn scan_and_import_with_progress<F: FnMut(usize, usize)>(
 /// size/quality mismatch between the two in the same grid.
 const THUMBNAIL_MAX_DIMENSION: u32 = 1024;
 
+/// One finished thumbnail, as the `thumbnail-ready` event carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadyThumbnail {
+    pub image_id: i64,
+    pub thumbnail_path: String,
+}
+
+/// Groups finished thumbnails so a fast pass sends the webview a message every `interval`, not one per file. The
+/// first one goes out at once (that is the "first picture" the user waits for); `take` hands out what is left when
+/// the pass ends. Pure bookkeeping, no clock but the one passed in, so it is tested without sleeping.
+pub struct ReadyBatcher {
+    pending: Vec<ReadyThumbnail>,
+    last_sent: Option<std::time::Instant>,
+    interval: std::time::Duration,
+}
+
+impl ReadyBatcher {
+    pub fn new(interval: std::time::Duration) -> Self {
+        Self { pending: Vec::new(), last_sent: None, interval }
+    }
+
+    /// Adds one; returns the group to send now when it is time (the first call, or `interval` after the last send).
+    pub fn push(&mut self, item: ReadyThumbnail, now: std::time::Instant) -> Option<Vec<ReadyThumbnail>> {
+        self.pending.push(item);
+        let due = self.last_sent.is_none_or(|t| now.duration_since(t) >= self.interval);
+        if !due {
+            return None;
+        }
+        self.last_sent = Some(now);
+        Some(std::mem::take(&mut self.pending))
+    }
+
+    /// Whatever has not been sent yet (empty when nothing is waiting).
+    pub fn take(&mut self) -> Vec<ReadyThumbnail> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
 pub fn generate_missing_thumbnails(catalog: &Arc<Mutex<Catalog>>, thumbnail_dir: &Path) {
     generate_missing_thumbnails_with_progress(catalog, thumbnail_dir, None, |_, _| {})
 }
@@ -333,7 +371,20 @@ pub fn generate_missing_thumbnails_with_progress<F: FnMut(usize, usize)>(
     catalog: &Arc<Mutex<Catalog>>,
     thumbnail_dir: &Path,
     import_batch: Option<i64>,
+    on_progress: F,
+) {
+    generate_missing_thumbnails_streaming(catalog, thumbnail_dir, import_batch, on_progress, |_, _| {});
+}
+
+/// Same pass, and additionally calls `on_ready(image_id, thumbnail_path)` the moment each thumbnail is written and
+/// recorded in the catalog (RFC-0030 slice A), so the grid can show it then instead of when the whole pass ends.
+/// Not called for an image whose generation failed, nor for one `ensure_thumbnail` filled in first.
+pub fn generate_missing_thumbnails_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
+    catalog: &Arc<Mutex<Catalog>>,
+    thumbnail_dir: &Path,
+    import_batch: Option<i64>,
     mut on_progress: F,
+    mut on_ready: R,
 ) {
     let images: Vec<_> = {
         let Ok(catalog) = catalog.lock() else { return };
@@ -368,8 +419,14 @@ pub fn generate_missing_thumbnails_with_progress<F: FnMut(usize, usize)>(
                 break 'image;
             };
 
-            let Ok(catalog) = catalog.lock() else { return };
-            let _ = catalog.set_thumbnail_path(image.image_id, &out_path.to_string_lossy());
+            let recorded = {
+                let Ok(catalog) = catalog.lock() else { return };
+                catalog.set_thumbnail_path(image.image_id, &out_path.to_string_lossy()).is_ok()
+            };
+            // After the lock is released, so the callback may use the catalog itself.
+            if recorded {
+                on_ready(image.image_id, &out_path);
+            }
         }
 
         on_progress(i + 1, total);
@@ -667,6 +724,48 @@ mod tests {
         assert!(images.iter().all(|img| img.thumbnail_path.is_some()));
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// RFC-0030 slice A: the streaming pass reports each thumbnail the moment it is recorded, with the path the
+    /// catalog now holds, once per image and in order.
+    #[test]
+    fn the_streaming_pass_reports_each_thumbnail_as_it_is_written() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("streaming");
+        image::RgbImage::from_pixel(200, 100, image::Rgb([120, 90, 60])).save(dir.join("a.jpg")).unwrap();
+        image::RgbImage::from_pixel(200, 100, image::Rgb([10, 20, 30])).save(dir.join("b.jpg")).unwrap();
+        let catalog = Catalog::open_in_memory().unwrap();
+        assert_eq!(scan_and_import(&dir, &catalog, &thumb_dir).imported, 2);
+        let catalog = Arc::new(Mutex::new(catalog));
+
+        let ready = std::cell::RefCell::new(Vec::new());
+        generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, |_, _| {}, |id, path| {
+            // The catalog already holds the path when the event fires.
+            let held = catalog.lock().unwrap().get_thumbnail_path(id).unwrap();
+            ready.borrow_mut().push((id, path.to_path_buf(), held));
+        });
+
+        let ready = ready.into_inner();
+        assert_eq!(ready.len(), 2);
+        for (id, path, held) in &ready {
+            assert!(path.exists(), "the file is on disk when it is announced");
+            assert_eq!(held.as_deref(), Some(path.to_string_lossy().as_ref()), "image {id}");
+        }
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn the_batcher_sends_the_first_at_once_then_groups_by_interval_and_hands_out_the_rest() {
+        use std::time::{Duration, Instant};
+        let item = |id: i64| ReadyThumbnail { image_id: id, thumbnail_path: format!("/t/{id}.jpg") };
+        let t0 = Instant::now();
+        let mut b = ReadyBatcher::new(Duration::from_millis(50));
+        assert_eq!(b.push(item(1), t0), Some(vec![item(1)]), "the first picture goes out immediately");
+        assert_eq!(b.push(item(2), t0 + Duration::from_millis(10)), None);
+        assert_eq!(b.push(item(3), t0 + Duration::from_millis(49)), None);
+        assert_eq!(b.push(item(4), t0 + Duration::from_millis(50)), Some(vec![item(2), item(3), item(4)]));
+        assert_eq!(b.push(item(5), t0 + Duration::from_millis(60)), None);
+        assert_eq!(b.take(), vec![item(5)]);
+        assert!(b.take().is_empty());
     }
 
     /// Real regression guard for the backlog this scoping was added to fix

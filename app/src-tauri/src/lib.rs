@@ -226,12 +226,49 @@ async fn backfill_missing_thumbnails(app: AppHandle, state: State<'_, AppState>,
     let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        import::generate_missing_thumbnails_with_progress(&catalog, &thumbnail_dir, Some(import_batch), |current, total| {
-            let _ = app.emit("thumbnail-progress", ImportProgress { current, total });
-        });
+        let mut ready = ReadyEmitter::new(app.clone());
+        import::generate_missing_thumbnails_streaming(
+            &catalog,
+            &thumbnail_dir,
+            Some(import_batch),
+            |current, total| {
+                let _ = app.emit("thumbnail-progress", ImportProgress { current, total });
+            },
+            |image_id, path| ready.push(image_id, path),
+        );
+        ready.finish();
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Sends the `"thumbnail-ready"` event (RFC-0030 slice A): the images whose thumbnails were just written, so the
+/// grid shows each one when it exists instead of when the whole pass is over. Groups them (the first goes out at
+/// once, then one message per 50 ms) so a fast pass does not flood the webview.
+struct ReadyEmitter {
+    app: AppHandle,
+    batcher: import::ReadyBatcher,
+}
+
+impl ReadyEmitter {
+    fn new(app: AppHandle) -> Self {
+        Self { app, batcher: import::ReadyBatcher::new(std::time::Duration::from_millis(50)) }
+    }
+
+    fn push(&mut self, image_id: i64, path: &std::path::Path) {
+        let item = import::ReadyThumbnail { image_id, thumbnail_path: path.to_string_lossy().into_owned() };
+        if let Some(group) = self.batcher.push(item, std::time::Instant::now()) {
+            let _ = self.app.emit("thumbnail-ready", group);
+        }
+    }
+
+    /// Sends what the last interval left waiting.
+    fn finish(mut self) {
+        let rest = self.batcher.take();
+        if !rest.is_empty() {
+            let _ = self.app.emit("thumbnail-ready", rest);
+        }
+    }
 }
 
 /// Fills in the pixel size of photos the catalog has none for (imported before it was read from the file itself,
@@ -2098,8 +2135,11 @@ pub fn run() {
             tauri::async_runtime::spawn_blocking(move || {
                 preview_cache::pregenerate_missing(&catalog_for_previews, &previews_dir);
             });
+            let handle_for_thumbs = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
-                import::generate_missing_thumbnails(&catalog_for_thumbs, &thumbnail_dir);
+                let mut ready = ReadyEmitter::new(handle_for_thumbs);
+                import::generate_missing_thumbnails_streaming(&catalog_for_thumbs, &thumbnail_dir, None, |_, _| {}, |id, path| ready.push(id, path));
+                ready.finish();
             });
 
             // Models shipped in the installer (release builds only) are copied into the model folders once, in the

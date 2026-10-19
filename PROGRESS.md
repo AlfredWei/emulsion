@@ -2,6 +2,21 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Import speed slice A: thumbnails stream to the grid (2026-10-19)
+
+First slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md) (decided order A, B, C, D, E, F; tiered thumbnails
+and the EXIF tier are in the plan). The backfill pass now reports each thumbnail the moment it is written and recorded
+(`generate_missing_thumbnails_streaming`, `on_ready` runs after the catalog lock is released), `lib.rs` groups them
+(`ReadyBatcher`: the first at once, then one message per 50 ms) into a `thumbnail-ready` event, and the frontend
+(`handleThumbnailsReady`) fills just those rows, only where there is no thumbnail yet (an edited picture is never put
+back). The startup catch-up pass emits the same event. No pixel change, so the total time of the pass is unchanged;
+what changes is that the first picture appears when it exists, not when the last one does. Tests: the pass reports each
+thumbnail once with the catalog already holding the path (this found and fixed a lock-held-in-callback deadlock), the
+batcher's grouping, the frontend patching (by `image_id`, one reassignment, untouched rows keep identity), the
+listener; the full frontend suite (1088) and type check pass; the `import::` Rust tests pass. **Not verified:** in the
+real window (the screen was locked when I tried; the bundled debug app built fine) and a measured first-picture time
+in the app; both are on the M6 milestone-end list.
+
 ## Import and export speed study (2026-10-19)
 
 Asked by the user: make thumbnails ready as soon as possible. Study only, nothing in the product changes; the write-up is

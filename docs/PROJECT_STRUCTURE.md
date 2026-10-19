@@ -81,7 +81,7 @@ src-tauri/
 │   ├── develop_engine/      CPU edit-stack interpreter (the reference the GPU shaders must match): pipeline.rs
 │   │                        (`apply_edit_stack`), color, tone, hsl_split, effects, detail, masks (incl. composable-mask modifiers), crop, lens,
 │   │                        perspective; tests/ = per-area tests + shared support
-│   ├── import.rs            Import pipeline: scan a folder, hash, dedupe, thumbnail
+│   ├── import.rs            Import pipeline: scan a folder, hash, dedupe, thumbnail (streaming backfill + `ReadyBatcher`, RFC-0030)
 │   ├── raw_decode.rs         LibRaw (via `rsraw`) wrapper for decoding RAW files
 │   ├── jpeg_decode.rs         JPEG decoding via the `image` crate
 │   ├── source_decode.rs        Format dispatch: which decoder handles which source file
@@ -184,7 +184,7 @@ src/
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)
 │   ├── appEvents.js         `installAppEvents({ handleMenuAction })`: startup refreshes, window-close flush + backup prompt,
-│   │                        Tauri listeners (drag-drop, menu, progress streams); called from the page's onMount (RFC-0009 P7)
+│   │                        Tauri listeners (drag-drop, menu, progress streams, `thumbnail-ready`); called from the page's onMount (RFC-0009 P7)
 │   ├── collectionRules.js, libraryFolders.js, railSections.js, panelLayout.js, shortcuts.js,
 │   │   thumbnailBatchQueue.js, gpuFallback.js   Pure UI logic extracted from the page/components
 │   └── styles/tokens.css     Dark-theme design tokens, ported from the reviewed mockup

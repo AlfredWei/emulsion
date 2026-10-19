@@ -14,7 +14,7 @@ const backup = vi.hoisted(() => ({ getBackupSettings: vi.fn(), isBackupDue: vi.f
 vi.mock("$lib/api/backup.js", () => backup);
 const queue = vi.hoisted(() => ({ flushThumbnailBatch: vi.fn() }));
 vi.mock("$lib/thumbnailBatchQueue.js", () => queue);
-const lib = vi.hoisted(() => ({ refresh: vi.fn(), refreshCollections: vi.fn(), handleBatchThumbnailsComplete: vi.fn() }));
+const lib = vi.hoisted(() => ({ refresh: vi.fn(), refreshCollections: vi.fn(), handleBatchThumbnailsComplete: vi.fn(), handleThumbnailsReady: vi.fn() }));
 vi.mock("$lib/actions/libraryActions.js", () => lib);
 const imp = vi.hoisted(() => ({ handleDropImport: vi.fn(), regenerateThumbnailFor: vi.fn(), pollUntilThumbnailsReadyOnStartup: vi.fn() }));
 vi.mock("$lib/actions/importActions.js", () => imp);
@@ -359,10 +359,18 @@ describe("progress streams", () => {
   );
 });
 
+describe("thumbnail-ready", () => {
+  it("hands each group to the library so the grid shows it at once", () => {
+    const group = [{ image_id: 4, thumbnail_path: "/t/4.jpg" }];
+    listeners["thumbnail-ready"]({ payload: group });
+    expect(lib.handleThumbnailsReady).toHaveBeenCalledWith(group);
+  });
+});
+
 describe("cleanup", () => {
   it("removes the window listener and calls every registered unlisten", () => {
     cleanup();
-    for (const k of ["close", "dragDrop", "menu-action", "import-progress", "thumbnail-progress", "hdr-merge-progress", "face-detection-progress", "face-detection-scan-progress"]) {
+    for (const k of ["close", "dragDrop", "menu-action", "import-progress", "thumbnail-progress", "thumbnail-ready", "hdr-merge-progress", "face-detection-progress", "face-detection-scan-progress"]) {
       expect(unlisten[k], k).toHaveBeenCalledTimes(1);
     }
     expect(windowListeners["shortcuts-updated"]).toBeUndefined();

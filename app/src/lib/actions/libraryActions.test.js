@@ -321,17 +321,18 @@ describe("local image patches", () => {
     expect(library.images[3]).toBe(before[3]); // untouched rows keep their identity
   });
 
-  it("handleThumbnailsReady replaces a tier-0 picture but never a real one", () => {
-    library.images = [img(1, { thumbnail_path: "/t/1-t.jpg" }), img(2, { thumbnail_path: "/t/2.jpg" })];
+  it("handleThumbnailsReady replaces a tier-0 or small picture but never a final one", () => {
+    library.images = [img(1, { thumbnail_path: "/t/1-t.jpg" }), img(2, { thumbnail_path: "/t/2.jpg" }), img(3, { thumbnail_path: "/t/3-s.jpg" })];
     handleThumbnailsReady([
-      { image_id: 1, thumbnail_path: "/t/1.jpg" },
+      { image_id: 1, thumbnail_path: "/t/1-s.jpg" },
       { image_id: 2, thumbnail_path: "/t/2-new.jpg" },
+      { image_id: 3, thumbnail_path: "/t/3.jpg" },
     ]);
-    expect(library.images.map((i) => i.thumbnail_path)).toEqual(["/t/1.jpg", "/t/2.jpg"]);
+    expect(library.images.map((i) => i.thumbnail_path)).toEqual(["/t/1-s.jpg", "/t/2.jpg", "/t/3.jpg"]);
   });
 
-  it("prioritizeThumbnail also asks for the real one when only tier 0 is there", () => {
-    library.images = [img(1, { thumbnail_path: "/t/1-t.jpg" })];
+  it("prioritizeThumbnail also asks for the final one when only a provisional one is there", () => {
+    library.images = [img(1, { thumbnail_path: "/t/1-s.jpg" })];
     catalog.ensureThumbnail.mockResolvedValue("/t/1.jpg");
     prioritizeThumbnail(10);
     expect(catalog.ensureThumbnail).toHaveBeenCalledWith(10);

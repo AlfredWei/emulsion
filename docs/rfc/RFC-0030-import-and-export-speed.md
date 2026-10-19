@@ -127,3 +127,9 @@ Order of work: **A** (streaming) and **B** (pool) first with the single existing
 ## 7. Plan and verification
 
 Decisions (user, 2026-10-19): order **A → B → C → D → E → F** as above; tiered thumbnails, small first and the larger decoded in the background (§5.4); the EXIF-thumbnail tier is wanted. One PR per slice, each with the probe re-run and its numbers in `PROGRESS.md`. The M6 milestone-end backlog gets: Windows timing (the efficiency cores and Defender scanning the cache directory change the picture), a cold-disk / card import, a 2,000-photo import for memory, and the by-eye comparison of the cheaper thumbnails.
+
+## 9. Status (2026-10-19)
+
+Slices A (streaming `thumbnail-ready`), B (thread pool), C (thumbnails during the import, catalog locked per step), D (tier 0,
+the EXIF picture) and E (tiers 512 px / 1024 px, cheaper pixels) are implemented in PRs #255 to #259 with their measurements in
+`PROGRESS.md`. Slice F (parallel export with progress) and the "visible rows first" ordering of §5.2 are not done.

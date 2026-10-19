@@ -20,6 +20,7 @@ import { refreshPeople } from "$lib/actions/faceActions.js";
 import { open } from "@tauri-apps/plugin-dialog";
 import { selection } from "$lib/state/selection.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
+import { needsRealThumbnail } from "$lib/thumbnails.js";
 import { queueThumbnailRegeneration } from "$lib/thumbnailBatchQueue.js";
 
 // App-startup catch-up ONLY (see the onMount call in +page.svelte) -- lib.rs's
@@ -213,7 +214,7 @@ export async function pollUntilThumbnailsReadyOnStartup() {
     const maxAttempts = 10;
     const intervalMs = 1500;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (!library.images.some((img) => img.thumbnail_path === null)) return;
+      if (!library.images.some((img) => needsRealThumbnail(img.thumbnail_path))) return;
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
       await refresh();
     }

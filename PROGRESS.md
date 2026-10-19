@@ -2,6 +2,27 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Import speed slice D: the camera's own thumbnail shows at once (tier 0) (2026-10-19)
+
+Fourth slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md), the user's "show small first" tier. When a JPEG
+is catalogued, `metadata::exif_thumbnail` takes the picture the camera stored in its EXIF (about 160 px, under a
+millisecond), checks it against the photo (a JPEG, at most 640 px, the photo's shape within 4%, so a letterboxed or stale
+one is refused), turns it to the photo's orientation (an upright one is written byte for byte, a rotated one is decoded
+and re-encoded at that size) and writes it as `{id}-t.jpg`, which becomes the row's `thumbnail_path`. The real thumbnail
+(slice B/C pool) replaces it a moment later: `-t.jpg` is the marker, so every place that asked "has a thumbnail?" now
+asks "has a real one?" (`needs_real_thumbnail` in Rust, `lib/thumbnails.js` in the frontend: the backfill's candidates,
+the pool's already-done check, `ensure_thumbnail`, `prioritizeThumbnail`, the startup poll, `handleThumbnailsReady`). A
+real thumbnail is never overwritten (`record_thumbnail`: an edited picture or an `ensure_thumbnail` that got in first
+wins), and the tier-0 file is deleted once the real one is recorded; a catalog left with only tier 0 by a quit mid-import
+is finished by the next backfill. Tests: the EXIF extraction on hand-built JPEGs (upright, rotated, wrong shape, none,
+garbage, truncated), tier 0 recorded at cataloguing, replaced by the real one (file deleted, announced), a streaming import
+ending with real thumbnails and no tier-0 file left, the never-replace rule, `ensure_thumbnail` upgrading; Rust 620 lib +
+47 + 51, frontend 1097, type check pass. **Not verified, and the main gap:** none of the JPEGs available here (the
+project's test photos and the NIND set, 21 files) carries an EXIF thumbnail (the check costs 0 to 0.3 ms), so tier 0 has
+only been run on test files built byte by byte to the EXIF spec, never on a real camera or phone file; its effect in the
+real window (a blurred picture for a moment, then the sharp one) is therefore unseen. Needs a few camera JPEGs (a phone
+photo, a DSLR JPEG, a portrait with orientation 6) on the M6 milestone-end list.
+
 ## Import speed slice C: thumbnails during the import, the catalog locked per step (2026-10-19)
 
 Third slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md). `import_folder` / `import_files` used to hold

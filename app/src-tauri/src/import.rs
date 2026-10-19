@@ -216,7 +216,14 @@ fn import_one<A: CatalogAccess>(path: &Path, access: &A, thumbnail_dir: &Path, i
                 Some(id)
             });
             match added {
-                Some(Some(image_id)) => FileOutcome::Imported { image_id, needs_thumbnail: true },
+                Some(Some(image_id)) => {
+                    // Tier 0: the picture the camera stored inside the file, shown with the row at once. The real
+                    // thumbnail (`needs_thumbnail`) replaces it.
+                    if let Some(placeholder) = write_placeholder_thumbnail(&bytes, image_id, thumbnail_dir) {
+                        let _ = access.with(|c| c.set_thumbnail_path(image_id, &placeholder.to_string_lossy()));
+                    }
+                    FileOutcome::Imported { image_id, needs_thumbnail: true }
+                }
                 _ => FileOutcome::Failed,
             }
         }
@@ -319,9 +326,12 @@ pub fn import_paths_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
                         None
                     });
                 let Some(out) = made else { continue };
-                let recorded = catalog.lock().ok().is_some_and(|c| c.set_thumbnail_path(image_id, &out.to_string_lossy()).is_ok());
-                if recorded && ready_tx.send((image_id, out)).is_err() {
-                    break;
+                let recorded = catalog.lock().ok().is_some_and(|c| record_thumbnail(&c, image_id, &out));
+                if recorded {
+                    remove_placeholder_file(thumbnail_dir, image_id);
+                    if ready_tx.send((image_id, out)).is_err() {
+                        break;
+                    }
                 }
             });
         }
@@ -398,6 +408,42 @@ pub fn scan_and_import_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
 /// thumbnail is capped at the same size as an unedited one -- no visible
 /// size/quality mismatch between the two in the same grid.
 const THUMBNAIL_MAX_DIMENSION: u32 = 1024;
+
+/// A tier-0 picture (RFC-0030 slice D) is the JPEG's own EXIF thumbnail, written as `{image_id}-t.jpg` the moment the
+/// file is catalogued and shown until the real thumbnail (`{image_id}.jpg`) replaces it. The name is the marker: a
+/// catalog whose `thumbnail_path` ends this way still needs its real thumbnail (the app was closed mid-import), and
+/// the frontend (`lib/thumbnails.js`) uses the same rule.
+const PLACEHOLDER_SUFFIX: &str = "-t.jpg";
+
+pub(crate) fn is_placeholder_thumbnail(path: &str) -> bool {
+    path.ends_with(PLACEHOLDER_SUFFIX)
+}
+
+/// True when the catalog has no thumbnail for the image, or only the tier-0 picture.
+fn needs_real_thumbnail(current: Option<&str>) -> bool {
+    current.is_none_or(is_placeholder_thumbnail)
+}
+
+/// Records `path` as the image's thumbnail unless a real one is already there (an `ensure_thumbnail` that got in
+/// first, or an edited picture): never replaces a real thumbnail, may replace nothing or a tier-0 one. Returns
+/// whether it recorded.
+fn record_thumbnail(catalog: &Catalog, image_id: i64, path: &Path) -> bool {
+    let current = catalog.get_thumbnail_path(image_id).ok().flatten();
+    needs_real_thumbnail(current.as_deref()) && catalog.set_thumbnail_path(image_id, &path.to_string_lossy()).is_ok()
+}
+
+/// Deletes the tier-0 file once the real thumbnail is recorded (best effort: a leftover is a few KB).
+fn remove_placeholder_file(thumbnail_dir: &Path, image_id: i64) {
+    let _ = std::fs::remove_file(thumbnail_dir.join(format!("{image_id}{PLACEHOLDER_SUFFIX}")));
+}
+
+/// Writes the JPEG's own EXIF thumbnail as the tier-0 picture, when it has a usable one (`metadata::exif_thumbnail`).
+fn write_placeholder_thumbnail(bytes: &[u8], image_id: i64, thumbnail_dir: &Path) -> Option<PathBuf> {
+    let thumb = metadata::exif_thumbnail(bytes)?;
+    let out = thumbnail_dir.join(format!("{image_id}{PLACEHOLDER_SUFFIX}"));
+    std::fs::write(&out, thumb).ok()?;
+    Some(out)
+}
 
 /// One finished thumbnail, as the `thumbnail-ready` event carries it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,7 +561,7 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
             .list_images()
             .unwrap_or_default()
             .into_iter()
-            .filter(|image| image.thumbnail_path.is_none())
+            .filter(|image| needs_real_thumbnail(image.thumbnail_path.as_deref()))
             .filter(|image| import_batch.is_none_or(|batch| image.import_batch == Some(batch)))
             .collect()
     };
@@ -541,8 +587,8 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
                     // than trusting the snapshot above: `ensure_thumbnail`'s on-demand "jump the queue" path can
                     // fill in exactly this image's thumbnail after the candidate list was captured, and
                     // re-decoding a large file just to overwrite a correct result is real wasted work.
-                    let already_done = catalog.lock().ok().and_then(|c| c.get_thumbnail_path(image.image_id).ok()).flatten();
-                    let out = if already_done.is_some() {
+                    let current = catalog.lock().ok().and_then(|c| c.get_thumbnail_path(image.image_id).ok()).flatten();
+                    let out = if !needs_real_thumbnail(current.as_deref()) {
                         None
                     } else {
                         // A decoder that panics on a hostile file costs that one picture, not the whole pass.
@@ -566,10 +612,11 @@ pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R
             if let Some(out_path) = out {
                 let recorded = {
                     let Ok(catalog) = catalog.lock() else { return };
-                    catalog.set_thumbnail_path(image_id, &out_path.to_string_lossy()).is_ok()
+                    record_thumbnail(&catalog, image_id, &out_path)
                 };
                 // After the lock is released, so the callback may use the catalog itself.
                 if recorded {
+                    remove_placeholder_file(thumbnail_dir, image_id);
                     on_ready(image_id, &out_path);
                 }
             }
@@ -635,15 +682,25 @@ fn generate_thumbnail_file(image_id: i64, path: &Path, thumbnail_dir: &Path) -> 
 /// redundant decode.
 pub fn ensure_thumbnail(catalog: &Arc<Mutex<Catalog>>, version_id: i64, thumbnail_dir: &Path) -> Option<String> {
     let source = catalog.lock().ok()?.get_version_source(version_id).ok()?;
-    if let Some(existing) = catalog.lock().ok()?.get_thumbnail_path(source.image_id).ok().flatten() {
-        return Some(existing);
+    let current = catalog.lock().ok()?.get_thumbnail_path(source.image_id).ok().flatten();
+    if let Some(existing) = current.as_ref().filter(|p| !is_placeholder_thumbnail(p)) {
+        return Some(existing.clone());
     }
 
     let _ = std::fs::create_dir_all(thumbnail_dir);
     let out_path = generate_thumbnail_file(source.image_id, Path::new(&source.path), thumbnail_dir)?;
     let out_path_str = out_path.to_string_lossy().into_owned();
-    catalog.lock().ok()?.set_thumbnail_path(source.image_id, &out_path_str).ok()?;
-    Some(out_path_str)
+    // A real thumbnail that landed meanwhile (the pool, an edit) wins; the answer is whatever the catalog holds.
+    let held = {
+        let catalog = catalog.lock().ok()?;
+        if record_thumbnail(&catalog, source.image_id, &out_path) {
+            out_path_str
+        } else {
+            catalog.get_thumbnail_path(source.image_id).ok().flatten().unwrap_or(out_path_str)
+        }
+    };
+    remove_placeholder_file(thumbnail_dir, source.image_id);
+    Some(held)
 }
 
 /// Thumbnail refresh after a Develop edit: unlike `generate_missing_thumbnails`
@@ -1054,6 +1111,97 @@ mod tests {
         assert_eq!(summary.imported, 1);
         assert_eq!(announced.get(), 0, "written during cataloguing, so it arrives with the row");
         assert!(catalog.lock().unwrap().list_images().unwrap()[0].thumbnail_path.is_some());
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// RFC-0030 slice D: a JPEG that carries a camera thumbnail gets it as the row's picture at once (tier 0, named
+    /// `{id}-t.jpg`); a JPEG that does not stays blank, as before.
+    #[test]
+    fn a_jpegs_own_exif_thumbnail_is_its_picture_the_moment_it_is_catalogued() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("tier0");
+        std::fs::write(dir.join("with.jpg"), crate::metadata::test_support::jpeg_with_exif_thumbnail((640, 480), (160, 120), None)).unwrap();
+        image::RgbImage::from_pixel(64, 48, image::Rgb([9, 9, 9])).save(dir.join("without.jpg")).unwrap();
+        let catalog = Catalog::open_in_memory().unwrap();
+        assert_eq!(scan_and_import(&dir, &catalog, &thumb_dir).imported, 2);
+
+        let images = catalog.list_images().unwrap();
+        let with = images.iter().find(|i| i.path.ends_with("with.jpg")).unwrap();
+        let without = images.iter().find(|i| i.path.ends_with("without.jpg")).unwrap();
+        let tier0 = with.thumbnail_path.as_deref().expect("tier 0 recorded");
+        assert!(is_placeholder_thumbnail(tier0) && Path::new(tier0).exists());
+        assert!(without.thumbnail_path.is_none());
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// The real thumbnail replaces tier 0: a pass treats a placeholder as "still missing", records the real file,
+    /// announces it, and deletes the tier-0 file.
+    #[test]
+    fn the_real_thumbnail_replaces_the_tier_0_picture() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("tier0-replace");
+        std::fs::write(dir.join("with.jpg"), crate::metadata::test_support::jpeg_with_exif_thumbnail((640, 480), (160, 120), None)).unwrap();
+        let catalog = Catalog::open_in_memory().unwrap();
+        assert_eq!(scan_and_import(&dir, &catalog, &thumb_dir).imported, 1);
+        let before = catalog.list_images().unwrap()[0].thumbnail_path.clone().unwrap();
+        let catalog = Arc::new(Mutex::new(catalog));
+
+        let ready = std::cell::RefCell::new(Vec::new());
+        generate_missing_thumbnails_streaming(&catalog, &thumb_dir, None, |_, _| {}, |id, path| ready.borrow_mut().push((id, path.to_path_buf())));
+
+        let after = catalog.lock().unwrap().list_images().unwrap()[0].thumbnail_path.clone().unwrap();
+        assert!(!is_placeholder_thumbnail(&after) && Path::new(&after).exists());
+        assert!(!Path::new(&before).exists(), "the tier-0 file is removed");
+        assert_eq!(ready.into_inner().len(), 1);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// The streaming import does the same replacement itself (the pool), so every row ends with a real thumbnail.
+    #[test]
+    fn a_streaming_import_ends_with_real_thumbnails_even_where_tier_0_was_written() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("tier0-streaming");
+        for n in 0..4u32 {
+            let mut file = crate::metadata::test_support::jpeg_with_exif_thumbnail((640 + n, 480), (160, 120), None);
+            file.extend(format!("unique-{n}").bytes());
+            std::fs::write(dir.join(format!("c{n}.jpg")), file).unwrap();
+        }
+        let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
+        let summary = import_paths_streaming(std::slice::from_ref(&dir), &catalog, &thumb_dir, Some(2), |_, _| {}, |_, _| {});
+        assert_eq!(summary.imported, 4);
+        let images = catalog.lock().unwrap().list_images().unwrap();
+        assert!(images.iter().all(|i| i.thumbnail_path.as_deref().is_some_and(|p| !is_placeholder_thumbnail(p))));
+        assert!(std::fs::read_dir(&thumb_dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with("-t.jpg")), "no tier-0 file is left behind");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// Recording never replaces a real thumbnail (an edited picture, or one `ensure_thumbnail` made first), and
+    /// may replace tier 0 or nothing.
+    #[test]
+    fn recording_a_thumbnail_never_replaces_a_real_one() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("record-guard");
+        image::RgbImage::from_pixel(64, 48, image::Rgb([9, 9, 9])).save(dir.join("a.jpg")).unwrap();
+        let catalog = Catalog::open_in_memory().unwrap();
+        scan_and_import(&dir, &catalog, &thumb_dir);
+        let id = catalog.list_images().unwrap()[0].image_id;
+
+        assert!(record_thumbnail(&catalog, id, Path::new("/t/1-t.jpg")), "nothing there: recorded");
+        assert!(record_thumbnail(&catalog, id, Path::new("/t/1.jpg")), "tier 0 there: replaced");
+        assert!(!record_thumbnail(&catalog, id, Path::new("/t/other.jpg")), "a real one there: kept");
+        assert_eq!(catalog.get_thumbnail_path(id).unwrap().as_deref(), Some("/t/1.jpg"));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// Opening a photo that still shows tier 0 makes its real thumbnail at once, like one with none.
+    #[test]
+    fn ensure_thumbnail_upgrades_a_tier_0_picture() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("tier0-ensure");
+        std::fs::write(dir.join("with.jpg"), crate::metadata::test_support::jpeg_with_exif_thumbnail((640, 480), (160, 120), None)).unwrap();
+        let catalog = Catalog::open_in_memory().unwrap();
+        scan_and_import(&dir, &catalog, &thumb_dir);
+        let version_id = catalog.list_images().unwrap()[0].version_id;
+        let catalog = Arc::new(Mutex::new(catalog));
+
+        let path = ensure_thumbnail(&catalog, version_id, &thumb_dir).expect("a thumbnail");
+        assert!(!is_placeholder_thumbnail(&path) && Path::new(&path).exists());
+        assert_eq!(ensure_thumbnail(&catalog, version_id, &thumb_dir).as_deref(), Some(path.as_str()), "now a no-op");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
@@ -1590,6 +1738,26 @@ mod speed_probe {
                 ms(first.get().unwrap_or_default())
             );
             let _ = std::fs::remove_dir_all(&thumbs);
+        }
+    }
+
+    /// How many real JPEGs carry a usable EXIF thumbnail (tier 0, RFC-0030 slice D), and what extraction costs.
+    #[test]
+    #[ignore = "measurement, needs IMPORT_PROBE_DIR"]
+    fn exif_thumbnails() {
+        let dir = PathBuf::from(std::env::var("IMPORT_PROBE_DIR").expect("IMPORT_PROBE_DIR"));
+        println!("\nEXIF thumbnail (tier 0) per JPEG");
+        for p in files(&dir, &["jpg", "jpeg"]) {
+            let bytes = std::fs::read(&p).unwrap();
+            let (t, thumb) = best(|| metadata::exif_thumbnail(&bytes));
+            let o = orientation(&bytes);
+            match thumb {
+                Some(b) => {
+                    let (w, h) = image::ImageReader::new(std::io::Cursor::new(&b)).with_guessed_format().unwrap().into_dimensions().unwrap();
+                    println!("  {:<40} orientation {o}: {w}x{h}, {} bytes, {:.2} ms", p.file_name().unwrap().to_string_lossy(), b.len(), ms(t));
+                }
+                None => println!("  {:<40} orientation {o}: none ({:.2} ms)", p.file_name().unwrap().to_string_lossy(), ms(t)),
+            }
         }
     }
 }

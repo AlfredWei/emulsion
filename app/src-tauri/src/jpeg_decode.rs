@@ -32,7 +32,7 @@ fn read_orientation(path: &Path) -> u32 {
         .unwrap_or(1)
 }
 
-fn apply_orientation(image: image::RgbImage, orientation: u32) -> image::RgbImage {
+pub(crate) fn apply_orientation(image: image::RgbImage, orientation: u32) -> image::RgbImage {
     match orientation {
         2 => imageops::flip_horizontal(&image),
         3 => imageops::rotate180(&image),

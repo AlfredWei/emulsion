@@ -376,16 +376,44 @@ pub fn generate_missing_thumbnails_with_progress<F: FnMut(usize, usize)>(
     generate_missing_thumbnails_streaming(catalog, thumbnail_dir, import_batch, on_progress, |_, _| {});
 }
 
+/// How many threads make thumbnails (RFC-0030 slice B): the cores minus two (the interface and the file system keep
+/// theirs), at most 8 (measured: ten cores are no faster than eight, the extra two are the slow ones), at least one,
+/// and never more than there are images. Each worker holds one decoded photo (about 0.2 GB at 24 MP), so the cap is
+/// also the memory bound.
+pub(crate) fn thumbnail_worker_count(cores: usize, images: usize) -> usize {
+    cores.saturating_sub(2).clamp(1, 8).min(images).max(1)
+}
+
 /// Same pass, and additionally calls `on_ready(image_id, thumbnail_path)` the moment each thumbnail is written and
 /// recorded in the catalog (RFC-0030 slice A), so the grid can show it then instead of when the whole pass ends.
 /// Not called for an image whose generation failed, nor for one `ensure_thumbnail` filled in first.
+///
+/// The pictures are made by a pool of threads (slice B, `thumbnail_worker_count`); the catalog writes and both
+/// callbacks stay on the calling thread, one at a time, so they need not be `Send` and the catalog is touched in
+/// short single-row steps. `on_progress` still fires once per candidate with a count that only goes up, but the
+/// order in which pictures finish is no longer the order of the list.
 pub fn generate_missing_thumbnails_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
     catalog: &Arc<Mutex<Catalog>>,
     thumbnail_dir: &Path,
     import_batch: Option<i64>,
+    on_progress: F,
+    on_ready: R,
+) {
+    generate_missing_thumbnails_with_workers(catalog, thumbnail_dir, import_batch, None, on_progress, on_ready);
+}
+
+/// The pass with an explicit worker count (`None` = `thumbnail_worker_count` for this machine); tests and the speed
+/// probe pin it.
+pub(crate) fn generate_missing_thumbnails_with_workers<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
+    catalog: &Arc<Mutex<Catalog>>,
+    thumbnail_dir: &Path,
+    import_batch: Option<i64>,
+    workers: Option<usize>,
     mut on_progress: F,
     mut on_ready: R,
 ) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     let images: Vec<_> = {
         let Ok(catalog) = catalog.lock() else { return };
         catalog
@@ -398,39 +426,61 @@ pub fn generate_missing_thumbnails_streaming<F: FnMut(usize, usize), R: FnMut(i6
     };
     let _ = std::fs::create_dir_all(thumbnail_dir);
     let total = images.len();
-
-    for (i, image) in images.into_iter().enumerate() {
-        'image: {
-            // Re-check under the lock (cheap indexed lookup, not another
-            // full list_images() scan) rather than trusting the snapshot
-            // above -- `ensure_thumbnail`'s on-demand "jump the queue" path
-            // can race ahead of this loop and fill in exactly this image's
-            // thumbnail between when the candidate list was captured and
-            // when this iteration runs, and re-decoding a large RAW file
-            // just to overwrite an already-correct result is real wasted
-            // work worth skipping, not just a correctness nicety.
-            let already_done = catalog.lock().ok().and_then(|c| c.get_thumbnail_path(image.image_id).ok()).flatten();
-            if already_done.is_some() {
-                break 'image;
-            }
-
-            let Some(out_path) = generate_thumbnail_file(image.image_id, Path::new(&image.path), thumbnail_dir)
-            else {
-                break 'image;
-            };
-
-            let recorded = {
-                let Ok(catalog) = catalog.lock() else { return };
-                catalog.set_thumbnail_path(image.image_id, &out_path.to_string_lossy()).is_ok()
-            };
-            // After the lock is released, so the callback may use the catalog itself.
-            if recorded {
-                on_ready(image.image_id, &out_path);
-            }
-        }
-
-        on_progress(i + 1, total);
+    if total == 0 {
+        return;
     }
+    let workers = workers.unwrap_or_else(|| thumbnail_worker_count(std::thread::available_parallelism().map_or(1, |n| n.get()), total)).clamp(1, total);
+
+    let next = AtomicUsize::new(0);
+    // (image id, the file written, or None when there is nothing to record): every candidate sends exactly one.
+    let (tx, rx) = std::sync::mpsc::channel::<(i64, Option<PathBuf>)>();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let (images, next) = (&images, &next);
+            scope.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::SeqCst);
+                    let Some(image) = images.get(i) else { break };
+                    // Re-check under the lock (cheap indexed lookup, not another full list_images() scan) rather
+                    // than trusting the snapshot above: `ensure_thumbnail`'s on-demand "jump the queue" path can
+                    // fill in exactly this image's thumbnail after the candidate list was captured, and
+                    // re-decoding a large file just to overwrite a correct result is real wasted work.
+                    let already_done = catalog.lock().ok().and_then(|c| c.get_thumbnail_path(image.image_id).ok()).flatten();
+                    let out = if already_done.is_some() {
+                        None
+                    } else {
+                        // A decoder that panics on a hostile file costs that one picture, not the whole pass.
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            generate_thumbnail_file(image.image_id, Path::new(&image.path), thumbnail_dir)
+                        }))
+                        .unwrap_or_else(|_| {
+                            eprintln!("thumbnail generation panicked for {}", image.path);
+                            None
+                        })
+                    };
+                    if tx.send((image.image_id, out)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+
+        for (done, (image_id, out)) in rx.iter().enumerate() {
+            if let Some(out_path) = out {
+                let recorded = {
+                    let Ok(catalog) = catalog.lock() else { return };
+                    catalog.set_thumbnail_path(image_id, &out_path.to_string_lossy()).is_ok()
+                };
+                // After the lock is released, so the callback may use the catalog itself.
+                if recorded {
+                    on_ready(image_id, &out_path);
+                }
+            }
+            on_progress(done + 1, total);
+        }
+    });
 }
 
 /// Decodes `path` fresh (unedited) and writes a `THUMBNAIL_MAX_DIMENSION`-
@@ -766,6 +816,74 @@ mod tests {
         assert_eq!(b.push(item(5), t0 + Duration::from_millis(60)), None);
         assert_eq!(b.take(), vec![item(5)]);
         assert!(b.take().is_empty());
+    }
+
+    #[test]
+    fn the_worker_count_leaves_cores_free_and_is_capped_by_the_work() {
+        assert_eq!(thumbnail_worker_count(10, 1000), 8, "capped at eight");
+        assert_eq!(thumbnail_worker_count(8, 1000), 6, "two cores stay free");
+        assert_eq!(thumbnail_worker_count(2, 1000), 1, "never zero");
+        assert_eq!(thumbnail_worker_count(1, 1000), 1);
+        assert_eq!(thumbnail_worker_count(10, 3), 3, "no more threads than pictures");
+        assert_eq!(thumbnail_worker_count(10, 0), 1);
+    }
+
+    /// RFC-0030 slice B: with several workers every picture still gets made, recorded and announced exactly once, and
+    /// the progress count only goes up to the total.
+    #[test]
+    fn a_pool_makes_every_thumbnail_once_and_counts_progress_up_to_the_total() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("pool");
+        for n in 0..12u8 {
+            image::RgbImage::from_pixel(120 + n as u32, 80, image::Rgb([n * 20, 90, 60])).save(dir.join(format!("p{n}.jpg"))).unwrap();
+        }
+        let catalog = Catalog::open_in_memory().unwrap();
+        assert_eq!(scan_and_import(&dir, &catalog, &thumb_dir).imported, 12);
+        let catalog = Arc::new(Mutex::new(catalog));
+
+        let progress = std::cell::RefCell::new(Vec::new());
+        let ready = std::cell::RefCell::new(Vec::new());
+        generate_missing_thumbnails_with_workers(
+            &catalog,
+            &thumb_dir,
+            None,
+            Some(4),
+            |current, total| progress.borrow_mut().push((current, total)),
+            |id, path| {
+                assert!(path.exists());
+                ready.borrow_mut().push(id);
+            },
+        );
+
+        assert_eq!(progress.into_inner(), (1..=12).map(|c| (c, 12)).collect::<Vec<_>>());
+        let mut ready = ready.into_inner();
+        ready.sort_unstable();
+        ready.dedup();
+        assert_eq!(ready.len(), 12, "each image announced once");
+        let images = catalog.lock().unwrap().list_images().unwrap();
+        assert!(images.iter().all(|i| i.thumbnail_path.is_some()));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// A file the pool cannot decode costs its own picture only: the others are made and every candidate is counted.
+    #[test]
+    fn a_picture_that_cannot_be_made_does_not_stop_the_pool() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("pool-bad");
+        for n in 0..5u8 {
+            image::RgbImage::from_pixel(100, 60, image::Rgb([n * 40, 10, 10])).save(dir.join(format!("ok{n}.jpg"))).unwrap();
+        }
+        let catalog = Catalog::open_in_memory().unwrap();
+        assert_eq!(scan_and_import(&dir, &catalog, &thumb_dir).imported, 5);
+        // One file vanishes between cataloguing and the pass.
+        std::fs::remove_file(dir.join("ok2.jpg")).unwrap();
+        let catalog = Arc::new(Mutex::new(catalog));
+
+        let last = std::cell::Cell::new((0, 0));
+        generate_missing_thumbnails_with_workers(&catalog, &thumb_dir, None, Some(3), |c, t| last.set((c, t)), |_, _| {});
+
+        assert_eq!(last.get(), (5, 5));
+        let done = catalog.lock().unwrap().list_images().unwrap().iter().filter(|i| i.thumbnail_path.is_some()).count();
+        assert_eq!(done, 4);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
     /// Real regression guard for the backlog this scoping was added to fix
@@ -1253,6 +1371,36 @@ mod speed_probe {
                 let total = start.elapsed();
                 println!("  {label:<9} workers {workers:>2}: all {:>7.0} ms ({:>5.1} files/s), first thumbnail {:>6.0} ms", ms(total), paths.len() as f64 / total.as_secs_f64(), ms(first.lock().unwrap().unwrap()));
             }
+        }
+    }
+    /// The real pass end to end (cataloguing, then the thumbnail pass), 1 worker against the pool, with the time to the
+    /// first finished picture. Point `IMPORT_PROBE_DIR` at a folder of JPEGs with unique content.
+    #[test]
+    #[ignore = "measurement, needs IMPORT_PROBE_DIR"]
+    fn real_pass() {
+        let dir = PathBuf::from(std::env::var("IMPORT_PROBE_DIR").expect("IMPORT_PROBE_DIR"));
+        let cores = std::thread::available_parallelism().unwrap().get();
+        println!("\nreal pass: cataloguing, then the thumbnail pass ({} cores)", cores);
+        for workers in [1, 2, 4, thumbnail_worker_count(cores, usize::MAX)] {
+            let thumbs = std::env::temp_dir().join(format!("emulsion-probe-thumbs-{workers}"));
+            let _ = std::fs::remove_dir_all(&thumbs);
+            let catalog = Catalog::open_in_memory().unwrap();
+            let t = Instant::now();
+            let summary = scan_and_import(&dir, &catalog, &thumbs);
+            let catalog_ms = ms(t.elapsed());
+            let catalog = Arc::new(Mutex::new(catalog));
+            let first = std::cell::Cell::new(None::<Duration>);
+            let t = Instant::now();
+            generate_missing_thumbnails_with_workers(&catalog, &thumbs, None, Some(workers), |_, _| {}, |_, _| {
+                first.set(first.get().or(Some(t.elapsed())));
+            });
+            println!(
+                "  workers {workers:>2}: imported {} in {catalog_ms:>6.0} ms, thumbnails: first {:>5.0} ms, all {:>6.0} ms",
+                summary.imported,
+                ms(first.get().unwrap_or_default()),
+                ms(t.elapsed())
+            );
+            let _ = std::fs::remove_dir_all(&thumbs);
         }
     }
 }

@@ -169,6 +169,50 @@ fn jpeg_header_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
 }
 
+/// The small picture a camera (or a phone) stores inside a JPEG's EXIF, ready to show in the grid at once
+/// (RFC-0030 slice D, tier 0): turned to the photo's own orientation and checked against the photo. Returns the bytes
+/// of a JPEG of about 160 px, or `None` when the file has none, it cannot be read, it is not a JPEG, or its shape
+/// does not match the photo's (some cameras letterbox it into 4:3, and a stale one survives a crop), because a wrong
+/// picture is worse than a blank cell for the fraction of a second before the real one arrives. Costs well under a
+/// millisecond for an upright photo; a rotated one is decoded and re-encoded at thumbnail size.
+pub fn exif_thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut reader = std::io::Cursor::new(bytes);
+    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+    let uint = |tag: exif::Tag, ifd: exif::In| exif.get_field(tag, ifd).and_then(|f| f.value.get_uint(0));
+    let offset = uint(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL)? as usize;
+    let length = uint(exif::Tag::JPEGInterchangeFormatLength, exif::In::THUMBNAIL)? as usize;
+    // A thumbnail is a few KB; anything much larger is not one.
+    if !(4..=256 * 1024).contains(&length) {
+        return None;
+    }
+    let thumb = exif.buf().get(offset..offset.checked_add(length)?)?;
+    if thumb[..2] != [0xFF, 0xD8] {
+        return None;
+    }
+
+    let (tw, th) = jpeg_header_dimensions(thumb)?;
+    let (mw, mh) = jpeg_header_dimensions(bytes)?;
+    if tw == 0 || th == 0 || tw.max(th) > 640 {
+        return None;
+    }
+    // Same shape as the photo, within 4%, in the stored (unrotated) layout.
+    let (a, b) = (tw as u64 * mh as u64, th as u64 * mw as u64);
+    if a.abs_diff(b) * 100 > b * 4 {
+        return None;
+    }
+
+    let orientation = uint(exif::Tag::Orientation, exif::In::PRIMARY).filter(|v| (1..=8).contains(v)).unwrap_or(1);
+    if orientation == 1 {
+        return Some(thumb.to_vec());
+    }
+    let upright = crate::jpeg_decode::apply_orientation(image::load_from_memory_with_format(thumb, image::ImageFormat::Jpeg).ok()?.to_rgb8(), orientation);
+    let mut out = Vec::new();
+    jpeg_encoder::Encoder::new(&mut out, 85)
+        .encode(upright.as_raw(), upright.width() as u16, upright.height() as u16, jpeg_encoder::ColorType::Rgb)
+        .ok()?;
+    Some(out)
+}
+
 /// The pixel size of a catalogued file read from the file itself: a JPEG by its header (cheap), a RAW by opening it
 /// with LibRaw (reads the whole file, so this is for a one-time backfill, not a hot path). `None` when the file is
 /// missing or unreadable.
@@ -242,6 +286,56 @@ fn extract_jpeg_exif(bytes: &[u8]) -> ImageMetadata {
         captured_at: field(exif::Tag::DateTimeOriginal)
             .and_then(ascii_string)
             .and_then(|s| normalize_exif_datetime(&s)),
+    }
+}
+
+/// Builds test JPEGs that carry an EXIF thumbnail (and, optionally, an orientation), by writing the APP1 segment by
+/// hand: the tests need the exact bytes a camera would make, not what a writer library would.
+#[cfg(test)]
+pub(crate) mod test_support {
+    fn jpeg(width: u32, height: u32, colour: [u8; 3]) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbImage::from_pixel(width, height, image::Rgb(colour))
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+            .unwrap();
+        out
+    }
+
+    /// A JPEG of `main` size whose EXIF holds a thumbnail of `thumb` size (red) and `orientation` (None = no tag).
+    pub(crate) fn jpeg_with_exif_thumbnail(main: (u32, u32), thumb: (u32, u32), orientation: Option<u16>) -> Vec<u8> {
+        let thumb_bytes = jpeg(thumb.0, thumb.1, [220, 30, 30]);
+        let mut tiff: Vec<u8> = vec![b'I', b'I', 0x2A, 0, 8, 0, 0, 0];
+        let ifd0_entries: u16 = orientation.is_some() as u16;
+        let ifd0_len = 2 + 12 * ifd0_entries as usize + 4;
+        let ifd1_at = 8 + ifd0_len;
+        let thumb_at = ifd1_at + 2 + 12 * 2 + 4;
+        tiff.extend(ifd0_entries.to_le_bytes());
+        if let Some(o) = orientation {
+            tiff.extend(0x0112u16.to_le_bytes());
+            tiff.extend(3u16.to_le_bytes());
+            tiff.extend(1u32.to_le_bytes());
+            tiff.extend(o.to_le_bytes());
+            tiff.extend([0, 0]);
+        }
+        tiff.extend((ifd1_at as u32).to_le_bytes());
+        tiff.extend(2u16.to_le_bytes());
+        for (tag, value) in [(0x0201u16, thumb_at as u32), (0x0202u16, thumb_bytes.len() as u32)] {
+            tiff.extend(tag.to_le_bytes());
+            tiff.extend(4u16.to_le_bytes());
+            tiff.extend(1u32.to_le_bytes());
+            tiff.extend(value.to_le_bytes());
+        }
+        tiff.extend(0u32.to_le_bytes());
+        tiff.extend(&thumb_bytes);
+
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(tiff);
+        let main_bytes = jpeg(main.0, main.1, [30, 30, 220]);
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend(((app1.len() + 2) as u16).to_be_bytes());
+        out.extend(app1);
+        out.extend(&main_bytes[2..]);
+        out
     }
 }
 
@@ -519,5 +613,50 @@ mod tests {
 
         let ref_below = exif::Value::Byte(vec![1]);
         assert_eq!(parse_gps_altitude(&alt, Some(&ref_below)), Some(-150.0));
+    }
+
+    use super::test_support::jpeg_with_exif_thumbnail;
+
+    fn dims(bytes: &[u8]) -> (u32, u32) {
+        jpeg_header_dimensions(bytes).unwrap()
+    }
+
+    #[test]
+    fn an_exif_thumbnail_of_the_photos_shape_is_returned_as_it_is() {
+        let file = jpeg_with_exif_thumbnail((640, 480), (160, 120), None);
+        let thumb = exif_thumbnail(&file).expect("a thumbnail");
+        assert_eq!(dims(&thumb), (160, 120));
+    }
+
+    #[test]
+    fn a_rotated_photos_thumbnail_is_turned_upright() {
+        // Orientation 6 = the photo is stored sideways and shown rotated a quarter turn: 640x480 stored, 480x640 shown.
+        let file = jpeg_with_exif_thumbnail((640, 480), (160, 120), Some(6));
+        let thumb = exif_thumbnail(&file).expect("a thumbnail");
+        assert_eq!(dims(&thumb), (120, 160));
+    }
+
+    #[test]
+    fn a_thumbnail_of_another_shape_is_not_used() {
+        // A letterboxed 4:3 thumbnail inside a 3:2 photo would show the wrong picture.
+        let file = jpeg_with_exif_thumbnail((600, 400), (160, 120), None);
+        assert!(exif_thumbnail(&file).is_none());
+    }
+
+    #[test]
+    fn a_file_without_an_exif_thumbnail_gives_none() {
+        let mut plain = Vec::new();
+        image::RgbImage::from_pixel(64, 48, image::Rgb([1, 2, 3])).write_to(&mut std::io::Cursor::new(&mut plain), image::ImageFormat::Jpeg).unwrap();
+        assert!(exif_thumbnail(&plain).is_none());
+        assert!(exif_thumbnail(b"not a jpeg at all").is_none());
+        assert!(exif_thumbnail(&[]).is_none());
+    }
+
+    #[test]
+    fn a_truncated_file_does_not_panic() {
+        let file = jpeg_with_exif_thumbnail((640, 480), (160, 120), Some(3));
+        for cut in [10, 40, 80, 120] {
+            let _ = exif_thumbnail(&file[..cut.min(file.len())]);
+        }
     }
 }

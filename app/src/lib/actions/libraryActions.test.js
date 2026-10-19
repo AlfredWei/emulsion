@@ -321,6 +321,22 @@ describe("local image patches", () => {
     expect(library.images[3]).toBe(before[3]); // untouched rows keep their identity
   });
 
+  it("handleThumbnailsReady replaces a tier-0 picture but never a real one", () => {
+    library.images = [img(1, { thumbnail_path: "/t/1-t.jpg" }), img(2, { thumbnail_path: "/t/2.jpg" })];
+    handleThumbnailsReady([
+      { image_id: 1, thumbnail_path: "/t/1.jpg" },
+      { image_id: 2, thumbnail_path: "/t/2-new.jpg" },
+    ]);
+    expect(library.images.map((i) => i.thumbnail_path)).toEqual(["/t/1.jpg", "/t/2.jpg"]);
+  });
+
+  it("prioritizeThumbnail also asks for the real one when only tier 0 is there", () => {
+    library.images = [img(1, { thumbnail_path: "/t/1-t.jpg" })];
+    catalog.ensureThumbnail.mockResolvedValue("/t/1.jpg");
+    prioritizeThumbnail(10);
+    expect(catalog.ensureThumbnail).toHaveBeenCalledWith(10);
+  });
+
   it("handleThumbnailsReady does not touch the list when nothing in it needs the group", () => {
     library.images = [img(1, { thumbnail_path: "/t/1.jpg" })];
     const before = library.images;

@@ -6,6 +6,7 @@
 
 import { getImagesForPerson } from "$lib/api/faces.js";
 import { library } from "$lib/state/library.svelte.js";
+import { needsRealThumbnail } from "$lib/thumbnails.js";
 import {
   listCollections,
   listCollectionImageIds,
@@ -210,14 +211,14 @@ export function handleBatchThumbnailsComplete(/** @type {Map<number, string | nu
 }
 
 /** Thumbnails the backend has just written (the `thumbnail-ready` event, RFC-0030 slice A): shows each in the grid at
- * once instead of when the whole pass is over. Only fills a photo that has none, so a picture the user has since
+ * once instead of when the whole pass is over. Only fills a photo that has none or only the tier-0 picture, so a picture the user has since
  * edited is never put back to the plain one. A virtual copy shares its photo's file, so the match is by `image_id`.
  * One reassignment per group, whatever its size. @param {{ image_id: number, thumbnail_path: string }[]} ready */
 export function handleThumbnailsReady(ready) {
   const byImage = new Map(ready.map((r) => [r.image_id, r.thumbnail_path]));
-  if (!library.images.some((img) => img.thumbnail_path === null && byImage.has(img.image_id))) return;
+  if (!library.images.some((img) => needsRealThumbnail(img.thumbnail_path) && byImage.has(img.image_id))) return;
   library.images = library.images.map((img) => {
-    const path = img.thumbnail_path === null ? byImage.get(img.image_id) : undefined;
+    const path = needsRealThumbnail(img.thumbnail_path) ? byImage.get(img.image_id) : undefined;
     return path === undefined ? img : { ...img, thumbnail_path: path };
   });
 }
@@ -239,7 +240,7 @@ export function handleThumbnailsReady(ready) {
  * placeholder for a photo that's already been viewed. */
 export function prioritizeThumbnail(/** @type {number} */ versionId) {
   const image = library.images.find((img) => img.version_id === versionId);
-  if (!image || image.thumbnail_path !== null) return;
+  if (!image || !needsRealThumbnail(image.thumbnail_path)) return;
   ensureThumbnail(versionId)
     .then((thumbnailPath) => {
       if (thumbnailPath) patchLocal(versionId, { thumbnail_path: thumbnailPath });

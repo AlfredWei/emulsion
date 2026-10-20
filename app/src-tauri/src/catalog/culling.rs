@@ -32,6 +32,22 @@ impl Catalog {
         )
     }
 
+    /// The photo's size in megapixels from the catalog's recorded width and height, `None` when it has none yet.
+    pub fn version_megapixels(&self, version_id: i64) -> Option<f64> {
+        let (w, h): (Option<i64>, Option<i64>) = self
+            .conn
+            .query_row(
+                "SELECT i.width, i.height FROM image_versions v JOIN images i ON i.id = v.image_id WHERE v.id = ?1",
+                params![version_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok()?;
+        match (w, h) {
+            (Some(w), Some(h)) if w > 0 && h > 0 => Some(w as f64 * h as f64 / 1e6),
+            _ => None,
+        }
+    }
+
     pub fn set_rating(&self, version_id: i64, rating: u8) -> Result<()> {
         self.conn.execute(
             "UPDATE image_versions SET rating = ?2, updated_at = datetime('now') WHERE id = ?1",

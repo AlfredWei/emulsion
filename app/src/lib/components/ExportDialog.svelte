@@ -1,6 +1,7 @@
 <script>
   import { open } from "@tauri-apps/plugin-dialog";
   import { exportImages, listExportPlugins } from "$lib/api/export.js";
+  import { exportConcurrency, runPool } from "$lib/exportPool.js";
   import { openFolder } from "$lib/api/system.js";
   import { denoiseMissingForExport } from "$lib/api/denoise.js";
   import { denoise } from "$lib/state/denoise.svelte.js";
@@ -23,10 +24,10 @@
   let exporting = $state(false);
   let statusMessage = $state("");
   let revealWhenDone = $state(true);
-  // M4.5: real per-file progress, not a single opaque "Exporting…" state.
-  // `progressCurrent`/`progressFileName` track the item CURRENTLY being
-  // exported (1-indexed, so it reads as "2 of 5" rather than "1 of 5"
-  // while the second file is actually mid-export).
+  // M4.5: real per-file progress, not a single opaque "Exporting…" state. With photos exported several at a time
+  // (RFC-0030 slice F) `progressCurrent` counts the photos FINISHED and `progressFileName` is the one most recently
+  // started; Stop (`stopRequested`) lets the running ones finish and starts no more.
+  let stopRequested = $state(false);
   let progressCurrent = $state(0);
   let progressTotal = $state(0);
   let progressFileName = $state("");
@@ -96,17 +97,15 @@
     return path.split(/[\\/]/).pop() ?? path;
   }
 
-  /** M4.5: exports one item per `exportImages` call instead of the whole
-   * batch in a single invoke -- lets the UI update between items for real
-   * progress. Sequential, not `Promise.all`, matching this app's own
-   * "deliberately sequential, not a worker pool" caution elsewhere for
-   * full-resolution decode work (preview_cache.rs's own doc comment) --
-   * several full-res RAW decodes running concurrently would spike
-   * CPU/memory for no real benefit, since Rust's underlying loop was
-   * always sequential anyway. */
+  /** M4.5: exports one item per `exportImages` call instead of the whole batch in a single invoke, so the UI can
+   * update between items for real progress. Several calls are in flight at once (RFC-0030 slice F, `runPool`): the
+   * backend lets only as many render as the cores and memory allow (`export::ExportBudget`), so this keeps it fed
+   * without piling up full-resolution decodes. A batch of 40 photos takes a fraction of the time the one-after-the-
+   * other loop did, and the first file appears as soon as the first render ends. */
   async function handleExport() {
     if (!items || items.length === 0 || !destinationDir) return;
     exporting = true;
+    stopRequested = false;
     statusMessage = "";
     progressCurrent = 0;
     progressTotal = items.length;
@@ -117,20 +116,45 @@
       plugin_id: pluginId ? Number(pluginId) : null,
       metadata: { exif: writeExif, iptc: writeIptc, gps: writeExif && writeGps },
     };
-    const results = /** @type {import('$lib/api/export.js').ExportResult[]} */ ([]);
     try {
-      for (const item of items) {
-        progressCurrent += 1;
-        progressFileName = fileNameOf(item.path);
-        const [result] = await exportImages([{ path: item.path, version_id: item.version_id }], options);
-        results.push(result);
-      }
+      const pool = await runPool(
+        items,
+        exportConcurrency(items.length),
+        async (item) => {
+          try {
+            const [result] = await exportImages([{ path: item.path, version_id: item.version_id }], options);
+            return result;
+          } catch (/** @type {any} */ e) {
+            // One photo failing must not end the others: it becomes that photo's own failed result.
+            return /** @type {import('$lib/api/export.js').ExportResult} */ ({
+              source_path: item.path,
+              output_path: null,
+              error: String(e),
+              plugin_error: null,
+              metadata_warning: null,
+            });
+          }
+        },
+        {
+          shouldStop: () => stopRequested,
+          onStart: (item) => {
+            progressFileName = fileNameOf(item.path);
+          },
+          onDone: () => {
+            progressCurrent += 1;
+          },
+        },
+      );
+      // The photos that ran, in the order they were given (a stopped batch leaves the rest out).
+      const results = /** @type {import('$lib/api/export.js').ExportResult[]} */ (pool.results.filter((r) => r !== undefined));
       const failed = results.filter((r) => r.error);
       // A plugin's own spawn() failure is reported separately from export
       // failure (RFC-0006 §3.3) -- surfaced here as an appended note, never
       // in place of the export's own success message.
       const pluginFailed = results.filter((r) => r.plugin_error);
-      if (results.length === 1) {
+      if (stopRequested && results.length < items.length) {
+        statusMessage = `Stopped: exported ${results.length - failed.length} of ${items.length}` + (failed.length > 0 ? ` — first failure: ${failed[0].error}` : "");
+      } else if (results.length === 1) {
         // Keep the single-image message shape people already know.
         statusMessage = failed.length > 0
           ? `Export failed: ${failed[0].error}`
@@ -261,8 +285,11 @@
         <div class="progress-row">
           <progress value={progressCurrent} max={progressTotal}></progress>
           <span class="progress-label">
-            Exporting {progressCurrent} of {progressTotal}{progressFileName ? ` — ${progressFileName}` : ""}
+            {stopRequested ? "Stopping — finishing the photos in progress" : `Exported ${progressCurrent} of ${progressTotal}`}{!stopRequested && progressFileName ? ` — ${progressFileName}` : ""}
           </span>
+          {#if progressTotal > 1}
+            <button class="secondary" type="button" onclick={() => (stopRequested = true)} disabled={stopRequested} data-testid="export-stop">Stop</button>
+          {/if}
         </div>
       {:else if statusMessage}
         <div class="status">{statusMessage}</div>

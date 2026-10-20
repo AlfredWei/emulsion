@@ -186,7 +186,7 @@ src/
 │   ├── appEvents.js         `installAppEvents({ handleMenuAction })`: startup refreshes, window-close flush + backup prompt,
 │   │                        Tauri listeners (drag-drop, menu, progress streams, `thumbnail-ready`); called from the page's onMount (RFC-0009 P7)
 │   ├── collectionRules.js, libraryFolders.js, railSections.js, panelLayout.js, shortcuts.js,
-│   │   thumbnailBatchQueue.js, thumbnails.js, gpuFallback.js   Pure UI logic extracted from the page/components
+│   │   thumbnailBatchQueue.js, thumbnails.js, exportPool.js, gpuFallback.js   Pure UI logic extracted from the page/components
 │   └── styles/tokens.css     Dark-theme design tokens, ported from the reviewed mockup
 ├── app.html                 SvelteKit's HTML shell
 └── static/                  Static assets (icons, etc.)

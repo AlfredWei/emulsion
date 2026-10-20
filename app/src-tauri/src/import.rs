@@ -499,7 +499,7 @@ impl Drop for ForegroundWork {
     }
 }
 
-fn wait_for_foreground_work() {
+pub(crate) fn wait_for_foreground_work() {
     while FOREGROUND_WORK.load(std::sync::atomic::Ordering::SeqCst) > 0 {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -650,7 +650,7 @@ pub fn generate_missing_thumbnails_with_progress<F: FnMut(usize, usize)>(
 /// and never more than there are images. Each worker holds one decoded photo (about 0.2 GB at 24 MP), so the cap is
 /// also the memory bound.
 /// Threads of the quiet large-thumbnail pass: two, so the upgrade never takes the machine from the user.
-const BACKGROUND_WORKERS: usize = 2;
+pub(crate) const BACKGROUND_WORKERS: usize = 2;
 
 pub(crate) fn thumbnail_worker_count(cores: usize, images: usize) -> usize {
     cores.saturating_sub(2).clamp(1, 8).min(images).max(1)

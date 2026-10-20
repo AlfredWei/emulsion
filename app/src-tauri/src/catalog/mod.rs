@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 mod backup;
 mod collections;
+mod cull_analysis;
 mod culling;
 mod edit_stack;
 mod export_plugins;

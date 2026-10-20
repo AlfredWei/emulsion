@@ -48,7 +48,7 @@ Setup: 13 JPEGs (panorama frames, portraits, night, and six ISO 6400 files), eac
 
 - Exposure, size and blur changes are nearly invisible to the hash; **a few percent of camera movement is not**, but even the worst shift (59) is far from the closest *unrelated* pair (95).
 - **The 78 pairs are (all but one) unrelated scenes**; the exception, the two overlapping panorama frames, still sits at 95 or more. That is the easy negative. The hard one, *two different shots at the same venue* (same wall, same stage, different pose), is not in the data and will sit much closer. So the hash distance alone must not decide; **capture time** has to be a second condition (§3.2), which also makes a wrong group cheap to be wrong about.
-- The analysis cost is small next to decoding (the probe's time is nearly all JPEG decode, and §3.1 takes the pixels from a decode that already happens). The metric alone was not timed separately.
+- **Cost (measured in slice A, the ignored `cull_probe_cost`, M1 Pro, release):** sharpness plus hash take **7.9 ms per photo** on the 1024 px picture; reducing a full-size photo to that picture, needed only on the source-decode fallback, takes 107 ms. The normal path adds the thumbnail's own small JPEG decode.
 
 ## 3. Decisions
 
@@ -56,7 +56,7 @@ Setup: 13 JPEGs (panorama frames, portraits, night, and six ISO 6400 files), eac
 
 For every photo, once, from the **unedited 1024 px picture the Large thumbnail pass already has in hand** (RFC-0030): `sharpness` (whole) and `sharpness_tile` (90th percentile) as REAL, and `dhash` as a 32-byte BLOB.
 
-- **Why in the thumbnail pass:** no extra decode of a 24 MP source, and the pixels are guaranteed unedited (a thumbnail regenerated after an edit, `{id}-{hash8}.jpg`, has the edit baked in; a crop would change the hash and a sharpen the score). For a RAW whose embedded JPEG is the final thumbnail, the embedded picture is analysed; if its long edge is under 640 px (some cameras' embedded previews are tiny) the pass falls back to the draft decode, as the thumbnail code already does.
+- **Why a separate quiet pass after the Large thumbnails (changed at implementation, slice A):** the first draft measured inside the Large-tier decode. But a RAW's final thumbnail is its embedded JPEG, written at import, so RAWs never go through that decode at all. So the pass (`cull::analyse_missing`) runs after the Large pass and reads each photo's plain `{id}.jpg` (1024 px for a JPEG, the camera's embedded picture for a RAW): a few milliseconds to decode and never the 24 MP source. An edited thumbnail (`{id}-{hash8}.jpg`) is never used, so an edit cannot change a score or a hash. If the plain file is missing or its long edge is under 640 px (some cameras' embedded previews are tiny), the source is decoded instead (about 100 ms more per photo, measured). Everything is reduced to a 1024 px long edge first, so scores are comparable across sizes.
 - **Storage:** a new table `cull_analysis(image_id INTEGER PRIMARY KEY REFERENCES images ON DELETE CASCADE, sharpness REAL, sharpness_tile REAL, dhash BLOB, algo INTEGER, analysed_at TEXT)`. `algo` is a version number: changing the metric bumps it and old rows are recomputed in the background. About 50 bytes a photo (2.5 MB for 50,000). Catalog migration is additive, `CREATE TABLE IF NOT EXISTS` like the others.
 - **Existing catalogs:** a background backfill (the `backfill_missing_thumbnails` pattern) decodes the plain `{id}.jpg` Large thumbnail when it exists and the source otherwise, one low-priority pass that yields to import and to the Large pass (`FOREGROUND_WORK`).
 - **Never changes the photo, never writes a sidecar, never leaves the machine.**
@@ -121,7 +121,7 @@ M7's exit criterion ("measurably reduce time-to-cull on a large event / burst-he
 - **The hard negative** (same venue, different shot) is absent from the data.
 - **Agreement with a photographer** is unmeasured; this is slice D's job and needs the user's sets: a burst, a posed re-take set, and a few deliberately soft frames, with their own pick marked.
 - **RAW** was not measured at all (JPEG only); embedded-preview sizes across camera makers are unchecked.
-- **Cost of the metric** inside the Large pass is expected to be small but was not timed; slice A measures it against RFC-0030's import numbers.
+- **Cost over a whole real import** (the metric alone is 7.9 ms a photo, see §2); the pass is quiet and yields to imports, but its total time on a large catalog has not been run.
 - Windows, and a 50,000-photo catalog's grouping time.
 
 ## 7. Questions for the user

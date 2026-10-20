@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 culling slice A: measurements stored per photo (2026-10-21)
+
+First slice of [RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md). New `cull.rs`: the sharpness score (Laplacian variance,
+whole frame and 90th-percentile tile) and the 256-bit difference hash, plus `analyse_missing`, a quiet two-worker pass
+that runs after the Large thumbnails (after an import, and at startup) and yields to imports. New table `cull_analysis`
+(`catalog/cull_analysis.rs`; `algo` version so a changed metric is re-measured). **Design change from the RFC draft:** the
+pass reads each photo's plain `{id}.jpg` thumbnail (or the source when it is missing or under 640 px) instead of measuring
+inside the Large-tier decode, because RAWs never go through that decode; RFC §3.1 updated. Measured: 7.9 ms per photo for
+the metric, 107 ms to reduce a full-size source (fallback only). 13 new unit tests (monotonic blur, hash robustness, pass
+sources, unreadable file, algo upgrade, cascade); full suite 636 passed, clippy clean for the new files. Nothing visible in
+the app yet (slices B and C). **Not verified:** the pass in the real window, total time on a big real catalog, RAW
+embedded previews, Windows. Stacked on `docs/rfc-m7-culling` (#262).
+
 ## M7 intelligent culling: RFC-0031 drafted (2026-10-20)
 
 [RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md), design only (branch `docs/rfc-m7-culling`). Scope decided with the

@@ -2,6 +2,24 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## Release build smoke test: `npm run build:release` (2026-10-20)
+
+First full run of the installer build on this machine (macOS, Apple silicon), from main after RFC-0030 (PRs #255 to #260).
+No network was used: the four models were already in `src-tauri/bundled-models` and the fetch script only verifies size and
+SHA-256. `fetch-bundled-models` -> `prepare-ai-helper` (the helper builds in 37 s, 27.5 MB) -> `tauri build` (1 m 46 s) made
+`Emulsion.app` (342 MB: `MacOS/emulsion`, `MacOS/emulsion-ai`, `Resources/models`) and `Emulsion_0.1.0_aarch64.dmg` (283 MB).
+**Verified by running the release `.app`** on a throwaway `HOME`: (1) first launch seeded all four models into the data
+folders (`upscale_models`, `denoise_models`, `segment_models` x2); (2) a folder import of 40 JPEGs (271 MB) showed every
+photo with its thumbnail within about 3 seconds (the face prompt appeared at that point), and after the background pass the
+thumbnail folder held 40 final files and no `-s` or `-t` leftovers, no error in the app log; (3) Enlarge (AI) on the 1.1 MP
+bridge photo: the dialog showed the model ready with no download prompt, 4x ran with the bundled helper and model and
+finished in 16 s (6396 x 2828 px), the result is catalogued and connected to its original. **Not verified:** mounting the
+DMG and installing from it, a clean machine (this one has the build tools and the repo), code signing and notarization and
+the Gatekeeper first-open flow, the Windows installer (`.exe`/`.msi`, the helper's `.exe`, a possible loose
+`onnxruntime.dll`), AI Denoise and Select Subject in this particular build (verified in the debug bundle earlier, same
+helper), upgrade over an existing install. Stale files noticed in the bundle folder: two `rw.*.dmg` temporaries from August
+(left by earlier interrupted builds; harmless, not part of the new bundle).
+
 ## Import and export speed slice F: parallel export (2026-10-20)
 
 Last slice of [RFC-0030](docs/rfc/RFC-0030-import-and-export-speed.md). The Export dialog already sent one photo per call

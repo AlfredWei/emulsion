@@ -82,6 +82,7 @@ src-tauri/
 │   │                        (`apply_edit_stack`), color, tone, hsl_split, effects, detail, masks (incl. composable-mask modifiers), crop, lens,
 │   │                        perspective; tests/ = per-area tests + shared support
 │   ├── import.rs            Import pipeline: scan a folder, hash, dedupe, thumbnail (per-step catalog lock, thumbnail pool during import, streaming events, tier-0 EXIF thumbnail: RFC-0030)
+│   ├── cull_probe.rs        Test-only, ignored: sharpness and perceptual-hash measurements behind RFC-0031 (intelligent culling); run by hand with `CULL_PROBE_DIR`
 │   ├── raw_decode.rs         LibRaw (via `rsraw`) wrapper for decoding RAW files
 │   ├── jpeg_decode.rs         JPEG decoding via the `image` crate
 │   ├── source_decode.rs        Format dispatch: which decoder handles which source file

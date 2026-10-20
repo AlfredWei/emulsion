@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 intelligent culling: RFC-0031 drafted (2026-10-20)
+
+[RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md), design only (branch `docs/rfc-m7-culling`). Scope decided with the
+user: **culling first; generative fill later as a spot-removal slice** (slice F, its own RFC, bundled model vs
+non-generative fill still to decide per MILESTONES.md). The RFC proposes near-duplicate groups (256-bit dHash + capture
+time window + same camera, derived on demand, not stored) with a suggested sharpest frame, and a *relative* "Soft" cue
+inside a group only. Measured with the new ignored `cull_probe` test on 13 JPEGs (synthetic blur and edits): the
+Laplacian-variance score drops to 25 to 53 % at a 0.6 px blur but ranges 50 to 1,714 across sharp photos, so only a
+relative threshold works; the hash is 0 to 17 bits from edits that keep framing, 22 to 59 bits from 5 % crop or 4 % pan,
+and 95 or more from unrelated photos. **Not verified:** any real burst, real blur, RAW, same-venue-different-shot
+negatives, agreement with a photographer, cost inside the Large thumbnail pass, Windows. Four questions for the user in §7.
+Slices A to F in §5; nothing built yet.
+
 ## Release build smoke test: `npm run build:release` (2026-10-20)
 
 First full run of the installer build on this machine (macOS, Apple silicon), from main after RFC-0030 (PRs #255 to #260).

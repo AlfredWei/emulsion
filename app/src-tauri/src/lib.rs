@@ -1,4 +1,6 @@
 mod catalog;
+#[cfg(test)]
+mod cull_probe;
 mod develop_engine;
 mod export;
 mod export_plugin;

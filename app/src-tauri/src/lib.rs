@@ -1,5 +1,6 @@
 mod catalog;
 mod cull;
+mod cull_groups;
 #[cfg(test)]
 mod cull_probe;
 mod develop_engine;
@@ -566,6 +567,31 @@ fn get_supported_extensions() -> Vec<String> {
 fn list_images(state: State<'_, AppState>) -> Result<Vec<ImageSummary>, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
     catalog.list_images().map_err(|e| e.to_string())
+}
+
+/// Groups of similar photos (RFC-0031): frames of one moment, with the sharpest suggested and the soft ones marked.
+/// `similarity` is the 0 (stricter) to 1 (looser) slider. Computed on the spot from the stored measurements.
+#[tauri::command]
+fn list_similar_groups(state: State<'_, AppState>, similarity: f64) -> Result<Vec<cull_groups::SimilarGroup>, String> {
+    let inputs = {
+        let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+        catalog.similar_group_inputs(cull::ALGO_VERSION).map_err(|e| e.to_string())?
+    };
+    Ok(cull_groups::similar_groups(&inputs, &cull_groups::GroupParams::from_similarity(similarity)))
+}
+
+/// How many photos the culling analysis has measured, of how many ("Analysing n / m" while the background pass runs).
+#[derive(serde::Serialize)]
+struct CullAnalysisStatus {
+    analysed: i64,
+    total: i64,
+}
+
+#[tauri::command]
+fn cull_analysis_status(state: State<'_, AppState>) -> Result<CullAnalysisStatus, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    let (analysed, total) = catalog.cull_analysis_counts(cull::ALGO_VERSION).map_err(|e| e.to_string())?;
+    Ok(CullAnalysisStatus { analysed, total })
 }
 
 #[tauri::command]
@@ -2208,6 +2234,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            list_similar_groups,
+            cull_analysis_status,
             get_upscale_links,
             segment_commands::segment_model_status,
             segment_commands::segment_download_models,

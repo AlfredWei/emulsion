@@ -2,6 +2,21 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 culling slice B: similar-photo groups (2026-10-22)
+
+Second slice of [RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md). New `cull_groups.rs`, a pure function
+`similar_groups(inputs, params)`: photos with a capture time, sorted, joined (single linkage, so a pan chains) when they
+share a camera, are within `max_seconds` and within `max_distance` hash bits; groups of one dropped; newest group first,
+members chronological. Suggested best = sharpest tile score, only when it beats the runner-up by 10 %; **Soft** = under
+50 % of the group's best; flat groups get neither. The one Similarity slider maps 0..1 to 2..18 s and 40..88 bits (0.5 =
+the RFC's 10 s / 64 bits; the loosest stays under the 95-bit gap measured). A frame is compared with at most 400 followers
+so a stuck camera clock cannot make it quadratic. Catalog: `similar_group_inputs` (primary version, camera, time, stored
+measurements, current metric only) and `cull_analysis_counts`. Two Tauri commands, `list_similar_groups(similarity)` and
+`cull_analysis_status`, for slice C's UI. 15 new unit tests (burst, two bursts, same-venue-different-shot, time limit,
+other camera, no time, inclusive distance, chaining, margin, flat, tie order, slider); full suite 651 passed, clippy
+clean for the new files. Measured: 50,000 photos (a quarter on one stuck second) group in 35 ms. **Not verified:** any real
+burst (thresholds are the RFC's starting points until slice D), the commands from the real window (no UI yet).
+
 ## M7 culling slice A: measurements stored per photo (2026-10-21)
 
 First slice of [RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md). New `cull.rs`: the sharpness score (Laplacian variance,

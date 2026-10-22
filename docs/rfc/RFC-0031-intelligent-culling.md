@@ -66,7 +66,7 @@ For every photo, once, from the **unedited 1024 px picture the Large thumbnail p
 Groups are **derived, not stored**: computed from `cull_analysis` plus `captured_at` and the camera on demand, in memory, so there is no stale state to repair when photos are added, removed or re-analysed. Pure function, unit-testable without a window:
 
 1. Sort by `captured_at` (photos without one are not grouped; their hash alone is too weak, §2).
-2. Walk a window: a photo joins a group when it is within **T seconds** of any member's capture time **and** its hash distance to that member is within **D bits**; same camera model required. Union-find over the window; groups of one are dropped.
+2. Walk a window (each frame is compared with at most 400 followers, so a stuck camera clock stays cheap): a photo joins a group when it is within **T seconds** of any member's capture time **and** its hash distance to that member is within **D bits**; same camera model required. Union-find over the window; groups of one are dropped.
 3. Starting values: **T = 10 s** (a burst, and a posed re-take), **D = 64 of 256**. The measurement supports "D between 59 and 95"; 64 is the conservative end of that gap, to be tuned on real bursts (§6). Both are exposed as one **Similarity** slider in the UI, not as two numbers.
 4. **Suggested best**: the member with the highest `sharpness_tile`, *only if* it beats the runner-up by a margin; otherwise "no clear best" (equal sharpness is information too). The suggestion is a badge, never an action.
 
@@ -122,7 +122,7 @@ M7's exit criterion ("measurably reduce time-to-cull on a large event / burst-he
 - **Agreement with a photographer** is unmeasured; this is slice D's job and needs the user's sets: a burst, a posed re-take set, and a few deliberately soft frames, with their own pick marked.
 - **RAW** was not measured at all (JPEG only); embedded-preview sizes across camera makers are unchecked.
 - **Cost over a whole real import** (the metric alone is 7.9 ms a photo, see §2); the pass is quiet and yields to imports, but its total time on a large catalog has not been run.
-- Windows, and a 50,000-photo catalog's grouping time.
+- Windows. (Grouping time on 50,000 photos was measured in slice B: 35 ms, including a quarter of them on one stuck second.)
 
 ## 7. Questions for the user
 

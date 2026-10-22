@@ -6,6 +6,7 @@
 
 import { getImagesForPerson } from "$lib/api/faces.js";
 import { library } from "$lib/state/library.svelte.js";
+import { similar } from "$lib/state/similar.svelte.js";
 import { needsRealThumbnail } from "$lib/thumbnails.js";
 import {
   listCollections,
@@ -29,6 +30,7 @@ export async function loadPersonMembership(/** @type {number} */ personId) {
 }
 
 export async function selectPerson(/** @type {number} */ personId) {
+  similar.leave();
   library.activeCollectionId = null;
   library.activeFolderKey = null;
   library.showLastImportOnly = false;
@@ -38,6 +40,7 @@ export async function selectPerson(/** @type {number} */ personId) {
 }
 
 export function selectAllPhotos() {
+  similar.leave();
   library.activeCollectionId = null;
   library.activeFolderKey = null;
   library.showLastImportOnly = false;
@@ -46,6 +49,7 @@ export function selectAllPhotos() {
 }
 
 export function selectLastImport() {
+  similar.leave();
   library.activeCollectionId = null;
   library.activeFolderKey = null;
   library.showLastImportOnly = true;
@@ -54,6 +58,7 @@ export function selectLastImport() {
 }
 
 export function selectFolder(/** @type {string} */ key) {
+  similar.leave();
   library.activeCollectionId = null;
   library.activeFolderKey = key;
   library.showLastImportOnly = false;
@@ -63,6 +68,7 @@ export function selectFolder(/** @type {string} */ key) {
 
 /** Scopes Library to the photos of a clicked map pin or cluster (M5.5 map view). Takes `image_id`s. */
 export function selectMapImages(/** @type {Iterable<number>} */ imageIds) {
+  similar.leave();
   library.activeCollectionId = null;
   library.activeFolderKey = null;
   library.showLastImportOnly = false;
@@ -132,6 +138,7 @@ export function handleResetFilters() {
 }
 
 export async function selectCollection(/** @type {number | null} */ collectionId) {
+  similar.leave();
   library.activeCollectionId = collectionId;
   library.activeFolderKey = null;
   library.showLastImportOnly = false;

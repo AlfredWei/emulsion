@@ -221,7 +221,7 @@ function askRejectOthers(){
    To undo: open <b>Rejected</b> in the rail and change the flag.</p>
    <div class="row"><button class="btn" id="no">Cancel</button><button class="btn primary" id="yes">Reject ${others.length}</button></div>`);
   document.getElementById('no').onclick=closeDlg;
-  document.getElementById('yes').onclick=()=>{others.forEach(p=>p.flag='reject'); k.flag=k.flag==='none'?'pick':k.flag; closeDlg(); toast(`${others.length} rejected. Kept #${k.id}.`); render()};
+  document.getElementById('yes').onclick=()=>{others.forEach(p=>p.flag='reject'); closeDlg(); toast(`${others.length} rejected. Kept #${k.id}.`); render()};
 }
 function dlg(h){document.getElementById('dlg').innerHTML=h;document.getElementById('modal').classList.add('on')}
 function closeDlg(){document.getElementById('modal').classList.remove('on')}

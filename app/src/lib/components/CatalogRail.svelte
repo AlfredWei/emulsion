@@ -35,6 +35,9 @@
    *   showLastImportOnly: boolean,
    *   activePersonId: number | null,
    *   activeMapImageIds: Set<number> | null,
+   *   similarActive?: boolean,
+   *   similarCount?: number | null,
+   *   onSelectSimilar?: () => void,
    *   lastImportBatchId: number | null,
    *   folderEntries: { key: string, count: number }[],
    *   collections: import('$lib/api/catalog.js').CollectionSummary[],
@@ -59,6 +62,9 @@
     showLastImportOnly,
     activePersonId,
     activeMapImageIds,
+    similarActive = false,
+    similarCount = null,
+    onSelectSimilar = undefined,
     lastImportBatchId,
     folderEntries,
     collections,
@@ -161,7 +167,7 @@
   <button
     type="button"
     class="tree-item"
-    class:active={activeCollectionId === null && activeFolderKey === null && !showLastImportOnly && activePersonId === null && activeMapImageIds === null}
+    class:active={!similarActive && activeCollectionId === null && activeFolderKey === null && !showLastImportOnly && activePersonId === null && activeMapImageIds === null}
     onclick={onSelectAllPhotos}
   >
     All Photos
@@ -171,6 +177,19 @@
     Last Import
     <span class="count">{lastImportBatchId === null ? 0 : images.filter((img) => img.import_batch === lastImportBatchId).length}</span>
   </button>
+
+  {#if onSelectSimilar}
+    <button
+      type="button"
+      class="tree-item"
+      class:active={similarActive}
+      title="Frames of the same moment, with the sharpest suggested"
+      onclick={onSelectSimilar}
+    >
+      Similar
+      {#if similarCount !== null}<span class="count">{similarCount}</span>{/if}
+    </button>
+  {/if}
 
   {#if activeMapImageIds !== null}
     <button type="button" class="tree-item active" title="Map selection - click to clear" onclick={onSelectAllPhotos}>

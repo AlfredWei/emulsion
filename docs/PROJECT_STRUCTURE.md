@@ -131,7 +131,7 @@ src/
 │   ├── components/          Svelte components. App shell: AppTitlebar, AppDialogs, StatusStrip; module
 │   │                        bodies picked by +page.svelte: LibraryModule, DevelopModule, PrintModule (prop-less, import the stores/actions they use; RFC-0009 P8). Library:
 │   │                        CatalogRail, LibraryGrid/GridCell, LibraryToolbar, LibraryFilterBar, LibraryImageViewer,
-│   │                        LibraryCompareView, LibrarySurveyView, LibraryMapView (Leaflet; loaded on first open), LibraryHistogram, MetadataPanel. Develop:
+│   │                        LibraryCompareView, LibrarySurveyView (also the group view of Similar), SimilarView (RFC-0031), LibraryMapView (Leaflet; loaded on first open), LibraryHistogram, MetadataPanel. Develop:
 │   │                        DevelopCanvas (WebGPU), DevelopPanel, DevelopInfoBar, Filmstrip, Histogram,
 │   │                        HistoryPanel, ToneCurveEditor, MaskToolStrip, MaskEditorPanel, ModelDownloadDialog (AI model consent/download/import, wording per feature: Select Subject, AI Denoise), ConnectedPhotos (AI-enlargement links and the Enlarge (AI)… / Enlarge again… button in the info panel), EnlargeDialog (Enlarge (AI): scale, Strength, the numbers, where it goes) + EnlargeCompare (its 1:1 Preview: plain resize left, model blended at Strength right, a navigator), AiDenoiseControls + AiDenoiseCompare (the AI Denoise block of the Noise Reduction panel and its before/after crop view), DevelopZoomHud (zoom readout + buttons + navigator). Print: PrintPanel,
 │   │                        PrintLayoutView. Dialogs: SettingsDialog, ExportDialog, ConfirmDialog,
@@ -141,6 +141,7 @@ src/
 │   │                        render/histogram), atmChain.js + brushRaster.js + segmentRaster.js + maskPack.js (pure helpers; maskPack packs the
 │   │                        mask and modifier uniform arrays; segmentRaster decodes a segment mask's logit PNG), shaders/*.js (the
 │   │                        WGSL sections, assembled by shaders/index.js)
+│   ├── similar.js           Pure helpers for the Similar view (RFC-0031): groups joined with photos, who "Reject the others" would flag, the slider's label (with tests)
 │   ├── maskGeometry.js, cropMath.js, stepMath.js, histogramMath.js   Pure geometry/math helpers (with tests)
 │   ├── zoomMath.js          Develop's zoom model: 50–200% range, Fit as a mode, one `reduceZoom` for every input
 │   │                        (buttons, click, ctrl+wheel, pinch), scroll<->visible-region geometry (with tests)
@@ -149,6 +150,7 @@ src/
 │   │                        print.svelte.js (Print module settings/state), faces.svelte.js (People/Faces state +
 │   │                        import-time detection prompt), importFlow.svelte.js (import/merge progress + the
 │   │                        close-time backup prompt), library.svelte.js (image list, sources,
+│   │                        similar.svelte.js (Similar view: slider, fetched groups, open group, pending Reject-the-others; RFC-0031),
 │   │                        filters, collections + their derived sets), selection.svelte.js (selected ids/anchor, selected images,
 │   │                        Compare pair), develop.svelte.js (open image, live edit stack, history/snapshots, preview,
 │   │                        canvas readouts, edit-stack persistence), developView.svelte.js (per-adjustment derived
@@ -158,7 +160,7 @@ src/
 │   │                        preview effect), presets.svelte.js (preset list + Develop dialog flags), exportFlow.svelte.js (Export dialog items + what Export/Print
 │   │                        would act on); more land per RFC-0009 P7+.
 │   │                        Tested via lib/state/*.test.js
-│   ├── actions/             Workflows that write more than one store (RFC-0009 §3.2): printActions.js
+│   ├── actions/             Workflows that write more than one store (RFC-0009 §3.2): similarActions.js (Similar view: fetch + poll, slider, open group, Reject the others), printActions.js
 │   │                        (print, export PDF, choose print profile), faceActions.js (people/face
 │   │                        operations), backupActions.js (backup prompt answers), libraryActions.js (source switching, image/
 │   │                        collection refresh, thumbnail patches, collection create/delete), selectionActions.js (click/range/

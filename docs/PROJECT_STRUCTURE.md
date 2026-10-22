@@ -76,12 +76,13 @@ src-tauri/
 │   ├── main.rs             Entry point, just calls into lib.rs
 │   ├── lib.rs               Tauri command definitions + app setup (catalog opened here)
 │   ├── catalog/             SQLite catalog, one file per domain: mod.rs (Catalog struct, open), schema.rs (migrate),
-│   │                        images, merge_sources, upscale_sources (AI enlargement provenance and links), culling, geo, faces, keywords, collections, backup, edit_stack,
+│   │                        images, merge_sources, upscale_sources (AI enlargement provenance and links), culling, cull_analysis (RFC-0031 per-photo sharpness + hash), geo, faces, keywords, collections, backup, edit_stack,
 │   │                        presets, export_plugins (each with its own tests; test_support.rs = shared fixtures)
 │   ├── develop_engine/      CPU edit-stack interpreter (the reference the GPU shaders must match): pipeline.rs
 │   │                        (`apply_edit_stack`), color, tone, hsl_split, effects, detail, masks (incl. composable-mask modifiers), crop, lens,
 │   │                        perspective; tests/ = per-area tests + shared support
 │   ├── import.rs            Import pipeline: scan a folder, hash, dedupe, thumbnail (per-step catalog lock, thumbnail pool during import, streaming events, tier-0 EXIF thumbnail: RFC-0030)
+│   ├── cull.rs              Culling analysis (RFC-0031): sharpness score + 256-bit dHash per photo, `analyse_missing` background pass (reads the plain 1024 px thumbnail, source as fallback)
 │   ├── cull_probe.rs        Test-only, ignored: sharpness and perceptual-hash measurements behind RFC-0031 (intelligent culling); run by hand with `CULL_PROBE_DIR`
 │   ├── raw_decode.rs         LibRaw (via `rsraw`) wrapper for decoding RAW files
 │   ├── jpeg_decode.rs         JPEG decoding via the `image` crate

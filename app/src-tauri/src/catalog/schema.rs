@@ -313,6 +313,17 @@ impl Catalog {
                 args_template_json TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            -- Culling aids (M7, RFC-0031 §3.1): one row per photo, measured once from its unedited 1024 px picture.
+            -- `algo` is the version of the metric; rows of an older version are measured again in the background.
+            CREATE TABLE IF NOT EXISTS cull_analysis (
+                image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                sharpness REAL NOT NULL,
+                sharpness_tile REAL NOT NULL,
+                dhash BLOB NOT NULL,
+                algo INTEGER NOT NULL,
+                analysed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             ",
         )?;
 

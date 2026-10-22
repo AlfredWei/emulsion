@@ -3,76 +3,13 @@
 //!   CULL_PROBE_DIR=/path/with/jpegs cargo test --release --lib cull_probe -- --ignored --nocapture
 //! Not product code; the RFC quotes its output.
 
+use crate::cull::{analysis_gray, dhash, hamming, sharpness, ANALYSIS_EDGE};
 use image::{imageops, GrayImage, RgbImage};
 use std::path::PathBuf;
 
-const ANALYSIS_EDGE: u32 = 1024;
-
 fn load_gray(path: &std::path::Path) -> GrayImage {
     let rgb = crate::jpeg_decode::decode(path).expect("decode");
-    let img = RgbImage::from_raw(rgb.width, rgb.height, rgb.rgb).unwrap();
-    to_analysis(&img)
-}
-
-fn to_analysis(img: &RgbImage) -> GrayImage {
-    let (w, h) = img.dimensions();
-    let scale = ANALYSIS_EDGE as f32 / w.max(h) as f32;
-    let (nw, nh) = (((w as f32 * scale) as u32).max(8), ((h as f32 * scale) as u32).max(8));
-    let small = imageops::resize(img, nw, nh, imageops::FilterType::Triangle);
-    imageops::grayscale(&small)
-}
-
-/// Variance of the 4-neighbour Laplacian over a rectangle.
-fn laplacian_var(g: &GrayImage, x0: u32, y0: u32, x1: u32, y1: u32) -> f64 {
-    let (mut sum, mut sum2, mut n) = (0f64, 0f64, 0f64);
-    for y in (y0.max(1))..(y1.min(g.height() - 1)) {
-        for x in (x0.max(1))..(x1.min(g.width() - 1)) {
-            let c = g.get_pixel(x, y)[0] as f64;
-            let l = g.get_pixel(x - 1, y)[0] as f64
-                + g.get_pixel(x + 1, y)[0] as f64
-                + g.get_pixel(x, y - 1)[0] as f64
-                + g.get_pixel(x, y + 1)[0] as f64
-                - 4.0 * c;
-            sum += l;
-            sum2 += l * l;
-            n += 1.0;
-        }
-    }
-    if n == 0.0 {
-        return 0.0;
-    }
-    let mean = sum / n;
-    sum2 / n - mean * mean
-}
-
-/// (whole-frame score, 8x8-grid 90th-percentile score)
-fn sharpness(g: &GrayImage) -> (f64, f64) {
-    let whole = laplacian_var(g, 0, 0, g.width(), g.height());
-    let (tw, th) = (g.width() / 8, g.height() / 8);
-    let mut tiles = Vec::new();
-    for ty in 0..8 {
-        for tx in 0..8 {
-            tiles.push(laplacian_var(g, tx * tw, ty * th, (tx + 1) * tw, (ty + 1) * th));
-        }
-    }
-    tiles.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    (whole, tiles[(tiles.len() as f64 * 0.9) as usize])
-}
-
-/// 16x16 difference hash = 256 bits (17x16 samples, each bit = left brighter than right).
-fn dhash(g: &GrayImage) -> Vec<bool> {
-    let s = imageops::resize(g, 17, 16, imageops::FilterType::Triangle);
-    let mut bits = Vec::with_capacity(256);
-    for y in 0..16 {
-        for x in 0..16 {
-            bits.push(s.get_pixel(x, y)[0] > s.get_pixel(x + 1, y)[0]);
-        }
-    }
-    bits
-}
-
-fn hamming(a: &[bool], b: &[bool]) -> usize {
-    a.iter().zip(b).filter(|(x, y)| x != y).count()
+    analysis_gray(&RgbImage::from_raw(rgb.width, rgb.height, rgb.rgb).unwrap())
 }
 
 fn files() -> Vec<PathBuf> {
@@ -110,7 +47,7 @@ fn cull_probe_blur() {
 fn cull_probe_duplicates() {
     let paths = files();
     let grays: Vec<GrayImage> = paths.iter().map(|p| load_gray(p)).collect();
-    let hashes: Vec<Vec<bool>> = grays.iter().map(dhash).collect();
+    let hashes: Vec<[u8; 32]> = grays.iter().map(dhash).collect();
     println!("--- same photo, edited (distance of 256 bits) ---");
     for (p, g) in paths.iter().zip(&grays) {
         let h = dhash(g);
@@ -142,4 +79,34 @@ fn cull_probe_duplicates() {
         println!("{dist:3}  {} <-> {}", paths[*i].file_name().unwrap().to_string_lossy(), paths[*j].file_name().unwrap().to_string_lossy());
     }
     println!("median {}", d[d.len() / 2].0);
+}
+
+/// What the measurement costs once the 1024 px picture exists (the decode is not counted; it already happens).
+#[test]
+#[ignore]
+fn cull_probe_cost() {
+    use crate::cull::analyse_gray;
+    let paths = files();
+    let rgbs: Vec<RgbImage> = paths
+        .iter()
+        .map(|p| {
+            let d = crate::jpeg_decode::decode(p).expect("decode");
+            RgbImage::from_raw(d.width, d.height, d.rgb).unwrap()
+        })
+        .collect();
+    let t = std::time::Instant::now();
+    let grays: Vec<GrayImage> = rgbs.iter().map(analysis_gray).collect();
+    let reduce = t.elapsed();
+    let t = std::time::Instant::now();
+    for g in &grays {
+        std::hint::black_box(analyse_gray(g));
+    }
+    let measure = t.elapsed();
+    let n = rgbs.len() as f64;
+    println!(
+        "{} photos: reduce to 1024 gray {:.1} ms each, sharpness+hash {:.1} ms each",
+        rgbs.len(),
+        reduce.as_secs_f64() * 1e3 / n,
+        measure.as_secs_f64() * 1e3 / n
+    );
 }

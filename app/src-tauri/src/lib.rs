@@ -1,4 +1,5 @@
 mod catalog;
+mod cull;
 #[cfg(test)]
 mod cull_probe;
 mod develop_engine;
@@ -270,6 +271,8 @@ fn spawn_large_thumbnail_pass(app: AppHandle, catalog: std::sync::Arc<std::sync:
         let mut ready = ReadyEmitter::new(app);
         import::generate_missing_thumbnails_streaming(&catalog, &thumbnail_dir, import_batch, import::ThumbTier::Large, |_, _| {}, |id, path| ready.push(id, path));
         ready.finish();
+        // Then the quiet culling measurements (RFC-0031), from the pictures just made.
+        cull::analyse_missing(&catalog, &thumbnail_dir, |_, _| {});
     });
 }
 
@@ -2176,6 +2179,7 @@ pub fn run() {
                     import::generate_missing_thumbnails_streaming(&catalog_for_thumbs, &thumbnail_dir, None, tier, |_, _| {}, |id, path| ready.push(id, path));
                 }
                 ready.finish();
+                cull::analyse_missing(&catalog_for_thumbs, &thumbnail_dir, |_, _| {});
             });
 
             // Models shipped in the installer (release builds only) are copied into the model folders once, in the

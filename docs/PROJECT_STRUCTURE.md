@@ -83,6 +83,7 @@ src-tauri/
 │   │                        perspective; tests/ = per-area tests + shared support
 │   ├── import.rs            Import pipeline: scan a folder, hash, dedupe, thumbnail (per-step catalog lock, thumbnail pool during import, streaming events, tier-0 EXIF thumbnail: RFC-0030)
 │   ├── cull.rs              Culling analysis (RFC-0031): sharpness score + 256-bit dHash per photo, `analyse_missing` background pass (reads the plain 1024 px thumbnail, source as fallback)
+│   ├── cull_groups.rs       Similar-photo groups (RFC-0031): pure grouping by camera + capture time + hash distance, suggested-best and Soft rules, the Similarity slider's mapping
 │   ├── cull_probe.rs        Test-only, ignored: sharpness and perceptual-hash measurements behind RFC-0031 (intelligent culling); run by hand with `CULL_PROBE_DIR`
 │   ├── raw_decode.rs         LibRaw (via `rsraw`) wrapper for decoding RAW files
 │   ├── jpeg_decode.rs         JPEG decoding via the `image` crate

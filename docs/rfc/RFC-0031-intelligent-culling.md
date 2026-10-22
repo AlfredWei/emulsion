@@ -1,7 +1,8 @@
 # RFC-0031: Intelligent culling: similar-photo groups and a soft-shot cue (M7 slice 1)
 
-- Status: Draft for review
+- Status: Draft for review (slices A and B built; slice C's UX mock added)
 - Date: 2026-10-20
+- UX mock: [similar-photos-mockup.html](../ux/mockups/similar-photos-mockup.html)
 - Relates to: [MILESTONES.md](../../PRD/MILESTONES.md) M7, PRD §7.2 (duplicate detection) and §7.3 (stacking), [RFC-0030](RFC-0030-import-and-export-speed.md) (thumbnail tiers, the background-pass pattern this reuses), [RFC-0005](RFC-0005-face-detection-people-view.md) (face landmarks, for the later blink slice), [RFC-0023](RFC-0023-on-device-ai-inference.md) (model survey method, the later generative slice), [ADR-0009](../adr/ADR-0009-ml-inference-runtime.md)
 
 ## 0. Process note
@@ -76,7 +77,7 @@ A photo is shown as **Soft** when its `sharpness_tile` is under **50 %** of the 
 
 ### 3.4 UX
 
-Not a mock yet; the shape, to be judged by the user before slice C builds anything:
+Designed first as an interactive mock, [similar-photos-mockup.html](../ux/mockups/similar-photos-mockup.html) (synthetic photos; the Similarity slider really re-groups with §3.2's rule; Reject the others, Soft chips and the analysis strip all work), to be judged by use before slice C builds anything:
 
 - **Library:** a **Similar** entry in the rail (count of groups). A group shows as one cell with a stack of up to three thumbnails behind it and the count; opening it fills the view with the group (the existing Survey view, `N`) with sharpness shown as a small bar and a **Soft** or **Suggested** badge on each frame.
 - **Actions, all existing ones:** pick / reject / stars keyboard shortcuts work as today. One new bulk action in the group: **Reject the others** (the suggested or the picked frame stays). It is one confirmation with the count, never automatic, and **rejects only** (flag = reject, files untouched, reversible by changing the flag). There is no undo stack for flags in the app today, so the confirmation carries the count and the reverse is stated: *Show rejected*.

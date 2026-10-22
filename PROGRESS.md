@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 culling slice C, step 1: UX mock (2026-10-22)
+
+[similar-photos-mockup.html](docs/ux/mockups/similar-photos-mockup.html), the RFC-0028/0029 way: the UI is judged as an
+interactive mock before app code. Synthetic photos with a capture time, a stand-in "look" number and a sharpness score; the
+grouping in the mock is the RFC's rule in JavaScript (same camera, within N s, within D bits, single linkage), so the
+**Similarity slider really re-groups** (strict splits bursts, loose joins the drifting pan and the 5 s different shot, a
+second camera never joins). Covers: the **Similar** rail entry with the group count, group cells (stack + count +
+Suggested), the group view (sharpness bar relative to best, Suggested and Soft badges, P / X / arrows), **Reject the
+others** with its confirmation (count, keeps the selected frame, flag only, how to undo), the Soft chips toggle, and the
+"Analysing n / m" replay with groups appearing. Checked in the browser pane (grouping at default, strict and loose; the
+reject flow; no script errors). **Not checked:** a wide viewport (the pane was narrow), keyboard focus order, any real
+photo. The app UI waits for the user's judgement of the mock and the answers to RFC-0031 §7.
+
 ## M7 culling slice B: similar-photo groups (2026-10-22)
 
 Second slice of [RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md). New `cull_groups.rs`, a pure function

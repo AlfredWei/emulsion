@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Similar photos and the Soft cue — UX mock (RFC-0031)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  UX mock for RFC-0031 §3.4. Static and self-contained; uses the app's tokens. The "photos" are synthetic SVG, and each
+  has a capture time, a stand-in "look" number (the real app uses a 256-bit hash) and a sharpness score. What is real is
+  the BEHAVIOUR, so it can be judged by use:
+    - the Similar entry in the rail, with the group count; the Similarity slider re-groups live with the RFC's rule
+      (same camera, within N seconds, within D "bits"; single linkage), so a looser slider really joins more,
+    - a group is one cell with a stack and a count, the suggested frame's badge is on the cell,
+    - opening a group shows its frames side by side with a sharpness bar, Suggested and Soft badges,
+    - pick / reject on a frame (keys P and X, as in the app), and the one bulk action "Reject the others" with a confirmation
+      that carries the count and says how to undo it; "Show rejected" brings them back,
+    - the Soft chip on grid cells (View menu toggle), off by default,
+    - the analysis strip ("Analysing 124 / 300") with groups appearing as it goes.
+  Nothing here talks to the app. Rejecting only changes a flag in the mock, exactly as the RFC says it does in the app.
+-->
+<style>
+:root {
+  --bg-canvas:#141210; --bg-app:#1a1815; --bg-panel:#1e1c19; --bg-panel-raised:#28251f; --bg-hover:#332f28;
+  --border-subtle:#37332b; --border-strong:#4a453b;
+  --text-primary:#efeae2; --text-secondary:#a39c8e; --text-tertiary:#6e695e;
+  --accent:#e0932f; --accent-strong:#f0a94a; --accent-soft:#4a371f; --accent-on:#1b1310; --danger:#e5604d; --ok:#7bb274;
+  --radius-s:3px; --radius-m:5px;
+  --font-ui:-apple-system,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --shadow-soft:0 1px 2px rgba(0,0,0,.4),0 8px 24px -8px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-canvas);color:var(--text-primary);font:13px/1.4 var(--font-ui);padding:24px 32px 56px;-webkit-font-smoothing:antialiased}
+h1{font-size:15px;margin:0 0 4px}
+.lede{color:var(--text-secondary);max-width:920px;margin:0 0 12px}
+.btn{appearance:none;background:var(--bg-panel-raised);border:1px solid var(--border-subtle);color:var(--text-secondary);border-radius:var(--radius-s);font:11.5px var(--font-ui);padding:5px 10px;cursor:pointer}
+.btn:hover{background:var(--bg-hover)} .btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-on);font-weight:600}
+.btn.danger{border-color:var(--danger);color:var(--danger)}
+.btn:focus-visible,input:focus-visible,.cell:focus-visible,.fr:focus-visible{outline:2px solid var(--accent-strong);outline-offset:1px}
+.steps{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;align-items:center}
+.steps .btn.on{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-soft)}
+.cap{min-height:40px;max-width:920px;color:var(--text-secondary);font-size:12px;margin:0 0 10px}
+.cap b{color:var(--text-primary)}
+.app{width:900px;max-width:100%;height:600px;position:relative;border:1px solid var(--border-subtle);border-radius:var(--radius-m);overflow:hidden;background:var(--bg-app);display:flex;flex-direction:column}
+.titlebar{height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--border-subtle);background:var(--bg-panel);font-size:11px;color:var(--text-secondary)}
+.titlebar .sp{flex:1}
+.main{flex:1;min-height:0;display:flex}
+.rail{width:160px;flex:none;border-right:1px solid var(--border-subtle);background:var(--bg-panel);padding:10px;font-size:11.5px;color:var(--text-secondary)}
+.rail .it{padding:4px 6px;border-radius:var(--radius-s);cursor:pointer;display:flex;justify-content:space-between}.rail .it:hover{background:var(--bg-hover)}.rail .it.on{background:var(--accent-soft);color:var(--accent-strong)}
+.rail h4{margin:10px 0 4px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)}
+.slider{margin-top:10px;padding:8px;border:1px solid var(--border-subtle);border-radius:var(--radius-m);background:var(--bg-panel-raised)}
+.slider label{display:block;font-size:10.5px;color:var(--text-tertiary);margin-bottom:4px}
+.slider input{width:100%}
+.slider .ends{display:flex;justify-content:space-between;font-size:10px;color:var(--text-tertiary)}
+.slider .now{margin-top:4px;font-size:10.5px}
+.content{flex:1;min-width:0;display:flex;flex-direction:column}
+.bar{flex:none;height:34px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;gap:8px;padding:0 12px;font-size:11.5px;color:var(--text-secondary)}
+.bar .sp{flex:1}
+.grid{flex:1;padding:12px;display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:122px;gap:10px;overflow:auto;align-content:start}
+.cell{position:relative;border-radius:var(--radius-s);cursor:pointer;border:2px solid transparent}
+.cell .ph{position:absolute;inset:0;border-radius:var(--radius-s);overflow:hidden;background:#000}
+.cell.stack .ph.b2{transform:translate(6px,-6px);opacity:.55}.cell.stack .ph.b1{transform:translate(3px,-3px);opacity:.8}
+.ph svg{position:absolute;inset:0;width:100%;height:100%}
+.cell .badge,.fr .badge{position:absolute;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:9px;letter-spacing:.02em}
+.badge.n{right:5px;bottom:5px;background:rgba(0,0,0,.7);color:var(--text-primary)}
+.badge.best{left:5px;top:5px;background:var(--accent);color:var(--accent-on)}
+.badge.soft{right:5px;top:5px;background:#3b2623;color:#ff9c8c;border:1px solid var(--danger)}
+.badge.rej{left:5px;bottom:5px;background:var(--danger);color:#fff}
+.badge.pick{left:5px;bottom:5px;background:var(--ok);color:#10200d}
+.hide-soft .cell .badge.soft{display:none}
+.group{flex:1;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0}
+.frames{flex:1;overflow:auto;display:grid;gap:10px;min-height:0;align-content:start}
+.fr{position:relative;border:2px solid transparent;border-radius:var(--radius-s);overflow:hidden;background:#000;aspect-ratio:3/2;cursor:pointer}
+.fr.sel{border-color:var(--accent)} .fr.rejected{opacity:.35}
+.fr .meter{position:absolute;left:6px;right:6px;bottom:22px;height:5px;background:rgba(0,0,0,.6);border-radius:3px;overflow:hidden}
+.fr .meter i{display:block;height:100%;background:var(--ok)} .fr .meter.low i{background:var(--danger)}
+.fr .lab{position:absolute;left:6px;bottom:5px;font-size:10px;color:#fff;text-shadow:0 1px 2px #000}
+.actions{flex:none;display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--text-secondary)}
+.status{height:26px;flex:none;border-top:1px solid var(--border-subtle);background:var(--bg-panel);display:flex;align-items:center;gap:10px;padding:0 10px;font-size:11px;color:var(--text-secondary)}
+.status .pb{width:160px;height:6px;border-radius:3px;background:var(--bg-hover);overflow:hidden;display:none}.status .pb i{display:block;height:100%;background:var(--accent);width:0}
+.status.run .pb{display:block}
+.modal{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:20}
+.modal.on{display:flex}
+.dlg{width:380px;background:var(--bg-panel-raised);border:1px solid var(--border-strong);border-radius:var(--radius-m);padding:14px;box-shadow:var(--shadow-soft)}
+.dlg h3{margin:0 0 6px;font-size:13px}.dlg p{margin:0 0 10px;color:var(--text-secondary);font-size:12px}
+.dlg .row{display:flex;gap:8px;justify-content:flex-end}
+.toast{position:absolute;left:50%;bottom:40px;transform:translateX(-50%);background:var(--bg-panel-raised);border:1px solid var(--accent);border-radius:var(--radius-m);padding:8px 12px;font-size:12px;box-shadow:var(--shadow-soft);display:none;gap:10px;align-items:center;z-index:25}
+.toast.on{display:flex}
+.empty{padding:40px;color:var(--text-tertiary);text-align:center}
+</style>
+</head>
+<body>
+<h1>Similar photos and the Soft cue (RFC-0031 §3.4)</h1>
+<p class="lede">Mock, not the app. Try: click <b>Similar</b>, open a group, press <b>P</b> / <b>X</b> on a frame, use <b>Reject the others</b>, drag the <b>Similarity</b> slider, switch on <b>Soft chips</b>, or replay the analysis.</p>
+<div class="steps" id="steps"></div>
+<div class="cap" id="cap"></div>
+
+<div class="app" id="app">
+  <div class="titlebar"><b>Library</b><span id="crumb"></span><span class="sp"></span>
+    <label><input type="checkbox" id="chips"> Soft chips on the grid</label></div>
+  <div class="main">
+    <div class="rail">
+      <h4>Catalog</h4>
+      <div class="it on" data-view="all"><span>All photos</span><span id="nAll"></span></div>
+      <div class="it" data-view="similar"><span>Similar</span><span id="nSim"></span></div>
+      <div class="it" data-view="rejected"><span>Rejected</span><span id="nRej"></span></div>
+      <div class="slider" id="sliderBox">
+        <label for="sim">Similarity</label>
+        <input type="range" id="sim" min="0" max="100" value="50">
+        <div class="ends"><span>stricter</span><span>looser</span></div>
+        <div class="now" id="simNow"></div>
+      </div>
+    </div>
+    <div class="content" id="content"></div>
+  </div>
+  <div class="status" id="status"><span id="stText">Ready</span><span class="pb"><i id="pbi"></i></span></div>
+  <div class="modal" id="modal"><div class="dlg" id="dlg"></div></div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+// ---- synthetic catalog: id, camera, time (s), look (stand-in for the hash), sharpness, hue ----
+const P = [
+ // burst A, 5 frames over 4 s, #3 motion-blurred, #2 clearly sharpest (#4 is close behind but inside the 10% margin)
+ [1,'R5',0,0,300,30],[2,'R5',1,6,340,30],[3,'R5',2,9,60,30],[4,'R5',3,12,305,30],[5,'R5',4,14,150,30],
+ // burst B, 4 frames, two equally sharp (no clear best)
+ [6,'R5',60,100,200,200],[7,'R5',61,103,200,200],[8,'R5',62,108,120,200],[9,'R5',63,110,190,200],
+ // same venue, different shot: 5 s apart, far apart in look: never groups until very loose
+ [10,'R5',120,150,180,120],[11,'R5',125,225,170,300],
+ // a drifting pan, 8 s steps: chains
+ [12,'R5',200,40,290,80],[13,'R5',208,75,240,80],[14,'R5',216,110,35,80],
+ // another camera, same moment as 10: never groups with it
+ [15,'Z6',121,152,160,120],
+ // singles
+ [16,'R5',300,60,220,10],[17,'R5',420,160,230,260],[18,'R5',600,20,90,340],
+].map(([id,cam,t,look,sharp,hue])=>({id,cam,t,look,sharp,hue,flag:'none'}));
+let shown = P.length;      // photos "analysed" so far (the replay reveals them)
+let view = 'all', open = null, sel = null, showSoft = false;
+
+const params = s => ({sec: Math.round(2+16*s), bits: Math.round(40+48*s)});
+function groups(){
+  const {sec,bits} = params(+document.getElementById('sim').value/100);
+  const items = P.slice(0,shown).sort((a,b)=>a.t-b.t||a.id-b.id);
+  const par = items.map((_,i)=>i), find = x=>{while(par[x]!==x){par[x]=par[par[x]];x=par[x]}return x};
+  for(let a=0;a<items.length;a++) for(let b=a+1;b<items.length;b++){
+    if(items[b].t-items[a].t>sec) break;
+    if(items[a].cam===items[b].cam && Math.abs(items[a].look-items[b].look)<=bits) par[find(b)]=find(a);
+  }
+  const by = {}; items.forEach((p,i)=>(by[find(i)] ||= []).push(p));
+  return Object.values(by).filter(g=>g.length>1).map(m=>{
+    const top = Math.max(...m.map(p=>p.sharp)), s = m.map(p=>p.sharp).sort((a,b)=>b-a);
+    const best = top>0 && s[0] > s[1]*1.1 ? m.find(p=>p.sharp===top).id : null;
+    return {members:m, best, top};
+  }).sort((a,b)=>b.members[0].t-a.members[0].t);
+}
+const isSoft = (p,g)=> p.sharp < .5*g.top;
+function svg(p, soft){
+  const h=p.hue, id='f'+p.id+(soft?'s':'');
+  return `<svg viewBox="0 0 120 80" preserveAspectRatio="xMidYMid slice"><defs>
+   <linearGradient id="g${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${h},40%,32%)"/><stop offset="1" stop-color="hsl(${(h+40)%360},45%,18%)"/></linearGradient>
+   <filter id="b${id}"><feGaussianBlur stdDeviation="${soft?2.6:0}"/></filter></defs>
+   <g filter="url(#b${id})"><rect width="120" height="80" fill="url(#g${id})"/>
+   <circle cx="${40+(p.look%40)}" cy="34" r="12" fill="hsl(${h},55%,62%)"/><rect x="${20+(p.look%30)}" y="52" width="70" height="4" fill="hsl(${h},30%,80%)"/>
+   <path d="M0 70 L30 52 L60 66 L90 48 L120 64 V80 H0Z" fill="hsl(${h},30%,12%)"/></g></svg>`;
+}
+const photoHtml=(p,soft)=>`<div class="ph">${svg(p,soft)}</div>`;
+
+function render(){
+  const gs = groups(), content = document.getElementById('content');
+  document.getElementById('nAll').textContent = shown;
+  document.getElementById('nSim').textContent = gs.length;
+  document.getElementById('nRej').textContent = P.filter(p=>p.flag==='reject').length;
+  const {sec,bits} = params(+document.getElementById('sim').value/100);
+  document.getElementById('simNow').textContent = `within ${sec} s and ${bits} of 256 bits`;
+  document.getElementById('sliderBox').style.display = view==='similar'||open ? '' : 'none';
+  document.querySelectorAll('.rail .it').forEach(e=>e.classList.toggle('on', e.dataset.view===view));
+  document.getElementById('app').classList.toggle('hide-soft', !showSoft);
+  document.getElementById('crumb').textContent = open ? ` › Similar › group of ${open.members.length}` : view==='similar' ? ' › Similar' : view==='rejected' ? ' › Rejected' : '';
+  if(open){ renderGroup(content); return; }
+  if(view==='similar'){
+    content.innerHTML = `<div class="bar"><span>${gs.length} groups · ${gs.reduce((n,g)=>n+g.members.length,0)} photos</span><span class="sp"></span><span>newest first</span></div>` +
+      (gs.length ? `<div class="grid">${gs.map((g,i)=>cellGroup(g,i)).join('')}</div>` : `<div class="empty">No similar photos at this setting.</div>`);
+    content.querySelectorAll('.cell').forEach(c=>c.onclick=()=>{open=groups()[+c.dataset.g];sel=open.best??open.members[0].id;render()});
+    content.querySelectorAll('.cell').forEach(c=>c.onkeydown=e=>{if(e.key==='Enter')c.click()});
+    return;
+  }
+  const list = P.slice(0,shown).filter(p=> view==='rejected' ? p.flag==='reject' : p.flag!=='reject' || view==='all');
+  content.innerHTML = `<div class="bar"><span>${view==='rejected'?'Rejected photos':'All photos'} · ${list.length}</span><span class="sp"></span></div><div class="grid">${list.map(p=>{
+    const g = gs.find(g=>g.members.includes(p));
+    return `<div class="cell" tabindex="0">${photoHtml(p,g&&isSoft(p,g))}${g&&isSoft(p,g)?'<span class="badge soft">Soft</span>':''}${p.flag==='reject'?'<span class="badge rej">Rejected</span>':p.flag==='pick'?'<span class="badge pick">Pick</span>':''}</div>`}).join('')}</div>`;
+}
+function cellGroup(g,i){
+  const lead = g.members.find(p=>p.id===g.best) || g.members[0];
+  return `<div class="cell stack" tabindex="0" data-g="${i}">
+    ${g.members.length>2?`<div class="ph b2">${svg(g.members[1],false)}</div>`:''}<div class="ph b1">${svg(g.members[g.members.length>1?1:0],false)}</div>${photoHtml(lead,false)}
+    <span class="badge n">${g.members.length}</span>${g.best?'<span class="badge best">Suggested</span>':''}</div>`;
+}
+function renderGroup(content){
+  let g = open; const cols = g.members.length<=2?2:g.members.length<=4?2:3;
+  const live = groups().find(x=>x.members.some(p=>p.id===g.members[0].id)); if(live) open = g = live;
+  content.innerHTML = `<div class="group"><div class="actions"><button class="btn" id="back">‹ Back to Similar</button><span class="sp" style="flex:1"></span>
+    <span>P pick · X reject · ← → move</span>
+    <button class="btn danger" id="rejOthers">Reject the others…</button></div>
+    <div class="frames" style="grid-template-columns:repeat(${cols},1fr)">${g.members.map(p=>{
+      const soft=isSoft(p,g), rel=Math.round(100*p.sharp/g.top);
+      return `<div class="fr${p.id===sel?' sel':''}${p.flag==='reject'?' rejected':''}" tabindex="0" data-id="${p.id}">${svg(p,soft)}
+        ${p.id===g.best?'<span class="badge best">Suggested</span>':''}${soft?'<span class="badge soft" style="display:block">Soft</span>':''}
+        ${p.flag==='reject'?'<span class="badge rej">Rejected</span>':p.flag==='pick'?'<span class="badge pick">Pick</span>':''}
+        <div class="meter${soft?' low':''}"><i style="width:${rel}%"></i></div><span class="lab">${rel}% of best</span></div>`}).join('')}</div>
+    <div class="actions">${g.best?'The sharpest frame is suggested; nothing is changed until you choose.':'No frame is clearly sharper than the rest; nothing is suggested.'}</div></div>`;
+  content.querySelector('#back').onclick=()=>{open=null;render()};
+  content.querySelectorAll('.fr').forEach(f=>f.onclick=()=>{sel=+f.dataset.id;render()});
+  content.querySelector('#rejOthers').onclick=askRejectOthers;
+}
+function keep(){ return P.find(p=>p.id===sel); }
+function askRejectOthers(){
+  const g=open, k=keep(), others=g.members.filter(p=>p.id!==k.id && p.flag!=='reject');
+  if(!others.length){toast('Nothing to reject: the others are already rejected.');return}
+  dlg(`<h3>Reject ${others.length} other photo${others.length>1?'s':''}?</h3>
+   <p>Keeps the selected frame (#${k.id}). The ${others.length} others get the Reject flag. No file is touched or deleted.
+   To undo: open <b>Rejected</b> in the rail and change the flag.</p>
+   <div class="row"><button class="btn" id="no">Cancel</button><button class="btn primary" id="yes">Reject ${others.length}</button></div>`);
+  document.getElementById('no').onclick=closeDlg;
+  document.getElementById('yes').onclick=()=>{others.forEach(p=>p.flag='reject'); k.flag=k.flag==='none'?'pick':k.flag; closeDlg(); toast(`${others.length} rejected. Kept #${k.id}.`); render()};
+}
+function dlg(h){document.getElementById('dlg').innerHTML=h;document.getElementById('modal').classList.add('on')}
+function closeDlg(){document.getElementById('modal').classList.remove('on')}
+let tt; function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>e.classList.remove('on'),2600)}
+
+document.querySelectorAll('.rail .it').forEach(e=>e.onclick=()=>{view=e.dataset.view;open=null;render()});
+document.getElementById('sim').oninput=render;
+document.getElementById('chips').onchange=e=>{showSoft=e.target.checked;render()};
+document.addEventListener('keydown',e=>{
+  if(!open) return; const k=keep(), ids=open.members.map(p=>p.id), i=ids.indexOf(sel);
+  if(e.key==='p'||e.key==='P'){k.flag=k.flag==='pick'?'none':'pick';render()}
+  else if(e.key==='x'||e.key==='X'){k.flag=k.flag==='reject'?'none':'reject';render()}
+  else if(e.key==='ArrowRight'){sel=ids[Math.min(i+1,ids.length-1)];render()}
+  else if(e.key==='ArrowLeft'){sel=ids[Math.max(i-1,0)];render()}
+});
+
+// ---- analysis replay: photos appear, groups form as they do ----
+let timer; function replay(){
+  clearInterval(timer); P.forEach(p=>p.flag='none'); shown=0; open=null; view='all'; render();
+  const st=document.getElementById('status'), tx=document.getElementById('stText'), pb=document.getElementById('pbi');
+  st.classList.add('run');
+  timer=setInterval(()=>{ shown++; tx.textContent=`Analysing ${shown} / ${P.length}`; pb.style.width=(100*shown/P.length)+'%'; render();
+    if(shown>=P.length){clearInterval(timer);st.classList.remove('run');tx.textContent='Ready'} },280);
+}
+
+const STEPS=[
+ ['Overview',()=>{shown=P.length;view='all';open=null;caption('<b>All photos</b> looks as it does today. The only addition is the <b>Similar</b> entry in the rail with the number of groups. Nothing is hidden or removed by the analysis.')}],
+ ['Similar',()=>{shown=P.length;view='similar';open=null;caption('Each <b>group is one cell</b> with a stack behind it and the count. <b>Suggested</b> marks that the sharpest frame clearly beats the others; groups with no clear sharpest frame (burst B) show no badge.')}],
+ ['Open burst A',()=>{shown=P.length;view='similar';const g=groups().find(g=>g.members.some(p=>p.id===1));open=g;sel=g.best;caption('The group opens as a side-by-side view (the Survey view). Each frame has a <b>sharpness bar relative to the best</b>. #3 and #5 are <b>Soft</b> (under half of the best). Press <b>P</b> / <b>X</b> on the selected frame, or <b>Reject the others…</b>.')}],
+ ['Reject the others',()=>{STEPS[2][1]();askRejectOthers();caption('One confirmation with the <b>count</b>; it rejects only (a flag), keeps the selected frame, and says how to reverse it. There is no undo stack for flags today, so the text carries the way back.')}],
+ ['Slider: looser',()=>{document.getElementById('sim').value=100;shown=P.length;view='similar';open=null;caption('<b>Looser</b> joins the drifting pan (8 s steps) and the 5 s different shot further out; <b>stricter</b> splits bursts. A frame from <b>another camera</b> never joins, whatever the slider says.')}],
+ ['Replay analysis',()=>{document.getElementById('sim').value=50;view='similar';replay();caption('While the background pass runs the strip shows <b>Analysing n / m</b> and groups appear as photos are measured. Nothing blocks the Library.')}],
+];
+function caption(h){document.getElementById('cap').innerHTML=h}
+const stepsEl=document.getElementById('steps');
+STEPS.forEach(([name,fn],i)=>{const b=document.createElement('button');b.className='btn';b.textContent=`${i+1}. ${name}`;b.onclick=()=>{
+  P.forEach(p=>p.flag='none'); document.getElementById('sim').value=50; clearInterval(timer); document.getElementById('status').classList.remove('run'); document.getElementById('stText').textContent='Ready';
+  fn(); stepsEl.querySelectorAll('.btn').forEach(x=>x.classList.remove('on'));b.classList.add('on');render()};stepsEl.appendChild(b)});
+STEPS[0][1](); stepsEl.firstChild.classList.add('on'); render();
+</script>
+</body>
+</html>

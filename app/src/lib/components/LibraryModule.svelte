@@ -19,6 +19,9 @@
   import LibraryToolbar from "$lib/components/LibraryToolbar.svelte";
   import MetadataPanel from "$lib/components/MetadataPanel.svelte";
   import { shell } from "$lib/state/shell.svelte.js";
+  import SimilarView from "$lib/components/SimilarView.svelte";
+  import { similar } from "$lib/state/similar.svelte.js";
+  import { showSimilar } from "$lib/actions/similarActions.js";
 
   let imageViewerRef = $state(/** @type {any} */ (null));
 </script>
@@ -88,6 +91,9 @@
     showLastImportOnly={library.showLastImportOnly}
     activePersonId={library.activePersonId}
     activeMapImageIds={library.activeMapImageIds}
+    similarActive={similar.active}
+    similarCount={similar.loaded ? similar.groupViews.length : null}
+    onSelectSimilar={showSimilar}
     lastImportBatchId={library.lastImportBatchId}
     folderEntries={library.folderEntries}
     collections={library.collections}
@@ -105,7 +111,11 @@
     onRenamePerson={handleRenamePerson}
   />
 
-  {#if library.images.length === 0}
+  {#if similar.active && library.images.length > 0}
+    <div class="library-view-container">
+      <SimilarView />
+    </div>
+  {:else if library.images.length === 0}
     <div class="empty">
       <p>No photos yet.</p>
       <div class="empty-actions">

@@ -13,7 +13,13 @@
    *   onRatingChange: (versionId: number, rating: number) => void,
    *   onFlagChange: (versionId: number, flag: string) => void,
    *   onColorLabelChange: (versionId: number, colorLabel: string) => void,
+   *   culling?: Map<number, { best: boolean, soft: boolean, relative: number }> | null,
+   *   showDeselect?: boolean,
    * }}
+   *
+   * `culling` (RFC-0031) is what the Similar view adds per frame (by version id): the Suggested and Soft badges and a
+   * sharpness bar relative to the group's best. Without it the view is the plain Survey; `showDeselect` hides the
+   * remove-from-Survey button where a frame is not the user's to remove (a group).
    */
   let {
     images,
@@ -24,6 +30,8 @@
     onRatingChange,
     onFlagChange,
     onColorLabelChange,
+    culling = null,
+    showDeselect = true,
   } = $props();
 
   let count = $derived(images.length);
@@ -68,6 +76,7 @@
         <div
           class="survey-cell"
           class:is-primary={isPrimary}
+          class:is-rejected={culling !== null && image.flag === "reject"}
           role="button"
           tabindex="0"
           onclick={() => onSetPrimary(image.version_id)}
@@ -84,14 +93,18 @@
             onkeydown={(e) => e.stopPropagation()}
           >
             <span class="cell-filename truncate" title={image.path}>{filename}</span>
-            <button
-              type="button"
-              class="deselect-btn"
-              title="Remove from Survey (deselect)"
-              onclick={() => onDeselect(image.version_id)}
-            >
-              ✕
-            </button>
+            {#if culling?.get(image.version_id)?.best}<span class="cull-badge best">Suggested</span>{/if}
+            {#if culling?.get(image.version_id)?.soft}<span class="cull-badge soft" title="Under half as sharp as the sharpest frame of this group">Soft</span>{/if}
+            {#if showDeselect}
+              <button
+                type="button"
+                class="deselect-btn"
+                title="Remove from Survey (deselect)"
+                onclick={() => onDeselect(image.version_id)}
+              >
+                ✕
+              </button>
+            {/if}
           </div>
 
           <!-- Image Thumbnail Container -->
@@ -100,6 +113,13 @@
               <img src={thumbSrc} alt={filename} class="survey-img" draggable="false" />
             {:else}
               <div class="survey-img placeholder"></div>
+            {/if}
+            {#if culling?.get(image.version_id)}
+              {@const c = culling.get(image.version_id)}
+              <div class="sharp-meter" class:low={c?.soft} title="Sharpness as a share of the group's best">
+                <i style="width: {Math.round((c?.relative ?? 0) * 100)}%"></i>
+                <span>{Math.round((c?.relative ?? 0) * 100)}% of best</span>
+              </div>
             {/if}
           </div>
 
@@ -228,6 +248,54 @@
     justify-content: space-between;
     gap: 6px;
     z-index: 2;
+  }
+  .cull-badge {
+    flex: none;
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 9px;
+    letter-spacing: 0.02em;
+  }
+  .cull-badge.best {
+    background: var(--accent);
+    color: var(--accent-on, #1b1310);
+  }
+  .cull-badge.soft {
+    background: #3b2623;
+    color: #ff9c8c;
+    border: 1px solid var(--label-red);
+  }
+  .survey-cell.is-rejected .cell-image-container {
+    opacity: 0.35;
+  }
+  .sharp-meter {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 6px;
+    height: 14px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+  }
+  .sharp-meter i {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    background: var(--label-green);
+    opacity: 0.55;
+  }
+  .sharp-meter.low i {
+    background: var(--label-red);
+  }
+  .sharp-meter span {
+    position: relative;
+    font-size: 10px;
+    padding-left: 6px;
+    line-height: 14px;
+    color: #fff;
   }
   .cell-filename {
     font-family: var(--font-mono);

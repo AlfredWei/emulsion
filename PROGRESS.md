@@ -2,6 +2,27 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 culling slice C: the Similar view in the app (2026-10-23)
+
+Third build slice of [RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md), after the UX mock. A **Similar** entry in the
+Library rail (`CatalogRail` + `state/similar.svelte.js`, `actions/similarActions.js`, `components/SimilarView.svelte`,
+`api/cull.js`, pure `lib/similar.js`). The view lists groups as stacked cells (count, **Suggested** badge); a group opens
+into the existing Survey view, which gained optional `culling` data (Suggested / Soft badges, a sharpness bar relative
+to the best, rejected frames dimmed) and `showDeselect`. **Similarity** slider (remembered in localStorage, debounced
+refetch), "Analysing n / m" in the view's bar while the background pass runs, groups refetched as the count moves (2 s
+poll, only while the view is on), the rail's count loaded at startup. **Reject the others…** keeps the selected frame,
+asks first with the count and the way back, and sets only the Reject flag (optimistic, then the catalog; on failure the
+list is reloaded). Every other rail source leaves the view. The RFC §7 questions were not answered, so the RFC's
+defaults are used (one confirmed bulk reject; one slider). Tests: 25 new (pure helpers; actions with fake timers: entry,
+stale-answer guard, polling, slider debounce, open, ask / confirm / cancel / failure); 1128 frontend tests and
+svelte-check pass. **Verified in the real bundled app** on a generated burst folder (EXIF capture times written by hand, one
+photo blurred): the rail entry, 2 groups (the 4-frame field burst with no clear best, the 2-frame bridge pair with the
+sharp one Suggested), the blurred frame **Soft** at "1% of best", the confirmation text, 3 photos rejected and the
+catalog rows really flagged (checked in the SQLite file), the slider label moving, leaving the view from the rail, and
+measurements stored for all 7 photos. **Not done / not verified:** the **Soft chips on the plain grid** (the mock has
+them; they need groups loaded outside the view, left for a later slice), the status strip text (shown in the view bar
+instead), keyboard focus order, a wide window, RAW, real bursts (thresholds still the RFC's starting points), Windows.
+
 ## M7 culling slice C, step 1: UX mock (2026-10-22)
 
 [similar-photos-mockup.html](docs/ux/mockups/similar-photos-mockup.html), the RFC-0028/0029 way: the UI is judged as an

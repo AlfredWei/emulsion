@@ -2,6 +2,21 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 object removal: RFC-0032 slice C, the Remove tool UX mock (2026-10-26)
+
+[remove-tool-mockup.html](docs/ux/mockups/remove-tool-mockup.html), the RFC-0028/0029/0031 way: the UI is judged by use before
+any code. A synthetic beach photo with things to remove; **Remove** beside Clone / Heal in the tool panel; three ways to mark
+(**Paint**, **Click object** with three candidates: object, object with its shadow, a wider area; **Lasso**); several marks
+in one job, each removed object its own history entry (enable box, delete); the result shown in place with **Accept /
+Undo / Use Heal instead** and Before on the `\` key; a mark that leaves the shadow or half the wire behind says so and
+offers to include it; the **large-region guard** (over 10 % of the photo) asks first; the model consent and download step.
+It also carries **the study prototype for slice C2**: variant A (accepted result stored, never changes) vs variant B
+(re-runs when the photo is opened, the fill changes), *Close and reopen photo*, and *Patch file missing* ("needs
+regenerating", nothing re-runs by itself). Checked in a browser pane by driving it (no console errors; click, paint,
+shadow offer, wire offer, guard, Heal switch, reopen A / B, missing patch, model download). **Not verified:** use by a person
+(the user's), and the fill is faked, so how Remove *looks* is still the bake-off's evidence. Next: the user tries the mock,
+then slice C2 (the small study), and the licence step (B).
+
 ## M7 object removal: RFC-0032 bake-off done (2026-10-26)
 
 [RFC-0032](docs/rfc/RFC-0032-ai-object-removal.md) now has the slice A results (§9). User answers (2026-10-26): download the

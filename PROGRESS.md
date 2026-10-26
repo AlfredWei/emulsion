@@ -2,6 +2,38 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 adaptive tone: RFC-0033 drafted, user decisions in (2026-10-26)
+
+[RFC-0033](docs/rfc/RFC-0033-adaptive-tone-presets.md), the last open M7 scope line ("adaptive / context-aware auto-tone
+presets"), a **scoping RFC: nothing built, nothing measured on photographs.** Four readings: R1 scene-aware Auto Tone,
+**R2 adaptive presets** (preset ops bound to a region kind, resolved per photo, as Lightroom's Adaptive Presets), R3 a
+learned enhancer (poor fit), R4 learning from the user's own edits. **User decisions:** adaptive presets first, better
+Auto later (R1 = slice D); read the catalog (done: 24 photos, 12 with mostly test edits, so no data to learn from); R4
+**dropped**; all five starter presets (deepen sky, lift subject, soften background, brighten faces, cool shadows) and
+study modern photography (restraint trend, Lightroom's adaptive set; no skin smoothing; Amount slider on everything;
+start values to be judged, not derived). **Checking the draft against the code changed the plan:** a local mask adjusts
+only Exposure / Contrast / Saturation, there is **no automatic sky or subject selection** (SAM is click-to-select), a face
+detector exists. So R2 needs **slice 0: richer local adjustments** (Temperature, Tint, Highlights, Shadows, Texture,
+Clarity, Dehaze in masks) and region resolvers (sky = heuristic range mask, person = faces to clicks, face = box,
+subject = person or one click). Open for the user: slice 0 as the next step, `subject` needing a click, presets
+depending on the optional 155 MB Select Subject model.
+
+**Slice A, sky resolver measured (RFC-0033 §9):** a numpy heuristic (smooth, top-connected, colour-step-limited region
+growing, clouds, hole fill) vs skyseg's masks on the 45 Commons photos of RFC-0023 §4.6: **34 of 45 differ by more than
+5 %** (the trained U-Net, rejected earlier: 19), mean IoU **0.65** (U-Net 0.76); good on open skies (desert 0.90, clear
+blue 0.88, skyline 0.79), **poor through branches (0.15), night, fog, trees**. So not a resolver to trust unattended:
+the design (§3.1b) shows what was found (coverage, overlay), flags doubtful photos and offers the manual route. Not tried:
+SAM prompted with a heuristic point, a confidence signal, `face` / `person` / `shadows` resolvers. The prototype and a
+12-photo overlay sheet are in `docs/rfc/RFC-0033-appendix/`.
+
+**User answers (round 2):** slice 0 next with its own design note (**RFC-0034**, written); a `subject` preset that asks for
+one click is fine; and "bundle the Select Subject model": **it already is** (SAM 2 Tiny, 155 MB, in
+`models/bundled-models.json`, seeded on first launch; RFC-0026 §3.5's download was superseded and RFC-0033's first draft was
+wrong about it, now corrected). **RFC-0034 finding:** the pointwise controls a mask lacks (Temperature, Tint, Highlights,
+Shadows, Whites, Blacks) already exist as `apply_global_adjustments` in both Rust and WGSL, so slice 0a is small: the mask
+pass calls it, with a test that a weight-1 mask equals the global stack; 0b (Texture, Clarity, Dehaze, spatial) needs a
+linearity probe first.
+
 ## M7 object removal: RFC-0032 slice C2, the measured part (2026-10-26)
 
 Merged: the Remove tool mock (#268). The **stored vs regenerated patch** question (the user's question 3) was first

@@ -26,6 +26,14 @@ the design (§3.1b) shows what was found (coverage, overlay), flags doubtful pho
 SAM prompted with a heuristic point, a confidence signal, `face` / `person` / `shadows` resolvers. The prototype and a
 12-photo overlay sheet are in `docs/rfc/RFC-0033-appendix/`.
 
+**User answers (round 2):** slice 0 next with its own design note (**RFC-0034**, written); a `subject` preset that asks for
+one click is fine; and "bundle the Select Subject model": **it already is** (SAM 2 Tiny, 155 MB, in
+`models/bundled-models.json`, seeded on first launch; RFC-0026 §3.5's download was superseded and RFC-0033's first draft was
+wrong about it, now corrected). **RFC-0034 finding:** the pointwise controls a mask lacks (Temperature, Tint, Highlights,
+Shadows, Whites, Blacks) already exist as `apply_global_adjustments` in both Rust and WGSL, so slice 0a is small: the mask
+pass calls it, with a test that a weight-1 mask equals the global stack; 0b (Texture, Clarity, Dehaze, spatial) needs a
+linearity probe first.
+
 ## M7 object removal: RFC-0032 slice C2, the measured part (2026-10-26)
 
 Merged: the Remove tool mock (#268). The **stored vs regenerated patch** question (the user's question 3) was first

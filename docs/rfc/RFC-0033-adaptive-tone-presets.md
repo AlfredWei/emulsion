@@ -54,13 +54,13 @@ Shape (unchanged in spirit): a preset op carries a **region binding** instead of
 | Kind | Resolver | Needs a model | Confidence |
 |---|---|---|---|
 | `sky` | A composed **colour / luminance range mask** from the photo itself (bright, blue or warm-gradient, connected to the top edge), the manual recipe RFC-0026 recommends, automated. Measured on labelled photographs in slice B | No | **Measured (§9): good on open skies, poor through branches, on night and fog; not reliable unattended.** Needs a "what was found" check (§3.1b) |
-| `person` | **Face boxes (RFC-0005) to segmentation clicks** (a point on the face and one on the torso below it) through the existing SAM decoder, one mask per detected person, merged | Yes: the optional 155 MB Select Subject model (RFC-0026 §3.5); without it the kind is unavailable and the preset says why | Good where a face is found; none where not |
+| `person` | **Face boxes (RFC-0005) to segmentation clicks** (a point on the face and one on the torso below it) through the existing SAM decoder, one mask per detected person, merged | Yes: the Select Subject model (SAM 2 Tiny, **already bundled in the installer** and seeded on first launch; RFC-0026 §3.5 proposed a download, `models/bundled-models.json` ships it). The segmenter needs GPU acceleration (the tool is disabled without it), so on a machine without one the kind is unavailable and the preset says why | Good where a face is found; none where not |
 | `face` | The face box and landmarks only (an ellipse), no segmenter; for "brighten faces", where the edge does not need to be exact | No | Good; limited to what the detector finds |
 | `subject` | **Not automatic in this RFC.** Resolves to `person` when a person is found; otherwise the preset asks the user to click the subject once on the open photo (a one-click Select Subject), and cannot be applied to a batch | Yes | Honest: a click is not "automatic", and the RFC says so |
 | `background` | The inverse of `person` or the clicked subject | Yes | As its source |
 | `shadows` / `highlights` | A **luminance range mask** (existing), feathered | No | High: it is deterministic |
 
-- **A binding the photo cannot satisfy is skipped and reported** ("No sky found in 4 of 12 photos", "Needs the Select Subject model"), never an empty mask. A coverage floor (for example under 2 % of the frame counts as not found) is measured in slice B, not guessed.
+- **A binding the photo cannot satisfy is skipped and reported** ("No sky found in 4 of 12 photos", "Needs GPU acceleration for the person mask"), never an empty mask. A coverage floor (for example under 2 % of the frame counts as not found) is measured in slice B, not guessed.
 - **An Amount slider** scales the whole preset (0 to 100, default 50 to 70). Lightroom's adaptive presets have one, and it is the answer to "too strong on this photo". Presets are written **restrained** (§3.3).
 - **Applying to many photos** is a background batch job (the segmenter takes time), cancellable, one at a time like the other helper jobs.
 - Masks resolved from a preset are excluded from XMP and from Copy Settings like any AI mask. **The preset itself is a name and numbers**, small and shareable.
@@ -127,7 +127,7 @@ Unchanged from the first draft and **deferred by the user**: keep today's Auto T
 | **0** | **Richer local adjustments**: Temperature, Tint, Highlights, Shadows, Texture, Clarity, Dehaze (then Sharpness, Noise) inside masks; its own design document, parity tests, performance check | Nothing from the user. Starts with a short design note on the mask pass |
 | **A** | **Region resolvers measured**: `sky` (heuristic) **done, §9**; `face`, `person` (faces to clicks), `shadows` still to do; found / not found, the coverage floor; no UI | Web photographs (the user's too if wanted) |
 | **B** | **Region-bound preset ops**: the model, apply, not-found handling, History entry, Amount, batch job, tests | A, and 0 for the non-sky presets |
-| **C** | **UX mock, then UI**: the preset editor's "bind to region" control, the five starter presets, hover preview, Amount, "needs the Select Subject model" and "no sky found" states | B; a mock first (the RFC-0028 / 0029 / 0031 / 0032 way) |
+| **C** | **UX mock, then UI**: the preset editor's "bind to region" control, the five starter presets, hover preview, Amount, "needs GPU acceleration" and "no sky found" states | B; a mock first (the RFC-0028 / 0029 / 0031 / 0032 way) |
 | **D** | **R1: scene-aware Auto Tone**, only if blind pairs say it wins | A and 0 |
 
 0 and A are independent and can run in either order; the sky resolver (A) is the thing most likely to change the plan.
@@ -141,18 +141,20 @@ Unchanged from the first draft and **deferred by the user**: keep today's Auto T
 
 ## 8. Decisions and questions
 
-Answered by the user on 2026-10-26:
+Answered by the user on 2026-10-26 (first round):
 
 1. **Order: adaptive presets first, a better Auto later.** (§3, §6: R1 is slice D.)
 2. **Reading the catalog: yes.** Done, read-only, on a copy: 24 photographs, 12 with edits, mostly test edits (§3.5). Not enough to measure with; web photographs are the plan (slice A).
 3. **R4 (learning from the user's own edits): dropped.**
 4. **Starter presets: all five candidates, and study modern photography too** (§3.3).
 
-Open, for the user:
+Answered by the user on 2026-10-26 (second round):
 
-- **A. Slice 0 is the prerequisite and is large** (§3.1a): richer local adjustments are needed before most of the starter set exists. Is that the right next step, with its own design note first? (Starting with slice A, the sky resolver, in parallel is possible.)
-- **B. The `subject` kind** needs a click, or a person found by the face detector (§3.1). Is "a preset that asks you to click the subject once" acceptable, or should `subject` be person-only until an automatic subject model exists?
-- **C. The Select Subject model is a 155 MB optional download** and `person` / `subject` / `background` presets depend on it. Acceptable that those presets say "needs the Select Subject model" until it is installed?
+5. **Slice 0 (richer local adjustments) is the next step, with its own design note first:** yes. The note is [RFC-0034](RFC-0034-richer-local-adjustments.md).
+6. **A `subject` preset that asks for one click is acceptable:** yes (§3.1).
+7. **Bundle the Select Subject model with the installer.** **It already is** (SAM 2 Tiny encoder and decoder, 155 MB, listed in `models/bundled-models.json` and seeded on first launch; the release smoke test in PROGRESS confirmed it). This RFC's first draft wrongly called it an optional download, following RFC-0026 §3.5's older proposal; §3.1 is corrected. What remains true: the segmenter needs GPU acceleration, so the person / subject / background presets are unavailable, with a message, on a machine without it.
+
+Open: none for this RFC. (RFC-0032's question C, bundling LaMa's 208 MB, is separate and still open: unlike SAM it would roughly add 208 MB to a 283 MB installer.)
 
 ## 9. Slice A, the sky resolver measured (2026-10-26)
 

@@ -1,6 +1,6 @@
 # RFC-0033: Adaptive and context-aware tone: what it could mean here, and what to build first (M7 slice 3)
 
-- Status: Draft for review. **A scoping RFC: it frames the question, reads what is known, and proposes an order. It builds nothing and measures nothing yet** (§6 says what the first measurement needs).
+- Status: Draft for review. **A scoping RFC: it frames the question, reads what is known, and proposes an order. It builds nothing and measures nothing on photographs yet.** User decisions of 2026-10-26 are in §8; they changed the order (adaptive presets first, better Auto later) and removed the personal-learning reading.
 - Date: 2026-10-26
 - Relates to: [MILESTONES.md](../../PRD/MILESTONES.md) M7 ("adaptive / context-aware auto-tone presets"), [RFC-0026](RFC-0026-click-select-segmentation.md) (subject and sky masks), [RFC-0028](RFC-0028-context-menus-and-develop-multiselect.md) (presets, Copy / Paste Settings, what is excluded from them), [RFC-0031](RFC-0031-intelligent-culling.md) §5 ("adaptive auto-tone presets want their own RFC after culling"), [RFC-0032](RFC-0032-ai-object-removal.md) §3.2 and §10 (stored vs regenerated results, which applies here too)
 
@@ -29,77 +29,123 @@ The gap is two separate things that the milestone line joins:
 | **R1. Scene-aware heuristics** | Classify the picture (high key, low key, backlit, night, snow, sunset ...) from histogram shape and cheap statistics, then pick the targets. Still sliders. | No model, no download, explainable, testable. Quality depends on the rules; **only a user's judgement says whether it is better** than today's Auto. |
 | **R2. Adaptive presets** | A preset's local adjustments are bound to a *kind of region* ("sky", "subject", "person", "background") and resolved to a mask when applied to each photo. This is how Lightroom Classic's Adaptive Presets (Portrait, Sky, Subject groups) work, by its own help and third-party descriptions: the preset runs an AI mask, then applies its settings to it, which is why previewing one takes a moment. | **Uses models we already ship** (RFC-0026). New: a way to store a region binding in a preset, resolve it per photo, and say plainly when it finds nothing (no sky in an indoor photo). The mask is a per-photo result (§3.2). |
 | **R3. A learned auto-enhancer** | A network predicts the edit. Lightroom's own Auto is described as using Adobe's Sensei models; academic examples are image-adaptive 3D lookup tables (AdaInt, CVPR 2022: code Apache-2.0 per its repository, a 5-layer backbone on the FiveK set, real-time). | **Two problems that are not engineering ones.** (a) The *output is a colour lookup, not sliders*: the edit becomes one opaque op the user cannot adjust with the controls they know, or must be fitted back to sliders (lossy). (b) **Training data**: the usual set (MIT-Adobe FiveK) has an unclear licence in what was found (mirrors label it "adobe-mit" or "Other"; the official terms were **not** retrieved); a model trained on someone's retouching needs the same licence reading RFC-0032 §9.4 asks for Places2. |
-| **R4. Personal adaptive** | Learn from **the user's own finished edits** (on this machine, never uploaded): for a new photo, find photos like it that the user edited, and propose their typical slider values. "Edit like I usually do." | No model download and no third-party data licence; **it needs the user's edits** (hundreds of photos to be useful) and **a measurement of whether it beats the fixed rules** before anything is built. Privacy-clean, and not something Lightroom does. |
+| **R4. Personal adaptive** (**dropped by the user, §8**) | Learn from **the user's own finished edits** (on this machine, never uploaded): for a new photo, find photos like it that the user edited, and propose their typical slider values. "Edit like I usually do." | No model download and no third-party data licence; **it needs the user's edits** (hundreds of photos to be useful) and **a measurement of whether it beats the fixed rules** before anything is built. Privacy-clean, and not something Lightroom does. |
 
 Not in the table, and not proposed: cloud analysis (PRD: no cloud), generative colour grading, and matching any product's proprietary "Auto".
 
 ## 3. What this RFC proposes
 
-**Order: R2 first, a measured R1 beside it, R4 as a study, R3 not now.**
+**Decided with the user (§8): adaptive presets (R2) first; a better Auto Tone (R1) later; personal learning (R4) dropped; the learned enhancer (R3) not now.**
 
-### 3.1 R2 first: it is the part nobody can get from the current app
+### 3.0 What the code has, which changes R2's size (read from the app, 2026-10-26)
 
-R2 needs no new model, builds on RFC-0026, and gives the user something visible: presets such as "Sky: deepen and cool", "Subject: lift and warm", "Portrait: soften background". Shape:
+Three facts found while checking the first draft against the code; all three make R2 bigger than "bind a preset to the masks we have":
 
-- A preset op may carry a **region binding** (`sky`, `subject`, `person`, `background` = the inverse of the subject) instead of a mask raster. The binding, the adjustments and the feather live in the preset; **no raster is stored in the preset**.
-- **Apply** resolves the binding for each target photo with the existing segmenters, writes the resulting mask into that photo's edit stack as the ordinary segment mask it already is (per-photo, excluded from copy as today), with a **history entry that says what was bound** ("Sky: deepen and cool: sky found, 31 % of the frame").
-- **When nothing is found**, the op is skipped and the result says so ("No sky found in 4 of 12 photos"), never a silent empty mask. A coverage floor (for example under 2 % of the frame) counts as not found; the number is measured in slice B, not guessed.
-- **Applying to many photos** is a batch job in the background (the segmenter takes time), cancellable, and one at a time like the other helper jobs.
-- **Presets are excluded from XMP** as masks already are, and the binding is a name plus numbers, so a preset file is small and shareable.
+1. **A local mask adjusts only three things: Exposure, Contrast, Saturation** (`SegmentMask`, and the other mask ops, carry exactly those). Lightroom's adaptive presets move Temperature, Tint, Highlights, Shadows, Clarity, Texture, Dehaze, Sharpness and Noise inside a mask. Most of the starter set (§3.3) cannot be expressed with three sliders.
+2. **There is no automatic "select the sky" or "select the subject".** The segmenter is a click-to-select tool (SAM 2: the user clicks; RFC-0026 §4 lists "sky detection" and "automatic whole-image select all subjects" as out of scope, and RFC-0023 found auto-picking the top candidate chose the wrong level in 2 of 6 tries). Sky is today a manual Luminance / Color Range mask.
+3. **A face detector exists** (RFC-0005, on device, already run after import): boxes and landmarks per face. It can seed a segmentation click, so *person* can be automatic where *subject* cannot.
+
+### 3.1 R2: region-bound presets
+
+Shape (unchanged in spirit): a preset op carries a **region binding** instead of a mask raster; **apply** resolves it for each photo, writes the ordinary per-photo mask into the edit stack, records what was bound in History, and says so plainly when nothing is found. Details:
+
+- **Region kinds and how each is resolved** (the part the first draft got wrong by assuming one segmenter does all):
+
+| Kind | Resolver | Needs a model | Confidence |
+|---|---|---|---|
+| `sky` | A composed **colour / luminance range mask** from the photo itself (bright, blue or warm-gradient, connected to the top edge), the manual recipe RFC-0026 recommends, automated. Measured on labelled photographs in slice B | No | Unknown until measured; fails on indoor photos, on sky seen through trees, on a flat overcast sky (§5) |
+| `person` | **Face boxes (RFC-0005) to segmentation clicks** (a point on the face and one on the torso below it) through the existing SAM decoder, one mask per detected person, merged | Yes: the optional 155 MB Select Subject model (RFC-0026 §3.5); without it the kind is unavailable and the preset says why | Good where a face is found; none where not |
+| `face` | The face box and landmarks only (an ellipse), no segmenter; for "brighten faces", where the edge does not need to be exact | No | Good; limited to what the detector finds |
+| `subject` | **Not automatic in this RFC.** Resolves to `person` when a person is found; otherwise the preset asks the user to click the subject once on the open photo (a one-click Select Subject), and cannot be applied to a batch | Yes | Honest: a click is not "automatic", and the RFC says so |
+| `background` | The inverse of `person` or the clicked subject | Yes | As its source |
+| `shadows` / `highlights` | A **luminance range mask** (existing), feathered | No | High: it is deterministic |
+
+- **A binding the photo cannot satisfy is skipped and reported** ("No sky found in 4 of 12 photos", "Needs the Select Subject model"), never an empty mask. A coverage floor (for example under 2 % of the frame counts as not found) is measured in slice B, not guessed.
+- **An Amount slider** scales the whole preset (0 to 100, default 50 to 70). Lightroom's adaptive presets have one, and it is the answer to "too strong on this photo". Presets are written **restrained** (§3.3).
+- **Applying to many photos** is a background batch job (the segmenter takes time), cancellable, one at a time like the other helper jobs.
+- Masks resolved from a preset are excluded from XMP and from Copy Settings like any AI mask. **The preset itself is a name and numbers**, small and shareable.
+
+### 3.1a Slice 0: richer local adjustments (the real prerequisite)
+
+Without it R2 has almost nothing to adjust. **Extend the mask adjustments** from three to the set the starter presets need: **Temperature, Tint, Highlights, Shadows, Texture, Clarity, Dehaze** (all already global ops with CPU and GPU implementations), and, if the budget allows, **Sharpness** and **Noise Reduction** (the "soften the background" and "protect the sky" uses). The work is in the mask pass: each added adjustment is another term in the WGSL `fs_mask` and its CPU twin, packed per mask, with CPU / GPU parity tests (the `develop-cpu-gpu-parity` harness) and a performance check against M5's ~100 ms interactive budget (more adjustments per mask means more work per pixel in every mask). **This is its own RFC-sized slice and is useful on its own**: it improves every manual mask, not just presets. It is scoped here, designed in its own document.
 
 ### 3.2 It follows the stored-result rule of RFC-0032
 
 The mask a segmenter produced for one photo is a result the user may have fine-tuned (RFC-0026's modifier). Per RFC-0032 §10 (same machine, same model: identical; other providers: small differences), the **resolved mask is stored with the photo's edit stack and never silently re-resolved**; "Re-apply preset" is an explicit action. This avoids a preset re-run changing an edit the user already accepted.
 
-### 3.3 R1: a better Auto Tone, judged by a person, not by a metric
+### 3.3 The starter set, and what "modern" means for it
 
-- **Keep the current Auto Tone as the baseline and the fallback.** Any new rule set ships only if the user, shown pairs without labels, prefers it on enough photos (§5).
-- Inputs are cheap: the histogram, the percentiles already used, plus **segment-mask statistics where masks exist** ("do not brighten the sky to the subject's median"; "protect a snow scene's whites"). Output stays the existing seven sliders, so the result is explainable and editable and nothing new is stored.
-- The rule set must be small enough to be described in the user guide in a paragraph, or it is the wrong design.
+The user asked for **all five candidates** and for **a study of modern photography** to inform them. The study is a reading, not a measurement; what the sources found (search results, not primary sources) and what it changes:
 
-### 3.4 R4: a study, not a slice
+- **Restraint.** Several 2026 trend pieces describe a move away from the hyper-polished look (synthetic skin, impossible lighting) toward natural colour, soft tones and minimal retouching, especially for documentary and street work; film grain and faded colour are popular as a counter to the "too perfect" look. **So the presets are written restrained, and every one has the Amount slider** (default well under full). No skin smoothing preset; skin is left as it is.
+- **What Lightroom's adaptive set does** (help pages and tutorials): three groups, Portrait, Sky and Subject, a Blur-Background one, Amount slider, previewed on hover; Portrait has component presets (Whiten Teeth, Darken Eyebrows) and some build several masks (one Glamour preset creates seven). **Teeth, iris, lips and eyebrows need a facial-feature segmenter we do not have** (RFC-0005 gives face landmarks, not part masks): they are out of this RFC, and may come as landmark-shaped masks later.
+- **What the study could not find**: current practice for dehaze, subject separation and skin-tone calibration (the searches returned nothing on them). The numbers below are therefore **starting values to be judged on photographs in slice C, not derived values**, labelled as that in the preset's description, the RFC-0022 way ("aesthetic choice, no claim to match any product").
 
-The idea is attractive (a personalised Auto, privacy-clean) and its viability is unknown. It is cheap to measure **offline** once there is data: leave one photo out, predict its sliders from its nearest neighbours' sliders (neighbour = a few image statistics, no model), and compare the error with today's Auto Tone and with "all zeros" on the same photos. **If it does not clearly beat Auto Tone on the user's own edits, it is dropped**, and nothing was built. §6 says what data is needed.
+The five starter presets, with the adjustments each needs and whether today's three-slider masks could do it:
 
-### 3.5 R3, not now
+| Preset | Region | Adjustments (restrained start values, Amount 100 %) | Needs slice 0? |
+|---|---|---|---|
+| **Deepen sky** | `sky` | Exposure -0.3, Contrast +12, Saturation +10, Dehaze +10 | Dehaze: yes. The first three: today |
+| **Lift subject** | `subject` / `person` | Exposure +0.25, Shadows +15, Clarity +8 | Shadows, Clarity: yes |
+| **Soften background** | `background` | Clarity -15, Texture -20, Saturation -8, Exposure -0.1 (a real blur is out of scope: no blur op exists) | Clarity, Texture: yes |
+| **Brighten faces** | `face` | Exposure +0.3, Shadows +12, Temperature +3 (a little warmth) | Shadows, Temperature: yes |
+| **Cool the shadows** | `shadows` | Temperature -8, Saturation -5 | Temperature: yes |
 
-A learned enhancer fits poorly here for the two reasons in §2: a lookup output does not fit a slider edit stack, and the training-data licence question repeats RFC-0032's. **Revisit if R1 and R4 are judged not good enough**, with a survey in the RFC-0023 manner (size, licence, accuracy, hardware) before any build.
+Only part of **Deepen sky** works today; **the rest wait for slice 0**.
+
+### 3.4 R1 later: a better Auto Tone, judged by a person, not by a metric
+
+Unchanged from the first draft and **deferred by the user**: keep today's Auto Tone as the baseline and fallback; inputs are the histogram and, where masks exist, mask statistics (do not brighten the sky to the subject's median; protect a snow scene's whites); output stays the existing seven sliders; the rule set must fit in a paragraph of the user guide; it ships only if blind pairs say it wins and loses nowhere badly (§5). It reuses slice 0 and the region resolvers.
+
+### 3.5 R4 dropped, R3 not now
+
+**R4 (learning from the user's own edits) is dropped by the user.** For the record, the catalog was looked at (read-only copy, with permission): it holds 24 photographs, 12 with any edit and mostly test edits, so it could not have supported the study anyway. **R3** (a learned enhancer) fits poorly for the reasons in §2 (a lookup output does not fit a slider edit stack; the training-data licence question repeats RFC-0032's); revisit only if R1 is judged not good enough, with a survey in the RFC-0023 manner first.
 
 ## 4. Not in this RFC
 
-- Cloud, generative grading, colour grading by reference image, film-stock colour emulation (M5.8's grain only is built; colour is a separate question).
-- **Auto crop / straighten / auto-subject framing.**
-- **Auto White Balance changes**: the gray-world rule has the same blindness, but it is a separate decision (a scene-aware WB can use the same classifier as R1 if R1 ships).
+- Cloud, generative grading, colour grading by reference image, film-stock colour emulation (M5.8's grain only is built).
+- **Part-of-face masks** (teeth, eyes, lips, eyebrows, hair), skin smoothing, **a real background blur**, automatic "select all subjects", sky replacement.
+- **Auto crop / straighten / framing.**
+- **Auto White Balance changes** (the gray-world rule has the same blindness; a separate decision).
 - Anything in Library (culling is RFC-0031).
 
 ## 5. How it is judged
 
-- **R2**: it must do what its name says on a set of real photographs: sky found / not found correct on a labelled set, the coverage floor chosen from that set, the result judged at 100 % for halos on the mask edge (the failure RFC-0026's modifier exists for). Time per photo and for a 30-photo batch.
-- **R1**: **blind pairs**. The same 30 photographs (the user's, across scene types), Auto Tone as it is vs the new rules, shown without labels, the user picks or says "same". The new rules ship only if they win clearly and **lose nowhere badly** (a regression on a photo type is worse than no gain). Slider agreement with the user's own finished edits is recorded as a second signal, not the decision.
-- **R4**: leave-one-out error against Auto Tone and against zeros, on the user's edited photos, in slider space and in the resulting histogram percentiles.
+- **Region resolvers**: on labelled photographs (sky present or absent, person present or absent, the user's own and web photographs, as in RFC-0032's bake-off), the resolver's *found / not found* is right, the **coverage floor** is chosen from the data, and the mask edge is looked at 100 % for halos (the failure RFC-0026's feather and grow exist for). **The sky resolver is the main risk and is measured first.**
+- **Presets**: each starter preset is applied to a set of 20 or more photographs across scene types and **looked at by the user** at Amount 100 % and at the default; a preset that looks wrong on a photo type is narrowed or dropped, not shipped with a caveat. Time per photo and for a 30-photo batch.
+- **Slice 0**: CPU / GPU parity on every added adjustment, interactive time with eight masks (RFC-0025's budget).
+- **R1 (later)**: blind pairs, as before: the same 30 photographs, today's Auto vs the new rules, no labels, win clearly and lose nowhere badly.
 
 ## 6. Slice plan
 
 | Slice | What | Needs |
 |---|---|---|
-| **A** | **The measurement kit**: an exporter that writes (image statistics, slider values) for every edited photo in a catalog, plus the leave-one-out and blind-pair tools. Reports today's Auto Tone vs the user's own edits | **The user's edited photos** (their catalog, or an export of edit stacks with thumbnails). Nothing leaves the machine |
-| **B** | R2: region-bound preset ops: the model, apply with the existing segmenters, not-found handling, history entry, batch job, tests | Slice A's labelled sky / subject set for the coverage floor |
-| **C** | R2 UI: the preset editor's "bind to region" control, a small starter set (Sky, Subject, Portrait), preview on hover (as presets do) | UX mock first, the RFC-0028 / 0029 / 0031 / 0032 way |
-| **D** | R1: scene-aware Auto Tone, only if the blind-pair test says it wins | Slice A |
-| **E** | R4: only if slice A's leave-one-out shows a clear win | Slice A |
+| **0** | **Richer local adjustments**: Temperature, Tint, Highlights, Shadows, Texture, Clarity, Dehaze (then Sharpness, Noise) inside masks; its own design document, parity tests, performance check | Nothing from the user. Starts with a short design note on the mask pass |
+| **A** | **Region resolvers measured**: `sky` (heuristic), `face`, `person` (faces to clicks), `shadows`; labelled photographs, found / not found, the coverage floor; no UI | Web photographs (the user's too if wanted) |
+| **B** | **Region-bound preset ops**: the model, apply, not-found handling, History entry, Amount, batch job, tests | A, and 0 for the non-sky presets |
+| **C** | **UX mock, then UI**: the preset editor's "bind to region" control, the five starter presets, hover preview, Amount, "needs the Select Subject model" and "no sky found" states | B; a mock first (the RFC-0028 / 0029 / 0031 / 0032 way) |
+| **D** | **R1: scene-aware Auto Tone**, only if blind pairs say it wins | A and 0 |
 
-Slices B and C do not depend on D or E: adaptive presets are useful whatever Auto does.
+0 and A are independent and can run in either order; the sky resolver (A) is the thing most likely to change the plan.
 
 ## 7. Not verified
 
-- **Everything about quality.** No photograph was processed for this RFC. Whether scene rules beat Auto Tone, whether neighbours predict a user's sliders, and whether the coverage floor is 2 % or 5 % are all open.
-- **Lightroom's behaviour** is from help pages and third-party descriptions, not from using it here.
-- **FiveK's licence and AdaInt's model sizes and accuracy**: not read in the primary sources (§2).
-- **Windows**: segmenters on the Windows runner are as verified as RFC-0026 left them.
+- **Everything about quality.** No photograph was processed for this RFC. Whether a heuristic sky mask is good enough, what the coverage floor is, whether the starting values look right, and whether scene rules beat Auto Tone are all open.
+- **The three code facts in §3.0** are from reading `develop.js`, `segment.js` and RFC-0026 / RFC-0023, not from running the app.
+- **Lightroom's behaviour** is from help pages and third-party descriptions, not from using it here. **FiveK and AdaInt** details were not read in the primary sources (§2). **Modern-photography trends** are from a handful of blog and news pieces, not a survey.
+- **Windows**: the segmenter and the mask pass on the Windows runner are as verified as RFC-0026 and RFC-0025 left them.
 
-## 8. Questions for the user
+## 8. Decisions and questions
 
-1. **Order**: R2 (adaptive, mask-bound presets) first, with the measurement kit beside it, as §3 proposes? Or the better-Auto first?
-2. **Your edits as data** (slice A): may the measurement kit read your own catalog (read-only, on this machine) to build the evidence for R1 and R4? If you would rather not, a folder of about 100 edited photos with their settings works.
-3. **R4**: is "learns from my own edits, locally" something you would want, or is a fixed good Auto enough? (If not wanted, slice E is removed now.)
-4. **Starter presets** (slice C): which region presets would you actually use? Candidates: deepen the sky, lift the subject, soften the background, brighten faces, cool the shadows.
+Answered by the user on 2026-10-26:
+
+1. **Order: adaptive presets first, a better Auto later.** (§3, §6: R1 is slice D.)
+2. **Reading the catalog: yes.** Done, read-only, on a copy: 24 photographs, 12 with edits, mostly test edits (§3.5). Not enough to measure with; web photographs are the plan (slice A).
+3. **R4 (learning from the user's own edits): dropped.**
+4. **Starter presets: all five candidates, and study modern photography too** (§3.3).
+
+Open, for the user:
+
+- **A. Slice 0 is the prerequisite and is large** (§3.1a): richer local adjustments are needed before most of the starter set exists. Is that the right next step, with its own design note first? (Starting with slice A, the sky resolver, in parallel is possible.)
+- **B. The `subject` kind** needs a click, or a person found by the face detector (§3.1). Is "a preset that asks you to click the subject once" acceptable, or should `subject` be person-only until an automatic subject model exists?
+- **C. The Select Subject model is a 155 MB optional download** and `person` / `subject` / `background` presets depend on it. Acceptable that those presets say "needs the Select Subject model" until it is installed?

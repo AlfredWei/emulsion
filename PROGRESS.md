@@ -2,18 +2,22 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
-## M7 adaptive tone: RFC-0033 drafted (2026-10-26)
+## M7 adaptive tone: RFC-0033 drafted, user decisions in (2026-10-26)
 
 [RFC-0033](docs/rfc/RFC-0033-adaptive-tone-presets.md), the last open M7 scope line ("adaptive / context-aware auto-tone
-presets"), a **scoping RFC: nothing built, nothing measured on photographs.** It splits the phrase into four readings:
-R1 scene-aware Auto Tone (heuristics, still sliders), **R2 adaptive presets** (preset ops bound to a region kind: sky /
-subject / person / background, resolved per photo with the existing RFC-0026 segmenters, as Lightroom's Adaptive Presets
-do; today AI masks are excluded from presets), R3 a learned enhancer (poor fit: lookup output not sliders, and the
-training-data licence question, FiveK's terms not retrieved), R4 personal (learn from the user's own edits, locally).
-**Proposal: R2 first, a measured R1 beside it, R4 as a study on the user's data, R3 not now.** Resolved masks stay stored
-with the photo (same rule as RFC-0032 §10). Judged by blind pairs and leave-one-out on the user's photos. Slice plan A
-(measurement kit) to E. Questions for the user: order, may the kit read their catalog, whether R4 is wanted, starter
-presets. Web facts are from search results, not primary sources.
+presets"), a **scoping RFC: nothing built, nothing measured on photographs.** Four readings: R1 scene-aware Auto Tone,
+**R2 adaptive presets** (preset ops bound to a region kind, resolved per photo, as Lightroom's Adaptive Presets), R3 a
+learned enhancer (poor fit), R4 learning from the user's own edits. **User decisions:** adaptive presets first, better
+Auto later (R1 = slice D); read the catalog (done: 24 photos, 12 with mostly test edits, so no data to learn from); R4
+**dropped**; all five starter presets (deepen sky, lift subject, soften background, brighten faces, cool shadows) and
+study modern photography (restraint trend, Lightroom's adaptive set; no skin smoothing; Amount slider on everything;
+start values to be judged, not derived). **Checking the draft against the code changed the plan:** a local mask adjusts
+only Exposure / Contrast / Saturation, there is **no automatic sky or subject selection** (SAM is click-to-select), a face
+detector exists. So R2 needs **slice 0: richer local adjustments** (Temperature, Tint, Highlights, Shadows, Texture,
+Clarity, Dehaze in masks) and region resolvers (sky = heuristic range mask, person = faces to clicks, face = box,
+subject = person or one click). Open for the user: slice 0 as the next step, `subject` needing a click, presets
+depending on the optional 155 MB Select Subject model.
+
 ## M7 object removal: RFC-0032 slice C2, the measured part (2026-10-26)
 
 Merged: the Remove tool mock (#268). The **stored vs regenerated patch** question (the user's question 3) was first

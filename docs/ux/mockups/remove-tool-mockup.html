@@ -343,10 +343,10 @@ function renderHist(){
   const ul=$('hist');
   if(!hist.length){ ul.className='hist empty'; ul.innerHTML='<li style="color:var(--text-tertiary)">No edits yet</li>'; return; }
   ul.className='hist';
-  ul.innerHTML = hist.map(h=>`<li><input type="checkbox" ${h.on?'checked':''} data-on="${h.id}" aria-label="Enabled"><span class="k ${h.kind==='Heal'?'heal':''}">${h.kind}</span><span class="nm">${h.label}</span>${h.missing?`<span class="need">needs regenerating</span><button class="btn" data-regen="${h.id}" style="padding:1px 6px">Regenerate</button>`:''}<button class="x" data-del="${h.id}" title="Delete">×</button></li>`).join('');
+  ul.innerHTML = hist.map(h=>`<li><input type="checkbox" ${h.on?'checked':''} data-on="${h.id}" aria-label="Enabled"><span class="k ${h.kind==='Heal'?'heal':''}">${h.kind}</span><span class="nm">${h.label}</span>${h.missing?`<span class="need">needs regenerating</span><button class="btn" data-regen="${h.id}" style="padding:1px 6px" title="Re-makes the fill from the saved mark. It may look slightly different.">Regenerate</button>`:''}<button class="x" data-del="${h.id}" title="Delete">×</button></li>`).join('');
   ul.querySelectorAll('[data-on]').forEach(c=>c.onchange=()=>{ hist.find(h=>h.id==c.dataset.on).on=c.checked; renderPhoto(); });
   ul.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ hist=hist.filter(h=>h.id!=b.dataset.del); renderPhoto(); });
-  ul.querySelectorAll('[data-regen]').forEach(b=>b.onclick=()=>{ const h=hist.find(h=>h.id==b.dataset.regen); h.missing=false; h.seed=Math.floor(Math.random()*1e6); renderPhoto(); toast('Regenerated: ' + h.label); });
+  ul.querySelectorAll('[data-regen]').forEach(b=>b.onclick=()=>{ const h=hist.find(h=>h.id==b.dataset.regen); h.missing=false; h.seed=Math.floor(Math.random()*1e6); renderPhoto(); toast('Regenerated ' + h.label + ' from the saved mark. It may look slightly different from what you accepted.'); });
 }
 function renderBar(){
   const b=$('rbar');

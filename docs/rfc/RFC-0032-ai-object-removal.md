@@ -62,7 +62,7 @@ The pipeline applies patches **first**, to the source pixels, before tone, colou
 
 - **Non-destructive and undoable** through the existing history, like any op.
 - **Per-photo**: excluded from Copy Settings and Auto Sync the way crop and spot removal already are (RFC-0028 §3.5), because a mask is only meaningful on its own photo.
-- **The patch is a stored file, not a cache entry (provisional: the user asked for a small study of this before it is decided, slice C2).** A GAN's output can differ between CPU and CoreML, so regenerating it later could change a picture the user already accepted. It lives next to the catalog data (backed up with it) and is deleted with its op. If the file is missing the op shows a "needs regenerating" state rather than silently re-running.
+- **The patch is a stored file, not a cache entry (provisional: the user asked for a small study of this before it is decided, slice C2; §10 measured that the reason given here is much weaker than assumed for LaMa).** A GAN's output can differ between CPU and CoreML, so regenerating it later could change a picture the user already accepted. It lives next to the catalog data (backed up with it) and is deleted with its op. If the file is missing the op shows a "needs regenerating" state rather than silently re-running.
 - **Not exportable to XMP** (no standard to carry it); the existing sidecar story for AI results applies.
 - CPU interpreter and GPU path both just **composite a stored image over a region**; no model runs in the render path.
 
@@ -105,7 +105,7 @@ Measured: **time and peak memory** on this Mac (CPU, and CoreML where the model 
 | **A** | Bake-off: PatchMatch, MI-GAN, LaMa on 60 hole cases over 20 photographs; times, memory, providers | **Done (§9)**; the by-eye table awaits the user's ruling |
 | **B** | Licence step and ADR: Places2 terms (§9.4), LaMa weights file, bundle vs download of 208 MB, where patches live | Needs the user's licence decision |
 | **C** | UX mock of the Remove tool (§3.4): [remove-tool-mockup.html](../ux/mockups/remove-tool-mockup.html) | **Done** (awaits the user's use of it) |
-| **C2** | **Small study: stored patch vs regenerate on demand** (§3.2, the user's question 3). Run with the mock and a prototype: 5 to 8 photographers (the user first), tasks "remove, edit further, close, come back / open on the other machine / copy the catalog", compare *a fixed stored result* with *a result that re-runs and may differ*: measure surprise, trust, and what they would pick. Decides §3.2 before slice D builds it | After C |
+| **C2** | **Small study: stored patch vs regenerate on demand** (§3.2, the user's question 3). **Measured part done (§10); the study with people is ready to run ([protocol](RFC-0032-appendix/c2-patch-study.md)).** Run with the mock and a prototype: 5 to 8 photographers (the user first), tasks "remove, edit further, close, come back / open on the other machine / copy the catalog", compare *a fixed stored result* with *a result that re-runs and may differ*: measure surprise, trust, and what they would pick. Decides §3.2 before slice D builds it | After C |
 | **D** | Engine and job: `inpaint_run` helper op (LaMa), crop / blend, **detail transfer** for holes the 512 px network sees reduced, the `remove` op with stored patches, CPU and GPU compositing | After B and C2 |
 | **E** | Develop UI: the Remove tool, paint / click / lasso, accept / undo, Heal fallback, large-region guard, history entries, model manager entry | After D |
 | **F** | Quality work the bake-off shows is needed: detail and grain matching, halo growth, better PatchMatch as a no-download fallback if wanted | After E |
@@ -182,3 +182,28 @@ Closest to the original: **LaMa in 46 of 60 cases**, PatchMatch 13, MI-GAN 1. La
 - **LaMa**: code Apache-2.0 (the ONNX port's card, and the original's `big-lama` card on Hugging Face, both say Apache-2.0; the repo's `LICENSE` text was not retrievable here). **Trained on Places2.**
 - **MI-GAN**: code MIT; the weights' file `LICENSE-WEIGHTS` has MIT wording that speaks only of "Software". **Trained on Places2.**
 - **Places2**: the terms page could not be reached (connection refused), so **its terms were not read**. From memory (not verified) it is distributed for non-commercial research and education, and its images are third parties' photographs. **This is the open question for the user (§8 B)**: it applies to both models, and to any weights trained on that data. It is the same kind of question `mask_training/README.md` leaves to the product owner for CC BY training images.
+
+## 10. Slice C2, the measured part: how much does a regenerated result change? (2026-10-26)
+
+The argument for a **stored** patch (§3.2) was that regenerating a removal might change a picture the user already accepted. That is a measurable claim, so it was measured before asking anyone (script `mask_training/inpaint/determinism.py`; LaMa fp32, ORT 1.30 on the M1 Pro; 12 cases over four photographs, hole pixels only, on the 0..255 scale).
+
+| Same input, run again | Max difference in the hole | Meaning |
+|---|---|---|
+| Same session, second run | **0.0** on all 12 | bit-identical |
+| New session (model reloaded) | **0.0** on all 12 | bit-identical |
+| 1 thread vs 8 threads | **at most 0.002** | rounding noise, below one level |
+| **CPU vs CoreML** (3 cases) | **12.7 / 21.9 / 28.7**; mean 0.45 / 0.93 / 1.75; 3 % / 12 % / 31 % of hole pixels differ by more than 2 levels | a different texture grain; same content |
+
+[The CPU / CoreML pair for the large case](RFC-0032-appendix/c2_cpu_vs_coreml.png) (left CPU, middle CoreML, right the difference ×8): the structure, the colours and the arches are the same; the difference is fine texture.
+
+What this changes:
+
+- **LaMa is a feed-forward network with no random draw**, so on the same machine and provider a regenerated removal is **identical**. "Regenerate may change what you accepted" does not hold within one machine; it holds across **providers** (a GPU path, DirectML, CoreML), **ORT or model versions**, and **machines of different kinds** (a catalog copied between a Mac and a Windows PC). Across providers the change is texture, not content.
+- **Regeneration is not free**: 2.3 s per removal on CPU (§9.2), so re-running every removal when a photo opens (variant B in the mock) would make a photo with five removals wait about 12 s. It would have to be cached anyway, so variant B is a **cache with a re-run on a miss**, not "no stored file".
+- **A diffusion fill (slice G) is different**: it samples, so a re-run gives a different picture. A stored patch is then mandatory. Choosing "stored" now keeps one design for both.
+
+**Revised hypothesis for the study (the design the numbers favour, to be confirmed by people):** keep the patch as a stored file next to the catalog (**the saved result is the truth**, nothing re-runs on open), but treat it as **recomputable**: if the file is missing (catalog copied without its patches, a restore) the entry shows "needs regenerating" with **one button that re-runs it from the stored mask**, and says so if the result is not guaranteed identical (a different provider, a newer model). Never regenerate silently. This costs a few hundred kilobytes per removal and removes the main failure of A (a lost file is a lost edit) without B's waiting.
+
+**What the measurements do not settle** (so the study with people stays): whether photographers *want* the accepted result frozen even when regenerating would be identical; whether a texture-level change after a catalog move is noticed or minded; whether "needs regenerating" is understood; and which of A, B and the hybrid they would pick. The protocol is [RFC-0032-appendix/c2-patch-study.md](RFC-0032-appendix/c2-patch-study.md).
+
+**Not verified:** Windows (DirectML or CPU on another CPU family may differ from the Mac CPU by more than 0.002; not measured); CoreML on more than three cases (the earlier provider run ended silently, §7); a GPU path that does not exist yet.

@@ -73,9 +73,9 @@ The pipeline applies patches **first**, to the source pixels, before tone, colou
 - A new helper op `inpaint_run` next to `denoise_run` and `upscale_run`, on the same reader thread, with `progress` and `cancel`; one job at a time; Select Subject waits.
 - Memory is bounded by the crop (512 px network input), not by the photo: much smaller than denoise or enlargement. Not measured.
 
-### 3.4 UX (to be designed as an interactive mock first)
+### 3.4 UX (designed first as an interactive mock)
 
-The RFC-0028 / 0029 / 0031 way: mock before code. The shape to put in the mock:
+The RFC-0028 / 0029 / 0031 way: mock before code. The mock is [remove-tool-mockup.html](../ux/mockups/remove-tool-mockup.html) (a synthetic beach photo: dust spots, a wire, a person with a shadow, a bin, a small crowd). Paint, Click object (three candidates), Lasso, the result with Accept / Undo / Use Heal instead / hold-for-Before, the "shadow is still there" and "only part of the wire" offers, the large-region guard, the model consent step, and two selectors for the open questions (bundle vs download; stored vs re-run patch, with *Close and reopen photo* and *Patch file missing*) all work. The shape it carries:
 
 - A **Remove** tool in Develop's tool strip beside Heal / Clone. **Three ways to mark:** paint, click an object (Select Subject's click, with the three candidates), or lasso.
 - The result appears **in place in about a second or two**, with **Accept** / **Undo**, and a **Before / After** that holds the key. **Use Heal instead** is one click on the same mask, so the old tool is never taken away.
@@ -104,7 +104,7 @@ Measured: **time and peak memory** on this Mac (CPU, and CoreML where the model 
 |---|---|---|
 | **A** | Bake-off: PatchMatch, MI-GAN, LaMa on 60 hole cases over 20 photographs; times, memory, providers | **Done (§9)**; the by-eye table awaits the user's ruling |
 | **B** | Licence step and ADR: Places2 terms (§9.4), LaMa weights file, bundle vs download of 208 MB, where patches live | Needs the user's licence decision |
-| **C** | UX mock of the Remove tool (§3.4) | Next |
+| **C** | UX mock of the Remove tool (§3.4): [remove-tool-mockup.html](../ux/mockups/remove-tool-mockup.html) | **Done** (awaits the user's use of it) |
 | **C2** | **Small study: stored patch vs regenerate on demand** (§3.2, the user's question 3). Run with the mock and a prototype: 5 to 8 photographers (the user first), tasks "remove, edit further, close, come back / open on the other machine / copy the catalog", compare *a fixed stored result* with *a result that re-runs and may differ*: measure surprise, trust, and what they would pick. Decides §3.2 before slice D builds it | After C |
 | **D** | Engine and job: `inpaint_run` helper op (LaMa), crop / blend, **detail transfer** for holes the 512 px network sees reduced, the `remove` op with stored patches, CPU and GPU compositing | After B and C2 |
 | **E** | Develop UI: the Remove tool, paint / click / lasso, accept / undo, Heal fallback, large-region guard, history entries, model manager entry | After D |

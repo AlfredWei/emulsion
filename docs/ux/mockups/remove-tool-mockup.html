@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Remove tool (inpainting) — UX mock (RFC-0032 §3.4)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  UX mock for RFC-0032 slice C. Static and self-contained; uses the app's real tokens. The photo is a synthetic SVG
+  beach scene with things worth removing: dust spots in the sky, a wire, a person with a shadow, a bin, a small crowd.
+  What is real here is the BEHAVIOUR the RFC specifies, so it can be judged by using it:
+    - a Remove tool beside Heal / Clone, three ways to mark: Paint, Click an object (three candidates: tight / with shadow
+      / wide), Lasso; several marks can go into one job; each removed object becomes its own history entry,
+    - the job runs in the background (progress in the status strip, Cancel), the result is shown in place, with
+      Accept / Undo, "Use Heal instead" on the same mask, and Before / After held on the \ key,
+    - a mask that misses the shadow or half a wire says so, with a one-click "include it",
+    - the large-region guard (more than 10 % of the photo),
+    - the model state (bundled, or not downloaded yet: consent and download, open question C in the RFC),
+    - the stored-patch question (slice C2): switch between "A stored" and "B re-runs when the photo is opened",
+      press "Close and reopen photo", and see what each does to a result you already accepted; "Patch file missing"
+      shows the "needs regenerating" state.
+  Nothing here talks to the app. The "fill" is faked: objects under the mask disappear to the background beneath and a
+  faint seeded smudge is left where the model's invention would be, so a changed result is visible when the seed changes.
+-->
+<style>
+:root {
+  --bg-canvas:#141210; --bg-app:#1a1815; --bg-panel:#1e1c19; --bg-panel-raised:#28251f; --bg-hover:#332f28;
+  --border-subtle:#37332b; --border-strong:#4a453b;
+  --text-primary:#efeae2; --text-secondary:#a39c8e; --text-tertiary:#6e695e;
+  --accent:#e0932f; --accent-strong:#f0a94a; --accent-soft:#4a371f; --accent-on:#1b1310; --danger:#e5604d; --ok:#7bb274;
+  --radius-s:3px; --radius-m:5px;
+  --font-ui:-apple-system,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --shadow-soft:0 1px 2px rgba(0,0,0,.4),0 8px 24px -8px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-canvas);color:var(--text-primary);font:13px/1.4 var(--font-ui);padding:24px 32px 56px;-webkit-font-smoothing:antialiased}
+h1{font-size:15px;margin:0 0 4px}
+.lede{color:var(--text-secondary);max-width:960px;margin:0 0 12px}
+.steps{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;align-items:center}
+.btn{appearance:none;background:var(--bg-panel-raised);border:1px solid var(--border-subtle);color:var(--text-secondary);border-radius:var(--radius-s);font:11.5px var(--font-ui);padding:5px 10px;cursor:pointer}
+.btn:hover{background:var(--bg-hover)} .btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-on);font-weight:600}
+.btn.primary:hover{background:var(--accent-strong)}
+.btn:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent-strong);outline-offset:1px}
+.steps .btn.on{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-soft)}
+.cap{min-height:40px;max-width:960px;color:var(--text-secondary);font-size:12px;margin:0 0 10px}
+.cap b{color:var(--text-primary)}
+.study{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:0 0 10px;font-size:11.5px;color:var(--text-secondary)}
+.study label{display:flex;gap:6px;align-items:center}
+.study select{background:var(--bg-panel-raised);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:var(--radius-s);padding:3px 6px;font:11.5px var(--font-ui)}
+.app{width:1000px;height:640px;position:relative;border:1px solid var(--border-subtle);border-radius:var(--radius-m);overflow:hidden;background:var(--bg-app);display:flex;flex-direction:column}
+.titlebar{height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--border-subtle);background:var(--bg-panel);font-size:11px;color:var(--text-secondary)}
+.titlebar .mod{padding:2px 8px;border-radius:var(--radius-s)} .titlebar .mod.on{background:var(--bg-panel-raised);color:var(--text-primary)}
+.titlebar .sp{flex:1}
+.main{flex:1;min-height:0;display:flex}
+.center{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;background:var(--bg-canvas);position:relative}
+.stage{position:relative;width:700px;height:440px;box-shadow:var(--shadow-soft);user-select:none;touch-action:none}
+.stage svg,.stage canvas{position:absolute;inset:0;width:700px;height:440px}
+#maskc{opacity:.5;pointer-events:none}
+#hovc{pointer-events:none}
+#hit{cursor:crosshair}
+.stage.before #maskc,.stage.before #hovc{display:none}
+.stagetag{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.7);color:var(--accent-strong);font-size:11px;font-weight:700;padding:2px 8px;border-radius:9px;display:none}
+.stage.before .stagetag{display:block}
+.rbar{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);min-width:420px;max-width:660px;background:var(--bg-panel-raised);border:1px solid var(--accent);border-radius:var(--radius-m);padding:8px 10px;box-shadow:var(--shadow-soft);display:none;flex-direction:column;gap:6px;font-size:12px}
+.rbar.on{display:flex}
+.rbar .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rbar .sp{flex:1}
+.rbar .hint{color:var(--accent-strong)}
+.rbar .hold{color:var(--text-tertiary);font-size:11px}
+.panel{width:280px;flex:none;border-left:1px solid var(--border-subtle);background:var(--bg-panel);padding:10px 12px;overflow:auto;font-size:11.5px;color:var(--text-secondary)}
+.panel h4{margin:12px 0 5px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)}
+.panel h4:first-child{margin-top:0}
+.tools{display:flex;gap:4px}
+.tools .btn{flex:1;text-align:center}
+.tools .btn.on{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-soft)}
+.seg{display:flex;gap:0}
+.seg .btn{flex:1;border-radius:0;text-align:center;margin-left:-1px}
+.seg .btn:first-child{border-radius:var(--radius-s) 0 0 var(--radius-s);margin-left:0}
+.seg .btn:last-child{border-radius:0 var(--radius-s) var(--radius-s) 0}
+.seg .btn.on{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-soft);z-index:1;position:relative}
+.rowf{display:flex;align-items:center;gap:8px;margin:6px 0}
+.rowf label{width:62px;color:var(--text-tertiary)}
+.rowf input[type=range]{flex:1;accent-color:var(--accent)}
+.meter{height:6px;border-radius:3px;background:var(--bg-hover);position:relative;margin:4px 0 2px}
+.meter i{display:block;height:100%;border-radius:3px;background:var(--accent);width:0}
+.meter .lim{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--text-tertiary)}
+.meter.over i{background:var(--danger)}
+.cands{display:none;gap:4px;align-items:center;margin:6px 0}
+.cands.on{display:flex}
+.cands .btn{padding:3px 9px}
+.cands .btn.on{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-soft)}
+.hist{list-style:none;margin:0;padding:0;border:1px solid var(--border-subtle);border-radius:var(--radius-s);min-height:30px}
+.hist li{display:flex;gap:6px;align-items:center;padding:4px 6px;border-bottom:1px solid var(--border-subtle);color:var(--text-primary)}
+.hist li:last-child{border-bottom:0}
+.hist .k{font-size:9.5px;font-weight:700;padding:0 5px;border-radius:9px;background:var(--accent-soft);color:var(--accent-strong)}
+.hist .k.heal{background:var(--bg-hover);color:var(--text-secondary)}
+.hist .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist .need{font-size:10px;color:var(--danger)}
+.hist .x{background:none;border:0;color:var(--text-tertiary);cursor:pointer;font-size:13px;padding:0 3px}
+.hist .x:hover{color:var(--text-primary)}
+.hist.empty{padding:6px 8px;color:var(--text-tertiary)}
+details{margin-top:8px} summary{cursor:pointer;color:var(--text-secondary)}
+details ul{margin:6px 0 0;padding-left:16px}
+details li{margin:2px 0}
+.status{height:26px;flex:none;border-top:1px solid var(--border-subtle);background:var(--bg-panel);display:flex;align-items:center;gap:10px;padding:0 10px;font-size:11px;color:var(--text-secondary)}
+.status .pb{width:160px;height:6px;border-radius:3px;background:var(--bg-hover);overflow:hidden;display:none}
+.status .pb i{display:block;height:100%;background:var(--accent);width:0}
+.status.run .pb{display:block}
+.status .cx{display:none} .status.run .cx{display:inline}
+.modal{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:20}
+.modal.on{display:flex}
+.dlg{width:410px;background:var(--bg-panel-raised);border:1px solid var(--border-strong);border-radius:var(--radius-m);padding:14px;box-shadow:var(--shadow-soft)}
+.dlg h3{margin:0 0 6px;font-size:13px}.dlg p{margin:0 0 10px;color:var(--text-secondary);font-size:12px}
+.dlg .row{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.dlg .pb{height:6px;border-radius:3px;background:var(--bg-hover);overflow:hidden;margin:0 0 10px}
+.dlg .pb i{display:block;height:100%;width:0;background:var(--accent)}
+.toast{position:absolute;left:50%;bottom:40px;transform:translateX(-50%);background:var(--bg-panel-raised);border:1px solid var(--accent);border-radius:var(--radius-m);padding:8px 12px;font-size:12px;box-shadow:var(--shadow-soft);display:none;gap:10px;align-items:center;z-index:25;max-width:560px}
+.toast.on{display:flex}
+.notes{max-width:960px;margin:22px 0 0;color:var(--text-secondary);font-size:12px}
+.notes h2{font-size:13px;color:var(--text-primary);margin:14px 0 4px}
+.notes li{margin:3px 0}
+kbd{font:10.5px var(--font-mono);background:var(--bg-panel-raised);border:1px solid var(--border-subtle);border-radius:3px;padding:0 4px}
+</style>
+</head>
+<body>
+<h1>Remove tool (RFC-0032 §3.4)</h1>
+<p class="lede">Mock, not the app. Marking: choose <b>Paint</b>, <b>Click object</b> or <b>Lasso</b> and mark something (a dust spot, the wire, the person, the bin, the small crowd), then <b>Remove</b> (<kbd>Enter</kbd>). Hold <kbd>\</kbd> (or the Before button) to compare. The replay buttons set up the interesting cases; the two selectors below are the open questions the study (slice C2) needs.</p>
+<div class="steps" id="steps"></div>
+<div class="cap" id="cap"></div>
+<div class="study">
+  <label>Model <select id="distSel"><option value="bundled">Bundled with the app</option><option value="download">Download on first use (208 MB)</option></select></label>
+  <label>Patch (study C2) <select id="varSel"><option value="A">A · stored result: never changes</option><option value="B">B · re-runs when the photo is opened: may differ</option></select></label>
+  <button class="btn" id="reopen">Close and reopen photo</button>
+  <button class="btn" id="miss">Patch file missing</button>
+</div>
+
+<div class="app" id="app">
+  <div class="titlebar"><span class="mod">Library</span><span class="mod on">Develop</span><span>Beach_0412.ARW</span><span class="sp"></span><span id="titleNote"></span></div>
+  <div class="main">
+    <div class="center">
+      <div class="stage" id="stage">
+        <svg id="scene" viewBox="0 0 700 440" aria-label="Photo"></svg>
+        <canvas id="maskc" width="700" height="440"></canvas>
+        <canvas id="hovc" width="700" height="440"></canvas>
+        <div id="hit" style="position:absolute;inset:0"></div>
+        <div class="stagetag">Before</div>
+      </div>
+      <div class="rbar" id="rbar"></div>
+    </div>
+    <div class="panel">
+      <h4>Tools</h4>
+      <div class="tools" id="tools"><button class="btn" data-t="clone">Clone</button><button class="btn" data-t="heal">Heal</button><button class="btn on" data-t="remove">Remove</button></div>
+      <div id="removePanel">
+        <h4>Mark with</h4>
+        <div class="seg" id="modes"><button class="btn on" data-m="paint">Paint</button><button class="btn" data-m="click">Click object</button><button class="btn" data-m="lasso">Lasso</button></div>
+        <div class="rowf" id="sizeRow"><label for="size">Brush</label><input type="range" id="size" min="6" max="80" value="26"><span id="sizeV">26</span></div>
+        <div class="cands" id="cands"><span>Candidate</span><button class="btn" data-c="1" title="The object only">1</button><button class="btn on" data-c="2" title="Object and its shadow, grown a little">2</button><button class="btn" data-c="3" title="A wider area around it">3</button></div>
+        <div id="candNote" style="display:none;color:var(--text-tertiary);margin:-2px 0 4px"></div>
+        <div class="rowf"><label>Marked</label><div style="flex:1"><div class="meter" id="meter"><i id="meterI"></i><span class="lim" style="left:40%"></span></div><div id="meterT" style="font-size:11px">Nothing marked</div></div></div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn primary" id="run" disabled>Remove</button>
+          <button class="btn" id="undoMark" disabled>Undo mark</button>
+          <button class="btn" id="clear" disabled>Clear</button>
+        </div>
+        <div style="color:var(--text-tertiary);margin-top:6px">Marks: a halo and shadow should be inside the mark. <kbd>Enter</kbd> remove · <kbd>Esc</kbd> clear · <kbd>\</kbd> hold for Before</div>
+      </div>
+      <h4>History</h4>
+      <ul class="hist empty" id="hist"><li style="color:var(--text-tertiary)">No edits yet</li></ul>
+      <details>
+        <summary>What to expect from Remove</summary>
+        <ul>
+          <li>It paints in plausible background; it does not know what was really behind.</li>
+          <li>It can repeat texture. Look at 100 %.</li>
+          <li>Faces and text in the filled area are not reliable.</li>
+          <li>Large areas smear. If it looks wrong, use Heal on the same mark.</li>
+          <li>Runs on this computer; nothing is sent anywhere.</li>
+        </ul>
+      </details>
+    </div>
+  </div>
+  <div class="status" id="status"><span id="stText">Ready</span><span class="pb"><i id="pbi"></i></span><a class="cx" id="cancel" href="#" style="color:var(--accent-strong)">Cancel</a></div>
+  <div class="modal" id="modal"><div class="dlg" id="dlg"></div></div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<div class="notes">
+  <h2>What this mock is for</h2>
+  <ul>
+    <li><b>One tool, plain name.</b> "Remove", beside Clone and Heal. No prompt box, no "generative" wording.</li>
+    <li><b>The result is a proposal</b> until Accept: Undo discards the stored patch; Heal is one click on the same mark, so the old tool is never taken away.</li>
+    <li><b>The mark is judged for the user.</b> A mark that leaves a shadow or half a wire says so and offers to include it; a mark over 10 % of the photo says the result may be poor before it runs.</li>
+    <li><b>Each removed object is its own history entry</b> (disable with the box, delete with ×), several marks go into one job.</li>
+    <li><b>Slice C2 prototype:</b> variant A keeps the accepted result exactly; variant B re-runs when the photo is opened and the fill changes slightly. The study asks photographers which they expect and trust. "Patch file missing" shows the "needs regenerating" state of variant A.</li>
+    <li><b>Open question C (RFC §8):</b> the Model selector shows the consent and download step if the model is not bundled.</li>
+  </ul>
+</div>
+
+<script>
+const W = 700, H = 440, LIMIT = 0.10;
+const $ = id => document.getElementById(id);
+
+// ---------------------------------------------------------------- the synthetic photo
+// Objects are made of parts so that a partial mark leaves part of an object behind. A part has sample points; it is
+// removed when most of its points are inside the mark. cands: three mark shapes for Click object.
+const rect = (x,y,w,h)=>({k:'r',x,y,w,h});
+const line = (x1,y1,x2,y2,w)=>({k:'l',x1,y1,x2,y2,w});
+const grid = (x,y,w,h,nx,ny)=>{const o=[];for(let i=0;i<nx;i++)for(let j=0;j<ny;j++)o.push([x+w*(i+.5)/nx,y+h*(j+.5)/ny]);return o};
+const OBJ = {}, PARTS = [];
+function addObj(id,label,cands){OBJ[id]={id,label,parts:[],cands}}
+function addPart(obj,id,pts,svg,role){PARTS.push({id,obj,pts,svg,role:role||'main'});OBJ[obj].parts.push(id)}
+
+addObj('person','the person',[
+  [rect(326,246,38,108)],
+  [rect(326,246,38,108), rect(330,340,100,28)],
+  [rect(268,200,244,230)]]);
+addPart('person','person_body',grid(330,250,30,100,4,7),
+  '<g><circle cx="345" cy="262" r="11" fill="#caa07a"/><rect x="333" y="272" width="24" height="46" rx="6" fill="#2f4b6e"/><rect x="334" y="316" width="9" height="34" fill="#25354b"/><rect x="347" y="316" width="9" height="34" fill="#25354b"/></g>');
+addPart('person','person_shadow',grid(336,346,90,16,6,3),
+  '<ellipse cx="383" cy="354" rx="46" ry="7" fill="#000" opacity=".28"/>','shadow');
+
+addObj('bin','the bin',[[rect(516,311,33,42)],[rect(508,303,50,56)],[rect(480,280,110,100)]]);
+addPart('bin','bin_body',grid(520,315,25,35,3,4),
+  '<g><rect x="520" y="316" width="25" height="34" rx="3" fill="#6b7a4a"/><rect x="518" y="312" width="29" height="6" rx="2" fill="#53603a"/></g>');
+addPart('bin','bin_shadow',grid(524,348,34,8,4,2),'<ellipse cx="540" cy="352" rx="18" ry="4" fill="#000" opacity=".25"/>','shadow');
+
+addObj('crowd','the people on the left',[
+  [rect(94,302,28,88),rect(130,310,26,84),rect(164,298,28,92),rect(204,308,26,86),rect(238,300,28,90)],
+  [rect(84,296,192,112)],
+  [rect(60,270,240,160)]]);
+[[94,302,28,88,'#8a3b3b'],[130,310,26,84,'#3b6a8a'],[164,298,28,92,'#7a6a2f'],[204,308,26,86,'#5a3b7a'],[238,300,28,90,'#3b7a5a']].forEach(([x,y,w,h,c],i)=>
+  addPart('crowd','crowd_'+i,grid(x,y,w,h,3,5),
+  `<g><circle cx="${x+w/2}" cy="${y+10}" r="9" fill="#c9a07e"/><rect x="${x+2}" y="${y+20}" width="${w-4}" height="${h-52}" rx="6" fill="${c}"/><rect x="${x+4}" y="${y+h-34}" width="${(w-8)/2-1}" height="32" fill="#2a2a2a"/><rect x="${x+w/2+1}" y="${y+h-34}" width="${(w-8)/2-1}" height="32" fill="#2a2a2a"/></g>`));
+
+[['spot1',120,60,5],['spot2',460,112,4],['spot3',585,42,6]].forEach(([id,x,y,r],i)=>{
+  addObj(id,'a dust spot',[[rect(x-r-3,y-r-3,2*r+6,2*r+6)],[rect(x-16,y-16,32,32)],[rect(x-40,y-40,80,80)]]);
+  addPart(id,id+'_p',[[x,y],[x-r/2,y],[x+r/2,y],[x,y-r/2],[x,y+r/2]],`<circle cx="${x}" cy="${y}" r="${r}" fill="#1b2a3a" opacity=".5" style="filter:blur(1px)"/>`);
+});
+
+// the wire: 14 segments from (0,150) to (700,95)
+const WIRE = {x1:0,y1:150,x2:700,y2:95}, NSEG = 14;
+addObj('wire','the wire',[[line(WIRE.x1,WIRE.y1,WIRE.x2,WIRE.y2,10)],[line(WIRE.x1,WIRE.y1,WIRE.x2,WIRE.y2,24)],[line(WIRE.x1,WIRE.y1,WIRE.x2,WIRE.y2,110)]]);
+for(let i=0;i<NSEG;i++){
+  const a=i/NSEG,b=(i+1)/NSEG, p=t=>[WIRE.x1+(WIRE.x2-WIRE.x1)*t, WIRE.y1+(WIRE.y2-WIRE.y1)*t];
+  const [ax,ay]=p(a),[bx,by]=p(b), [mx,my]=p((a+b)/2);
+  addPart('wire','wire_'+i,[[ax,ay],[mx,my],[bx,by]],`<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#20262e" stroke-width="2.2"/>`);
+}
+
+function drawScene(){
+  let s = `<defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4f87c2"/><stop offset=".7" stop-color="#b6cfe0"/><stop offset="1" stop-color="#f1d9b8"/></linearGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2f7d8c"/><stop offset="1" stop-color="#58a7ae"/></linearGradient>
+    <linearGradient id="sand" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d9bf93"/><stop offset="1" stop-color="#c3a173"/></linearGradient></defs>
+    <rect width="700" height="230" fill="url(#sky)"/><rect y="230" width="700" height="62" fill="url(#sea)"/><rect y="292" width="700" height="148" fill="url(#sand)"/>
+    <path d="M0 232 Q120 218 240 230 T480 228 T700 226 V236 H0Z" fill="#7aa6b5" opacity=".5"/>`;
+  PARTS.forEach(p=>{ s += `<g data-part="${p.id}">${p.svg}</g>`; });
+  s += `<g id="patches"></g><g id="marks"></g>`;
+  $('scene').innerHTML = s;
+}
+
+// ---------------------------------------------------------------- state
+let tool='remove', mode='paint', size=26, cand=2;
+let ops=[];            // the mark: {t:'stroke',size,pts} | {t:'poly',pts} | {t:'obj',obj,cand}
+let hist=[];           // accepted edits: {id,kind,obj,label,parts,seed,on,missing}
+let pending=null;      // a result awaiting Accept: {kind,parts,objs,seed,notes}
+let running=null, hold=false, nextId=1, drawing=null, hover=null, variant='A', model='bundled';
+const mask = $('maskc').getContext('2d', {willReadFrequently:true}), hov = $('hovc').getContext('2d');
+
+// ---------------------------------------------------------------- drawing the mark
+function shapePath(c, sh){
+  if(sh.k==='r'){ c.beginPath(); c.roundRect(sh.x,sh.y,sh.w,sh.h,Math.min(12,sh.w/2,sh.h/2)); c.fill(); }
+  else { c.lineWidth=sh.w; c.lineCap='round'; c.beginPath(); c.moveTo(sh.x1,sh.y1); c.lineTo(sh.x2,sh.y2); c.stroke(); }
+}
+function redrawMask(){
+  mask.clearRect(0,0,W,H); mask.fillStyle=mask.strokeStyle='#e0932f'; mask.lineJoin='round'; mask.lineCap='round';
+  ops.forEach(o=>{
+    if(o.t==='stroke'){ mask.lineWidth=o.size; mask.beginPath(); o.pts.forEach((p,i)=>i?mask.lineTo(p[0],p[1]):mask.moveTo(p[0],p[1])); if(o.pts.length===1){mask.beginPath();mask.arc(o.pts[0][0],o.pts[0][1],o.size/2,0,7);mask.fill()} else mask.stroke(); }
+    else if(o.t==='poly'){ mask.beginPath(); o.pts.forEach((p,i)=>i?mask.lineTo(p[0],p[1]):mask.moveTo(p[0],p[1])); mask.closePath(); mask.fill(); }
+    else if(o.t==='obj'){ OBJ[o.obj].cands[o.cand-1].forEach(sh=>shapePath(mask,sh)); }
+  });
+  updateMeter();
+}
+function maskData(){ return mask.getImageData(0,0,W,H).data; }
+function maskFraction(){ const d=maskData(); let n=0; for(let i=3;i<d.length;i+=4) if(d[i]>40) n++; return n/(W*H); }
+function inMask(d,x,y){ x=Math.round(x); y=Math.round(y); if(x<0||y<0||x>=W||y>=H) return false; return d[(y*W+x)*4+3]>40; }
+function updateMeter(){
+  const f = ops.length ? maskFraction() : 0, over = f>LIMIT;
+  $('meterI').style.width = Math.min(100, f/(LIMIT*2.5)*100)+'%';
+  $('meter').classList.toggle('over', over);
+  $('meterT').textContent = !ops.length ? 'Nothing marked' : `${(f*100).toFixed(1)} % of the photo` + (over ? ' · large: the result may be poor' : '');
+  $('meterT').style.color = over ? 'var(--danger)' : '';
+  const busy = !!pending || !!running;
+  $('run').disabled = !ops.length || busy; $('clear').disabled = !ops.length || busy; $('undoMark').disabled = !ops.length || busy;
+  return f;
+}
+
+// ---------------------------------------------------------------- rendering of the photo state
+function removedSet(){
+  const s = new Set();
+  hist.forEach(h=>{ if(h.on && !h.missing) h.parts.forEach(p=>s.add(p)); });
+  if(pending) pending.parts.forEach(p=>s.add(p));
+  return s;
+}
+function rng(seed){ let a=seed>>>0; return ()=>{ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function partBox(ids){
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  ids.forEach(id=>PARTS.find(p=>p.id===id).pts.forEach(([x,y])=>{x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y)}));
+  return {x0,y0,x1,y1};
+}
+function patchSvg(e){
+  const b=partBox(e.parts), r=rng(e.seed), pad=10, w=b.x1-b.x0+2*pad, h=b.y1-b.y0+2*pad;
+  if(w>500) return '';  // the wire: a line of faint dabs instead of one big box
+  let s='';
+  if(e.kind==='Heal'){
+    s+=`<ellipse cx="${(b.x0+b.x1)/2}" cy="${(b.y0+b.y1)/2}" rx="${w/2}" ry="${h/2}" fill="#c9b08a" opacity=".16" style="filter:blur(5px)"/>`;
+  } else {
+    for(let i=0;i<3;i++){
+      const x=b.x0-pad+r()*w*.8, y=b.y0-pad+r()*h, ww=10+r()*w*.5;
+      s+=`<rect x="${x}" y="${y}" width="${ww}" height="${2+r()*3}" rx="2" fill="#fff" opacity="${.06+r()*.06}" style="filter:blur(1.2px)"/>`;
+    }
+    s+=`<ellipse cx="${b.x0+r()*(b.x1-b.x0)}" cy="${b.y0+r()*(b.y1-b.y0)}" rx="${4+r()*8}" ry="${3+r()*6}" fill="#000" opacity=".07" style="filter:blur(2px)"/>`;
+  }
+  return s;
+}
+function renderPhoto(){
+  const gone = removedSet();
+  PARTS.forEach(p=>{ const el=document.querySelector(`[data-part="${p.id}"]`); el.style.display = (!hold && gone.has(p.id)) ? 'none' : ''; });
+  let patches='', marks='';
+  if(!hold){
+    const all = hist.filter(h=>h.on && !h.missing).concat(pending ? [{...pending, parts:pending.parts, kind:pending.kind, seed:pending.seed}] : []);
+    if(pending){ // the pending result may span several objects; one smudge per object
+      all.pop(); pending.objs.forEach(o=>all.push({kind:pending.kind, parts:pending.parts.filter(p=>PARTS.find(q=>q.id===p).obj===o), seed:pending.seed+o.length}));
+    }
+    all.forEach(e=>{ patches+=patchSvg(e); });
+  }
+  hist.filter(h=>h.on && h.missing && !hold).forEach(h=>{ const b=partBox(h.parts); marks+=`<rect x="${b.x0-8}" y="${b.y0-8}" width="${b.x1-b.x0+16}" height="${b.y1-b.y0+16}" fill="none" stroke="#e5604d" stroke-width="1.5" stroke-dasharray="4 3"/>`; });
+  $('patches').innerHTML = patches; $('marks').innerHTML = marks;
+  $('stage').classList.toggle('before', hold);
+  $('titleNote').textContent = hist.some(h=>h.missing) ? 'Needs regenerating' : '';
+  renderHist(); renderBar();
+}
+function renderHist(){
+  const ul=$('hist');
+  if(!hist.length){ ul.className='hist empty'; ul.innerHTML='<li style="color:var(--text-tertiary)">No edits yet</li>'; return; }
+  ul.className='hist';
+  ul.innerHTML = hist.map(h=>`<li><input type="checkbox" ${h.on?'checked':''} data-on="${h.id}" aria-label="Enabled"><span class="k ${h.kind==='Heal'?'heal':''}">${h.kind}</span><span class="nm">${h.label}</span>${h.missing?`<span class="need">needs regenerating</span><button class="btn" data-regen="${h.id}" style="padding:1px 6px">Regenerate</button>`:''}<button class="x" data-del="${h.id}" title="Delete">×</button></li>`).join('');
+  ul.querySelectorAll('[data-on]').forEach(c=>c.onchange=()=>{ hist.find(h=>h.id==c.dataset.on).on=c.checked; renderPhoto(); });
+  ul.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ hist=hist.filter(h=>h.id!=b.dataset.del); renderPhoto(); });
+  ul.querySelectorAll('[data-regen]').forEach(b=>b.onclick=()=>{ const h=hist.find(h=>h.id==b.dataset.regen); h.missing=false; h.seed=Math.floor(Math.random()*1e6); renderPhoto(); toast('Regenerated: ' + h.label); });
+}
+function renderBar(){
+  const b=$('rbar');
+  if(!pending){ b.className='rbar'; b.innerHTML=''; return; }
+  const n=pending.objs.length;
+  b.className='rbar on';
+  b.innerHTML = `<div class="row"><b>${pending.kind==='Heal'?'Healed':'Removed'} ${n} thing${n>1?'s':''}</b><span class="sp"></span>
+    <button class="btn primary" id="bAcc">Accept</button><button class="btn" id="bUndo">Undo</button>${pending.kind==='Remove'?'<button class="btn" id="bHeal">Use Heal instead</button>':'<button class="btn" id="bRem">Use Remove instead</button>'}
+    <button class="btn" id="bBefore" title="Hold to see the original">Before (hold)</button></div>
+    ${pending.notes.map(t=>`<div class="hint">${t.text}${t.action?` <button class="btn" data-act="${t.action}" style="padding:1px 7px">${t.btn}</button>`:''}</div>`).join('')}
+    <div class="hold">Hold <kbd>\\</kbd> for Before. Accept keeps it as ${n>1?'separate history entries':'a history entry'}; Undo discards it and keeps your mark.</div>`;
+  $('bAcc').onclick=accept; $('bUndo').onclick=undoPending;
+  if($('bHeal')) $('bHeal').onclick=()=>rerun('Heal'); if($('bRem')) $('bRem').onclick=()=>rerun('Remove');
+  const bb=$('bBefore'); bb.onpointerdown=()=>{hold=true;renderPhoto()}; bb.onpointerup=bb.onpointerleave=()=>{if(hold){hold=false;renderPhoto()}};
+  b.querySelectorAll('[data-act]').forEach(x=>x.onclick=()=>noteAction(x.dataset.act));
+}
+
+// ---------------------------------------------------------------- the job
+function evaluate(kind){
+  const d=maskData(), removed=new Set(), touched=new Set(), notes=[];
+  PARTS.forEach(p=>{
+    const inside=p.pts.filter(([x,y])=>inMask(d,x,y)).length, f=inside/p.pts.length;
+    if(f>0) touched.add(p.obj);
+    if(f>=0.6) removed.add(p.id);
+  });
+  const objs=[...touched].filter(o=>OBJ[o].parts.some(p=>removed.has(p)));
+  objs.forEach(o=>{
+    const left=OBJ[o].parts.filter(p=>!removed.has(p));
+    if(!left.length) return;
+    if(o==='wire') notes.push({text:`Only part of the wire is covered (${OBJ[o].parts.length-left.length} of ${OBJ[o].parts.length} pieces): the rest is still there.`, action:'wire', btn:'Cover the whole wire'});
+    else if(left.some(p=>PARTS.find(q=>q.id===p).role==='shadow')) notes.push({text:`The shadow of ${OBJ[o].label} is still there.`, action:'shadow:'+o, btn:'Include the shadow'});
+    else notes.push({text:`Part of ${OBJ[o].label} is not covered and stays.`, action:'obj:'+o, btn:'Mark all of it'});
+  });
+  if(!objs.length) notes.push({text:'Nothing recognisable was under the mark, so it was filled with plain background. If you meant to remove something, mark all of it.'});
+  return {kind, parts:[...removed], objs, seed:Math.floor(Math.random()*1e6), notes};
+}
+function noteAction(a){
+  undoPending(true);
+  if(a==='wire') ops.push({t:'obj',obj:'wire',cand:2});
+  else if(a.startsWith('shadow:')||a.startsWith('obj:')) ops.push({t:'obj',obj:a.split(':')[1],cand:2});
+  redrawMask(); startRun(pendingKind||'Remove', true);
+}
+let pendingKind='Remove';
+function request(kind){
+  if(!ops.length||running||pending) return;
+  pendingKind=kind;
+  if(kind==='Remove' && model==='download' && !modelReady){ dialogModel(()=>request(kind)); return; }
+  const f=updateMeter();
+  if(kind==='Remove' && f>LIMIT){ dialogLarge(f); return; }
+  startRun(kind);
+}
+let modelReady=false;
+function startRun(kind, quick){
+  const f=maskFraction(), dur = quick ? 700 : Math.min(3200, 1000 + f*12000), t0=performance.now();
+  running={kind}; $('status').classList.add('run'); $('stText').textContent = (kind==='Heal'?'Healing…':'Removing… on this computer');
+  updateMeter();
+  const tick=()=>{ if(!running) return; const p=Math.min(1,(performance.now()-t0)/dur); $('pbi').style.width=p*100+'%';
+    if(p<1) requestAnimationFrame(tick); else { const r=evaluate(kind); running=null; $('status').classList.remove('run'); $('stText').textContent='Ready'; pending=r; updateMeter(); renderPhoto(); } };
+  requestAnimationFrame(tick);
+}
+$('cancel').onclick=e=>{ e.preventDefault(); running=null; $('status').classList.remove('run'); $('stText').textContent='Cancelled. Nothing was changed.'; updateMeter(); };
+function rerun(kind){ pending=null; renderPhoto(); request(kind); }
+function undoPending(silent){ pending=null; updateMeter(); renderPhoto(); if(silent!==true) toast('Undone. Your mark is still there.'); }
+function accept(){
+  if(!pending) return;
+  pending.objs.forEach(o=>{
+    const parts=pending.parts.filter(p=>PARTS.find(q=>q.id===p).obj===o);
+    hist.push({id:nextId++, kind:pending.kind, obj:o, label:OBJ[o].label.replace(/^the /,'').replace(/^a /,''), parts, seed:pending.seed+o.length, on:true, missing:false});
+  });
+  if(!pending.objs.length) hist.push({id:nextId++, kind:pending.kind, obj:'fill', label:'background fill', parts:[], seed:pending.seed, on:true, missing:false});
+  pending=null; ops=[]; redrawMask(); renderPhoto(); toast('Saved in the history.');
+}
+
+// ---------------------------------------------------------------- dialogs and toast
+function open(html){ $('dlg').innerHTML=html; $('modal').classList.add('on'); }
+function close(){ $('modal').classList.remove('on'); }
+function dialogLarge(f){
+  open(`<h3>This is a large area (${(f*100).toFixed(0)} % of the photo)</h3>
+    <p>The result may smear texture or lose structure; the bigger the area, the less it can be trusted. You can still try it, and Undo is one click.</p>
+    <div class="row"><button class="btn" id="dC">Cancel</button><button class="btn" id="dH">Use Heal instead</button><button class="btn primary" id="dGo">Remove anyway</button></div>`);
+  $('dC').onclick=close; $('dH').onclick=()=>{close();startRun('Heal')}; $('dGo').onclick=()=>{close();startRun('Remove')};
+}
+function dialogModel(then){
+  open(`<h3>Remove needs a model</h3>
+    <p>Remove uses an AI model that runs on this computer; nothing is sent anywhere. It is a one-time download of 208 MB. Heal and Clone do not need it.</p>
+    <div class="pb" id="dpb" style="display:none"><i id="dpi"></i></div>
+    <div class="row"><span id="dtxt" style="flex:1;color:var(--text-tertiary)"></span><button class="btn" id="dN">Not now</button><button class="btn" id="dH2">Use Heal instead</button><button class="btn primary" id="dD">Download</button></div>`);
+  $('dN').onclick=close; $('dH2').onclick=()=>{close();request('Heal')};
+  $('dD').onclick=()=>{ $('dpb').style.display='block'; $('dD').disabled=$('dN').disabled=$('dH2').disabled=true; let p=0; const iv=setInterval(()=>{ p+=4; $('dpi').style.width=p+'%'; $('dtxt').textContent=`${Math.round(208*p/100)} of 208 MB`; if(p>=100){clearInterval(iv); modelReady=true; close(); then();} },60); };
+}
+let tmr; function toast(t){ const e=$('toast'); e.textContent=t; e.classList.add('on'); clearTimeout(tmr); tmr=setTimeout(()=>e.classList.remove('on'),3200); }
+
+// ---------------------------------------------------------------- marking input
+function pt(e){ const r=$('stage').getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
+function hitObject(x,y){
+  let best=null,bd=1e9;
+  PARTS.forEach(p=>{
+    if(removedSet().has(p.id)) return;
+    const b=partBox([p.id]); let d;
+    if(p.obj==='wire'){ const t=(x/ (WIRE.x2-WIRE.x1)); const ly=WIRE.y1+(WIRE.y2-WIRE.y1)*Math.max(0,Math.min(1,t)); d=Math.abs(y-ly)>9?1e9:0; }
+    else { const px=Math.max(b.x0-6-x,0,x-(b.x1+6)), py=Math.max(b.y0-6-y,0,y-(b.y1+6)); d=Math.hypot(px,py); if(d>0) d=1e9; }
+    if(d<bd){bd=d;best=p.obj}
+  });
+  return best;
+}
+const hitEl=$('hit');
+hitEl.onpointerdown=e=>{
+  if(tool!=='remove'||pending||running) return;
+  hitEl.setPointerCapture(e.pointerId); const [x,y]=pt(e);
+  if(mode==='paint'){ drawing={t:'stroke',size,pts:[[x,y]]}; ops.push(drawing); redrawMask(); }
+  else if(mode==='lasso'){ drawing={t:'lasso',pts:[[x,y]]}; }
+  else { const o=hitObject(x,y); if(o){ ops.push({t:'obj',obj:o,cand:cand}); lastClick=ops[ops.length-1]; redrawMask(); } else toast('Nothing to select there. Try Paint.'); }
+};
+let lastClick=null;
+hitEl.onpointermove=e=>{
+  const [x,y]=pt(e);
+  if(drawing && drawing.t==='stroke'){ drawing.pts.push([x,y]); redrawMask(); }
+  else if(drawing && drawing.t==='lasso'){ drawing.pts.push([x,y]); hov.clearRect(0,0,W,H); hov.strokeStyle='#f0a94a'; hov.setLineDash([5,4]); hov.lineWidth=1.5; hov.beginPath(); drawing.pts.forEach((p,i)=>i?hov.lineTo(p[0],p[1]):hov.moveTo(p[0],p[1])); hov.stroke(); }
+  else drawHover(x,y);
+};
+hitEl.onpointerup=e=>{
+  if(drawing && drawing.t==='lasso'){ hov.clearRect(0,0,W,H); if(drawing.pts.length>3) ops.push({t:'poly',pts:drawing.pts}); redrawMask(); }
+  drawing=null; syncUi();
+};
+hitEl.onpointerleave=()=>{ hov.clearRect(0,0,W,H); };
+function drawHover(x,y){
+  hov.clearRect(0,0,W,H);
+  if(tool!=='remove'||pending||running) return;
+  if(mode==='paint'){ hov.strokeStyle='#efeae2'; hov.lineWidth=1; hov.beginPath(); hov.arc(x,y,size/2,0,7); hov.stroke(); }
+  else if(mode==='click'){ const o=hitObject(x,y); hover=o; if(o){ hov.strokeStyle='#f0a94a'; hov.lineWidth=2; hov.fillStyle='rgba(240,169,74,.18)'; OBJ[o].cands[cand-1].forEach(sh=>{ if(sh.k==='r'){hov.beginPath();hov.roundRect(sh.x,sh.y,sh.w,sh.h,8);hov.fill();hov.stroke()} else {hov.save();hov.lineWidth=sh.w;hov.strokeStyle='rgba(240,169,74,.25)';hov.lineCap='round';hov.beginPath();hov.moveTo(sh.x1,sh.y1);hov.lineTo(sh.x2,sh.y2);hov.stroke();hov.restore()} }); } }
+}
+
+// ---------------------------------------------------------------- controls
+function syncUi(){
+  $('sizeRow').style.display = mode==='paint' ? '' : 'none';
+  $('cands').classList.toggle('on', mode==='click');
+  $('candNote').style.display = mode==='click' ? '' : 'none';
+  $('candNote').textContent = ({1:'1 · the object only',2:'2 · the object with its shadow, grown a little',3:'3 · a wider area around it'})[cand];
+  document.querySelectorAll('#modes .btn').forEach(b=>b.classList.toggle('on', b.dataset.m===mode));
+  document.querySelectorAll('#cands .btn').forEach(b=>b.classList.toggle('on', +b.dataset.c===cand));
+  document.querySelectorAll('#tools .btn').forEach(b=>b.classList.toggle('on', b.dataset.t===tool));
+  $('removePanel').style.display = tool==='remove' ? '' : 'none';
+  updateMeter();
+}
+document.querySelectorAll('#modes .btn').forEach(b=>b.onclick=()=>{ mode=b.dataset.m; syncUi(); });
+document.querySelectorAll('#cands .btn').forEach(b=>b.onclick=()=>{ cand=+b.dataset.c; if(lastClick && ops[ops.length-1]===lastClick){ lastClick.cand=cand; redrawMask(); } syncUi(); });
+document.querySelectorAll('#tools .btn').forEach(b=>b.onclick=()=>{ tool=b.dataset.t; if(tool!=='remove') toast(b.textContent+' is the existing tool, unchanged. Remove is the new one.'); syncUi(); });
+$('size').oninput=e=>{ size=+e.target.value; $('sizeV').textContent=size; };
+$('run').onclick=()=>request('Remove');
+$('clear').onclick=()=>{ ops=[]; lastClick=null; redrawMask(); };
+$('undoMark').onclick=()=>{ ops.pop(); lastClick=null; redrawMask(); };
+$('distSel').onchange=e=>{ model=e.target.value; modelReady=false; };
+$('varSel').onchange=e=>{ variant=e.target.value; toast(variant==='A'?'A: an accepted result is stored and never changes.':'B: results are re-run when the photo is opened and may differ.'); };
+$('reopen').onclick=()=>{
+  if(!hist.length){ toast('Remove something and Accept it first.'); return; }
+  if(pending){ toast('Accept or Undo the pending result first.'); return; }
+  if(variant==='A'){ toast(`Opened. ${hist.length} edit${hist.length>1?'s':''} loaded from stored patches: identical to what you accepted.`); renderPhoto(); }
+  else { const live=hist.filter(h=>h.kind==='Remove'); live.forEach(h=>h.seed=Math.floor(Math.random()*1e6)); renderPhoto(); toast(`Opened. ${live.length} removal${live.length>1?'s':''} re-ran: the filled areas changed slightly (look at them). Is that what you expected?`); }
+};
+$('miss').onclick=()=>{ if(!hist.length){ toast('Remove something and Accept it first.'); return; } hist.filter(h=>h.kind==='Remove').forEach(h=>h.missing=true); renderPhoto(); toast('Patch file missing: the area shows the original with a dashed marker, and the entry says "needs regenerating". Nothing re-runs by itself.'); };
+
+document.addEventListener('keydown',e=>{
+  if(e.target.closest && e.target.closest('select,input[type=range]')) return;
+  if(e.key==='\\'){ if(!hold){ hold=true; renderPhoto(); } e.preventDefault(); return; }
+  if($('modal').classList.contains('on')) return;
+  if(e.key==='Enter'){ if(pending) accept(); else request('Remove'); e.preventDefault(); }
+  else if(e.key==='Escape'){ if(pending) undoPending(); else if(running) $('cancel').click(); else { ops=[]; redrawMask(); } }
+  else if((e.metaKey||e.ctrlKey)&&e.key==='z'){ if(pending) undoPending(); else if(ops.length){ ops.pop(); redrawMask(); } else if(hist.length){ const h=hist.pop(); renderPhoto(); toast('Undid: '+h.label); } e.preventDefault(); }
+});
+document.addEventListener('keyup',e=>{ if(e.key==='\\'){ hold=false; renderPhoto(); } });
+
+// ---------------------------------------------------------------- replay
+function reset(){ ops=[]; hist=[]; pending=null; running=null; hold=false; lastClick=null; tool='remove'; mode='paint'; cand=2; modelReady=false; $('status').classList.remove('run'); $('stText').textContent='Ready'; close(); redrawMask(); syncUi(); renderPhoto(); }
+const STEPS = [
+ ['1 · Paint over a spot', ()=>{ reset(); }, 'Paint over a <b>dust spot</b> in the sky (top left) or along the <b>wire</b>, then <b>Remove</b>. Try covering only half of the wire, then use the offer to cover the rest.'],
+ ['2 · Click an object', ()=>{ reset(); mode='click'; syncUi(); }, 'Click the <b>person</b>. Candidate 2 (the default) includes the shadow; candidate 1 is the body only and leaves the shadow behind, which the result will tell you. Candidate 3 is a wide area.'],
+ ['3 · A large area', ()=>{ reset(); mode='click'; cand=3; ops.push({t:'obj',obj:'crowd',cand:3}); syncUi(); redrawMask(); }, 'The wide candidate around the <b>small crowd</b> is about 12 % of the photo, over the 10 % limit: the meter turns red and <b>Remove</b> asks before running. Heal is offered on the same mark.'],
+ ['4 · Heal instead', ()=>{ reset(); mode='click'; ops.push({t:'obj',obj:'person',cand:2}); syncUi(); redrawMask(); request('Remove'); }, 'Wait for the result, then press <b>Use Heal instead</b>: the same mark is healed, the old tool is not taken away. Switch back with <b>Use Remove instead</b>.'],
+ ['5 · Model not downloaded', ()=>{ reset(); $('distSel').value='download'; model='download'; mode='click'; ops.push({t:'obj',obj:'bin',cand:2}); syncUi(); redrawMask(); }, 'Open question C: with the model not bundled, the first <b>Remove</b> asks for consent and downloads once. Heal never needs it.'],
+ ['6 · Reopen the photo (C2)', ()=>{ reset(); mode='click'; ops.push({t:'obj',obj:'person',cand:2}); ops.push({t:'obj',obj:'bin',cand:2}); syncUi(); redrawMask(); request('Remove'); }, 'Accept the result. Then press <b>Close and reopen photo</b> with variant A and with variant B, and look at the filled areas. Also try <b>Patch file missing</b>.'],
+];
+STEPS.forEach(([t,fn,c],i)=>{ const b=document.createElement('button'); b.className='btn'; b.textContent=t; b.onclick=()=>{ fn(); $('cap').innerHTML=c; document.querySelectorAll('#steps .btn').forEach(x=>x.classList.remove('on')); b.classList.add('on'); }; $('steps').appendChild(b); });
+
+drawScene(); redrawMask(); syncUi(); renderPhoto();
+$('cap').innerHTML = 'Pick a replay above, or mark something yourself.';
+</script>
+</body>
+</html>

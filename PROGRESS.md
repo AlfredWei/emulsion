@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 adaptive tone, slice 0b-1: Texture inside a mask (RFC-0034, 2026-10-26)
+
+**Probe result (reading `detail.rs`):** global Texture and Clarity are exactly linear in amount (`rgb += (luma - blurred) *
+amount / 100`, `blurred` independent of it), so a mask's version is exact, not an approximation; Dehaze is not linear and
+is not planned for masks. Cost splits the slice: **Texture built** (13 x 13 box window read in place in `fs_mask`, only for
+pixels of a mask that uses it; on the CPU one `separable_mean_filter` over the pre-mask luma, only when a mask uses it;
+`texture` in `LocalExtra`, packed at `+22`, panel group **Detail**); **Clarity not built** (radius 24 = 2,401 loads, needs the
+guided-filter pass chain on the pre-mask image: large GPU setup change, only if a preset needs it). With 0a and 0b-1 all
+five RFC-0033 starter presets are expressible ("Soften background" uses Texture). **Verified:** a Rust test (a full-weight
+mask with Texture X equals the global Texture X on a textured image, worst channel difference at most 1, and the image
+really moved), packing test, vitest and svelte-check pass, the WGSL compiles with no messages in Chromium WebGPU.
+**Verified in the real bundled debug app:** the Detail group appears in the mask panel, and Texture +100 on a full-frame Luminance Range mask visibly sharpens the corn field and the mountain edge on the GPU path (before / after crops compared). **Not verified:** CPU / GPU agreement in the real window, Windows GPU timing of the 169-load window on a large mask.
+
 ## M7 adaptive tone, slice 0a: six more adjustments inside a mask (RFC-0034, 2026-10-26)
 
 A mask now carries **Temperature, Tint, Highlights, Shadows, Whites, Blacks** besides Exposure / Contrast / Saturation, on

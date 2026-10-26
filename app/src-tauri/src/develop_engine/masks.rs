@@ -12,6 +12,10 @@ pub(super) struct LocalExtra {
     pub(super) shadows: f32,
     pub(super) whites: f32,
     pub(super) blacks: f32,
+    /// RFC-0034 slice 0b: Texture, the one spatial control a mask carries. Not part of the pointwise function
+    /// (`is_zero` ignores it): the pipeline adds `texture / 100 * detail` after it, where `detail` is the pre-mask
+    /// luma minus its box mean (the global Texture's own delta).
+    pub(super) texture: f32,
 }
 
 impl LocalExtra {
@@ -24,6 +28,7 @@ impl LocalExtra {
             shadows: f("shadows"),
             whites: f("whites"),
             blacks: f("blacks"),
+            texture: f("texture"),
         }
     }
 
@@ -964,6 +969,19 @@ impl Mask {
             }
             Mask::Spot(m) => spot_mask_weight(uv, m, aspect),
             Mask::RedEye(m) => red_eye_weight(uv, rgb, m),
+        }
+    }
+
+    /// RFC-0034 slice 0b: this mask's Texture amount (-100..100), 0 for the kinds that carry no adjustments.
+    pub(super) fn texture_amount(&self) -> f32 {
+        match self {
+            Mask::Linear(m) => m.extra.texture,
+            Mask::Radial(m) => m.extra.texture,
+            Mask::Brush(m) => m.extra.texture,
+            Mask::LuminanceRange(m) => m.extra.texture,
+            Mask::ColorRange(m) => m.extra.texture,
+            Mask::Segment(m) => m.extra.texture,
+            Mask::Spot(_) | Mask::RedEye(_) => 0.0,
         }
     }
 

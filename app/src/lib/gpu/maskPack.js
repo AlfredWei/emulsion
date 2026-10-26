@@ -129,6 +129,7 @@ export function packMasks(masks, brushLayerOf) {
     maskData[o + 19] = m.shadows ?? 0;
     maskData[o + 20] = m.whites ?? 0;
     maskData[o + 21] = m.blacks ?? 0;
+    maskData[o + 22] = m.texture ?? 0; // slice 0b
 
     const mods = /** @type {any[]} */ (m.modifiers ?? []);
     maskData[o + 12] = modCount; // first modifier index

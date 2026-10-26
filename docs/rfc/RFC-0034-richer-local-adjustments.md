@@ -34,9 +34,16 @@ Add **Temperature, Tint, Highlights, Shadows, Whites, Blacks** to every weight-p
 
 ### 3.2 Slice 0b: Texture, Clarity, Dehaze (spatial)
 
-These cannot be a per-pixel function: each needs a neighbourhood. The cheap form, **if the global filters are linear in their amount** (local contrast as `in + amount * (in - base)`), is a **detail layer** computed once per frame (`in - base`, from the blur the global pass already makes) that each mask scales by its own amount and weight: `rgb += weight * amount * detail`. One extra texture read per mask pixel; the blur is computed only when some mask uses the control (a dirty flag), so images without such masks pay nothing.
+These cannot be a per-pixel function: each needs a neighbourhood. **The probe was reading the code (2026-10-26), and it settles the first two:**
 
-**Not yet verified**, and it decides the slice: whether Clarity (guided filter, RFC-0010) and Dehaze (transmission estimate, RFC-0011) are linear in amount the way Texture is. If not, the fallback is `mix(rgb, filtered(rgb), weight)` where `filtered` is the global filter computed at a **unit amount** once per frame, blended by weight with the amount as a mix factor: not identical to the global at partial amounts, but close, and it is stated as such. **First step of 0b: read the two filters and write the probe** (Rust, ignored test: global at amount a vs `in + a * (filtered_at_1 - in)`, max error) before any shader work.
+- **Texture and Clarity are exactly linear in their amount.** `apply_local_contrast` and `apply_clarity` (`develop_engine/detail.rs`) both do `rgb += (luma - blurred) * amount / 100`, where `blurred` does not depend on the amount (a plain box mean at radius 6 for Texture, a self-guided filter at radius 24 for Clarity). So a mask's version is not an approximation: `rgb += weight * amount / 100 * (luma - blurred)`, with the detail taken from the pre-mask image, equals the global filter's delta at full weight.
+- **Dehaze is not linear** (a transmission division with a per-image atmospheric light), so it keeps the fallback: a unit-amount result blended by weight, which is close but not identical at partial amounts, or it is left out. **Not in 0b.**
+
+Cost differs sharply, so 0b is split:
+
+- **0b-1, Texture (done in this slice).** A 13 x 13 box window read in place inside `fs_mask`, only for pixels of a mask that uses Texture (169 loads per such pixel); on the CPU, one `separable_mean_filter` over the pre-mask luma, computed once and only when some mask uses it. Same radius, same clamp-to-edge window, so both twins agree by construction, and a Rust test checks that a full-weight mask with Texture X equals the global Texture X on a textured image (worst channel difference at most 1).
+- **0b-2, Clarity (not built).** Radius 24 means 2,401 loads per pixel if read in place, too heavy, so it needs the real thing: the guided-filter pass chain (about a dozen passes and as many textures, today bound to the global stage) run on the pre-mask image and gated by "some mask uses Clarity". That is a large change to the GPU setup for one slider; **it is built only if the starter presets need it.** "Soften background" can be done with Texture alone (RFC-0033 §3.3 is amended).
+- **Dehaze in masks** is not planned.
 
 ### 3.3 Not in this RFC
 
@@ -52,11 +59,11 @@ Local **Sharpness** and **Noise Reduction** (the spatial cost is the same as 0b 
 | Slice | What | Done when |
 |---|---|---|
 | **0a** | Pointwise six: Rust `LocalAdjust`, WGSL, packing, mask-panel groups, invariant and parity tests | Tests above; real-window check; user guide line |
-| **0b-probe** | Read the Clarity / Dehaze filters; the linearity probe | Numbers in this RFC |
-| **0b** | Texture, Clarity (then Dehaze) in masks | Per the probe |
+| **0b-1** | Texture in masks (in-shader box window, CPU twin, mask-panel Detail group, tests) | **Done** (§3.2) |
+| **0b-2** | Clarity in masks (the guided-filter chain on the pre-mask image) | Only if a preset needs it |
 
 ## 6. Not verified
 
 - Everything: no code was changed for this RFC. The claim that the mask adjustment can simply become `apply_global_adjustments` is from reading both twins' signatures and orders, not from running them; the first test of 0a is the one that would show it false.
 - Windows GPU timing of the larger mask pass.
-- 0b's linearity (§3.2).
+- Texture's GPU path in the real window beyond the visual check; Clarity's chain (0b-2, not built).

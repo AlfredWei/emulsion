@@ -662,3 +662,38 @@ fn a_mask_with_several_controls_matches_the_global_stack_and_a_plain_mask_is_unc
     // No extra fields: identical to the old three-control path (the existing 138 expectation, exposure +1 EV).
     assert_mask_pixel(mask_stack((0.1, 0.5), (0.4, 0.5), 0.0, 1.0), [138, 138, 138]);
 }
+
+/// RFC-0034 slice 0b: Texture inside a mask is the global Texture's own delta (pre-mask luma minus its box mean),
+/// so a full-weight mask with Texture X on a textured image must render what the global Texture X renders, and
+/// a half-weight one halves the delta. The test image is a 24 x 24 checker of two greys with a gradient, so the box
+/// mean (radius 6) differs from the pixel almost everywhere.
+#[test]
+fn texture_in_a_full_weight_mask_equals_the_global_texture() {
+    let make = || {
+        RgbImage::from_fn(24, 24, |x, y| {
+            let g = if (x / 2 + y / 2) % 2 == 0 { 70u8 } else { 150u8 };
+            image::Rgb([g.saturating_add((x * 3) as u8), g, g.saturating_sub((y * 2) as u8)])
+        })
+    };
+    for value in [60.0f32, -80.0] {
+        let mut local = make();
+        let mut stack = mask_stack((0.0, 0.5), (0.0001, 0.5), 0.0, 0.0); // t = 1 across the frame
+        stack.ops[0]["texture"] = serde_json::json!(value);
+        apply_edit_stack(&mut local, &stack);
+
+        let mut global = make();
+        apply_edit_stack(&mut global, &stack_with(&[("texture", value)]));
+
+        let mut worst = 0;
+        for (a, b) in local.pixels().zip(global.pixels()) {
+            for c in 0..3 {
+                worst = worst.max((a.0[c] as i32 - b.0[c] as i32).abs());
+            }
+        }
+        assert!(worst <= 1, "texture {value}: worst channel difference {worst}");
+
+        let base = make();
+        let moved = local.pixels().zip(base.pixels()).any(|(a, b)| (0..3).any(|c| (a.0[c] as i32 - b.0[c] as i32).abs() > 8));
+        assert!(moved, "texture {value} left the image alone, the comparison proves nothing");
+    }
+}

@@ -273,6 +273,17 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
         }
     }
 
+    // RFC-0034 slice 0b: Texture inside a mask. The global Texture is `rgb += (luma - box mean of luma) * amount`
+    // (apply_local_contrast), linear in the amount, so a mask's Texture is the same delta from the PRE-MASK image
+    // scaled by its own amount and weight. Computed once, only when some mask uses it.
+    let texture_detail: Option<Vec<f32>> = if masks.iter().any(|m| m.texture_amount() != 0.0) {
+        let luma: Vec<f32> = pre_mask.iter().map(|c| c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722).collect();
+        let blurred = separable_mean_filter(&luma, w, h, TEXTURE_RADIUS);
+        Some(luma.iter().zip(blurred.iter()).map(|(l, b)| l - b).collect())
+    } else {
+        None
+    };
+
     // Pass 8 (final): the mask loop, reading `pre_mask` as its accumulator
     // base instead of continuing to mutate an in-loop `rgb` from Pass 7 --
     // required so `Spot`'s `local_color` can look up a DIFFERENT pixel's
@@ -291,6 +302,13 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             for mask in &masks {
                 let weight = mask.weight(uv, aspect, rgb);
                 let local = mask.local_color(uv, rgb, &pre_mask, w, h);
+                let local = match (&texture_detail, mask.texture_amount()) {
+                    (Some(detail), t) if t != 0.0 => {
+                        let d = detail[idx] * (t / 100.0);
+                        [local[0] + d, local[1] + d, local[2] + d]
+                    }
+                    _ => local,
+                };
                 for c in 0..3 {
                     rgb[c] += (local[c] - rgb[c]) * weight;
                 }

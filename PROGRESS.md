@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 adaptive tone: RFC-0033 drafted (2026-10-26)
+
+[RFC-0033](docs/rfc/RFC-0033-adaptive-tone-presets.md), the last open M7 scope line ("adaptive / context-aware auto-tone
+presets"), a **scoping RFC: nothing built, nothing measured on photographs.** It splits the phrase into four readings:
+R1 scene-aware Auto Tone (heuristics, still sliders), **R2 adaptive presets** (preset ops bound to a region kind: sky /
+subject / person / background, resolved per photo with the existing RFC-0026 segmenters, as Lightroom's Adaptive Presets
+do; today AI masks are excluded from presets), R3 a learned enhancer (poor fit: lookup output not sliders, and the
+training-data licence question, FiveK's terms not retrieved), R4 personal (learn from the user's own edits, locally).
+**Proposal: R2 first, a measured R1 beside it, R4 as a study on the user's data, R3 not now.** Resolved masks stay stored
+with the photo (same rule as RFC-0032 §10). Judged by blind pairs and leave-one-out on the user's photos. Slice plan A
+(measurement kit) to E. Questions for the user: order, may the kit read their catalog, whether R4 is wanted, starter
+presets. Web facts are from search results, not primary sources.
+
 ## M7 object removal: RFC-0032 slice C, the Remove tool UX mock (2026-10-26)
 
 [remove-tool-mockup.html](docs/ux/mockups/remove-tool-mockup.html), the RFC-0028/0029/0031 way: the UI is judged by use before

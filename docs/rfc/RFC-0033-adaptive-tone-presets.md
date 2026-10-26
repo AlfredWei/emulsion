@@ -89,13 +89,13 @@ The five starter presets, with the adjustments each needs and whether today's th
 
 | Preset | Region | Adjustments (restrained start values, Amount 100 %) | Needs slice 0? |
 |---|---|---|---|
-| **Deepen sky** | `sky` | Exposure -0.3, Contrast +12, Saturation +10, Dehaze +10 | Dehaze: yes. The first three: today |
-| **Lift subject** | `subject` / `person` | Exposure +0.25, Shadows +15, Clarity +8 | Shadows, Clarity: yes |
-| **Soften background** | `background` | Clarity -15, Texture -20, Saturation -8, Exposure -0.1 (a real blur is out of scope: no blur op exists) | Clarity, Texture: yes |
+| **Deepen sky** | `sky` | Exposure -0.3, Contrast +12, Saturation +10 (no Dehaze: it is not planned for masks) | No: today |
+| **Lift subject** | `subject` / `person` | Exposure +0.25, Shadows +15, Texture +8 | Shadows: done (0a); Texture: done (0b-1) |
+| **Soften background** | `background` | Texture -35, Saturation -8, Exposure -0.1 (a real blur is out of scope: no blur op exists; Clarity in masks is not built, RFC-0034 §3.2) | Texture: **done (0b-1)** |
 | **Brighten faces** | `face` | Exposure +0.3, Shadows +12, Temperature +3 (a little warmth) | Shadows, Temperature: yes |
 | **Cool the shadows** | `shadows` | Temperature -8, Saturation -5 | Temperature: yes |
 
-Only part of **Deepen sky** works today; **the rest wait for slice 0**.
+With slices 0a and 0b-1 built, **all five are expressible** (Deepen sky without Dehaze, Soften background with Texture instead of Clarity). What is missing is the region binding (slice B), not the adjustments.
 
 ### 3.4 R1 later: a better Auto Tone, judged by a person, not by a metric
 

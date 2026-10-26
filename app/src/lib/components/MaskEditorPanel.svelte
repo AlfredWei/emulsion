@@ -54,7 +54,7 @@
     onRefineSubject = () => {},
   } = $props();
 
-  // RFC-0034: the six pointwise controls beyond Exposure / Contrast / Saturation, in two groups, the same ranges and
+  // RFC-0034: the controls beyond Exposure / Contrast / Saturation, in two groups, the same ranges and
   // labels as the global panel. Absent on a mask written before they existed (read as 0, written when first touched).
   const EXTRA_GROUPS = /** @type {{ title: string, controls: { key: string, label: string }[] }[]} */ ([
     { title: "Light", controls: [
@@ -62,6 +62,7 @@
       { key: "whites", label: "Whites" }, { key: "blacks", label: "Blacks" },
     ] },
     { title: "Colour", controls: [{ key: "temperature", label: "Temperature" }, { key: "tint", label: "Tint" }] },
+    { title: "Detail", controls: [{ key: "texture", label: "Texture" }] },
   ]);
   const EXTRA_KEYS = EXTRA_GROUPS.flatMap((g) => g.controls.map((c) => c.key));
   /** @param {string} key */

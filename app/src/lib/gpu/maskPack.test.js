@@ -38,9 +38,9 @@ describe("maskPack", () => {
   });
 
   test("RFC-0034: the six extra adjustments pack into vec4s 5 and 6, absent = 0", () => {
-    const { maskData } = packMasks([radial("a", { temperature: 12, tint: -7, highlights: -30, shadows: 45, whites: 5, blacks: -9 }), radial("b")], noLayer);
-    expect(Array.from(maskData.slice(16, 22))).toEqual([12, -7, -30, 45, 5, -9]);
-    expect(Array.from(maskData.slice(MASK_STRIDE + 16, MASK_STRIDE + 22))).toEqual([0, 0, 0, 0, 0, 0]);
+    const { maskData } = packMasks([radial("a", { temperature: 12, tint: -7, highlights: -30, shadows: 45, whites: 5, blacks: -9, texture: 33 }), radial("b")], noLayer);
+    expect(Array.from(maskData.slice(16, 23))).toEqual([12, -7, -30, 45, 5, -9, 33]);
+    expect(Array.from(maskData.slice(MASK_STRIDE + 16, MASK_STRIDE + 23))).toEqual([0, 0, 0, 0, 0, 0, 0]);
     // the modifier range is where it always was
     expect([maskData[12], maskData[13]]).toEqual([0, 0]);
   });

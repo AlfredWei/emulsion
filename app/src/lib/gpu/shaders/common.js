@@ -64,7 +64,7 @@ export const common = `    struct VertexOut {
       adjustments: vec4<f32>, // x = exposure_ev (spot: mode, 0=clone/1=heal), y = contrast (unused for spot/red eye), z = saturation (unused for spot/red eye), w unused (red eye repurposes this for darken 0-100)
       mods: vec4<f32>,        // x = index of this mask's first modifier in mods, y = modifier count (RFC-0025; 0 for spot/red eye and for any mask without modifiers)
       adjustments2: vec4<f32>, // RFC-0034, weight-producing kinds only: x = temperature, y = tint, z = highlights, w = shadows
-      adjustments3: vec4<f32>, // RFC-0034: x = whites, y = blacks, zw unused
+      adjustments3: vec4<f32>, // RFC-0034: x = whites, y = blacks, z = texture (slice 0b), w unused
     };
     const MAX_MASKS = 8;
 

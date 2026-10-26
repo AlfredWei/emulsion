@@ -9,6 +9,9 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4 and 
     // stand-alone mask is. rgb is the pixel as it entered this mask
     // (range kinds select on it). Mirrors develop_engine/masks.rs's
     // Shape::weight.
+    // Texture's box radius: the same 6 as the global Texture (TEXTURE_RADIUS, develop_engine/detail.rs).
+    const MASK_TEXTURE_RADIUS: i32 = 6;
+
     fn component_weight(se: vec4<f32>, pr: vec4<f32>, kind: f32, rgb: vec3<f32>, uv: vec2<f32>) -> f32 {
         var weight: f32 = 0.0;
         if (kind < 0.5) {
@@ -281,6 +284,21 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4 and 
               m.adjustments2.x, m.adjustments2.y, m.adjustments2.z, m.adjustments2.w,
               m.adjustments3.x, m.adjustments3.y
             );
+          }
+          // RFC-0034 slice 0b, Texture: the global Texture's own delta (luma minus its 13 x 13 box mean, clamped
+          // at the edges) taken from the PRE-MASK image, scaled by this mask's amount. A box window read in
+          // place rather than blur passes: it only runs for pixels of a mask that uses Texture.
+          if (m.adjustments3.z != 0.0 && weight > 0.0) {
+            var box_sum = 0.0;
+            for (var ty = -MASK_TEXTURE_RADIUS; ty <= MASK_TEXTURE_RADIUS; ty = ty + 1) {
+              for (var tx = -MASK_TEXTURE_RADIUS; tx <= MASK_TEXTURE_RADIUS; tx = tx + 1) {
+                let tc = clamp(coord + vec2<i32>(tx, ty), vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+                box_sum = box_sum + dot(textureLoad(preMaskTex, tc, 0).rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+              }
+            }
+            let box_mean = box_sum / f32((2 * MASK_TEXTURE_RADIUS + 1) * (2 * MASK_TEXTURE_RADIUS + 1));
+            let centre = dot(textureLoad(preMaskTex, coord, 0).rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            adjusted = adjusted + vec3<f32>((centre - box_mean) * (m.adjustments3.z / 100.0));
           }
           rgb = mix(rgb, adjusted, weight);
         }

@@ -1,12 +1,12 @@
 # RFC-0032: Remove objects: AI inpainting for spot removal (M7, the "generative fill" decision)
 
-- Status: Draft for review (desk research only; nothing measured, nothing downloaded)
+- Status: Draft for review (slice A, the bake-off, run on 2026-10-26: results in §9; user answers to §8 recorded there)
 - Date: 2026-10-26
 - Relates to: [MILESTONES.md](../../PRD/MILESTONES.md) M7 (the decision this RFC must make before any implementation), [RFC-0023](RFC-0023-on-device-ai-inference.md) §5.6 (generative removal "not surveyed"; M7 owns it), [RFC-0031](RFC-0031-intelligent-culling.md) §5 slice F (the user's decision: generative fill, framed as spot removal, after culling), [RFC-0026](RFC-0026-click-select-segmentation.md) (click-to-select an object: the natural way to make the mask), [RFC-0027](RFC-0027-ai-denoise.md) / [RFC-0029](RFC-0029-ai-super-resolution.md) (the `emulsion-ai` helper, the model manager and consent flow, a cached result beside the edit stack), [RFC-0025](RFC-0025-composable-masking.md), [RFC-0020](RFC-0020-grain-particle-noise.md) (grain, for matching a patch to its surroundings), [ADR-0009](../adr/ADR-0009-ml-inference-runtime.md)
 
 ## 0. Process note
 
-Design and desk research. **No product code is changed, no model was downloaded, and no number below was measured on this machine.** Every figure is either read from a model page or paper (and marked so) or is a plain statement about how the app works today. Licences are read from the pages named in §2 and **not** from the files that would ship; the training data's terms are **not resolved**. The first slice (§6, slice A) is therefore a bake-off with real numbers, and it needs the user's go-ahead to download about 236 MB of third-party model files (§8, question 1).
+Design, desk research, and (added 2026-10-26) the slice A bake-off of §5 and §9. The two ONNX files were downloaded **on the user's go-ahead** into the user's `mask_training/inpaint/models/` (a sibling repo, gitignored for `*.onnx`): `migan_pipeline_v2.onnx` (28,079,181 bytes, SHA-256 `6f1f3530…8c40b`) from `huggingface.co/andraniksargsyan/migan`, and `lama_fp32.onnx` (208,044,816 bytes, SHA-256 `1faef530…eb68d6`) from `huggingface.co/Carve/LaMa-ONNX`. The test photographs (20, in the user's five categories) came from Wikimedia Commons, **CC0 / public domain / CC BY only** (never SA, NC, ND), listed with licence and author in `mask_training/inpaint/photos/meta.json`. The scripts that produced every number are in `mask_training/inpaint/` (`fetch_photos.py`, `prepare_cases.py`, `run_models.py`, `score.py`); the only code added to the app repo is the PatchMatch module and its ignored probe. **Nothing is in the app yet.** Numbers are measured on one Apple M1 Pro; Windows is not measured.
 
 User decision recorded 2026-10-20 (RFC-0031 §5): *generative fill is great for spot removal, so it comes after culling.* This RFC reads that as: **remove an unwanted object or blemish and fill it plausibly**, not "invent new content from a text prompt".
 
@@ -37,19 +37,18 @@ MILESTONES.md M7 says the decision between *a bundled on-device generative model
 | Stable Diffusion inpainting | Diffusion, can follow a prompt | OpenRAIL-family (recalled, **unverified**) | about 2 GB (recalled, **unverified**) | Heavy, GPU-hungry, slow. The ZITS++ paper reports an SD baseline failing above 1K on 48 GB. Out of scope (§4). |
 | FLUX.1 Fill [dev] | Diffusion | **FLUX.1-dev non-commercial** (per a [package listing](https://pypi.org/project/fluxbfl/)) | **23.8 GB** weights | Excluded on licence and size. |
 
-**What the research does not give** (so slice A must): peak memory and CPU time of MI-GAN and LaMa on a desktop, whether either runs on ORT's CoreML and DirectML providers, how they look on **full-resolution** photographs (both work at 512 px; our photos are 24 to 60 MP), and any comparison against a plain PatchMatch fill. Published quality numbers are the authors' own, on Places2 and similar, at 512 px.
+**What the research did not give** (slice A measured it, §9): peak memory and CPU time of MI-GAN and LaMa on a desktop, whether either runs on ORT's CoreML and DirectML providers, how they look on **full-resolution** photographs (both work at 512 px; our photos are 24 to 60 MP), and any comparison against a plain PatchMatch fill. Published quality numbers are the authors' own, on Places2 and similar, at 512 px.
 
 ## 3. What this RFC proposes
 
-### 3.1 The decision, conditional on slice A
+### 3.1 The decision (after the bake-off, §9)
 
-**Do not ship a diffusion / prompt-driven generative model in M7.** Ship **removal by inpainting**, and let slice A decide which engine, by a three-way bake-off on the same masks:
+**Do not ship a diffusion / prompted generative model in M7** (user: the complex part moves to a later slice, §4). Ship **removal by inpainting**, with **LaMa as the engine**, **subject to the licence decision in §9.4** (both models were trained on Places2, whose terms were not obtained). The bake-off's rule was that a model ships only if it is clearly better than a non-model fill; **the non-model baseline written for it (PatchMatch) lost by a wide margin on everything above a small spot**, so the "ship PatchMatch alone" fallback is **not** viable as it stands (§9.3 says why that is partly the baseline's fault). What the evidence supports:
 
-1. **PatchMatch** (no model, no download, deterministic, our code);
-2. **MI-GAN-512** (28 MB);
-3. **LaMa-fp32** (208 MB), as the quality reference.
-
-**Rule:** a model ships only if it is **clearly better than PatchMatch on the cases a photographer cares about** (§5) and fits the size, time and licence limits. If neither beats PatchMatch clearly, **M7 ships PatchMatch only**, which is exactly the "non-generative fallback" MILESTONES.md allows, and the model question is closed with evidence. If MI-GAN is within reach of LaMa it wins on size (28 MB can be **bundled in the installer** like the other models; 208 MB is a download with the consent flow, or a bundle decision for the user).
+- **LaMa** for removal: closest to the original in 46 of 60 cases, the only engine that **continues structure** (window rows, a facade grid, a ceiling arch) and the one that **did not invent objects** in the sheets looked at. Costs: 208 MB, 2.3 s per removal on this machine's CPU (CoreML is slower, §9.2), fixed 512 px working size.
+- **MI-GAN is out for anything above a small spot**: fast (0.3 s) and sharp on small holes, but on medium and large holes it **invented objects** (a white blob in a mesh, a green figure in a gap, cables in a window wall). A removal tool that adds things is worse than none.
+- **Large holes are poor for every engine** (smeared texture, lost structure): the tool needs a **large-region guard** (§3.4) rather than a promise.
+- The existing **clone / heal stays**, untouched, as the manual tool, and as the answer when the model's result is wrong ("Use Heal instead").
 
 ### 3.2 It is an edit, not a new photo
 
@@ -63,7 +62,7 @@ The pipeline applies patches **first**, to the source pixels, before tone, colou
 
 - **Non-destructive and undoable** through the existing history, like any op.
 - **Per-photo**: excluded from Copy Settings and Auto Sync the way crop and spot removal already are (RFC-0028 §3.5), because a mask is only meaningful on its own photo.
-- **The patch is a stored file, not a cache entry.** A GAN's output can differ between CPU and CoreML, so regenerating it later could change a picture the user already accepted. It lives next to the catalog data (backed up with it) and is deleted with its op. If the file is missing the op shows a "needs regenerating" state rather than silently re-running.
+- **The patch is a stored file, not a cache entry (provisional: the user asked for a small study of this before it is decided, slice C2).** A GAN's output can differ between CPU and CoreML, so regenerating it later could change a picture the user already accepted. It lives next to the catalog data (backed up with it) and is deleted with its op. If the file is missing the op shows a "needs regenerating" state rather than silently re-running.
 - **Not exportable to XMP** (no standard to carry it); the existing sidecar story for AI results applies.
 - CPU interpreter and GPU path both just **composite a stored image over a region**; no model runs in the render path.
 
@@ -87,7 +86,7 @@ The RFC-0028 / 0029 / 0031 way: mock before code. The shape to put in the mock:
 
 ## 4. Not in this RFC
 
-- **Prompted generation / text-to-image fill / outpainting** (diffusion, GBs, GPU). Revisit only if the user wants it after seeing removal; the PRD's non-goals already put Firefly-style features out of scope unless revisited.
+- **Prompted generation / text-to-image fill / outpainting** (diffusion, GBs, GPU). **The user's decision (2026-10-26): removal only now; the complex part moves to a later slice (slice G).** Revisit after removal ships; the PRD's non-goals already put Firefly-style features out of scope unless revisited.
 - **Sky replacement, object replacement, face or body generation.**
 - **Cloud inference** (PRD: no cloud).
 - **Batch removal across photos** and **removal in Library**: Develop only.
@@ -101,28 +100,85 @@ Measured: **time and peak memory** on this Mac (CPU, and CoreML where the model 
 
 ## 6. Slice plan
 
-| Slice | What | Done when |
+| Slice | What | Status |
 |---|---|---|
-| **A** | Bake-off spike: PatchMatch (written for the spike), MI-GAN, LaMa on §5's cases; times, memory, CoreML / CPU, licence files and training-data terms read from the real files | A table of numbers and a by-eye verdict in this RFC; the engine decision (§3.1 rule) written down |
-| **B** | ADR (engine, licence, bundle vs download, where patches live) | ADR accepted by the user |
-| **C** | UX mock of the Remove tool (§3.4) | The user has used the mock and answered its open points |
-| **D** | Engine and job: PatchMatch in Rust and / or the `inpaint_run` helper op, crop / blend / detail transfer, the `remove` op in the edit stack with stored patches, CPU and GPU compositing | Tests: determinism, mask edge cases, patch round trip, missing patch state; a real removal in the bundled app |
-| **E** | Develop UI: the Remove tool, paint / click / lasso, accept / undo, Heal fallback, history entries, model manager entry | Component tests; real-window pass |
-| **F** | Quality work the bake-off shows is needed (grain matching, large-region guard, halo growth) | By-eye pass on the user's own photographs |
+| **A** | Bake-off: PatchMatch, MI-GAN, LaMa on 60 hole cases over 20 photographs; times, memory, providers | **Done (§9)**; the by-eye table awaits the user's ruling |
+| **B** | Licence step and ADR: Places2 terms (§9.4), LaMa weights file, bundle vs download of 208 MB, where patches live | Needs the user's licence decision |
+| **C** | UX mock of the Remove tool (§3.4) | Next |
+| **C2** | **Small study: stored patch vs regenerate on demand** (§3.2, the user's question 3). Run with the mock and a prototype: 5 to 8 photographers (the user first), tasks "remove, edit further, close, come back / open on the other machine / copy the catalog", compare *a fixed stored result* with *a result that re-runs and may differ*: measure surprise, trust, and what they would pick. Decides §3.2 before slice D builds it | After C |
+| **D** | Engine and job: `inpaint_run` helper op (LaMa), crop / blend, **detail transfer** for holes the 512 px network sees reduced, the `remove` op with stored patches, CPU and GPU compositing | After B and C2 |
+| **E** | Develop UI: the Remove tool, paint / click / lasso, accept / undo, Heal fallback, large-region guard, history entries, model manager entry | After D |
+| **F** | Quality work the bake-off shows is needed: detail and grain matching, halo growth, better PatchMatch as a no-download fallback if wanted | After E |
+| **G** | **Later, optional: the complex part** (prompted fill, diffusion), only if the user wants it after living with removal | Not scheduled |
 
-## 7. Not verified (everything, until slice A)
+## 7. Not verified
 
-- Every speed, memory and quality claim: none was measured. MI-GAN's latency is the authors' on an iPhone; LaMa's has no figure at all here.
-- **Licences of the files that would ship**: MI-GAN's `LICENSE-WEIGHTS` names only "Software" (it does not say "weights"), its two hosts disagree on detail, and **Places2's terms were not read** (one port says CC-BY 4.0). LaMa's card says Apache-2.0 and the same Places2 caveat applies. SD's licence and size are from memory.
-- Whether ORT runs LaMa's FFT block on CoreML or DirectML (probably CPU only), and on Windows at all.
-- Whether a 512 px result can be made to look right on a 24 to 60 MP photograph (§3.3).
-- That PatchMatch is worse; it may well be good enough.
+- **Windows**, in every respect (LaMa's FFT block on ORT's CPU provider and DirectML, timing, memory).
+- **Real removal cases.** The holes are random blobs with known ground truth; real removals have an object with a shadow and halo, a mask drawn by a person or by click-select, and a purpose. The user's own photographs were not used (the user asked for web photographs).
+- **Whether detail transfer fixes the soft medium and large fills** (§9.3): not tried.
+- **A competent non-model fill.** The PatchMatch here is a first implementation (§9.3); it says little about what a good one can do.
+- **Licences** (§9.4): Places2's terms, and the weights files' own notices.
+- **CoreML**: the provider run covered only four cases and the process then ended without a result or an error message (not understood); what it did measure was far slower than CPU.
+- **Quality on faces, text, and very textured sky or foliage** beyond what the sheets show.
 - The edit-stack and GPU-path design (§3.2) against the real pipeline code: read from comments only.
 
-## 8. Questions for the user
+## 8. Decisions and open questions
 
-1. **May I download the two ONNX files for slice A?** `migan_pipeline_v2.onnx` (28.1 MB, from `huggingface.co/andraniksargsyan/migan`) and `lama_fp32.onnx` (about 208 MB, from `huggingface.co/Carve/LaMa-ONNX`), into a scratch folder only, for measurement; nothing goes into the app until the ADR.
-2. **Scope:** removal only, no prompts and no diffusion in M7: right?
-3. **Stored patch** (§3.2, a real file next to the catalog, never silently regenerated): acceptable, or would you rather it regenerate on demand?
-4. **If no model clearly beats PatchMatch**, ship PatchMatch alone and say so: acceptable? (My recommendation: yes.)
-5. **Photographs:** can you give me 5 to 10 of your own where you would reach for Remove (an object at an edge, a wire, a blemish)? The bake-off is only as good as its cases.
+Answered by the user on 2026-10-26:
+
+1. **Download for the bake-off:** yes, into the `mask_training` folder (done, §0).
+2. **Scope:** removal only; **the complex part moves to a later slice** (§4, slice G).
+3. **Stored patch:** arrange **a small study** to make sure users get the best experience (slice C2) before deciding.
+4. **If no model beats the non-model fill, ship the non-model fill alone:** yes (a model did beat it, so this did not trigger; see §3.1).
+5. **Test photographs:** find them on the web: people, portrait, landscape, architecture, building (done: 20 Commons photographs, §0).
+
+Open, for the user:
+
+- **A. The by-eye ruling (§9.3):** do you agree LaMa is the engine, MI-GAN is out above small holes, and large holes get a guard? The contact sheets are in `mask_training/inpaint/out/sheets/`.
+- **B. The licence question (§9.4):** is a model trained on Places2 acceptable for this product? (The same kind of question as the sky model's CC BY training data in `mask_training/README.md`.)
+- **C. Bundle or download:** LaMa is 208 MB. The other models are bundled in the installer; this one would make the installer about 208 MB larger. Bundle, or download on first use with the existing consent flow?
+
+## 9. Bake-off results (slice A, 2026-10-26)
+
+### 9.1 What was run
+
+20 photographs (4 each: people, portrait, landscape, architecture, building; 2,606 to 3,840 px wide; some are historic scans), **3 holes each: about 150, 500 and 1,100 px across in native photo pixels** (S, M, L: dust spot / small object, a person at a distance, a large object), irregular blobs at random places, **60 cases**. Each case is a square crop around the hole with context (512 px for S, about 1,100 px for M, up to 2,420 px for L) with the original as ground truth. **MI-GAN** takes the crop at native size (its pipeline reduces to 512 itself); **LaMa** takes the crop reduced to 512, and only the hole of its result is pasted back; **PatchMatch** (the module in `app/src-tauri/src/inpaint_patchmatch.rs`, §9.3) works on the crop reduced to at most 1,536 px.
+
+### 9.2 Time and memory (Apple M1 Pro, ORT 1.30, CPU provider)
+
+| | MI-GAN-512 | LaMa fp32 | PatchMatch (ours) |
+|---|---|---|---|
+| File | 28.1 MB | 208 MB | none |
+| Time per removal, median (range), 60 cases | **0.29 s** (0.23 to 0.63) | **2.30 s** (2.19 to 3.21) | 1.20 s median, 3.7 s max (8 cases run at once, so each is slower than alone) |
+| Peak memory, one process | about 880 MB (1,100 px crop) | about 750 MB (fixed 512) | not measured |
+| CoreML provider | 2.2 to 4.3 s on the 4 cases that ran (**7 to 15 times slower than CPU**) | 8.6 to 10.9 s (**about 4 times slower**) | n/a |
+
+ORT's CoreML provider split the graphs into hundreds of partitions (585 for LaMa), the same pathology RFC-0023 found for SCUNet: **use the CPU provider**. Peak memory is of a Python process with the model loaded and two runs of random input.
+
+### 9.3 Quality
+
+Scored inside the hole against the original. **PSNR is only a sanity signal** (a blur scores well); `detail` is the high-frequency energy of the fill relative to the original's (1.0 = as sharp; far below 1 = a smudge).
+
+| Hole | n | PatchMatch PSNR / detail | MI-GAN PSNR / detail | LaMa PSNR / detail |
+|---|---|---|---|---|
+| S (~150 px) | 20 | 21.8 dB / 0.51 | 21.6 dB / **0.98** | **23.2 dB** / 0.89 |
+| M (~500 px) | 20 | 17.0 dB / 0.40 | 16.2 dB / 0.43 | **18.1 dB** / 0.29 |
+| L (~1,100 px) | 20 | 14.3 dB / 0.14 | 13.6 dB / 0.31 | **16.0 dB** / 0.10 |
+| all | 60 | 17.7 / 0.35 | 17.2 / 0.53 | **19.1** / 0.29 |
+
+Closest to the original: **LaMa in 46 of 60 cases**, PatchMatch 13, MI-GAN 1. LaMa leads in every category (people, portrait, landscape, architecture, building).
+
+**By eye** (five of the twenty contact sheets looked at, all three sizes each: landscape 1, building 1, people 3, architecture 1, portrait 2; the sheets are in `mask_training/inpaint/out/sheets/`):
+
+- **Small holes: LaMa's fills are hard to find** (snow, a girder, a ceiling arch, a shirt). MI-GAN's are good on plain areas but leave faint smears on mouldings and fabric; PatchMatch leaves a flat patch on busy texture (foliage, mouldings, a shirt).
+- **Medium holes: LaMa continues the structure** (it redrew the rows of windows under a cable, the facade grid, the ceiling frieze), softly. **MI-GAN invents objects** (a white blob in a metal mesh, tangled cables and a balcony in a window wall). PatchMatch fills with a flat colour patch.
+- **Large holes: every engine fails in its own way**: LaMa gives smeared mush with the right colours and rough structure, MI-GAN builds plausible but *wrong* scenery (a green figure in a gap, a small building where a street was), PatchMatch a grey cloud. A **guard is required**.
+- **On a 24 MP photograph the medium fill is soft**: LaMa sees the crop reduced to about 0.47 of native, and its `detail` is 0.29. This is the main quality problem to solve (slice D's detail transfer).
+
+**The PatchMatch baseline is weak, and partly through my implementation**: it is a first version (Wexler-style, one patch size, a centre-copy last pass), not tuned, and a competent content-aware fill would do better on medium holes. What it does show is the ceiling for "no model": on structured scenes it cannot continue lines, which is what a user removing an object from a building or a street needs.
+
+### 9.4 Licences (what was read)
+
+- **LaMa**: code Apache-2.0 (the ONNX port's card, and the original's `big-lama` card on Hugging Face, both say Apache-2.0; the repo's `LICENSE` text was not retrievable here). **Trained on Places2.**
+- **MI-GAN**: code MIT; the weights' file `LICENSE-WEIGHTS` has MIT wording that speaks only of "Software". **Trained on Places2.**
+- **Places2**: the terms page could not be reached (connection refused), so **its terms were not read**. From memory (not verified) it is distributed for non-commercial research and education, and its images are third parties' photographs. **This is the open question for the user (§8 B)**: it applies to both models, and to any weights trained on that data. It is the same kind of question `mask_training/README.md` leaves to the product owner for CC BY training images.

@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 object removal: RFC-0032 drafted (2026-10-26)
+
+[RFC-0032](docs/rfc/RFC-0032-ai-object-removal.md), design and desk research only (branch `docs/rfc-m7-spot-removal`): the
+"generative fill, framed as spot removal" decision the user deferred to after culling. Proposal: **no diffusion /
+prompted generation in M7**; removal by **inpainting**, with the engine chosen by a bake-off on the same masks:
+PatchMatch (non-model, our code) vs **MI-GAN-512** (28.1 MB ONNX, MIT code) vs **LaMa fp32** (about 208 MB, Apache-2.0);
+**a model ships only if clearly better than PatchMatch**, else M7 ships PatchMatch alone (MILESTONES' "non-generative
+fallback"). A removal is an **edit-stack op** (the pixel grid does not change) with a **stored patch file** (not a cache:
+a GAN may give a different result on another provider), applied first in the pipeline, per-photo (not copied or synced).
+UX to be mocked first. FLUX Fill excluded (non-commercial, 23.8 GB); SD inpainting named and out of scope. **Nothing was
+measured or downloaded**; licences of the shipping files and Places2's terms are unresolved; five questions for the user in
+§8, the first asking permission to download the two ONNX files for the bake-off (slice A).
+
 ## M7 culling slice C: the Similar view in the app (2026-10-23)
 
 Third build slice of [RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md), after the UX mock. A **Similar** entry in the

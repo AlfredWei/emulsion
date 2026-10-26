@@ -151,8 +151,19 @@ enum FileOutcome {
 
 /// One id for every image landed by one import call: wall-clock millis, since there is no dedicated batch table to
 /// hand one out from. Backs the Library sidebar's "Last Import" source (`import_batch == max(import_batch)`).
+/// Strictly increasing within the process: two imports started in the same millisecond (a test, or a script) must not
+/// share one id, or the second would be taken for part of the first.
 fn new_import_batch() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let mut last = LAST.load(std::sync::atomic::Ordering::SeqCst);
+    loop {
+        let next = now.max(last + 1);
+        match LAST.compare_exchange(last, next, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst) {
+            Ok(_) => return next,
+            Err(seen) => last = seen,
+        }
+    }
 }
 
 /// The per-file core shared by every import entry point: read, hash, skip a known hash, catalog (one transaction),
@@ -1993,5 +2004,11 @@ mod speed_probe {
             let mse = old_img.as_raw().iter().zip(new_img.as_raw()).map(|(a, b)| (*a as f64 - *b as f64).powi(2)).sum::<f64>() / old_img.as_raw().len() as f64;
             println!("  {stem:<40} {:.1} dB   ({} KB -> {} KB; 512: {} KB)", 10.0 * (255.0f64 * 255.0 / mse.max(1e-9)).log10(), old.len() / 1000, std::fs::metadata(out.join(format!("{stem}-new1024.jpg"))).unwrap().len() / 1000, std::fs::metadata(out.join(format!("{stem}-new512.jpg"))).unwrap().len() / 1000);
         }
+    }
+
+    #[test]
+    fn import_batch_ids_never_repeat_even_within_one_millisecond() {
+        let ids: Vec<i64> = (0..1000).map(|_| new_import_batch()).collect();
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "strictly increasing");
     }
 }

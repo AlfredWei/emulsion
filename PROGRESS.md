@@ -2,6 +2,23 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 object removal: RFC-0032 bake-off done (2026-10-26)
+
+[RFC-0032](docs/rfc/RFC-0032-ai-object-removal.md) now has the slice A results (§9). User answers (2026-10-26): download the
+models into `mask_training` (done: `mask_training/inpaint/models/`, SHA-256 in the RFC), removal only and the complex part
+(prompted / diffusion) to a later slice G, a **small study on stored vs regenerated patches** before that is decided
+(slice C2), photos from the web (20 Wikimedia Commons photographs, CC0 / PD / CC BY only, in five categories).
+**Bake-off, 60 hole cases (150 / 500 / 1,100 px) on M1 Pro CPU:** LaMa fp32 (208 MB) closest to the original in 46 of 60
+(19.1 dB mean), 2.3 s per removal, ~750 MB; MI-GAN-512 (28 MB) 0.29 s but **invents objects on medium and large holes**;
+our new PatchMatch baseline (`inpaint_patchmatch.rs`, 7 tests, a first untuned version) smears everything above a small
+spot; CoreML is 4 to 15 times slower than CPU. Large holes fail for every engine, so a guard is needed; the medium fill on
+a 24 MP photo is soft (detail transfer is slice D's job). **Proposal: LaMa as the engine, subject to the Places2 licence
+question** (terms page unreachable; both models trained on it) which is the user's call. **Not verified:** Windows, real
+removal cases, any fix for the softness, a competent non-model fill, five of twenty sheets looked at by eye. Open for the
+user: the by-eye ruling, the licence question, bundle vs download (208 MB). Also fixed on the way: a **flaky import test**
+(`batch_scoped_backfill_...`, failing about 4 runs in 10): two imports in the same millisecond shared a batch id, so
+`new_import_batch` is now strictly increasing within the process (with its own test).
+
 ## M7 culling slice C: the Similar view in the app (2026-10-23)
 
 Third build slice of [RFC-0031](docs/rfc/RFC-0031-intelligent-culling.md), after the UX mock. A **Similar** entry in the

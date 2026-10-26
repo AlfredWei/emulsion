@@ -20,6 +20,10 @@ mod face_models;
 mod face_pipeline;
 mod hdr_merge;
 mod import;
+#[cfg_attr(not(test), allow(dead_code))] // the non-model fill of RFC-0032; not wired into the app until the engine decision
+mod inpaint_patchmatch;
+#[cfg(test)]
+mod inpaint_probe;
 mod jpeg_decode;
 mod lens_profile;
 mod metadata;

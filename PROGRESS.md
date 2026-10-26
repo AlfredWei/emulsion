@@ -18,6 +18,14 @@ Clarity, Dehaze in masks) and region resolvers (sky = heuristic range mask, pers
 subject = person or one click). Open for the user: slice 0 as the next step, `subject` needing a click, presets
 depending on the optional 155 MB Select Subject model.
 
+**Slice A, sky resolver measured (RFC-0033 §9):** a numpy heuristic (smooth, top-connected, colour-step-limited region
+growing, clouds, hole fill) vs skyseg's masks on the 45 Commons photos of RFC-0023 §4.6: **34 of 45 differ by more than
+5 %** (the trained U-Net, rejected earlier: 19), mean IoU **0.65** (U-Net 0.76); good on open skies (desert 0.90, clear
+blue 0.88, skyline 0.79), **poor through branches (0.15), night, fog, trees**. So not a resolver to trust unattended:
+the design (§3.1b) shows what was found (coverage, overlay), flags doubtful photos and offers the manual route. Not tried:
+SAM prompted with a heuristic point, a confidence signal, `face` / `person` / `shadows` resolvers. The prototype and a
+12-photo overlay sheet are in `docs/rfc/RFC-0033-appendix/`.
+
 ## M7 object removal: RFC-0032 slice C2, the measured part (2026-10-26)
 
 Merged: the Remove tool mock (#268). The **stored vs regenerated patch** question (the user's question 3) was first

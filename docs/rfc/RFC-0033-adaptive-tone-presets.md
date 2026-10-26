@@ -53,7 +53,7 @@ Shape (unchanged in spirit): a preset op carries a **region binding** instead of
 
 | Kind | Resolver | Needs a model | Confidence |
 |---|---|---|---|
-| `sky` | A composed **colour / luminance range mask** from the photo itself (bright, blue or warm-gradient, connected to the top edge), the manual recipe RFC-0026 recommends, automated. Measured on labelled photographs in slice B | No | Unknown until measured; fails on indoor photos, on sky seen through trees, on a flat overcast sky (§5) |
+| `sky` | A composed **colour / luminance range mask** from the photo itself (bright, blue or warm-gradient, connected to the top edge), the manual recipe RFC-0026 recommends, automated. Measured on labelled photographs in slice B | No | **Measured (§9): good on open skies, poor through branches, on night and fog; not reliable unattended.** Needs a "what was found" check (§3.1b) |
 | `person` | **Face boxes (RFC-0005) to segmentation clicks** (a point on the face and one on the torso below it) through the existing SAM decoder, one mask per detected person, merged | Yes: the optional 155 MB Select Subject model (RFC-0026 §3.5); without it the kind is unavailable and the preset says why | Good where a face is found; none where not |
 | `face` | The face box and landmarks only (an ellipse), no segmenter; for "brighten faces", where the edge does not need to be exact | No | Good; limited to what the detector finds |
 | `subject` | **Not automatic in this RFC.** Resolves to `person` when a person is found; otherwise the preset asks the user to click the subject once on the open photo (a one-click Select Subject), and cannot be applied to a batch | Yes | Honest: a click is not "automatic", and the RFC says so |
@@ -68,6 +68,10 @@ Shape (unchanged in spirit): a preset op carries a **region binding** instead of
 ### 3.1a Slice 0: richer local adjustments (the real prerequisite)
 
 Without it R2 has almost nothing to adjust. **Extend the mask adjustments** from three to the set the starter presets need: **Temperature, Tint, Highlights, Shadows, Texture, Clarity, Dehaze** (all already global ops with CPU and GPU implementations), and, if the budget allows, **Sharpness** and **Noise Reduction** (the "soften the background" and "protect the sky" uses). The work is in the mask pass: each added adjustment is another term in the WGSL `fs_mask` and its CPU twin, packed per mask, with CPU / GPU parity tests (the `develop-cpu-gpu-parity` harness) and a performance check against M5's ~100 ms interactive budget (more adjustments per mask means more work per pixel in every mask). **This is its own RFC-sized slice and is useful on its own**: it improves every manual mask, not just presets. It is scoped here, designed in its own document.
+
+### 3.1b What a resolver that is sometimes wrong means for the design (from §9)
+
+The sky resolver is right on open skies and wrong in the cases photographers meet often (branches, night, fog). A preset that silently paints a wrong mask is worse than none, so **the apply step shows what it found**: the coverage ("Sky: 38 % of the frame"), the mask as an overlay on hover, and three outcomes: **found** (applied), **not found** (skipped, said so), **check** (applied, but flagged for review when the mask is small, ragged or touches only part of the top edge). A flagged photo offers **"Select the sky yourself"** (the existing manual range mask, or one Select Subject click on the sky) and the preset's adjustments move to that mask. For a batch, the report lists the flagged photos; nothing is hidden.
 
 ### 3.2 It follows the stored-result rule of RFC-0032
 
@@ -121,7 +125,7 @@ Unchanged from the first draft and **deferred by the user**: keep today's Auto T
 | Slice | What | Needs |
 |---|---|---|
 | **0** | **Richer local adjustments**: Temperature, Tint, Highlights, Shadows, Texture, Clarity, Dehaze (then Sharpness, Noise) inside masks; its own design document, parity tests, performance check | Nothing from the user. Starts with a short design note on the mask pass |
-| **A** | **Region resolvers measured**: `sky` (heuristic), `face`, `person` (faces to clicks), `shadows`; labelled photographs, found / not found, the coverage floor; no UI | Web photographs (the user's too if wanted) |
+| **A** | **Region resolvers measured**: `sky` (heuristic) **done, §9**; `face`, `person` (faces to clicks), `shadows` still to do; found / not found, the coverage floor; no UI | Web photographs (the user's too if wanted) |
 | **B** | **Region-bound preset ops**: the model, apply, not-found handling, History entry, Amount, batch job, tests | A, and 0 for the non-sky presets |
 | **C** | **UX mock, then UI**: the preset editor's "bind to region" control, the five starter presets, hover preview, Amount, "needs the Select Subject model" and "no sky found" states | B; a mock first (the RFC-0028 / 0029 / 0031 / 0032 way) |
 | **D** | **R1: scene-aware Auto Tone**, only if blind pairs say it wins | A and 0 |
@@ -149,3 +153,19 @@ Open, for the user:
 - **A. Slice 0 is the prerequisite and is large** (§3.1a): richer local adjustments are needed before most of the starter set exists. Is that the right next step, with its own design note first? (Starting with slice A, the sky resolver, in parallel is possible.)
 - **B. The `subject` kind** needs a click, or a person found by the face detector (§3.1). Is "a preset that asks you to click the subject once" acceptable, or should `subject` be person-only until an automatic subject model exists?
 - **C. The Select Subject model is a 155 MB optional download** and `person` / `subject` / `background` presets depend on it. Acceptable that those presets say "needs the Select Subject model" until it is installed?
+
+## 9. Slice A, the sky resolver measured (2026-10-26)
+
+**What was run.** A numpy prototype ([skyheur.py](RFC-0033-appendix/skyheur.py), outside the app): the smooth region connected to the top edge, grown pixel to pixel with a colour-step limit; bright low-saturation textured pixels next to it (clouds) taken in; holes filled. 300-px working size. Compared with **skyseg's masks** on the 45 Wikimedia Commons photographs of RFC-0023 §4.6 (12 scene types, CC0 / PD / CC BY). **skyseg is a reference, not ground truth** (its provenance is unexplained and it cannot ship, RFC-0023 §4.3), but it was preferred in 32 of 45 blind comparisons against the project's own trained sky model (RFC-0023 §4.6). The tuning was two variants on the same 45 photographs (the second adds a per-row colour match); that is a small overfit risk, so the numbers are best read as the ceiling of this approach.
+
+| | Photos with more than 5 % of the frame different from skyseg | Mean IoU (photos where skyseg finds sky) |
+|---|---|---|
+| **Heuristic** (best of two variants) | **34 of 45** | **0.65** |
+| The project's trained U-Net (rejected in RFC-0023 §4.6), same comparison | 19 of 45 | 0.76 |
+| The bar set before the trained model's last run (RFC-0023 §4.6) | at most 8 | 0.80 |
+
+By scene (variant 1, mean IoU): **desert 0.90, clear blue sky 0.88, skyline 0.79, sunset 0.72**, then lake 0.65, fog 0.65, storm 0.61, sea horizon 0.60, trees 0.57, night 0.53, **bare branches 0.15** (it finds almost nothing: the sky between branches is not connected to the top). [Overlays for twelve photos](RFC-0033-appendix/sky-heuristic-vs-skyseg.png) (left skyseg, right heuristic): clean skies, sunsets and storm skies over open ground are good, including the cloud edges; reflections in water, fog, trees and branches, and the Milky Way are not.
+
+**What it says.** A non-model sky mask is a good *first guess* for open skies and not a resolver to trust unattended: by the project's own earlier bar it fails, and it is worse than the trained model overall. So §3.1b: show what was found, flag the doubtful, offer the manual route. The measurement did **not** try: a model-based sky (SAM 2 prompted with a point the heuristic picks; RFC-0026's rejection was for a *click* tool used as a sky detector, with the user choosing the candidate), which is the next thing to measure if the flagged-photo rate is too high in use; the project's own trained U-Net as the resolver (rejected on its numbers, and its CC BY training-data question is open); a confidence signal (the heuristic's own features may predict its failures; not measured).
+
+**Not verified:** `face`, `person`, `shadows` resolvers (not run); Windows (a pure numpy prototype); how the Rust port behaves (this is a prototype, ~60 lines; the port is slice B's); any photograph of the user's own.

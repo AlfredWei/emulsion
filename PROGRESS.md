@@ -2,6 +2,20 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 object removal: RFC-0032 slice C2, the measured part (2026-10-26)
+
+Merged: the Remove tool mock (#268). The **stored vs regenerated patch** question (the user's question 3) was first
+**measured** (RFC-0032 §10, `mask_training/inpaint/determinism.py`): LaMa re-run on the same machine is **bit-identical**
+(same session, new session; 1 vs 8 threads differ by at most 0.002 of a level); **CPU vs CoreML** differs in fine texture
+only (mean 0.45 to 1.75 levels, max 13 to 29, structure and colour the same). So "regenerating may change what you
+accepted" holds across providers, versions and machine types, not within one machine, but a re-run costs 2.3 s per
+removal, so "re-make on open" would need a cache anyway; a diffusion fill (slice G) is non-deterministic, so a stored
+patch is needed then. **Revised hypothesis:** the stored file is the truth (nothing re-runs on open), **recomputable on
+request** (a missing file shows "needs regenerating" with one Regenerate button, never silent). The study with people is
+written ([protocol](docs/rfc/RFC-0032-appendix/c2-patch-study.md): tasks, plain wording, decision rule fixed in advance);
+the mock's Regenerate now says the result may differ slightly. **Not verified:** Windows determinism, CoreML beyond three
+cases, anything with people (the study is the user's to run or to arrange).
+
 ## M7 object removal: RFC-0032 slice C, the Remove tool UX mock (2026-10-26)
 
 [remove-tool-mockup.html](docs/ux/mockups/remove-tool-mockup.html), the RFC-0028/0029/0031 way: the UI is judged by use before

@@ -2,6 +2,27 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 adaptive tone, slice 0a: six more adjustments inside a mask (RFC-0034, 2026-10-26)
+
+A mask now carries **Temperature, Tint, Highlights, Shadows, Whites, Blacks** besides Exposure / Contrast / Saturation, on
+every weight-producing kind (linear, radial, brush, luminance, colour range, segment). The mask pass calls the global
+chain's own `apply_global_adjustments` (Rust `LocalExtra` + `local_adjusted` in `masks.rs`; WGSL `Mask.adjustments2/3`
+and a branch in `fs_mask`) and falls back to the old three-control function when all six are zero, so old stacks are
+unchanged and no schema bump was needed. `MASK_STRIDE` 16 to 24 (`gpuHandles.js`, `maskPack.js`, the buffer size).
+Mask panel: **More adjustments** (hidden until asked for, forced open while any value is set) with Light and Colour
+groups and *Reset these*. **Verified:** two new Rust tests (a full-weight mask equals the global stack for each of the
+six controls on six pixels; several controls combined; plain mask unchanged), 2 new vitest (packing), 1129 vitest and
+svelte-check pass; **a new e2e scenario** in `develop-mask-shapes.e2e.js` compares CPU and GPU on a mask with all six
+(it needs WebGPU, local only like its neighbours). **Verified in the real bundled debug app** (throwaway HOME, Field-corn
+photo): a Luminance Range mask, *More adjustments* opens with Light (Highlights, Shadows, Whites, Blacks) and Colour
+(Temperature, Tint) and *Reset these*; dragging Temperature to +89 visibly warms the photo on the GPU path (the blue sky
+goes warm, the histogram moves) and the persisted stack has `"temperature":89` on the mask; the WGSL also compiles with no
+messages in Chromium's WebGPU. **Local e2e caveat:** on this machine the existing `develop-mask-shapes` GPU scenarios fail the
+same way on unmodified main (CPU 180, GPU 140: the WebDriver-driven WKWebView does not render masks on the GPU), so the
+new scenario could not be run here either; CI skips it for lack of WebGPU. **Not verified:** CPU / GPU agreement of the
+new controls in the real window (the Rust tests cover the CPU side against the global stack), Windows GPU timing of the
+larger mask pass, the other mask kinds' panels by hand.
+
 ## M7 adaptive tone: RFC-0033 drafted, user decisions in (2026-10-26)
 
 [RFC-0033](docs/rfc/RFC-0033-adaptive-tone-presets.md), the last open M7 scope line ("adaptive / context-aware auto-tone

@@ -1,5 +1,54 @@
 use super::*;
 
+/// RFC-0034: the six pointwise adjustments a mask carries beyond Exposure / Contrast / Saturation. They go through
+/// the same `apply_global_adjustments` the global stack uses, so a weight-1 mask with these values renders the pixel
+/// the global stack would (tested). Every field is optional in the op JSON and defaults to 0, so a stack written
+/// before RFC-0034 is unchanged and no schema bump is needed.
+#[derive(Clone, Copy, Default)]
+pub(super) struct LocalExtra {
+    pub(super) temperature: f32,
+    pub(super) tint: f32,
+    pub(super) highlights: f32,
+    pub(super) shadows: f32,
+    pub(super) whites: f32,
+    pub(super) blacks: f32,
+}
+
+impl LocalExtra {
+    pub(super) fn from_op(op: &serde_json::Value) -> Self {
+        let f = |k: &str| op.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        LocalExtra {
+            temperature: f("temperature"),
+            tint: f("tint"),
+            highlights: f("highlights"),
+            shadows: f("shadows"),
+            whites: f("whites"),
+            blacks: f("blacks"),
+        }
+    }
+
+    pub(super) fn is_zero(&self) -> bool {
+        self.temperature == 0.0
+            && self.tint == 0.0
+            && self.highlights == 0.0
+            && self.shadows == 0.0
+            && self.whites == 0.0
+            && self.blacks == 0.0
+    }
+}
+
+/// The colour a mask's adjustments produce from `rgb` (before the weight blends it in). With no RFC-0034 values this
+/// is exactly the old three-control `apply_adjustments`; otherwise the global chain's own function.
+pub(super) fn local_adjusted(rgb: [f32; 3], exposure: f32, contrast: f32, saturation: f32, x: &LocalExtra) -> [f32; 3] {
+    if x.is_zero() {
+        apply_adjustments(rgb, exposure, contrast, saturation)
+    } else {
+        apply_global_adjustments(
+            rgb, exposure, contrast, saturation, x.temperature, x.tint, x.highlights, x.shadows, x.whites, x.blacks,
+        )
+    }
+}
+
 /// A `linear_gradient_mask` op (M3 Slice 5), parsed from its opaque JSON
 /// shape -- see MaskToolStrip.svelte/develop.js for how the frontend
 /// creates these. Coordinates are normalized (0..1, matching the WGSL
@@ -12,6 +61,8 @@ pub(super) struct LinearGradientMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// RFC-0034: the pointwise adjustments beyond exposure / contrast / saturation (absent = 0).
+    pub(super) extra: LocalExtra,
     /// Composable masking (RFC-0025): further shapes folded into this mask's
     /// weight, in order. Empty for a mask without a `modifiers` array. Filled
     /// in by `parse_masks`, never by the per-kind parse functions, so a shape
@@ -40,6 +91,7 @@ pub(super) fn parse_linear_gradient_mask(op: &serde_json::Value) -> Option<Linea
             .get("saturation")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as f32,
+        extra: LocalExtra::from_op(op),
     })
 }
 
@@ -78,6 +130,8 @@ pub(super) struct RadialGradientMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// RFC-0034: the pointwise adjustments beyond exposure / contrast / saturation (absent = 0).
+    pub(super) extra: LocalExtra,
     /// Composable masking (RFC-0025): further shapes folded into this mask's
     /// weight, in order. Empty for a mask without a `modifiers` array. Filled
     /// in by `parse_masks`, never by the per-kind parse functions, so a shape
@@ -103,6 +157,7 @@ pub(super) fn parse_radial_gradient_mask(op: &serde_json::Value) -> Option<Radia
             .get("saturation")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as f32,
+        extra: LocalExtra::from_op(op),
     })
 }
 
@@ -239,6 +294,8 @@ pub(super) struct BrushMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// RFC-0034: the pointwise adjustments beyond exposure / contrast / saturation (absent = 0).
+    pub(super) extra: LocalExtra,
     /// Composable masking (RFC-0025): further shapes folded into this mask's
     /// weight, in order. Empty for a mask without a `modifiers` array. Filled
     /// in by `parse_masks`, never by the per-kind parse functions, so a shape
@@ -276,6 +333,7 @@ pub(super) fn parse_brush_mask(op: &serde_json::Value) -> Option<BrushMask> {
             .get("saturation")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as f32,
+        extra: LocalExtra::from_op(op),
     })
 }
 
@@ -348,6 +406,8 @@ pub(super) struct LuminanceRangeMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// RFC-0034: the pointwise adjustments beyond exposure / contrast / saturation (absent = 0).
+    pub(super) extra: LocalExtra,
     /// Composable masking (RFC-0025): further shapes folded into this mask's
     /// weight, in order. Empty for a mask without a `modifiers` array. Filled
     /// in by `parse_masks`, never by the per-kind parse functions, so a shape
@@ -368,6 +428,7 @@ pub(super) fn parse_luminance_range_mask(op: &serde_json::Value) -> Option<Lumin
             .get("saturation")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as f32,
+        extra: LocalExtra::from_op(op),
     })
 }
 
@@ -414,6 +475,8 @@ pub(super) struct ColorRangeMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// RFC-0034: the pointwise adjustments beyond exposure / contrast / saturation (absent = 0).
+    pub(super) extra: LocalExtra,
     /// Composable masking (RFC-0025): further shapes folded into this mask's
     /// weight, in order. Empty for a mask without a `modifiers` array. Filled
     /// in by `parse_masks`, never by the per-kind parse functions, so a shape
@@ -439,6 +502,7 @@ pub(super) fn parse_color_range_mask(op: &serde_json::Value) -> Option<ColorRang
             .get("saturation")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as f32,
+        extra: LocalExtra::from_op(op),
     })
 }
 
@@ -691,6 +755,8 @@ pub(super) struct SegmentMask {
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
+    /// RFC-0034: the pointwise adjustments beyond exposure / contrast / saturation (absent = 0).
+    pub(super) extra: LocalExtra,
     /// Composable masking (RFC-0025); filled in by `parse_masks` only.
     pub(super) modifiers: Vec<Modifier>,
 }
@@ -718,6 +784,7 @@ pub(super) fn parse_segment_mask(op: &serde_json::Value) -> Option<SegmentMask> 
         exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
         contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
         saturation: op.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        extra: LocalExtra::from_op(op),
     })
 }
 
@@ -934,17 +1001,17 @@ impl Mask {
             }
             Mask::RedEye(m) => red_eye_local_color(rgb, m),
             _ => {
-                let (exposure, contrast, saturation) = match self {
-                    Mask::Linear(m) => (m.exposure, m.contrast, m.saturation),
-                    Mask::Radial(m) => (m.exposure, m.contrast, m.saturation),
-                    Mask::Brush(m) => (m.exposure, m.contrast, m.saturation),
-                    Mask::LuminanceRange(m) => (m.exposure, m.contrast, m.saturation),
-                    Mask::ColorRange(m) => (m.exposure, m.contrast, m.saturation),
-                    Mask::Segment(m) => (m.exposure, m.contrast, m.saturation),
+                let (exposure, contrast, saturation, extra) = match self {
+                    Mask::Linear(m) => (m.exposure, m.contrast, m.saturation, &m.extra),
+                    Mask::Radial(m) => (m.exposure, m.contrast, m.saturation, &m.extra),
+                    Mask::Brush(m) => (m.exposure, m.contrast, m.saturation, &m.extra),
+                    Mask::LuminanceRange(m) => (m.exposure, m.contrast, m.saturation, &m.extra),
+                    Mask::ColorRange(m) => (m.exposure, m.contrast, m.saturation, &m.extra),
+                    Mask::Segment(m) => (m.exposure, m.contrast, m.saturation, &m.extra),
                     Mask::Spot(_) => unreachable!(),
                     Mask::RedEye(_) => unreachable!(),
                 };
-                apply_adjustments(rgb, exposure, contrast, saturation)
+                local_adjusted(rgb, exposure, contrast, saturation, extra)
             }
         }
     }

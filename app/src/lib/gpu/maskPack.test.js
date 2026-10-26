@@ -21,18 +21,28 @@ describe("maskPack", () => {
     expect(MAX_MODIFIERS).toBe(API_MAX_MODIFIERS);
   });
 
-  test("the WGSL declares the same array sizes and a 4th vec4 on Mask", () => {
+  test("the WGSL declares the same array sizes and the 4th to 6th vec4s on Mask", () => {
     expect(WGSL).toContain(`const MAX_MASKS = ${MAX_MASKS};`);
     expect(WGSL).toContain(`const MAX_MODS = ${MAX_MODIFIERS};`);
     expect(WGSL).toMatch(/mods: vec4<f32>,/);
-    expect(MASK_STRIDE).toBe(16);
+    expect(WGSL).toMatch(/adjustments2: vec4<f32>,/);
+    expect(WGSL).toMatch(/adjustments3: vec4<f32>,/);
+    expect(MASK_STRIDE).toBe(24);
     expect(MOD_STRIDE).toBe(12);
   });
 
   test("a mask without modifiers packs the pre-RFC layout and an empty modifier range", () => {
     const { maskData, modCount } = packMasks([radial("a")], noLayer);
-    expect(Array.from(maskData.slice(0, 16))).toEqual([0.4, 0.6, 0.2, 0.3, 25, 1, 1, 0, 1.5, 10, -20, 0, 0, 0, 0, 0].map(Math.fround));
+    expect(Array.from(maskData.slice(0, 24))).toEqual([0.4, 0.6, 0.2, 0.3, 25, 1, 1, 0, 1.5, 10, -20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0].map(Math.fround));
     expect(modCount).toBe(0);
+  });
+
+  test("RFC-0034: the six extra adjustments pack into vec4s 5 and 6, absent = 0", () => {
+    const { maskData } = packMasks([radial("a", { temperature: 12, tint: -7, highlights: -30, shadows: 45, whites: 5, blacks: -9 }), radial("b")], noLayer);
+    expect(Array.from(maskData.slice(16, 22))).toEqual([12, -7, -30, 45, 5, -9]);
+    expect(Array.from(maskData.slice(MASK_STRIDE + 16, MASK_STRIDE + 22))).toEqual([0, 0, 0, 0, 0, 0]);
+    // the modifier range is where it always was
+    expect([maskData[12], maskData[13]]).toEqual([0, 0]);
   });
 
   test("modifiers are flattened in mask order with first/count per mask", () => {

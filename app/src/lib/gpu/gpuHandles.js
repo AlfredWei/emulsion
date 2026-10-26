@@ -6,8 +6,8 @@
 export const MAX_MASKS = 8;
 /** Composable masking (RFC-0025): total modifiers across the image (the `mods` uniform array). */
 export const MAX_MODIFIERS = 16;
-/** f32s per mask record in the `masks` uniform: 4 x vec4 (the 4th, `mods`, carries first/count into the modifier array). */
-export const MASK_STRIDE = 16;
+/** f32s per mask record in the `masks` uniform: 6 x vec4 (the 4th, `mods`, carries first/count into the modifier array; the 5th and 6th, RFC-0034, carry the six extra adjustments). */
+export const MASK_STRIDE = 24;
 /** f32s per modifier record in the `mods` uniform: 3 x vec4 (start_end, params, combine). */
 export const MOD_STRIDE = 12;
 

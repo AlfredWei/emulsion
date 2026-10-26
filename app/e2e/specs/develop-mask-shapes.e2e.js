@@ -316,6 +316,66 @@ describe("Develop mask shapes (composable masking)", function () {
     expect(Math.abs(cpuBare.r - cpu.r) + Math.abs(cpuBare.g - cpu.g) + Math.abs(cpuBare.b - cpu.b)).toBeGreaterThan(12);
   });
 
+  // RFC-0034 slice 0a: the six pointwise controls a mask gained (Temperature, Tint, Highlights, Shadows,
+  // Whites, Blacks) go through apply_global_adjustments on both twins. The mask is at full weight at the
+  // patch (t clamps to 1 at u = 0.15), so this is the global chain's own arithmetic on a mask's pixel: a
+  // control left out of the packing, or a WGSL / Rust ordering difference, moves the pixel by tens of levels.
+  it("CPU and GPU agree on a mask with the six pointwise adjustments", async function () {
+    if (!gpuAvailable) this.skip();
+    const stack = {
+      schema_version: 1,
+      ops: [
+        {
+          ...lin(0, 0.5, 0.1, 0.5),
+          id: "e2e-extra",
+          exposure: 0.3,
+          contrast: 10,
+          saturation: -10,
+          temperature: 40,
+          tint: -15,
+          highlights: -40,
+          shadows: 40,
+          whites: 20,
+          blacks: -20,
+        },
+      ],
+    };
+    await openWithStack(stack);
+    const canvasEl = await $(".canvas-wrap canvas");
+    await canvasEl.waitForExist({ timeout: 20000 });
+
+    const persisted = await getEditStack();
+    expect(persisted.ops[0].temperature).toBe(40);
+
+    const preview = await browser.execute(
+      (p, hash, s) => window.__TAURI__.core.invoke("preview_edit_stack", { path: p, contentHash: hash, stack: s }),
+      FIXTURE_PATH,
+      contentHash,
+      persisted,
+    );
+    const cpu = await readCpuPixel(preview.path, ROAD_PATCH.u, ROAD_PATCH.v);
+    const gpu = await readGpuPixel(canvasEl, ROAD_PATCH.u, ROAD_PATCH.v);
+    if (gpu === null) throw new Error("GPU hover-pixel readback never stabilized");
+    for (const ch of /** @type {const} */ (["r", "g", "b"])) {
+      const diff = Math.abs(cpu[ch] - gpu[ch]);
+      if (diff > TOLERANCE) {
+        throw new Error(`extra adjustments channel ${ch}: CPU=${cpu[ch]} GPU=${gpu[ch]} diff=${diff} exceeds ${TOLERANCE} | cpu=${JSON.stringify(cpu)} gpu=${JSON.stringify(gpu)}`);
+      }
+    }
+
+    // Not a vacuous pass: the same mask without the six controls renders differently on the CPU path.
+    const bare = JSON.parse(JSON.stringify(persisted));
+    for (const k of ["temperature", "tint", "highlights", "shadows", "whites", "blacks"]) delete bare.ops[0][k];
+    const barePreview = await browser.execute(
+      (p, hash, s) => window.__TAURI__.core.invoke("preview_edit_stack", { path: p, contentHash: hash, stack: s }),
+      FIXTURE_PATH,
+      contentHash,
+      bare,
+    );
+    const cpuBare = await readCpuPixel(barePreview.path, ROAD_PATCH.u, ROAD_PATCH.v);
+    expect(Math.abs(cpuBare.r - cpu.r) + Math.abs(cpuBare.g - cpu.g) + Math.abs(cpuBare.b - cpu.b)).toBeGreaterThan(12);
+  });
+
   it("Shapes UI: add a subtract shape, change it to intersect, remove it", async function () {
     // The mask tools are disabled while WebGPU is unavailable (develop-gpu-fallback.e2e.js), as on CI runners.
     if (!gpuAvailable) this.skip();

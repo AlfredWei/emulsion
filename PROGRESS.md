@@ -2,6 +2,19 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+## M7 adaptive tone, slice 0a: six more adjustments inside a mask (RFC-0034, 2026-10-26)
+
+A mask now carries **Temperature, Tint, Highlights, Shadows, Whites, Blacks** besides Exposure / Contrast / Saturation, on
+every weight-producing kind (linear, radial, brush, luminance, colour range, segment). The mask pass calls the global
+chain's own `apply_global_adjustments` (Rust `LocalExtra` + `local_adjusted` in `masks.rs`; WGSL `Mask.adjustments2/3`
+and a branch in `fs_mask`) and falls back to the old three-control function when all six are zero, so old stacks are
+unchanged and no schema bump was needed. `MASK_STRIDE` 16 to 24 (`gpuHandles.js`, `maskPack.js`, the buffer size).
+Mask panel: **More adjustments** (hidden until asked for, forced open while any value is set) with Light and Colour
+groups and *Reset these*. **Verified:** two new Rust tests (a full-weight mask equals the global stack for each of the
+six controls on six pixels; several controls combined; plain mask unchanged), 2 new vitest (packing), 1129 vitest and
+svelte-check pass; **a new e2e scenario** in `develop-mask-shapes.e2e.js` compares CPU and GPU on a mask with all six
+(status below). **Not verified:** the panel in the real window, Windows GPU timing of the larger mask pass.
+
 ## M7 adaptive tone: RFC-0033 drafted, user decisions in (2026-10-26)
 
 [RFC-0033](docs/rfc/RFC-0033-adaptive-tone-presets.md), the last open M7 scope line ("adaptive / context-aware auto-tone

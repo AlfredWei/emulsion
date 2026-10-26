@@ -269,7 +269,20 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4 and 
           rgb = mix(rgb, vec3<f32>(corrected, corrected, corrected), weight);
         }
         if (weighted) {
-          rgb = mix(rgb, apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z), weight);
+          // RFC-0034: with none of the six extra controls set this is exactly the old three-control path;
+          // otherwise the global chain's own function (white balance, exposure, contrast, parametric
+          // tone, saturation), so a full-weight mask renders what the global stack would.
+          var adjusted: vec3<f32>;
+          if (m.adjustments2.x == 0.0 && m.adjustments2.y == 0.0 && m.adjustments2.z == 0.0 && m.adjustments2.w == 0.0 && m.adjustments3.x == 0.0 && m.adjustments3.y == 0.0) {
+            adjusted = apply_adjustments(rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z);
+          } else {
+            adjusted = apply_global_adjustments(
+              rgb, m.adjustments.x, m.adjustments.y, m.adjustments.z,
+              m.adjustments2.x, m.adjustments2.y, m.adjustments2.z, m.adjustments2.w,
+              m.adjustments3.x, m.adjustments3.y
+            );
+          }
+          rgb = mix(rgb, adjusted, weight);
         }
 
         // Selected-mask overlay (soft colored fill, toggleable): every

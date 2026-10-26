@@ -599,3 +599,66 @@ fn spot_mask_multi_dab_stroke_shares_one_source_offset_across_every_dab() {
         "a pixel more than 1px from either dab center should be outside both dabs' coverage and left untouched"
     );
 }
+
+/// RFC-0034: the six pointwise controls a mask gained go through the global stack's own function, so a mask at
+/// full weight must render the pixel the global stack renders with the same value. One control at a time, over a
+/// spread of pixels, so a wrong order or a missed parameter shows up.
+#[test]
+fn a_full_weight_mask_with_the_extra_controls_equals_the_global_stack() {
+    let pixels: [[u8; 3]; 6] = [[100, 100, 100], [30, 40, 60], [200, 180, 150], [240, 235, 230], [10, 12, 8], [90, 140, 200]];
+    let cases: [(&str, f32); 8] = [
+        ("temperature", 40.0),
+        ("temperature", -60.0),
+        ("tint", 35.0),
+        ("highlights", -50.0),
+        ("shadows", 60.0),
+        ("whites", 30.0),
+        ("blacks", -40.0),
+        ("blacks", 25.0),
+    ];
+    for (name, value) in cases {
+        for px in pixels {
+            let mut local = RgbImage::from_pixel(1, 1, image::Rgb(px));
+            let mut stack = mask_stack((0.1, 0.5), (0.4, 0.5), 0.0, 0.0);
+            stack.ops[0][name] = serde_json::json!(value);
+            apply_edit_stack(&mut local, &stack);
+
+            let mut global = RgbImage::from_pixel(1, 1, image::Rgb(px));
+            apply_edit_stack(&mut global, &stack_with(&[(name, value)]));
+
+            for (a, b) in local.get_pixel(0, 0).0.iter().zip(global.get_pixel(0, 0).0.iter()) {
+                assert!(
+                    (*a as i32 - *b as i32).abs() <= 1,
+                    "{name} {value} on {px:?}: mask {:?} vs global {:?}",
+                    local.get_pixel(0, 0).0,
+                    global.get_pixel(0, 0).0
+                );
+            }
+        }
+    }
+}
+
+/// RFC-0034: the extra controls also combine with the old three in the global order (white balance, exposure,
+/// contrast, parametric tone, saturation), and the fields are optional: a mask without them is unchanged.
+#[test]
+fn a_mask_with_several_controls_matches_the_global_stack_and_a_plain_mask_is_unchanged() {
+    let px = [120u8, 100, 80];
+    let mut local = RgbImage::from_pixel(1, 1, image::Rgb(px));
+    let mut stack = mask_stack((0.1, 0.5), (0.4, 0.5), 0.0, 0.3);
+    stack.ops[0]["contrast"] = serde_json::json!(15.0);
+    stack.ops[0]["saturation"] = serde_json::json!(-10.0);
+    stack.ops[0]["temperature"] = serde_json::json!(-20.0);
+    stack.ops[0]["shadows"] = serde_json::json!(30.0);
+    apply_edit_stack(&mut local, &stack);
+    let mut global = RgbImage::from_pixel(1, 1, image::Rgb(px));
+    apply_edit_stack(
+        &mut global,
+        &stack_with(&[("exposure", 0.3), ("contrast", 15.0), ("saturation", -10.0), ("temperature", -20.0), ("shadows", 30.0)]),
+    );
+    for (a, b) in local.get_pixel(0, 0).0.iter().zip(global.get_pixel(0, 0).0.iter()) {
+        assert!((*a as i32 - *b as i32).abs() <= 1, "mask {:?} vs global {:?}", local.get_pixel(0, 0).0, global.get_pixel(0, 0).0);
+    }
+
+    // No extra fields: identical to the old three-control path (the existing 138 expectation, exposure +1 EV).
+    assert_mask_pixel(mask_stack((0.1, 0.5), (0.4, 0.5), 0.0, 1.0), [138, 138, 138]);
+}

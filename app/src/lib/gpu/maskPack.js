@@ -122,6 +122,13 @@ export function packMasks(masks, brushLayerOf) {
     maskData[o + 8] = m.exposure;
     maskData[o + 9] = m.contrast;
     maskData[o + 10] = m.saturation;
+    // RFC-0034: the six extra adjustments (absent = 0), vec4s 5 and 6 of the record.
+    maskData[o + 16] = m.temperature ?? 0;
+    maskData[o + 17] = m.tint ?? 0;
+    maskData[o + 18] = m.highlights ?? 0;
+    maskData[o + 19] = m.shadows ?? 0;
+    maskData[o + 20] = m.whites ?? 0;
+    maskData[o + 21] = m.blacks ?? 0;
 
     const mods = /** @type {any[]} */ (m.modifiers ?? []);
     maskData[o + 12] = modCount; // first modifier index

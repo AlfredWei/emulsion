@@ -63,6 +63,8 @@ export const common = `    struct VertexOut {
       params: vec4<f32>,      // x = feather 0-100 (unused for brush), y = invert 0/1 (unused for brush/spot; spot repurposes this for dabs' average radius, also for heal-ring sampling; red eye repurposes this for pupilSize 0-100), z = kind (0=linear, 1=radial, 2=brush, 3=luminance range, 4=color range, 5=spot, 6=red eye), w = texture-array layer (brush AND spot)
       adjustments: vec4<f32>, // x = exposure_ev (spot: mode, 0=clone/1=heal), y = contrast (unused for spot/red eye), z = saturation (unused for spot/red eye), w unused (red eye repurposes this for darken 0-100)
       mods: vec4<f32>,        // x = index of this mask's first modifier in mods, y = modifier count (RFC-0025; 0 for spot/red eye and for any mask without modifiers)
+      adjustments2: vec4<f32>, // RFC-0034, weight-producing kinds only: x = temperature, y = tint, z = highlights, w = shadows
+      adjustments3: vec4<f32>, // RFC-0034: x = whites, y = blacks, zw unused
     };
     const MAX_MASKS = 8;
 

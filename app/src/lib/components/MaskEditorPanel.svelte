@@ -54,6 +54,22 @@
     onRefineSubject = () => {},
   } = $props();
 
+  // RFC-0034: the six pointwise controls beyond Exposure / Contrast / Saturation, in two groups, the same ranges and
+  // labels as the global panel. Absent on a mask written before they existed (read as 0, written when first touched).
+  const EXTRA_GROUPS = /** @type {{ title: string, controls: { key: string, label: string }[] }[]} */ ([
+    { title: "Light", controls: [
+      { key: "highlights", label: "Highlights" }, { key: "shadows", label: "Shadows" },
+      { key: "whites", label: "Whites" }, { key: "blacks", label: "Blacks" },
+    ] },
+    { title: "Colour", controls: [{ key: "temperature", label: "Temperature" }, { key: "tint", label: "Tint" }] },
+  ]);
+  const EXTRA_KEYS = EXTRA_GROUPS.flatMap((g) => g.controls.map((c) => c.key));
+  /** @param {string} key */
+  const extraValue = (key) => /** @type {any} */ (mask)[key] ?? 0;
+  const hasExtra = $derived(EXTRA_KEYS.some((k) => extraValue(k) !== 0));
+  let moreOpen = $state(false);
+  const showMore = $derived(moreOpen || hasExtra);
+
   // Composable masking (RFC-0025): the mask's adjustments always live on the mask itself; the
   // shape controls below (Feather, ranges, colour, Invert) edit the SELECTED shape -- the base
   // shape (the mask's own fields) or one of its modifiers.
@@ -236,6 +252,42 @@
       <span class="val">{mask.saturation >= 0 ? "+" : ""}{mask.saturation}</span>
       {@render stepButtons(mask.saturation, 1, -100, 100, (v) => onChange({ saturation: v }))}
     </div>
+    <!-- RFC-0034: more adjustments, hidden until asked for (or until one is set, so a set value is never out of sight). -->
+    <button
+      type="button"
+      class="more"
+      aria-expanded={showMore}
+      disabled={hasExtra}
+      title={hasExtra ? "In use" : undefined}
+      onclick={() => (moreOpen = !moreOpen)}
+    >{showMore ? "▾" : "▸"} More adjustments</button>
+    {#if showMore}
+      {#each EXTRA_GROUPS as group (group.title)}
+        <div class="sec"><span>{group.title}</span></div>
+        {#each group.controls as c (c.key)}
+          <div class="row">
+            <label for="mask-{c.key}">{c.label}</label>
+            <input
+              id="mask-{c.key}"
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={extraValue(c.key)}
+              oninput={(e) => onChange({ [c.key]: Number(e.currentTarget.value) })}
+            />
+            <span class="val">{extraValue(c.key) >= 0 ? "+" : ""}{extraValue(c.key)}</span>
+            {@render stepButtons(extraValue(c.key), 1, -100, 100, (v) => onChange({ [c.key]: v }))}
+          </div>
+        {/each}
+      {/each}
+      <button
+        type="button"
+        class="more"
+        disabled={!hasExtra}
+        onclick={() => onChange(Object.fromEntries(EXTRA_KEYS.map((k) => [k, 0])))}
+      >Reset these</button>
+    {/if}
   {/if}
   {#if isModifiableOp(mask.op)}
     <!-- Composable masking (RFC-0025): what selects the pixels. The base shape first, then each
@@ -739,6 +791,24 @@
   }
   .delete:hover {
     border-color: var(--label-red);
+  }
+  .more {
+    appearance: none;
+    background: none;
+    border: 0;
+    padding: 4px 0;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .more:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .more:hover:not(:disabled) {
+    color: var(--text-primary);
   }
   .sep {
     height: 1px;

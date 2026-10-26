@@ -546,7 +546,7 @@ export async function initGpu(/** @type {import('./gpuHandles.js').GpuHandles} *
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   gpu.masksBuffer = gpu.device.createBuffer({
-    size: MAX_MASKS * MASK_STRIDE * 4, // 16 f32s (4x vec4) per mask
+    size: MAX_MASKS * MASK_STRIDE * 4, // 24 f32s (6x vec4) per mask
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   gpu.modsBuffer = gpu.device.createBuffer({

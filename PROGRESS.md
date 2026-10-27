@@ -2,6 +2,11 @@
 
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
+
+## M7 adaptive tone, slice A: face / person / shadows resolvers looked at (RFC-0033 §10, 2026-10-27)
+
+Branch `feature/adaptive-tone-slice-a-resolvers`; docs only, **no product code changed, no model run**. Read the faces the app already stored for the author's catalog and the luminance of 16 local JPEGs. **Found:** the detector's found / not-found looked right on 16 photographs by eye; its boxes are tight (a face mask must be an enlarged, feathered ellipse); a crowd photo has 18 faces down to 0.07 % of the frame, so the resolver needs a size floor (~0.5 %, a guess); **the catalog holds every face of two photographs twice** (detected 12 s apart on 2026-09-16; not reproduced, not fixed, a resolver must dedupe); `shadows` covers 5-16 % of ordinary frames and 64-99 % of night ones, so it needs a ceiling and a percentile threshold. **Not done:** `person` (needs the GPU segmenter), any larger measurement (needs openly licensed photographs, which need the user's OK to download). **Next:** the user decides whether to fetch a labelled set for real floors or go to slice B (region-bound preset ops) with these provisional ones.
+
 ## M7 adaptive tone, slice 0b-1: Texture inside a mask (RFC-0034, 2026-10-26)
 
 **Probe result (reading `detail.rs`):** global Texture and Clarity are exactly linear in amount (`rgb += (luma - blurred) *

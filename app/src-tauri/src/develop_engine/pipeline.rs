@@ -297,10 +297,13 @@ pub(crate) fn apply_edit_stack(image: &mut RgbImage, stack: &EditStack) {
             (x as f32 + 0.5) / width as f32,
             (y as f32 + 0.5) / height as f32,
         );
+        // The pixel before any edit: `image` is written only at the end of this iteration, so it still holds the
+        // geometry-corrected input here (RFC-0036: a luminance mask with `basis: "original"` measures this).
+        let original = [pixel[0] as f32 / 255.0, pixel[1] as f32 / 255.0, pixel[2] as f32 / 255.0];
 
         if !masks.is_empty() {
             for mask in &masks {
-                let weight = mask.weight(uv, aspect, rgb);
+                let weight = mask.weight(uv, aspect, rgb, original);
                 let local = mask.local_color(uv, rgb, &pre_mask, w, h);
                 let local = match (&texture_detail, mask.texture_amount()) {
                     (Some(detail), t) if t != 0.0 => {

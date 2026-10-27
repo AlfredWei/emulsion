@@ -408,6 +408,10 @@ pub(super) struct LuminanceRangeMask {
     pub(super) range_max: f32,
     pub(super) feather: f32,
     pub(super) invert: bool,
+    /// RFC-0036: `"basis": "original"` measures the luma of the geometry-corrected, un-graded pixel instead of the
+    /// pixel as already edited, so the selection does not move with the user's edits. Absent or anything else is the
+    /// original (WYSIWYG) behaviour, so no stored mask changes.
+    pub(super) original_basis: bool,
     pub(super) exposure: f32,
     pub(super) contrast: f32,
     pub(super) saturation: f32,
@@ -427,6 +431,7 @@ pub(super) fn parse_luminance_range_mask(op: &serde_json::Value) -> Option<Lumin
         range_max: op.get("rangeMax")?.as_f64()? as f32,
         feather: op.get("feather").and_then(|v| v.as_f64()).unwrap_or(20.0) as f32,
         invert: op.get("invert").and_then(|v| v.as_bool()).unwrap_or(false),
+        original_basis: op.get("basis").and_then(|v| v.as_str()) == Some("original"),
         exposure: op.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
         contrast: op.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
         saturation: op
@@ -449,8 +454,12 @@ pub(super) fn parse_luminance_range_mask(op: &serde_json::Value) -> Option<Lumin
 /// a near-hard step exactly at the range boundaries, matching the same
 /// `0.001`-floor pattern `radial_mask_weight` already established at its
 /// own `feather=0`.
-pub(super) fn luminance_mask_weight(rgb: [f32; 3], mask: &LuminanceRangeMask) -> f32 {
-    let luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+///
+/// `original` is the same pixel before any edit (the geometry-corrected input of the pipeline); a mask with
+/// `original_basis` takes its luma from it instead of from `rgb` (RFC-0036).
+pub(super) fn luminance_mask_weight(rgb: [f32; 3], original: [f32; 3], mask: &LuminanceRangeMask) -> f32 {
+    let measured = if mask.original_basis { original } else { rgb };
+    let luma = measured[0] * 0.2126 + measured[1] * 0.7152 + measured[2] * 0.0722;
     let range_min = mask.range_min / 100.0;
     let range_max = mask.range_max / 100.0;
     let softness = (mask.feather / 100.0).clamp(0.0, 0.999);
@@ -851,12 +860,12 @@ pub(super) enum Shape {
 }
 
 impl Shape {
-    pub(super) fn weight(&self, uv: (f32, f32), aspect: f32, rgb: [f32; 3]) -> f32 {
+    pub(super) fn weight(&self, uv: (f32, f32), aspect: f32, rgb: [f32; 3], original: [f32; 3]) -> f32 {
         match self {
             Shape::Linear(m) => mask_weight(uv, m),
             Shape::Radial(m) => radial_mask_weight(uv, m),
             Shape::Brush(m) => brush_mask_weight(uv, m, aspect),
-            Shape::LuminanceRange(m) => luminance_mask_weight(rgb, m),
+            Shape::LuminanceRange(m) => luminance_mask_weight(rgb, original, m),
             Shape::ColorRange(m) => color_mask_weight(rgb, m),
             Shape::Segment(m) => segment_mask_weight(uv, m),
         }
@@ -905,16 +914,17 @@ pub(super) fn parse_modifiers(op: &serde_json::Value) -> Vec<Modifier> {
 }
 
 /// Folds `modifiers` over the base weight, in listed order. Every modifier is
-/// evaluated against the same `rgb` the mask itself entered with.
+/// evaluated against the same `rgb` (and `original`) the mask itself entered with.
 pub(super) fn fold_modifiers(
     base: f32,
     modifiers: &[Modifier],
     uv: (f32, f32),
     aspect: f32,
     rgb: [f32; 3],
+    original: [f32; 3],
 ) -> f32 {
     modifiers.iter().fold(base, |w, m| {
-        m.combine.fold(w, m.shape.weight(uv, aspect, rgb)).clamp(0.0, 1.0)
+        m.combine.fold(w, m.shape.weight(uv, aspect, rgb, original)).clamp(0.0, 1.0)
     })
 }
 
@@ -948,24 +958,26 @@ impl Mask {
     /// by the time this mask's own weight is evaluated) -- the correct
     /// WYSIWYG behavior (select pixels as currently graded, matching what
     /// the user sees), not an oversight; see the parity test exercising
-    /// this explicitly below.
-    pub(super) fn weight(&self, uv: (f32, f32), aspect: f32, rgb: [f32; 3]) -> f32 {
+    /// this explicitly below. A luminance mask with `basis: "original"`
+    /// (RFC-0036) instead reads `original`, the pixel before any edit, so
+    /// its selection is a property of the photograph.
+    pub(super) fn weight(&self, uv: (f32, f32), aspect: f32, rgb: [f32; 3], original: [f32; 3]) -> f32 {
         match self {
-            Mask::Linear(m) => fold_modifiers(mask_weight(uv, m), &m.modifiers, uv, aspect, rgb),
+            Mask::Linear(m) => fold_modifiers(mask_weight(uv, m), &m.modifiers, uv, aspect, rgb, original),
             Mask::Radial(m) => {
-                fold_modifiers(radial_mask_weight(uv, m), &m.modifiers, uv, aspect, rgb)
+                fold_modifiers(radial_mask_weight(uv, m), &m.modifiers, uv, aspect, rgb, original)
             }
             Mask::Brush(m) => {
-                fold_modifiers(brush_mask_weight(uv, m, aspect), &m.modifiers, uv, aspect, rgb)
+                fold_modifiers(brush_mask_weight(uv, m, aspect), &m.modifiers, uv, aspect, rgb, original)
             }
             Mask::LuminanceRange(m) => {
-                fold_modifiers(luminance_mask_weight(rgb, m), &m.modifiers, uv, aspect, rgb)
+                fold_modifiers(luminance_mask_weight(rgb, original, m), &m.modifiers, uv, aspect, rgb, original)
             }
             Mask::ColorRange(m) => {
-                fold_modifiers(color_mask_weight(rgb, m), &m.modifiers, uv, aspect, rgb)
+                fold_modifiers(color_mask_weight(rgb, m), &m.modifiers, uv, aspect, rgb, original)
             }
             Mask::Segment(m) => {
-                fold_modifiers(segment_mask_weight(uv, m), &m.modifiers, uv, aspect, rgb)
+                fold_modifiers(segment_mask_weight(uv, m), &m.modifiers, uv, aspect, rgb, original)
             }
             Mask::Spot(m) => spot_mask_weight(uv, m, aspect),
             Mask::RedEye(m) => red_eye_weight(uv, rgb, m),

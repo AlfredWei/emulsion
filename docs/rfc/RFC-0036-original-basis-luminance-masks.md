@@ -1,6 +1,6 @@
 # RFC-0036: A luminance mask that measures the original image, so an adaptive "shadows" region does not move with the edits (M7 slice B follow-up)
 
-- Status: Draft for review (2026-10-28). **Nothing is built.** §2's code facts are read from the source, not run; §3's measurement was run on local photographs (numpy, outside the app).
+- Status: §6 decided (2026-10-28: all three proposals accepted). **R1 (CPU + schema) is built and tested; R2 (GPU) and R3 (resolver, panel) are not.** §3's measurement was run on local photographs (numpy, outside the app).
 - Companion documents: [RFC-0035](RFC-0035-region-bound-presets.md) §3.2 and §9 (the limitation this answers), [RFC-0034](RFC-0034-richer-local-adjustments.md) (mask adjustments), [RFC-0025](RFC-0025-composable-masking.md) (modifiers), [PROGRESS.md](../../PROGRESS.md)
 
 ## 1. Problem
@@ -47,7 +47,7 @@ Said plainly, so the claim is not larger than the fix:
 
 | Slice | What | Done when |
 |---|---|---|
-| **R1** CPU + schema | `basis` parsed on the luminance mask and modifier; reference luma passed through the weight dispatch; Rust tests: with `basis: "original"` the selected pixels are identical (to the bit, on a synthetic image) before and after Exposure +2, a tone curve, and a preceding mask; with the default they still move (the old behaviour is pinned) | tests pass; every existing mask test unchanged |
+| **R1** CPU + schema (built, §8) | `basis` parsed on the luminance mask and modifier; reference luma passed through the weight dispatch; Rust tests: with `basis: "original"` the selected pixels are identical (to the bit, on a synthetic image) before and after Exposure +2, a tone curve, and a preceding mask; with the default they still move (the old behaviour is pinned) | tests pass; every existing mask test unchanged |
 | **R2** GPU twin | binding, WGSL branch, `maskPack` flag, a CPU/GPU parity case | parity test passes in Chromium WebGPU (the local WebDriver window cannot render masks on the GPU: still the known gap, so GPU is verified there, not in the app window) |
 | **R3** resolver + panel | shadows emits `basis: "original"`; the switch; the RFC-0035 §9 limitation closed; e2e: apply Cool the shadows, change Exposure, the persisted mask is unchanged and the CPU render selects the same pixels | e2e + the by-eye before / after |
 
@@ -65,3 +65,10 @@ Per the project's RFC practice for GPU-heavy slices, R2 gets a short ADR note af
 - §3's measurement is a numpy simulation of option 3 on 35 photographs (the other 10 are night or low-key frames where no shadows region is found); it did not use the app's renderer.
 - Nothing about the cost in the render hot path (one extra `textureLoad` per masked pixel only when a mask asks for it) has been measured.
 - Windows.
+
+## 8. What R1 found (2026-10-28)
+
+Built: `original_basis` on `LuminanceRangeMask` (parsed from `"basis": "original"`; absent, `"edited"` and any other word are the default), an `original: [f32; 3]` argument through `Mask::weight`, `Shape::weight` and `fold_modifiers`, and in pass 8 of `apply_edit_stack` the pixel's own value before any edit (`image` is written only at the end of each pixel's iteration, so it is still the geometry-corrected input there: the §2 CPU claim is **confirmed by reading and by test**, with no extra buffer). Six new tests in `tests/original_basis_masks.rs`: the basis decides which pixel is measured (both directions, and `"edited"` / an unknown word are the default); the dark pixel is selected and the bright one never, for global exposure -1, -0.5, 0, 0.7, 1.5 and 3 EV; the default basis still misses the pixel after +1.5 EV (the old behaviour, pinned beside the new); a full-weight +2 EV mask above does not move an original-basis selection but does move a default one; a luminance **modifier** with the basis takes it too; a stored mask without a basis parses to the default. `cargo test --lib`: 680 pass, none of the existing mask tests changed except the argument added at their two call sites.
+
+- **The shadows resolver is deliberately not switched to `"original"` yet.** Until R2 gives the GPU the same reference, emitting the flag would make the canvas (GPU, measures the edited pixel) and the export (CPU, measures the original) select different pixels. It switches in R3, after R2.
+- **Not verified:** R2 and R3; that the GPU's reference texture holds exactly the 8-bit values the CPU reads (it is the same source, but lens / perspective resampling is a float pass); the cost; the export at full resolution (§4.1).

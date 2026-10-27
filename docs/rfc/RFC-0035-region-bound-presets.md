@@ -1,6 +1,6 @@
 # RFC-0035: Region-bound preset ops: how an adaptive preset is resolved, applied and reported (M7 slice B of RFC-0033)
 
-- Status: Draft for review (2026-10-27). **Nothing is built and nothing in §3 is measured on the product**; the numbers come from RFC-0033 §9-§10, which are by-eye looks at small sets.
+- Status: §6's three questions decided (2026-10-27: raster, constants first, `check` applies and flags). **B1 (the resolvers) is built and measured on photographs, not yet in the app**; B2 onward is design only. See §8 for what B1 found.
 - Companion documents: [RFC-0033](RFC-0033-adaptive-tone-presets.md) (scope, resolvers measured), [RFC-0034](RFC-0034-richer-local-adjustments.md) (the mask adjustments this uses), [RFC-0026](RFC-0026-click-select-segmentation.md) (`segment_mask`), [RFC-0032](RFC-0032-ai-object-removal.md) §10 (stored-result rule), [PROGRESS.md](../../PROGRESS.md)
 
 ## 1. Problem
@@ -64,7 +64,7 @@ The apply reports per rule: **found** ("Sky: 38 % of the frame"), **check** (app
 
 | Slice | What | Done when |
 |---|---|---|
-| **B1 resolvers** | `adaptive_regions.rs`: shadows, face (dedupe, floor, ellipses into the raster), sky (port); a command returning `outcome / coverage / reason / mask`; tests | §4 first bullet; the table corrected |
+| **B1 resolvers** (built, §8) | `adaptive_regions.rs`: shadows, face (dedupe, floor, ellipses into the raster), sky (port); command `resolve_adaptive_region` returning `outcome / coverage / reason / mask`; tests | §4 first bullet; the table corrected |
 | **B2 apply** | JS apply (Amount, ordering, labelled flush, one undo, re-apply, source tags), starter presets as constants, **no UI beyond a temporary menu row for trying them** | §4 second and third bullets |
 | **B3 batch** | Library "Apply Adaptive Preset to Selection": per-photo resolve off the UI thread, a report listing flagged and not-found photographs, nothing hidden | A batch of the 37 photographs with a report that matches by-eye |
 | **C** | UX mock first, then UI (RFC-0033 §6) | separate |
@@ -75,9 +75,21 @@ The apply reports per rule: **found** ("Sky: 38 % of the frame"), **check** (app
 2. **Starter presets as constants first, user-authored later** (§3.1): recommended; it avoids a preset-schema decision before anyone has used one.
 3. **`check` applies the mask and flags it** (§3.4) rather than asking first; recommended because Undo is one step, but a batch may apply hundreds of `check` masks the user must then review.
 
+**Decided 2026-10-27: all three recommendations accepted.**
+
 ## 7. Not verified
 
 - Everything in §3 is design. The code facts in §2 are from reading `develop.js`/`presets.svelte.js`/`masks.rs` and RFC-0025 / RFC-0026, not from running them.
 - Every threshold in §3.2 (floors, 0.75, 40 %, 2 % / 8 %, the 25th percentile) is a guess from RFC-0033 §9-§10's small sets.
 - Whether a 256-texel raster is good enough for small faces in groups.
 - Windows; any photograph of the user's own beyond RFC-0033 §10's first look.
+
+## 8. What B1 found (2026-10-27)
+
+Built: `app/src-tauri/src/adaptive_regions.rs` (pure resolvers, 13 unit tests, two ignored evaluation harnesses) and `adaptive_commands.rs` (`resolve_adaptive_region(image_id, path, content_hash, region)`; nothing in the UI calls it yet). All numbers here are by-eye and overlap measures on the local photo sets, not in the running app.
+
+- **Sky: the port is faithful, the method is not good enough to be `found`.** Against `skyheur.py` on the 45 sky photographs the Rust port has mean IoU 0.997 (worst 0.924). Against the segmenter's masks 12 of the 33 masks it called `found` overlapped under 0.7, and looking at them: photos 8, 21, 36, 37 are patchy blotches inside obvious sky, 30 takes a hazy green hillside for sky, 26 (night) takes the black ground, 10 includes the water reflection; photos 22, 23, 25, 29 (bare branches, one night) were `not_found` though there is sky (a safe miss). A per-column contiguity measure and the clouds/hole shares were tried as flags and none separated the bad masks from the good ones, so no threshold was fitted to 45 photographs. **Decision implemented: a heuristic sky is never `found`; it is always `check`** ("estimated without a model: look before keeping it"), which under §6.3 applies the mask and flags it. A model-based sky is the way to make `found` possible, and is not in this slice.
+- **Shadows behave as designed.** Looked at on the 45 photographs: the overlay lands on dark foregrounds, trunks and water; the ten night/low-key frames are `not_found` with "n % of the frame is already deep shadow" instead of tinting everything (31 found, 4 check, 10 not found). The band's soft edge (`feather` 30) is a guess to be judged in B2 on real edits.
+- **Faces: one raster holds a 59-face group cleanly**, with soft ellipses reaching hair and neck, and the smallest faces in the groups are covered. On the 37 full-resolution photographs: 25 found, 4 check, 8 not found (six have no face). Two corrections to the table from this: **(a)** the check is on the mask's own coverage (>40 % of the frame), not on the tight box's area, because the statue (58 %) and the dog (48 %) slipped under the box rule while real close-up portraits stay at 25-29 %; **(b)** a weak detector score (<0.75) flags only when there are at most two faces: with scores present nearly every large group was flagged by one stray blob.
+- **The catalog stores no detector scores**, only the box. So in the app a weak-score check never fires and the dog or the statue is caught only by coverage; the score rule exists for callers that have scores. Storing the score would need a schema change and a re-scan: not done.
+- **Not looked at:** the 60 low-resolution COCO photographs (640 px frames put most faces under the pixel floor by construction); person (no resolver); how an adjustment looks on these masks in the running app; CPU/GPU agreement of the stored raster in the real window (still the known gap from §4); duplicate face rows in a real catalog (the dedupe is tested on synthetic rows only); whether the Develop preview and the face detector's source decode share the same orientation (a rotated photo would put the ellipses in the wrong place: to be checked in B2 on a portrait-orientation file).

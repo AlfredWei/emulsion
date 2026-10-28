@@ -114,6 +114,8 @@ pub fn resolve_shadows(img: &RgbImage) -> RegionResult {
     let mask = json!({
         "op": "luminance_range_mask", "rangeMin": 0, "rangeMax": (top * 1000.0).round() / 10.0,
         "feather": SHADOW_FEATHER, "invert": false,
+        // RFC-0036: the range was measured on the original luma, so the mask measures it too and no later edit moves it.
+        "basis": "original",
     });
     if share < SHADOW_CHECK_SHARE {
         return RegionResult::with_mask(Outcome::Check, share, Some(format!("shadows are only {} of the frame", pct(share))), mask);
@@ -503,7 +505,36 @@ mod tests {
         assert!((r.coverage - 0.333).abs() < 0.02, "coverage {}", r.coverage);
         let m = r.mask.unwrap();
         assert_eq!(m["op"], "luminance_range_mask");
+        assert_eq!(m["basis"], "original", "the range is measured on the original, so the mask must measure it there");
         assert!(m["rangeMax"].as_f64().unwrap() <= SHADOW_CAP as f64 * 100.0 + 0.1);
+    }
+
+    #[test]
+    fn the_shadows_mask_selects_the_same_pixels_whatever_is_edited_after_it() {
+        // The resolver's own mask, through the real CPU renderer: a dark left third, a bright rest.
+        use crate::catalog::EditStack;
+        use crate::develop_engine::apply_edit_stack;
+        let img = RgbImage::from_fn(30, 20, |x, _| if x < 10 { Rgb([25, 25, 25]) } else { Rgb([200, 200, 200]) });
+        let mut mask = resolve_shadows(&img).mask.unwrap();
+        for (k, v) in [("id", json!("s")), ("exposure", json!(-2.0)), ("contrast", json!(0.0)), ("saturation", json!(0.0))] {
+            mask[k] = v;
+        }
+        let selected = |global_ev: f64, with_mask: bool| {
+            let mut out = img.clone();
+            let mut ops = vec![json!({ "op": "exposure", "value": global_ev })];
+            if with_mask {
+                ops.push(mask.clone());
+            }
+            apply_edit_stack(&mut out, &EditStack { schema_version: 1, ops });
+            out
+        };
+        for ev in [-1.0, 0.0, 1.0, 2.0, 3.0, 4.0] {
+            let (with, without) = (selected(ev, true), selected(ev, false));
+            for x in [0u32, 9, 10, 29] {
+                let changed = with.get_pixel(x, 5) != without.get_pixel(x, 5);
+                assert_eq!(changed, x < 10, "pixel {x} at global {ev} EV");
+            }
+        }
     }
 
     #[test]

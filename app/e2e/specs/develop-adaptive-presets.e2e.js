@@ -114,6 +114,35 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     expect(masksOf(stack)).toHaveLength(1);
   });
 
+  it("the shadows mask is stored as measured on the original (RFC-0036)", async function () {
+    const m = masksOf(await stackOf(state.corn.version_id)).find((/** @type {any} */ o) => o.op === "luminance_range_mask");
+    expect(m.basis).toBe("original");
+  });
+
+  it("the panel's Measured on switch changes a drawn luminance mask's basis (RFC-0036)", async function () {
+    const vid = state.corn.version_id;
+    const lumas = async () => masksOf(await stackOf(vid)).filter((/** @type {any} */ o) => o.op === "luminance_range_mask");
+    const shadowId = (await lumas())[0].id;
+    // The tool strip creates a mask the user draws and selects it (the path develop-mask-shapes uses).
+    await domClick('[aria-label="Luminance Range"]');
+    await waitFor(async () => browser.execute(() => !!document.querySelector("#mask-range-basis")), "the Measured on row");
+    const shown = () => browser.execute(() => /** @type {HTMLSelectElement} */ (document.querySelector("#mask-range-basis")).value);
+    const choose = (/** @type {string} */ v) =>
+      browser.execute((value) => {
+        const sel = /** @type {HTMLSelectElement} */ (document.querySelector("#mask-range-basis"));
+        sel.value = value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+      }, v);
+    const mine = async () => (await lumas()).find((/** @type {any} */ o) => o.id !== shadowId);
+    await waitFor(async () => !!(await mine()), "the drawn mask persisted");
+    expect(await shown()).toBe("edited");
+    expect((await mine()).basis).toBeUndefined();
+    await choose("original");
+    await waitFor(async () => (await mine()).basis === "original", "switched to Original");
+    await choose("edited");
+    await waitFor(async () => (await mine()).basis === "edited", "switched back to As edited");
+  });
+
   it("Deepen sky adds a segment mask flagged for a check, and its raster is a valid 256 x 256 field", async function () {
     const vid = state.corn.version_id;
     await setAmount(100);

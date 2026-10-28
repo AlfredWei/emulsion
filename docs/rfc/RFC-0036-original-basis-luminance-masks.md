@@ -1,6 +1,6 @@
 # RFC-0036: A luminance mask that measures the original image, so an adaptive "shadows" region does not move with the edits (M7 slice B follow-up)
 
-- Status: §6 decided (2026-10-28: all three proposals accepted). **R1 (CPU + schema) and R2 (GPU twin) are built and tested; R3 (resolver, panel) is not.** §3's measurement was run on local photographs (numpy, outside the app).
+- Status: §6 decided (2026-10-28: all three proposals accepted). **R1 (CPU + schema), R2 (GPU twin) and R3 (resolver, panel) are built; see §8-§10 for what was and was not verified.** §3's measurement was run on local photographs (numpy, outside the app).
 - Companion documents: [RFC-0035](RFC-0035-region-bound-presets.md) §3.2 and §9 (the limitation this answers), [RFC-0034](RFC-0034-richer-local-adjustments.md) (mask adjustments), [RFC-0025](RFC-0025-composable-masking.md) (modifiers), [PROGRESS.md](../../PROGRESS.md)
 
 ## 1. Problem
@@ -49,7 +49,7 @@ Said plainly, so the claim is not larger than the fix:
 |---|---|---|
 | **R1** CPU + schema (built, §8) | `basis` parsed on the luminance mask and modifier; reference luma passed through the weight dispatch; Rust tests: with `basis: "original"` the selected pixels are identical (to the bit, on a synthetic image) before and after Exposure +2, a tone curve, and a preceding mask; with the default they still move (the old behaviour is pinned) | tests pass; every existing mask test unchanged |
 | **R2** GPU twin (built, §9) | binding, WGSL branch, `maskPack` flag, a CPU/GPU parity case | parity test passes in Chromium WebGPU (the local WebDriver window cannot render masks on the GPU: still the known gap, so GPU is verified there, not in the app window) |
-| **R3** resolver + panel | shadows emits `basis: "original"`; the switch; the RFC-0035 §9 limitation closed; e2e: apply Cool the shadows, change Exposure, the persisted mask is unchanged and the CPU render selects the same pixels | e2e + the by-eye before / after |
+| **R3** resolver + panel (built, §10) | shadows emits `basis: "original"`; the switch; the RFC-0035 §9 limitation closed; e2e: apply Cool the shadows, change Exposure, the persisted mask is unchanged and the CPU render selects the same pixels | e2e + the by-eye before / after |
 
 Per the project's RFC practice for GPU-heavy slices, R2 gets a short ADR note after it lands.
 
@@ -81,3 +81,17 @@ Built: `originalTex` (binding 64) in `fs_mask`, bound to `perspectiveCorrectedTe
 
 - **What this is not:** a comparison with the Rust binary. The check is the GPU against the trapezoid formula re-written in the harness plus the invariance; the Rust side is covered by R1's tests, and the two share that formula. A bit-level CPU/GPU comparison on the same photograph is still open.
 - **Not verified:** the app window (WebDriver cannot draw masks on the GPU; a regression run of the existing specs is recorded in PROGRESS); that the lens / perspective resampling float pass gives the GPU the same 8-bit values the CPU reads; cost on a large photograph; Windows/WebView2.
+
+## 10. What R3 found (2026-10-29)
+
+Built: the shadows resolver stores `"basis": "original"`; the mask panel's luminance block has a "Measured on" select (As edited / Original; a mask without the field shows As edited, as it behaves); `basis` is typed `"original" | "edited"`.
+
+**Verified:**
+- A Rust test sends the resolver's own mask through the real CPU renderer on a dark-left / bright-right image and requires the same pixels to be selected at global exposure -1 to +4 EV. It is discriminating: with `"edited"` it fails at +3 EV, with `"original"` it passes (a first version stopping at +2 EV was not, and was extended).
+- In the real window, `develop-adaptive-presets` passes 7/7 on a fresh catalog: the persisted shadows mask carries `basis: "original"`, and for a luminance mask drawn from the tool strip the panel shows "As edited", switching to Original / back persists `"original"` / `"edited"`.
+- `cargo test --lib` 681 pass, vitest 1147 pass, svelte-check 0 errors.
+
+**Not verified:**
+- That the panel opens a *resolver-made* mask on "Original". Selecting a mask by clicking its chip in the tool strip did nothing in the WebDriver window in three attempts (DOM click, native click, with and without another mask's panel open; the chip is the top element at its position and the code path is a plain `selectedMaskId = id`). Unexplained: a driver quirk or an app bug, not investigated; the "Original" display for such a mask rests on reading `value={edit.basis === "original" ? ...}`.
+- A pixel-level before / after on a photograph with an Exposure change, in the app (the invariance is shown by the Rust test, the GPU harness and the stored field, not by comparing two renders of a photograph).
+- RFC-0036 §4.1 limits (full-resolution export vs the preview-measured range, geometry, AI denoise), cost, Windows.

@@ -23,7 +23,7 @@ export const COMBINE_CODE = Object.freeze({ add: 0, subtract: 1, intersect: 2 })
 
 /**
  * Writes one weight-producing shape (kinds 0-4 and 7) at `o`: start_end at o+0..3, feather o+4, invert
- * o+5, kind o+6, raster layer o+7 (brush and segment). Shared by a base mask and a modifier, so both are packed (and so
+ * o+5, kind o+6, raster layer o+7 (brush and segment); luminance's basis flag o+2 (RFC-0036). Shared by a base mask and a modifier, so both are packed (and so
  * evaluated by `component_weight`) identically. Returns false for any other op.
  * @param {Float32Array} data @param {number} o @param {any} shape
  * @param {number} layer texture-array layer, used by brush only
@@ -56,6 +56,7 @@ function packShape(data, o, shape, layer) {
     case "luminance_range_mask":
       data[o + 0] = shape.rangeMin;
       data[o + 1] = shape.rangeMax;
+      data[o + 2] = shape.basis === "original" ? 1 : 0; // RFC-0036: measure the un-graded image
       data[o + 4] = shape.feather;
       break;
     case "color_range_mask":

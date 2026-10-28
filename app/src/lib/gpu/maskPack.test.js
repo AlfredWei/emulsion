@@ -37,6 +37,21 @@ describe("maskPack", () => {
     expect(modCount).toBe(0);
   });
 
+  test("RFC-0036: a luminance shape's basis packs into start_end.z, and the shader reads it", () => {
+    const edited = packMasks([{ ...lumShape, id: "l", exposure: 0, contrast: 0, saturation: 0 }], noLayer).maskData;
+    const original = packMasks([{ ...lumShape, basis: "original", id: "l", exposure: 0, contrast: 0, saturation: 0 }], noLayer).maskData;
+    expect(edited[2]).toBe(0);
+    expect(original[2]).toBe(1);
+    // Everything else about the record is the same, so the flag is the only difference.
+    expect(Array.from(original.slice(3, 24))).toEqual(Array.from(edited.slice(3, 24)));
+    expect(Array.from(original.slice(0, 2))).toEqual(Array.from(edited.slice(0, 2)));
+    // A modifier packs through the same function.
+    const withMod = packMasks([{ ...radial("a"), modifiers: [{ id: "m", combine: "intersect", shape: { ...lumShape, basis: "original" } }] }], noLayer);
+    expect(withMod.modData[2]).toBe(1);
+    expect(WGSL).toContain("var originalTex: texture_2d<f32>;");
+    expect(WGSL).toContain("if (se.z > 0.5) { measured = textureLoad(originalTex, coord, 0).rgb; }");
+  });
+
   test("RFC-0034: the six extra adjustments pack into vec4s 5 and 6, absent = 0", () => {
     const { maskData } = packMasks([radial("a", { temperature: 12, tint: -7, highlights: -30, shadows: 45, whites: 5, blacks: -9, texture: 33 }), radial("b")], noLayer);
     expect(Array.from(maskData.slice(16, 23))).toEqual([12, -7, -30, 45, 5, -9, 33]);

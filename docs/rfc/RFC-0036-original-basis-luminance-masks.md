@@ -1,6 +1,6 @@
 # RFC-0036: A luminance mask that measures the original image, so an adaptive "shadows" region does not move with the edits (M7 slice B follow-up)
 
-- Status: §6 decided (2026-10-28: all three proposals accepted). **R1 (CPU + schema) is built and tested; R2 (GPU) and R3 (resolver, panel) are not.** §3's measurement was run on local photographs (numpy, outside the app).
+- Status: §6 decided (2026-10-28: all three proposals accepted). **R1 (CPU + schema) and R2 (GPU twin) are built and tested; R3 (resolver, panel) is not.** §3's measurement was run on local photographs (numpy, outside the app).
 - Companion documents: [RFC-0035](RFC-0035-region-bound-presets.md) §3.2 and §9 (the limitation this answers), [RFC-0034](RFC-0034-richer-local-adjustments.md) (mask adjustments), [RFC-0025](RFC-0025-composable-masking.md) (modifiers), [PROGRESS.md](../../PROGRESS.md)
 
 ## 1. Problem
@@ -48,7 +48,7 @@ Said plainly, so the claim is not larger than the fix:
 | Slice | What | Done when |
 |---|---|---|
 | **R1** CPU + schema (built, §8) | `basis` parsed on the luminance mask and modifier; reference luma passed through the weight dispatch; Rust tests: with `basis: "original"` the selected pixels are identical (to the bit, on a synthetic image) before and after Exposure +2, a tone curve, and a preceding mask; with the default they still move (the old behaviour is pinned) | tests pass; every existing mask test unchanged |
-| **R2** GPU twin | binding, WGSL branch, `maskPack` flag, a CPU/GPU parity case | parity test passes in Chromium WebGPU (the local WebDriver window cannot render masks on the GPU: still the known gap, so GPU is verified there, not in the app window) |
+| **R2** GPU twin (built, §9) | binding, WGSL branch, `maskPack` flag, a CPU/GPU parity case | parity test passes in Chromium WebGPU (the local WebDriver window cannot render masks on the GPU: still the known gap, so GPU is verified there, not in the app window) |
 | **R3** resolver + panel | shadows emits `basis: "original"`; the switch; the RFC-0035 §9 limitation closed; e2e: apply Cool the shadows, change Exposure, the persisted mask is unchanged and the CPU render selects the same pixels | e2e + the by-eye before / after |
 
 Per the project's RFC practice for GPU-heavy slices, R2 gets a short ADR note after it lands.
@@ -72,3 +72,12 @@ Built: `original_basis` on `LuminanceRangeMask` (parsed from `"basis": "original
 
 - **The shadows resolver is deliberately not switched to `"original"` yet.** Until R2 gives the GPU the same reference, emitting the flag would make the canvas (GPU, measures the edited pixel) and the export (CPU, measures the original) select different pixels. It switches in R3, after R2.
 - **Not verified:** R2 and R3; that the GPU's reference texture holds exactly the 8-bit values the CPU reads (it is the same source, but lens / perspective resampling is a float pass); the cost; the export at full resolution (§4.1).
+
+## 9. What R2 found (2026-10-28)
+
+Built: `originalTex` (binding 64) in `fs_mask`, bound to `perspectiveCorrectedTex` in the mask pass's bind group; `component_weight` takes the pixel `coord` and, for a luminance shape with `start_end.z > 0.5`, measures `textureLoad(originalTex, coord)` instead of the running `rgb`; `maskPack.js` writes the flag to `o+2` for a base mask and a modifier alike (one `packShape`); `basis` typed on `LuminanceRangeMask`. The §2 GPU claims are **confirmed**: the mask pass bound 2 sampled textures and now binds 3; auto layout kept the new binding out of every other pipeline; the shader compiled with no messages.
+
+**Verified in a real WebGPU device** (Chromium 152 on Metal, the shipped WGSL and the shipped packer, rgba16float textures, a 64-pixel luma ramp; `app/src/lib/gpu/originalBasisHarness.dev.js`, run from the dev server's console): original-basis weight equals the trapezoid formula on the original luma to within 0.0086 (read back through the selected-mask overlay, so this includes half-float rounding) for global edits of -1, 0, +1, +2, +3 EV; the default basis equals the formula on the edited luma, so it still moves; with a +1 EV full-weight mask above (18 pixels on the ramp), the original basis stays within 0.0003 of the formula while the default deviates by up to 0.50; a luminance modifier with the basis intersected with a base mask matches within 0.0037. Unit tests pin the packing (flag at `o+2`, modifiers too, nothing else in the record changes) and the WGSL text.
+
+- **What this is not:** a comparison with the Rust binary. The check is the GPU against the trapezoid formula re-written in the harness plus the invariance; the Rust side is covered by R1's tests, and the two share that formula. A bit-level CPU/GPU comparison on the same photograph is still open.
+- **Not verified:** the app window (WebDriver cannot draw masks on the GPU; a regression run of the existing specs is recorded in PROGRESS); that the lens / perspective resampling float pass gives the GPU the same 8-bit values the CPU reads; cost on a large photograph; Windows/WebView2.

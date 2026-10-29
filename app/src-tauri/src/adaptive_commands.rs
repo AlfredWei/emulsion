@@ -2,7 +2,7 @@
 //! `adaptive_regions`; this reads the stored face rows and the unedited, uncropped Develop preview (the frame every
 //! mask uses) and runs one of them. The History panel's Adaptive block calls it through `actions/adaptiveActions.js` (B2).
 
-use crate::adaptive_regions::{self, FaceBox, PersonCut, PersonDecoder, RegionResult};
+use crate::adaptive_regions::{self, FaceBox, Cut, ClickModel, RegionResult};
 use crate::ai::protocol::{Candidate, ModelPaths, Prompt, Request};
 use crate::ai::supervisor::AiHelper;
 use crate::segment_commands::{models_dir, DECODE_TIMEOUT, PREPARE_TIMEOUT};
@@ -19,9 +19,9 @@ struct HelperModel {
     content_hash: String,
 }
 
-impl PersonDecoder for HelperModel {
-    fn cut(&mut self, clicks: &[(f32, f32)]) -> Result<PersonCut, String> {
-        let prompts: Vec<Prompt> = clicks.iter().map(|&(x, y)| Prompt { x, y, positive: true }).collect();
+impl ClickModel for HelperModel {
+    fn cut(&mut self, clicks: &[(f32, f32, bool)]) -> Result<Cut, String> {
+        let prompts: Vec<Prompt> = clicks.iter().map(|&(x, y, positive)| Prompt { x, y, positive }).collect();
         let v = self
             .helper
             .request(
@@ -32,8 +32,18 @@ impl PersonDecoder for HelperModel {
         let candidates: Vec<Candidate> = serde_json::from_value(v).map_err(|e| e.to_string())?;
         // Best predicted IoU first (segment_decode's contract).
         let best = candidates.first().ok_or_else(|| "the model returned no cut".to_string())?;
-        Ok(PersonCut { iou: best.iou, logits: adaptive_regions::decode_logits(&best.logits_png)? })
+        Ok(Cut { iou: best.iou, logits: adaptive_regions::decode_logits(&best.logits_png)? })
     }
+}
+
+/// Starts the click-select model on this photograph (the encoder runs once here); the returned model decodes clicks.
+fn prepare_model(helper: Arc<AiHelper>, dir: &std::path::Path, content_hash: String, preview_path: &str) -> Result<HelperModel, String> {
+    let paths = segment_models::ready_paths(dir).ok_or_else(|| "the click-select model is not installed".to_string())?;
+    let models = ModelPaths { encoder: paths.encoder, decoder: paths.decoder };
+    helper
+        .request(Request::SegmentPrepare { models: models.clone(), content_hash: content_hash.clone(), image_path: PathBuf::from(preview_path) }, PREPARE_TIMEOUT)
+        .map_err(|e| e.to_string())?;
+    Ok(HelperModel { helper, models, content_hash })
 }
 
 /// Resolves `region` (`"shadows"`, `"face"`, `"person"` or `"sky"`) for one photograph. The face and person resolvers
@@ -60,7 +70,7 @@ pub async fn resolve_adaptive_region(
         Vec::new()
     };
     let previews_dir = resolve_cache_root(&app, &state.catalog)?.join("previews");
-    let person_models = if region == "person" { Some(models_dir(&app, &state)?) } else { None };
+    let person_models = if region == "person" || region == "sky" { Some(models_dir(&app, &state)?) } else { None };
     let helper = helper.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let preview = preview_cache::ensure_develop_preview_for_hash(std::path::Path::new(&path), &content_hash, &previews_dir)
@@ -69,20 +79,22 @@ pub async fn resolve_adaptive_region(
             "face" => Ok(adaptive_regions::resolve_faces(&faces, (preview.width, preview.height))),
             "person" => {
                 // Faces to clicks (RFC-0033 section 3.1): the encoder runs once for the photograph, then one decode per person.
-                let dir: PathBuf = person_models.ok_or_else(|| "no model folder".to_string())?;
-                let paths = segment_models::ready_paths(&dir).ok_or_else(|| "the click-select model is not installed".to_string())?;
-                let models = ModelPaths { encoder: paths.encoder, decoder: paths.decoder };
-                helper
-                    .request(
-                        Request::SegmentPrepare { models: models.clone(), content_hash: content_hash.clone(), image_path: PathBuf::from(&preview.path) },
-                        PREPARE_TIMEOUT,
-                    )
-                    .map_err(|e| e.to_string())?;
-                adaptive_regions::resolve_person(&faces, (preview.width, preview.height), &mut HelperModel { helper, models, content_hash })
+                let dir = person_models.ok_or_else(|| "no model folder".to_string())?;
+                let mut model = prepare_model(helper, &dir, content_hash, &preview.path)?;
+                adaptive_regions::resolve_person(&faces, (preview.width, preview.height), &mut model)
             }
             "shadows" | "sky" => {
                 let img = image::open(&preview.path).map_err(|e| e.to_string())?.to_rgb8();
-                Ok(if region == "sky" { adaptive_regions::resolve_sky(&img) } else { adaptive_regions::resolve_shadows(&img) })
+                if region == "shadows" {
+                    return Ok(adaptive_regions::resolve_shadows(&img));
+                }
+                // The sky is outlined by the click-select model when it is installed; without it (or if it fails) the colour
+                // rule's own estimate stands, which is flagged for a look.
+                let refined = person_models.as_deref().and_then(|dir| prepare_model(helper, dir, content_hash, &preview.path).ok());
+                Ok(match refined {
+                    Some(mut model) => adaptive_regions::resolve_sky_with_model(&img, &mut model),
+                    None => adaptive_regions::resolve_sky(&img),
+                })
             }
             other => Err(format!("unknown adaptive region \"{other}\"")),
         }

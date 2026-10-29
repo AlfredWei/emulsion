@@ -11,7 +11,7 @@ const GRAY: f32 = 100.0 / 255.0;
 fn weight_at_center(op: Value) -> f32 {
     let masks = parse_masks(&[op]);
     assert_eq!(masks.len(), 1, "op should parse as one mask");
-    masks[0].weight((0.5, 0.5), 1.0, [GRAY; 3])
+    masks[0].weight((0.5, 0.5), 1.0, [GRAY; 3], [GRAY; 3])
 }
 
 /// Linear gradient along x from `x0` to `x1`, feather 0: weight at uv.x = 0.5

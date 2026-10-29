@@ -1,3 +1,5 @@
+mod adaptive_commands;
+mod adaptive_regions;
 mod catalog;
 mod cull;
 mod cull_groups;
@@ -2241,6 +2243,7 @@ pub fn run() {
             list_similar_groups,
             cull_analysis_status,
             get_upscale_links,
+            adaptive_commands::resolve_adaptive_region,
             segment_commands::segment_model_status,
             segment_commands::segment_download_models,
             segment_commands::segment_import_model_files,

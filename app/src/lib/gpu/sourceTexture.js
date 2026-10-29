@@ -1008,6 +1008,8 @@ export async function applyBitmapToGpu(/** @type {import('./gpuHandles.js').GpuH
       { binding: 4, resource: gpu.brushTextureArray.createView({ dimension: "2d-array" }) },
       { binding: 26, resource: { buffer: gpu.clippingBuffer } },
       { binding: 27, resource: gpu.preMaskTex.createView() },
+      // RFC-0036: the un-graded reference a luminance mask with basis "original" measures.
+      { binding: 64, resource: gpu.perspectiveCorrectedTex.createView() },
     ],
   });
   // Every intermediate above is freshly (re)created for this bitmap --

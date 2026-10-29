@@ -463,6 +463,19 @@
       <span class="val">{edit.feather}</span>
       {@render stepButtons(edit.feather, 1, 0, 100, (v) => onEdit({ feather: v }))}
     </div>
+    <!-- RFC-0036: which image the range is compared with. Changing it moves the selection. -->
+    <div class="row">
+      <label for="mask-range-basis">Measured on</label>
+      <select
+        id="mask-range-basis"
+        value={edit.basis === "original" ? "original" : "edited"}
+        title="Original keeps this selection on the same pixels whatever you edit; As edited follows the picture's brightness as it is now"
+        onchange={(e) => onEdit({ basis: e.currentTarget.value })}
+      >
+        <option value="edited">As edited</option>
+        <option value="original">Original</option>
+      </select>
+    </div>
   {/if}
 
   {#if edit.op === "color_range_mask"}

@@ -87,6 +87,9 @@ import { invoke } from "@tauri-apps/api/core";
  *   range edges (a different meaning from linear/radial's single-boundary
  *   feather, so it's shown via a dedicated Min/Max/Feather block in
  *   MaskEditorPanel.svelte, not the shared Feather row).
+ * @property {("original" | "edited")=} basis - RFC-0036: "original" measures the geometry-corrected,
+ *   un-graded image, so no edit or earlier mask moves the selection; "edited" or absent = measure the
+ *   edited pixel (as before, and what a mask the user draws does).
  * @property {boolean} invert
  * @property {number} exposure
  * @property {number} contrast

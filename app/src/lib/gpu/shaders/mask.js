@@ -12,7 +12,12 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4 and 
     // Texture's box radius: the same 6 as the global Texture (TEXTURE_RADIUS, develop_engine/detail.rs).
     const MASK_TEXTURE_RADIUS: i32 = 6;
 
-    fn component_weight(se: vec4<f32>, pr: vec4<f32>, kind: f32, rgb: vec3<f32>, uv: vec2<f32>) -> f32 {
+    // RFC-0036: the geometry-corrected, un-graded image (lens and perspective applied, no tone, colour,
+    // detail or mask), the pixel a luminance shape with basis "original" measures. The same texture
+    // fs_grade reads at binding 1; auto layout keeps it out of every other pipeline.
+    @group(0) @binding(64) var originalTex: texture_2d<f32>;
+
+    fn component_weight(se: vec4<f32>, pr: vec4<f32>, kind: f32, rgb: vec3<f32>, uv: vec2<f32>, coord: vec2<i32>) -> f32 {
         var weight: f32 = 0.0;
         if (kind < 0.5) {
           // Linear: projection-onto-segment parametrization. 0 at start, 1
@@ -65,7 +70,11 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4 and 
           // Trapezoidal falloff, raw-then-clamp-once (same style as the
           // linear/radial formulas above) -- start_end.x/y hold
           // rangeMin/rangeMax (0-100, same scale as feather).
-          let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+          // RFC-0036: start_end.z = 1 is basis "original": the luma comes from originalTex, so no edit and
+          // no earlier mask can move the selection. The texture is read only when the flag is set.
+          var measured = rgb;
+          if (se.z > 0.5) { measured = textureLoad(originalTex, coord, 0).rgb; }
+          let luma = dot(measured, vec3<f32>(0.2126, 0.7152, 0.0722));
           let range_min = se.x / 100.0;
           let range_max = se.y / 100.0;
           let softness = clamp(pr.x / 100.0, 0.0, 0.999);
@@ -166,12 +175,12 @@ export const mask = `    // Weight of ONE weight-producing shape (kinds 0-4 and 
           // modifier is evaluated against the SAME rgb the mask entered
           // with, and the fold is the product family of masks.rs's
           // Combine::fold: add w+c-wc, subtract w(1-c), intersect wc.
-          weight = component_weight(m.start_end, m.params, kind, rgb, in.uv);
+          weight = component_weight(m.start_end, m.params, kind, rgb, in.uv, coord);
           let mod_first = i32(m.mods.x);
           let mod_count = i32(m.mods.y);
           for (var j = 0; j < mod_count; j = j + 1) {
             let md = mods[mod_first + j];
-            let c = component_weight(md.start_end, md.params, md.params.z, rgb, in.uv);
+            let c = component_weight(md.start_end, md.params, md.params.z, rgb, in.uv, coord);
             if (md.combine.x < 0.5) {
               weight = weight + c - weight * c;
             } else if (md.combine.x < 1.5) {

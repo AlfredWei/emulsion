@@ -26,7 +26,7 @@ fn segment(logits: String, feather: f32, grow: f32) -> Value {
 fn weight(op: Value, uv: (f32, f32)) -> f32 {
     let masks = parse_masks(&[op]);
     assert_eq!(masks.len(), 1, "op should parse as one mask");
-    masks[0].weight(uv, 1.0, [0.4; 3])
+    masks[0].weight(uv, 1.0, [0.4; 3], [0.4; 3])
 }
 
 fn near(actual: f32, expected: f32) {

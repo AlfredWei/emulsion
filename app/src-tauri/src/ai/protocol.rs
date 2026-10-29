@@ -28,7 +28,7 @@ pub struct Prompt {
 pub struct Candidate {
     pub index: usize,
     pub iou: f32,
-    /// Base64 of an 8-bit grayscale PNG: `0..255` <-> logit `-8..8`.
+    /// Base64 of an 8-bit grayscale PNG: `0..255` <-> logit `-4..4`.
     pub logits_png: String,
 }
 

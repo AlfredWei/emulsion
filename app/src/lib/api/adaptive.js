@@ -13,7 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 /** Resolves one kind of region on one photograph, from its stored face rows (`face`: scan first) or its
  * unedited Develop preview (`sky`, `shadows`).
- * @param {number} imageId @param {string} path @param {string} contentHash @param {"sky" | "face" | "shadows"} region
+ * @param {number} imageId @param {string} path @param {string} contentHash @param {"sky" | "face" | "shadows" | "person"} region
  * @returns {Promise<AdaptiveRegionResult>} */
 export function resolveAdaptiveRegion(imageId, path, contentHash, region) {
   return invoke("resolve_adaptive_region", { imageId, path, contentHash, region });

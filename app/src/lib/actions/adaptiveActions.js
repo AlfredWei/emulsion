@@ -9,7 +9,7 @@ import { masks } from "$lib/state/masks.svelte.js";
 import { resolveAdaptiveRegion } from "$lib/api/adaptive.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
 import { runFaceDetection } from "$lib/actions/faceActions.js";
-import { ADAPTIVE_PRESETS, planAdaptiveApply, describeReport, adaptiveLabel } from "$lib/adaptivePresets.js";
+import { ADAPTIVE_PRESETS, needsFaces, planAdaptiveApply, describeReport, adaptiveLabel } from "$lib/adaptivePresets.js";
 
 let running = false;
 
@@ -28,7 +28,7 @@ export async function handleApplyAdaptivePreset(presetId, amount, options = {}) 
   running = true;
   develop.clearPreview();
   try {
-    if (preset.rules.some((r) => r.region === "face") && !image.faces_scanned) await runFaceDetection([image.image_id], false);
+    if (needsFaces(preset) && !image.faces_scanned) await runFaceDetection([image.image_id], false);
     const results = [];
     for (const rule of preset.rules) results.push(await resolveAdaptiveRegion(image.image_id, imagePath, contentHash, rule.region));
     // The user may have moved to another photo while Rust was looking: never write one photo's masks onto another.

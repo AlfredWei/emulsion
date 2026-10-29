@@ -13,7 +13,7 @@ import { resolveAdaptiveRegion } from "$lib/api/adaptive.js";
 import { getEditStack, setEditStack, regenerateThumbnail } from "$lib/api/develop.js";
 import { runFaceDetection } from "$lib/actions/faceActions.js";
 import { patchLocal } from "$lib/actions/libraryActions.js";
-import { ADAPTIVE_PRESETS, planAdaptiveApply, adaptiveLabel, batchStatus } from "$lib/adaptivePresets.js";
+import { ADAPTIVE_PRESETS, needsFaces, planAdaptiveApply, adaptiveLabel, batchStatus } from "$lib/adaptivePresets.js";
 
 const nameOf = (/** @type {string} */ path) => path.split(/[\\/]/).pop() ?? path;
 
@@ -45,7 +45,7 @@ async function applyToPhoto(img, preset, amount) {
   const name = nameOf(img.path);
   try {
     if (!img.content_hash) return { versionId: img.version_id, name, status: "failed", report: [], error: "the photo has no content hash yet" };
-    if (preset.rules.some((r) => r.region === "face") && !library.images.find((i) => i.version_id === img.version_id)?.faces_scanned) {
+    if (needsFaces(preset) && !library.images.find((i) => i.version_id === img.version_id)?.faces_scanned) {
       return { versionId: img.version_id, name, status: "failed", report: [], error: "faces could not be scanned in this photo" };
     }
     const results = [];
@@ -77,7 +77,7 @@ export async function handleRunAdaptiveBatch() {
   const openIsTarget = develop.versionId !== null && adaptiveBatch.targets.includes(develop.versionId);
   try {
     if (openIsTarget) await develop.flushEditStack();
-    if (preset.rules.some((r) => r.region === "face")) {
+    if (needsFaces(preset)) {
       const unscanned = images.filter((i) => !i.faces_scanned).map((i) => i.image_id);
       if (unscanned.length > 0) await runFaceDetection(unscanned, false);
     }

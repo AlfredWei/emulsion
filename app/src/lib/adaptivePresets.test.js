@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, scaleAdjustments, buildMask, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
+import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, needsFaces, scaleAdjustments, buildMask, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
 import { MAX_MASKS, listMasks, createBrushMask, addMask } from "$lib/api/develop.js";
 
 const sky = /** @type {any} */ (ADAPTIVE_PRESETS.find((p) => p.id === "deepen-sky"));
@@ -90,7 +90,7 @@ describe("adaptive presets", () => {
   });
 
   it("every starter rule is bound to a region the resolvers know", () => {
-    for (const p of ADAPTIVE_PRESETS) for (const r of p.rules) expect(["sky", "face", "shadows"]).toContain(r.region);
+    for (const p of ADAPTIVE_PRESETS) for (const r of p.rules) expect(["sky", "face", "shadows", "person"]).toContain(r.region);
   });
   it("a check outcome is written into the mask's source, so the mask panel can ask the user to look", () => {
     const checked = /** @type {any} */ (buildMask(sky.rules[0], found({ outcome: "check", reason: "only 4 % of the frame" }), 100, "deepen-sky", 0));
@@ -141,5 +141,9 @@ describe("adaptive presets", () => {
     expect(batchStatus([rule({ outcome: "not_found", action: "skipped" })])).toBe("nothing");
     expect(batchStatus([rule({ action: "skipped", why: "an earlier mask from this preset was edited; confirm to replace it" })])).toBe("kept");
     expect(batchStatus([rule({ action: "skipped", why: "the photo already has 12 masks" })])).toBe("nothing");
+  });
+  it("the face and person presets need the faces scanned first; sky and shadows do not", () => {
+    const need = ADAPTIVE_PRESETS.filter(needsFaces).map((p) => p.id);
+    expect(need).toEqual(["brighten-faces", "lift-people"]);
   });
 });

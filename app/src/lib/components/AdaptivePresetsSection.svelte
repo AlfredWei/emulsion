@@ -110,7 +110,7 @@
           <div>
             <div class="rname">{d.name}</div>
             <div class="rtext">{d.text}</div>
-            {#if d.kind === "check" && (r.region === "sky" || r.region === "face")}
+            {#if d.kind === "check" && (r.region === "sky" || r.region === "face" || r.region === "person")}
               <button type="button" class="adaptive-yourself" onclick={() => onSelectItYourself(r.region)}>Select it yourself</button>
             {/if}
           </div>

@@ -164,11 +164,11 @@ fn iou(a: &FaceBox, b: &FaceBox) -> f32 {
     if u > 0.0 { i / u } else { 0.0 }
 }
 
-/// All the faces of one photograph in one `segment_mask`, any number of them. `frame` is the pixel size of the
-/// image the boxes are relative to (only the aspect and the pixel floor use it).
-pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
+/// The faces worth using: identical boxes dropped (the catalog holds duplicate rows) and those under the pixel floor,
+/// or the `not_found` result that says why there are none. `frame` is the pixel size the boxes are relative to.
+fn kept_faces(boxes: &[FaceBox], frame: (u32, u32)) -> Result<Vec<FaceBox>, RegionResult> {
     if boxes.is_empty() {
-        return RegionResult::not_found("no face in this photograph");
+        return Err(RegionResult::not_found("no face in this photograph"));
     }
     let long = frame.0.max(frame.1) as f32;
     let side_px = |f: &FaceBox| (f.w * frame.0 as f32).min(f.h * frame.1 as f32) / long * FACE_REF_EDGE;
@@ -183,9 +183,18 @@ pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
     let total = kept.len();
     kept.retain(|f| side_px(f) >= FACE_MIN_SIDE_PX);
     if kept.is_empty() {
-        return RegionResult::not_found(format!("{total} face(s), all under the size floor ({FACE_MIN_SIDE_PX:.0} px at a {FACE_REF_EDGE:.0} px frame)"));
+        return Err(RegionResult::not_found(format!("{total} face(s), all under the size floor ({FACE_MIN_SIDE_PX:.0} px at a {FACE_REF_EDGE:.0} px frame)")));
     }
+    Ok(kept)
+}
 
+/// All the faces of one photograph in one `segment_mask`, any number of them. `frame` is the pixel size of the
+/// image the boxes are relative to (only the aspect and the pixel floor use it).
+pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
+    let kept = match kept_faces(boxes, frame) {
+        Ok(k) => k,
+        Err(none) => return none,
+    };
     let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
     for f in &kept {
         let (cx, cy) = (f.x + f.w / 2.0, f.y + f.h / 2.0 - FACE_LIFT_Y * f.h);
@@ -218,6 +227,104 @@ pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
     } else {
         RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), mask)
     }
+}
+
+// ---------------------------------------------------------------- person
+
+/// What the segmenter gives for one set of clicks: the model's own quality estimate and the 256 x 256 logits.
+pub struct PersonCut {
+    pub iou: f32,
+    pub logits: Vec<f32>,
+}
+
+/// The click-select model, seen from the resolver: positive clicks (normalised to the frame) in, a cut out. The real
+/// one asks the AI helper; the tests use a stand-in.
+pub trait PersonDecoder {
+    fn cut(&mut self, clicks: &[(f32, f32)]) -> Result<PersonCut, String>;
+}
+
+/// RFC-0033 section 3.1: a person is found by clicking where their face is and where their torso should be, with the
+/// Select Subject model. Faces below the pixel floor are not used (a face the detector may not even have right is a
+/// poor place to click), and a crowd is capped: each person is one decode.
+const PERSON_MAX: usize = 6;
+/// A cut the model rates under this is left out rather than merged.
+const PERSON_MIN_IOU: f32 = 0.7;
+/// The torso click sits this many face-heights below the face centre.
+const PERSON_TORSO_DROP: f32 = 2.0;
+const PERSON_TORSO_LIMIT: f32 = 0.97;
+const PERSON_MIN_COVERAGE: f32 = 0.01;
+/// A close-up portrait really is over half the frame (61 % on the one real photograph looked at: the cut was the whole
+/// person); this only catches a cut that took the background too.
+const PERSON_BIG_COVERAGE: f32 = 0.85;
+const PERSON_FEATHER: f32 = 30.0;
+
+/// The people of one photograph in one `segment_mask`: for the largest faces, a click on the face and one on the
+/// torso below it, the model's best cut for each, merged. `Err` is a model failure the caller shows as it is.
+pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn PersonDecoder) -> Result<RegionResult, String> {
+    let mut faces = match kept_faces(boxes, frame) {
+        Ok(k) => k,
+        Err(none) => return Ok(none),
+    };
+    faces.sort_by(|a, b| (b.w * b.h).total_cmp(&(a.w * a.h)));
+    let beyond = faces.len().saturating_sub(PERSON_MAX);
+    faces.truncate(PERSON_MAX);
+
+    let mut merged = vec![-LOGIT_RANGE; RASTER * RASTER];
+    let (mut used, mut unsure) = (0usize, 0usize);
+    for f in &faces {
+        let (cx, cy) = (f.x + f.w / 2.0, f.y + f.h / 2.0);
+        let mut clicks = vec![(cx, cy)];
+        let torso = cy + PERSON_TORSO_DROP * f.h;
+        if torso < PERSON_TORSO_LIMIT {
+            clicks.push((cx, torso));
+        }
+        let cut = model.cut(&clicks)?;
+        if cut.iou < PERSON_MIN_IOU || cut.logits.len() != merged.len() {
+            unsure += 1;
+            continue;
+        }
+        used += 1;
+        for (m, l) in merged.iter_mut().zip(&cut.logits) {
+            *m = m.max(*l);
+        }
+    }
+    if used == 0 {
+        return Ok(RegionResult::not_found(if unsure > 0 {
+            "the model was not sure of anyone it was pointed at".to_string()
+        } else {
+            "no person found".to_string()
+        }));
+    }
+    let coverage = coverage_of(&merged);
+    if coverage < PERSON_MIN_COVERAGE {
+        return Ok(RegionResult::not_found(format!("the people cover only {} of the frame", pct(coverage))));
+    }
+    let mut why: Vec<String> = Vec::new();
+    if beyond > 0 {
+        why.push(format!("{beyond} more face(s) beyond the {PERSON_MAX} largest were not used"));
+    }
+    if unsure > 0 {
+        why.push(format!("{unsure} person(s) the model was unsure of were left out"));
+    }
+    if coverage > PERSON_BIG_COVERAGE {
+        why.push(format!("the mask covers over {} of the frame", pct(PERSON_BIG_COVERAGE)));
+    }
+    let mask = segment_mask(&merged, PERSON_FEATHER);
+    Ok(if why.is_empty() {
+        RegionResult::with_mask(Outcome::Found, coverage, None, mask)
+    } else {
+        RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), mask)
+    })
+}
+
+/// The inverse of `encode_logits`: a base64 256 x 256 gray PNG back to logits.
+pub fn decode_logits(b64: &str) -> Result<Vec<f32>, String> {
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| e.to_string())?;
+    let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(|e| e.to_string())?.to_luma8();
+    if img.width() as usize != RASTER || img.height() as usize != RASTER {
+        return Err(format!("the cut is {} x {}, expected {RASTER} x {RASTER}", img.width(), img.height()));
+    }
+    Ok(img.as_raw().iter().map(|&v| v as f32 / 255.0 * 2.0 * LOGIT_RANGE - LOGIT_RANGE).collect())
 }
 
 // ---------------------------------------------------------------- sky
@@ -439,6 +546,125 @@ mod tests {
 
     fn at(l: &[f32], u: f32, v: f32) -> f32 {
         l[(v * RASTER as f32) as usize * RASTER + (u * RASTER as f32) as usize]
+    }
+
+    /// A stand-in for the click-select model: a person is a column of `half` width around the face's x and from the
+    /// face's top to the bottom of the frame, rated `iou`; it records every set of clicks it is given.
+    struct FakeModel {
+        iou: f32,
+        half: f32,
+        seen: Vec<Vec<(f32, f32)>>,
+        fail: bool,
+    }
+    impl FakeModel {
+        fn new(iou: f32) -> Self {
+            FakeModel { iou, half: 0.06, seen: Vec::new(), fail: false }
+        }
+    }
+    impl PersonDecoder for FakeModel {
+        fn cut(&mut self, clicks: &[(f32, f32)]) -> Result<PersonCut, String> {
+            if self.fail {
+                return Err("the click-select model is not installed".to_string());
+            }
+            self.seen.push(clicks.to_vec());
+            let (cx, cy) = clicks[0];
+            let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
+            for iy in 0..RASTER {
+                for ix in 0..RASTER {
+                    let (u, v) = ((ix as f32 + 0.5) / RASTER as f32, (iy as f32 + 0.5) / RASTER as f32);
+                    if (u - cx).abs() < self.half && v > cy - 0.05 {
+                        logits[iy * RASTER + ix] = LOGIT_RANGE;
+                    }
+                }
+            }
+            Ok(PersonCut { iou: self.iou, logits })
+        }
+    }
+
+    fn big_face(x: f32, y: f32) -> FaceBox {
+        FaceBox { x, y, w: 0.06, h: 0.09, score: Some(0.9) }
+    }
+
+    #[test]
+    fn a_person_is_clicked_on_the_face_and_on_the_torso_below_it() {
+        let mut model = FakeModel::new(0.9);
+        let r = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::Found);
+        assert_eq!(model.seen.len(), 1);
+        let clicks = &model.seen[0];
+        assert_eq!(clicks.len(), 2);
+        assert!((clicks[0].0 - 0.43).abs() < 1e-4 && (clicks[0].1 - 0.245).abs() < 1e-4, "face centre {:?}", clicks[0]);
+        assert!((clicks[1].0 - 0.43).abs() < 1e-4 && (clicks[1].1 - (0.245 + 2.0 * 0.09)).abs() < 1e-4, "torso {:?}", clicks[1]);
+        let l = decode(r.mask.as_ref().unwrap());
+        assert!(at(&l, 0.43, 0.5) > 1.0, "the person is selected");
+        assert!(at(&l, 0.9, 0.5) < -1.0, "elsewhere is not");
+    }
+
+    #[test]
+    fn a_face_near_the_bottom_gets_only_the_face_click() {
+        let mut model = FakeModel::new(0.9);
+        resolve_person(&[FaceBox { x: 0.4, y: 0.86, w: 0.06, h: 0.09, score: Some(0.9) }], (1600, 1200), &mut model).unwrap();
+        assert_eq!(model.seen[0].len(), 1);
+    }
+
+    #[test]
+    fn people_are_merged_and_the_smallest_faces_beyond_the_cap_are_left_out_and_said() {
+        let faces: Vec<FaceBox> = (0..8).map(|i| FaceBox { x: 0.05 + i as f32 * 0.11, y: 0.2, w: 0.05 + 0.001 * (8 - i) as f32, h: 0.08, score: Some(0.9) }).collect();
+        let mut model = FakeModel::new(0.9);
+        let r = resolve_person(&faces, (1600, 1200), &mut model).unwrap();
+        assert_eq!(model.seen.len(), PERSON_MAX);
+        assert_eq!(r.outcome, Outcome::Check);
+        assert!(r.reason.as_deref().unwrap().contains("2 more face(s) beyond the 6 largest"));
+        let l = decode(r.mask.as_ref().unwrap());
+        assert!(at(&l, 0.05 + 0.025, 0.6) > 1.0 && at(&l, 0.05 + 0.11 * 3.0 + 0.025, 0.6) > 1.0, "two of the merged people");
+    }
+
+    #[test]
+    fn a_cut_the_model_is_unsure_of_is_not_merged_and_nothing_found_says_why() {
+        let mut model = FakeModel::new(0.4);
+        let r = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        assert!(r.reason.as_deref().unwrap().contains("not sure"));
+        assert!(r.mask.is_none());
+    }
+
+    #[test]
+    fn no_usable_face_is_not_found_without_asking_the_model() {
+        let mut model = FakeModel::new(0.9);
+        let r = resolve_person(&[], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        let tiny = FaceBox { x: 0.5, y: 0.5, w: 0.005, h: 0.007, score: Some(0.9) };
+        let r = resolve_person(&[tiny], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        assert!(model.seen.is_empty());
+    }
+
+    #[test]
+    fn a_model_failure_reaches_the_caller_unchanged() {
+        let mut model = FakeModel::new(0.9);
+        model.fail = true;
+        assert_eq!(resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut model).err().as_deref(), Some("the click-select model is not installed"));
+    }
+
+    #[test]
+    fn a_mask_over_most_of_the_frame_is_flagged() {
+        let mut model = FakeModel::new(0.9);
+        model.half = 0.45;
+        let r = resolve_person(&[big_face(0.45, 0.05)], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::Check);
+        assert!(r.reason.as_deref().unwrap().contains("covers over 85 %"));
+    }
+
+    #[test]
+    fn decode_logits_undoes_encode_logits() {
+        let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
+        logits[RASTER * 10 + 20] = LOGIT_RANGE;
+        logits[RASTER * 11 + 20] = 0.0;
+        let back = decode_logits(&encode_logits(&logits)).unwrap();
+        assert!((back[RASTER * 10 + 20] - LOGIT_RANGE).abs() < 0.05);
+        assert!((back[RASTER * 11 + 20]).abs() < 0.05);
+        assert!((back[0] + LOGIT_RANGE).abs() < 0.05);
+        assert!(decode_logits("not base64!").is_err());
     }
 
     /// Evaluation harness, not a regression test: `EMULSION_ADAPTIVE_EVAL_IN=<dir of photos> EMULSION_ADAPTIVE_EVAL_OUT=<dir>

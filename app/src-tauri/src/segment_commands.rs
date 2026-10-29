@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
-fn models_dir(app: &AppHandle, state: &State<'_, AppState>) -> Result<PathBuf, String> {
+pub(crate) fn models_dir(app: &AppHandle, state: &State<'_, AppState>) -> Result<PathBuf, String> {
     Ok(resolve_cache_root(app, &state.catalog)?.join("segment_models"))
 }
 
@@ -24,8 +24,8 @@ struct ModelProgress {
 }
 
 /// A cold encode on a slow machine can take several seconds; hung means far longer.
-const PREPARE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
-const DECODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const PREPARE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+pub(crate) const DECODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Whether the model files are installed and valid, and what a download costs.

@@ -9,7 +9,7 @@ import { MAX_MASKS, addMask, listMasks } from "$lib/api/develop.js";
  * One rule of an adaptive preset: the region it is bound to and the mask adjustments (RFC-0034's controls and
  * Texture) applied inside it. `feather` overrides the resolver's own softness when set.
  * @typedef {Object} AdaptiveRule
- * @property {"sky" | "face" | "shadows"} region
+ * @property {"sky" | "face" | "shadows" | "person"} region
  * @property {Record<string, number>} adjustments
  * @property {number=} feather
  *
@@ -26,14 +26,21 @@ export const ADAPTIVE_PRESETS = [
   { id: "deepen-sky", name: "Deepen sky", rules: [{ region: "sky", adjustments: { exposure: -0.3, contrast: 12, saturation: 10 } }] },
   { id: "brighten-faces", name: "Brighten faces", rules: [{ region: "face", adjustments: { exposure: 0.3, shadows: 12, temperature: 3 } }] },
   { id: "cool-shadows", name: "Cool the shadows", rules: [{ region: "shadows", adjustments: { temperature: -8, saturation: -5 } }] },
+  // RFC-0033 section 3.3's "Lift subject" for the people the face detector found: the click-select model cuts each one
+  // out from a click on the face and one on the torso (the largest few; a crowd is capped and said so).
+  { id: "lift-people", name: "Lift people", rules: [{ region: "person", adjustments: { exposure: 0.25, shadows: 15, texture: 8 } }] },
 ];
+
+/** Whether applying this preset needs the photograph's faces scanned first (the face and person resolvers read them).
+ * @param {AdaptivePreset} preset */
+export const needsFaces = (preset) => preset.rules.some((r) => r.region === "face" || r.region === "person");
 
 /** Shown greyed out in the section so the user knows they are coming: they need the segmenter (one click, GPU
  * only, RFC-0035 §3.5). Not appliable.
  * @type {{ id: string, name: string, region: string, needs: string }[]} */
 export const ADAPTIVE_PLANNED = [
   { id: "separate-subject", name: "Separate the subject", region: "subject", needs: "Needs a click and GPU acceleration" },
-  { id: "warm-person", name: "Warm the person", region: "person", needs: "Needs a click and GPU acceleration" },
+  { id: "soften-background", name: "Soften the background", region: "background", needs: "Needs a click and GPU acceleration" },
 ];
 
 /** Amount (0-100 %) is applied once, here: the numbers written are the real ones the mask panel shows. Exact for
@@ -142,7 +149,7 @@ export function planAdaptiveApply(stack, preset, results, amount, replaceEdited 
   return { stack: next, report, changed, added };
 }
 
-const REGION_LABEL = { sky: "Sky", face: "Faces", shadows: "Shadows" };
+const REGION_LABEL = { sky: "Sky", face: "Faces", shadows: "Shadows", person: "People" };
 
 /** One rule's line of the report: what was looked for, how it went, in words. `kind` picks the icon and colour.
  * @param {RuleReport} r

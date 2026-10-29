@@ -187,12 +187,15 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     }, "the preset's own mask is back (exposure 0)");
   });
 
-  it("the panel's Measured on switch changes a drawn luminance mask's basis (RFC-0036)", async function () {
+  it("the panel's Measured on switch changes a luminance mask's basis (RFC-0036)", async function () {
     const vid = state.corn.version_id;
     const lumas = async () => masksOf(await stackOf(vid)).filter((/** @type {any} */ o) => o.op === "luminance_range_mask");
     const shadowId = (await lumas())[0].id;
-    // The tool strip creates a mask the user draws and selects it (the path develop-mask-shapes uses).
-    await domClick('[aria-label="Luminance Range"]');
+    // With GPU acceleration the tool strip draws a mask of the user's own (the path develop-mask-shapes uses). Without it
+    // (the CI Windows runner has none) every mask tool is disabled, so the switch is tried on the shadows mask itself.
+    const toolDisabled = await browser.execute(() => /** @type {HTMLButtonElement | null} */ (document.querySelector('[aria-label="Luminance Range"]'))?.disabled ?? true);
+    if (!toolDisabled) await domClick('[aria-label="Luminance Range"]');
+    else await domClick(".mask-chip");
     await waitFor(async () => browser.execute(() => !!document.querySelector("#mask-range-basis")), "the Measured on row");
     const shown = () => browser.execute(() => /** @type {HTMLSelectElement} */ (document.querySelector("#mask-range-basis")).value);
     const choose = (/** @type {string} */ v) =>
@@ -201,14 +204,18 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
         sel.value = value;
         sel.dispatchEvent(new Event("change", { bubbles: true }));
       }, v);
-    const mine = async () => (await lumas()).find((/** @type {any} */ o) => o.id !== shadowId);
-    await waitFor(async () => !!(await mine()), "the drawn mask persisted");
-    expect(await shown()).toBe("edited");
-    expect((await mine()).basis).toBeUndefined();
+    const mine = async () => (await lumas()).find((/** @type {any} */ o) => (toolDisabled ? o.id === shadowId : o.id !== shadowId));
+    await waitFor(async () => !!(await mine()), "the mask persisted");
+    if (toolDisabled) {
+      expect(await shown()).toBe("original");
+    } else {
+      expect(await shown()).toBe("edited");
+      expect((await mine()).basis).toBeUndefined();
+    }
     await choose("original");
     await waitFor(async () => (await mine()).basis === "original", "switched to Original");
     await choose("edited");
-    await waitFor(async () => (await mine()).basis === "edited", "switched back to As edited");
+    await waitFor(async () => (await mine()).basis === "edited", "switched to As edited");
   });
 
   it("Deepen sky adds a segment mask flagged for a check, and its raster is a valid 256 x 256 field", async function () {

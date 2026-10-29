@@ -5,6 +5,7 @@
 import { develop } from "$lib/state/develop.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
+import { masks } from "$lib/state/masks.svelte.js";
 import { resolveAdaptiveRegion } from "$lib/api/adaptive.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
 import { runFaceDetection } from "$lib/actions/faceActions.js";
@@ -46,6 +47,12 @@ export async function handleApplyAdaptivePreset(presetId, amount) {
         throw e;
       }
       regenerateThumbnailFor(versionId);
+      // Show what was found: the user cannot tell what a resolver selected until the mask is open with its overlay on.
+      if (develop.versionId === versionId && plan.added.length > 0) {
+        masks.activeTool = null;
+        masks.showMaskOverlay = true;
+        masks.selectedMaskId = plan.added[0];
+      }
     }
     shell.notify(`${preset.name} ${amount} %: ${plan.changed ? "" : "nothing changed. "}${describeReport(plan.report)}`);
     return plan.report;

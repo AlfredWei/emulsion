@@ -119,18 +119,23 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     expect(m.basis).toBe("original");
   });
 
-  it("the shadows mask is listed in the tool strip, and selecting it opens the panel on Original (RFC-0036)", async function () {
-    // A preset mask carries only the adjustments the preset sets; the panel used to throw on its missing exposure.
+  it("after Apply the new mask is already selected: panel open on Original, so the user sees what was found", async function () {
     const probe = () =>
       browser.execute(() => ({
         chips: document.querySelectorAll(".mask-chip").length,
         selected: document.querySelectorAll(".mask-chip.selected").length,
         basis: /** @type {HTMLSelectElement | null} */ (document.querySelector("#mask-range-basis"))?.value ?? null,
       }));
-    await waitFor(async () => (await probe()).chips === 1, "a chip for the resolver's mask");
+    await waitFor(async () => (await probe()).selected === 1, "the new mask selected without a click");
+    const now = await probe();
+    expect(now.chips).toBe(1);
+    expect(now.basis).toBe("original");
+    // Closing the panel and picking the chip again also works: a preset mask only carries the adjustments it sets,
+    // and the panel used to throw on its missing exposure.
+    await domClick('[role="dialog"] .close');
+    await waitFor(async () => (await probe()).basis === null, "the panel closed");
     await domClick(".mask-chip");
-    await waitFor(async () => (await probe()).selected === 1, "the chip selected");
-    expect((await probe()).basis).toBe("original");
+    await waitFor(async () => (await probe()).basis === "original", "the chip reopens the panel on Original");
   });
 
   it("the panel's Measured on switch changes a drawn luminance mask's basis (RFC-0036)", async function () {

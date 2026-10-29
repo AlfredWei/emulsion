@@ -72,19 +72,22 @@ export function isEdited(/** @type {any} */ mask) {
  * Applies a resolved preset to a stack: for each rule `found` and `check` add a mask (in rule order, after the
  * existing ones), `not_found` adds nothing. A mask this preset wrote earlier (`source.preset`) is replaced unless
  * the user edited it, in which case it is kept and the rule is skipped (RFC-0035 §3.3.4; the confirm dialog is slice C).
+ * `added` lists the new masks' ids in rule order (the caller selects the first, so the user sees what was found).
  * Never exceeds `MAX_MASKS` (a rule that would is skipped and says so). Amount 0 changes nothing.
  * @param {import('$lib/api/develop.js').EditStack} stack @param {AdaptivePreset} preset
  * @param {import('$lib/api/adaptive.js').AdaptiveRegionResult[]} results one per rule, in order @param {number} amount
- * @returns {{ stack: import('$lib/api/develop.js').EditStack, report: RuleReport[], changed: boolean }}
+ * @returns {{ stack: import('$lib/api/develop.js').EditStack, report: RuleReport[], changed: boolean, added: string[] }}
  */
 export function planAdaptiveApply(stack, preset, results, amount) {
   const report = /** @type {RuleReport[]} */ (preset.rules.map((rule, i) => ({ region: rule.region, outcome: results[i].outcome, coverage: results[i].coverage, reason: results[i].reason, action: "skipped" })));
   if (amount <= 0) {
     report.forEach((r) => (r.why = "Amount is 0"));
-    return { stack, report, changed: false };
+    return { stack, report, changed: false, added: [] };
   }
   let next = stack;
   let changed = false;
+  /** @type {string[]} */
+  const added = [];
   preset.rules.forEach((rule, i) => {
     const result = results[i];
     if (result.outcome === "not_found" || !result.mask) return;
@@ -98,11 +101,13 @@ export function planAdaptiveApply(stack, preset, results, amount) {
       report[i].why = `the photo already has ${MAX_MASKS} masks`;
       return;
     }
-    next = addMask(without, /** @type {any} */ (buildMask(rule, result, amount, preset.id, i)));
+    const mask = /** @type {any} */ (buildMask(rule, result, amount, preset.id, i));
+    next = addMask(without, mask);
+    added.push(mask.id);
     report[i].action = earlier.length ? "replaced" : "added";
     changed = true;
   });
-  return { stack: next, report, changed };
+  return { stack: next, report, changed, added };
 }
 
 const REGION_LABEL = { sky: "Sky", face: "Faces", shadows: "Shadows" };

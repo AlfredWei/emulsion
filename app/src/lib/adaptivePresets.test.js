@@ -36,6 +36,7 @@ describe("adaptive presets", () => {
     const start = addMask(empty, /** @type {any} */ (brush));
     const plan = planAdaptiveApply(start, sky, [found()], 100);
     expect(plan.changed).toBe(true);
+    expect(plan.added).toEqual([/** @type {any} */ (listMasks(plan.stack)[1]).id]);
     expect(plan.stack.ops[0]).toEqual(empty.ops[0]);
     expect(plan.stack.ops.map((o) => o.op)).toEqual(["exposure", "brush_mask", "segment_mask"]);
     expect(plan.report[0]).toMatchObject({ outcome: "found", action: "added" });

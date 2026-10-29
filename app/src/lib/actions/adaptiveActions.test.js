@@ -13,6 +13,7 @@ import { develop } from "$lib/state/develop.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { listMasks } from "$lib/api/develop.js";
+import { masks } from "$lib/state/masks.svelte.js";
 
 const result = (/** @type {any} */ over = {}) => ({ outcome: "found", coverage: 0.25, reason: null, mask: { op: "luminance_range_mask", rangeMin: 0, rangeMax: 25, feather: 30, invert: false }, ...over });
 
@@ -25,6 +26,9 @@ beforeEach(() => {
   vi.spyOn(develop, "clearPreview").mockImplementation(() => {});
   vi.spyOn(develop, "flushEditStack").mockImplementation(async () => {});
   shell.notify("");
+  masks.selectedMaskId = null;
+  masks.activeTool = "brush";
+  masks.showMaskOverlay = false;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -39,6 +43,22 @@ describe("handleApplyAdaptivePreset", () => {
     expect(develop.flushEditStack).toHaveBeenCalledWith("Adaptive: Cool the shadows 60 %");
     expect(regen).toHaveBeenCalledWith(10);
     expect(report?.[0].action).toBe("added");
+  });
+
+  it("opens the new mask afterwards (selected, overlay on, no tool armed) so the user sees what was found", async () => {
+    api.resolveAdaptiveRegion.mockResolvedValue(result());
+    await handleApplyAdaptivePreset("cool-shadows", 100);
+    const made = /** @type {any} */ (listMasks(develop.editStack)[0]);
+    expect(masks.selectedMaskId).toBe(made.id);
+    expect(masks.showMaskOverlay).toBe(true);
+    expect(masks.activeTool).toBeNull();
+  });
+
+  it("leaves the selection alone when nothing was added", async () => {
+    api.resolveAdaptiveRegion.mockResolvedValue(result({ outcome: "not_found", coverage: 0, reason: "x", mask: null }));
+    masks.selectedMaskId = "keep";
+    await handleApplyAdaptivePreset("cool-shadows", 100);
+    expect(masks.selectedMaskId).toBe("keep");
   });
 
   it("writes nothing and flushes nothing when the region is not found, and says why", async () => {

@@ -67,9 +67,15 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     }, v);
   }
 
+  /** Picks a preset's row in the Adaptive section, then presses Apply (or Re-apply). */
+  async function applyPreset(/** @type {string} */ name) {
+    await domClick(".adaptive-row", name);
+    await domClick(".adaptive-apply");
+  }
+
   async function openPresetsTab() {
     await domClick(".tab-btn", "Presets");
-    await waitFor(() => browser.execute(() => !!document.querySelector(".adaptive-block")), "adaptive block");
+    await waitFor(() => browser.execute(() => !!document.querySelector(".adaptive-block .adaptive-row")), "adaptive block");
   }
 
   before(async function () {
@@ -85,7 +91,7 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     const vid = state.corn.version_id;
     const before = (await history(vid)).length;
     await setAmount(60);
-    await domClick(".adaptive-btn", "Cool the shadows");
+    await applyPreset("Cool the shadows");
     const stack = await waitFor(async () => {
       const s = await stackOf(vid);
       return masksOf(s).length === 1 ? s : null;
@@ -105,7 +111,7 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
   it("applying again replaces the mask instead of stacking a second one", async function () {
     const vid = state.corn.version_id;
     await setAmount(100);
-    await domClick(".adaptive-btn", "Cool the shadows");
+    await applyPreset("Cool the shadows");
     const stack = await waitFor(async () => {
       const s = await stackOf(vid);
       const m = masksOf(s)[0];
@@ -138,6 +144,49 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     await waitFor(async () => (await probe()).basis === "original", "the chip reopens the panel on Original");
   });
 
+  it("the section reports what was found, and Apply has become Re-apply", async function () {
+    const text = () =>
+      browser.execute(() => ({
+        lines: Array.from(document.querySelectorAll(".adaptive-report .line")).map((e) => `${e.className}|${e.textContent}`),
+        button: document.querySelector(".adaptive-apply")?.textContent?.trim() ?? "",
+        planned: Array.from(document.querySelectorAll(".adaptive-row.off")).map((e) => e.textContent ?? ""),
+      }));
+    await waitFor(async () => (await text()).lines.length > 0, "a report line");
+    const now = await text();
+    expect(now.lines[0]).toMatch(/^line (found|check)/);
+    expect(now.lines[0]).toContain("Shadows");
+    expect(now.button).toBe("Re-apply");
+    expect(now.planned.join(" ")).toContain("Needs a click and GPU acceleration");
+  });
+
+  it("Re-apply asks before replacing a mask the user changed; Keep mine keeps it, Replace restores the preset", async function () {
+    const vid = state.corn.version_id;
+    const mine = async () => masksOf(await stackOf(vid)).filter((/** @type {any} */ o) => o.op === "luminance_range_mask");
+    const confirmShown = () => browser.execute(() => !!document.querySelector(".adaptive-confirm"));
+    // Choosing the row opens its mask (the panel), so the user's change goes into the preset's own mask.
+    await domClick(".adaptive-row", "Cool the shadows");
+    await waitFor(async () => browser.execute(() => !!document.querySelector("#mask-exposure")), "the mask panel");
+    await browser.execute(() => {
+      const el = /** @type {HTMLInputElement} */ (document.querySelector("#mask-exposure"));
+      el.value = "0.5";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await waitFor(async () => (await mine())[0].exposure === 0.5, "the user's exposure persisted");
+    await domClick(".adaptive-apply");
+    await waitFor(confirmShown, "the confirm");
+    await domClick(".adaptive-keep");
+    await waitFor(async () => !(await confirmShown()), "the confirm closed");
+    expect(await mine()).toHaveLength(1);
+    expect((await mine())[0].exposure).toBe(0.5);
+    await domClick(".adaptive-apply");
+    await waitFor(confirmShown, "the confirm again");
+    await domClick(".adaptive-replace");
+    await waitFor(async () => {
+      const m = await mine();
+      return m.length === 1 && m[0].exposure === 0 ? m : null;
+    }, "the preset's own mask is back (exposure 0)");
+  });
+
   it("the panel's Measured on switch changes a drawn luminance mask's basis (RFC-0036)", async function () {
     const vid = state.corn.version_id;
     const lumas = async () => masksOf(await stackOf(vid)).filter((/** @type {any} */ o) => o.op === "luminance_range_mask");
@@ -165,7 +214,7 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
   it("Deepen sky adds a segment mask flagged for a check, and its raster is a valid 256 x 256 field", async function () {
     const vid = state.corn.version_id;
     await setAmount(100);
-    await domClick(".adaptive-btn", "Deepen sky");
+    await applyPreset("Deepen sky");
     const stack = await waitFor(async () => {
       const s = await stackOf(vid);
       return masksOf(s).some((/** @type {any} */ m) => m.op === "segment_mask") ? s : null;

@@ -7,7 +7,7 @@
   import { handleDeleteSnapshot, handlePeekHistory, handlePeekSnapshot, handleCropChange, handleSourceDimensions, handleHistogramUpdate, handleHoverPixel, handleToggleClippingOverlay, handleAdjustmentChange, handleAutoWhiteBalance, handleAutoTone, handleWbPresetChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleGrainStockChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropAspectPreset, handleCropReset, handleTogglePanelVisibility, handleResetPanel } from "$lib/actions/developActions.js";
   import { handleAutoSyncToggle } from "$lib/actions/autoSyncActions.js";
   import { handleApplyAdaptivePreset } from "$lib/actions/adaptiveActions.js";
-  import { ADAPTIVE_PRESETS } from "$lib/adaptivePresets.js";
+  import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, presetMasks, isEdited } from "$lib/adaptivePresets.js";
   import { handleApplyPreset, handleSaveCurrentAsPresetRequest, handleExportPreset, handleDeletePresetRequest, handleImportPresetRequest, handlePeekPreset, handleCopySettingsRequest, handlePasteSettings, handleSyncSettingsRequest } from "$lib/actions/presetActions.js";
   import { shell } from "$lib/state/shell.svelte.js";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
@@ -26,6 +26,24 @@
   import { denoise } from "$lib/state/denoise.svelte.js";
   import { handleAiDenoiseAmountChange, handleDenoisePreviewCrop, handleDenoiseWhole, handleDenoiseCancel, handleDenoiseRemove, handleDenoiseDismissCrop, handleDenoiseDownload, handleDenoiseImport, handleDenoiseDialogCancel, handleDenoiseDialogRetry } from "$lib/actions/denoiseActions.js";
   import { handleSegmentToolToggle, handleAddSegmentShape, handleSegmentClick, handleSegmentCandidate, handleSegmentAccept, handleSegmentCancel, handleSegmentDownload, handleSegmentImport, handleSegmentDialogCancel, handleSegmentDialogRetry, handleSegmentRefine } from "$lib/actions/segmentActions.js";
+
+  // The Adaptive section (RFC-0035 slice C): which presets this photo already carries masks from, and whether the user
+  // changed one (a Re-apply then asks first).
+  const appliedAdaptive = $derived(
+    Object.fromEntries(ADAPTIVE_PRESETS.filter((p) => presetMasks(develop.editStack, p.id).length > 0).map((p) => [p.id, { edited: presetMasks(develop.editStack, p.id).some(isEdited) }])),
+  );
+  /** Picking a preset the photo already has opens its first mask, so the region is on screen again. */
+  function handleOpenAdaptiveMasks(/** @type {string} */ presetId) {
+    const first = presetMasks(develop.editStack, presetId)[0];
+    if (!first) return;
+    masks.activeTool = null;
+    masks.showMaskOverlay = true;
+    masks.selectedMaskId = first.id;
+  }
+  /** "Select it yourself" on a flagged sky or face: the Select Subject tool, one click on the real thing. */
+  function handleSelectItYourself(/** @type {string} */ _region) {
+    if (masks.activeTool !== "segment") void handleSegmentToolToggle();
+  }
 </script>
 
 {#snippet aiDenoiseSection()}
@@ -59,8 +77,15 @@
     onDeleteSnapshot={handleDeleteSnapshot}
     presets={presets.list}
     onApplyPreset={handleApplyPreset}
-    adaptivePresets={ADAPTIVE_PRESETS}
-    onApplyAdaptive={handleApplyAdaptivePreset}
+    adaptive={{
+      presets: ADAPTIVE_PRESETS,
+      planned: ADAPTIVE_PLANNED,
+      applied: appliedAdaptive,
+      photoKey: develop.versionId,
+      onApply: handleApplyAdaptivePreset,
+      onOpenApplied: handleOpenAdaptiveMasks,
+      onSelectItYourself: handleSelectItYourself,
+    }}
     onSaveCurrentAsPresetRequest={handleSaveCurrentAsPresetRequest}
     onExportPreset={handleExportPreset}
     onDeletePresetRequest={handleDeletePresetRequest}

@@ -99,6 +99,8 @@
     segment: "Click the subject on the image (Alt-click removes). Enter keeps it.",
   });
   let shapes = $derived(listModifiers(mask));
+  /** An adaptive preset's reason for asking the user to look at its selection (`source.check`), or null. */
+  let checkNote = $derived(/** @type {string | null} */ (/** @type {any} */ (mask).source?.check ?? null));
   let editShape = $derived(shapes.find((x) => x.id === selectedShapeId) ?? null);
   /** Fields of the shape being edited (the mask itself for the base shape). */
   let edit = $derived(/** @type {any} */ (editShape ? editShape.shape : mask));
@@ -181,6 +183,11 @@
     <span class="title">{title}</span>
     <button class="close" type="button" title="Deselect" onclick={onClose}>×</button>
   </div>
+
+  {#if checkNote}
+    <!-- RFC-0035 §3.4: an adaptive preset applied this selection but is not sure of it; the overlay shows what it found. -->
+    <p class="check-note" role="note">Check this selection: it is highlighted on the photo. {checkNote}.</p>
+  {/if}
 
   {#if mask.op === "spot_mask"}
     <!-- No Exposure/Contrast/Saturation for a spot mask -- it copies pixel
@@ -1005,5 +1012,10 @@
   .menu .why {
     font-size: 9.5px;
     margin-left: 6px;
+  }
+  .check-note {
+    margin: 0 0 8px;
+    font-size: 11px;
+    color: var(--label-yellow, var(--text-secondary));
   }
 </style>

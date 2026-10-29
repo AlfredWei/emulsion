@@ -1,4 +1,5 @@
 <script>
+  import AdaptivePresetsSection from "$lib/components/AdaptivePresetsSection.svelte";
   /**
    * Develop-mode left rail (M3): History (click any row to jump straight
    * to that edit state -- undo/redo are just this same jump, one row up
@@ -43,8 +44,7 @@
    *   onPeekEnd: () => void,
    *   previewUrl: string | null,
    *   width?: number,
-   *   adaptivePresets?: { id: string, name: string }[],
-   *   onApplyAdaptive?: (presetId: string, amount: number) => void,
+   *   adaptive?: Omit<import('svelte').ComponentProps<typeof AdaptivePresetsSection>, never> | null,
    * }}
    */
   let {
@@ -67,12 +67,8 @@
     onPeekEnd,
     previewUrl,
     width = 200,
-    adaptivePresets = [],
-    onApplyAdaptive = () => {},
+    adaptive = null,
   } = $props();
-
-  // RFC-0035 B2: a temporary way to try adaptive presets (the real editor UI is slice C).
-  let adaptiveAmount = $state(100);
 
   let activeTab = $state(/** @type {"history" | "presets"} */ ("history"));
 
@@ -206,20 +202,8 @@
           partial changes.
         </p>
       {/if}
-      {#if adaptivePresets.length > 0}
-        <div class="adaptive-block">
-          <div class="adaptive-title">Adaptive (trying out)</div>
-          <label class="adaptive-amount">
-            Amount <input type="range" min="0" max="100" step="5" bind:value={adaptiveAmount} aria-label="Adaptive preset amount" />
-            <span>{adaptiveAmount} %</span>
-          </label>
-          {#each adaptivePresets as ap (ap.id)}
-            <button type="button" class="preset-name-btn adaptive-btn" onclick={() => onApplyAdaptive(ap.id, adaptiveAmount)} title="Find the region in this photo and apply {ap.name} to it">
-              {ap.name}
-            </button>
-          {/each}
-          <p class="preset-note">Finds the region in this photo and adds a mask for it. Sky is always marked "check".</p>
-        </div>
+      {#if adaptive}
+        <AdaptivePresetsSection {...adaptive} />
       {/if}
     {/if}
   </div>
@@ -455,33 +439,6 @@
   }
   .preset-icon-btn.delete:hover {
     color: var(--label-red);
-  }
-  .adaptive-block {
-    margin-top: 12px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border-subtle);
-  }
-  .adaptive-title {
-    margin: 0 4px 4px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-  .adaptive-amount {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin: 0 4px 4px;
-    font-size: 11px;
-    color: var(--text-tertiary);
-  }
-  .adaptive-amount input {
-    flex: 1;
-    min-width: 0;
-  }
-  .adaptive-btn {
-    display: block;
-    width: 100%;
   }
   .preset-note {
     margin: 8px 4px 0;

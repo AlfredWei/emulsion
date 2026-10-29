@@ -76,6 +76,25 @@ describe("handleApplyAdaptivePreset", () => {
     expect(develop.flushEditStack).not.toHaveBeenCalled();
   });
 
+  it("keeps the path it started with when the photo changes during the face scan", async () => {
+    library.images = /** @type {any} */ ([{ image_id: 7, version_id: 10, content_hash: "h1", faces_scanned: false }]);
+    faceDetect.runFaceDetection.mockImplementation(async () => {
+      develop.imagePath = "/p/b.raw";
+    });
+    api.resolveAdaptiveRegion.mockResolvedValue(result({ mask: { op: "segment_mask", logits: "AAAA", feather: 50, grow: 0, invert: false } }));
+    await handleApplyAdaptivePreset("brighten-faces", 100);
+    expect(api.resolveAdaptiveRegion).toHaveBeenCalledWith(7, "/p/a.raw", "h1", "face");
+  });
+
+  it("puts the previous stack back when the flush fails, so no unsaved mask stays on the canvas", async () => {
+    api.resolveAdaptiveRegion.mockResolvedValue(result());
+    vi.spyOn(develop, "flushEditStack").mockRejectedValue(new Error("disk full"));
+    const before = develop.editStack;
+    expect(await handleApplyAdaptivePreset("cool-shadows", 100)).toBeNull();
+    expect(develop.editStack).toBe(before);
+    expect(shell.statusMessage).toContain("failed");
+  });
+
   it("reports a failure instead of throwing", async () => {
     api.resolveAdaptiveRegion.mockRejectedValue(new Error("preview failed"));
     expect(await handleApplyAdaptivePreset("cool-shadows", 100)).toBeNull();

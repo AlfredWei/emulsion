@@ -1,6 +1,6 @@
 //! Tauri command for the adaptive-preset region resolvers (RFC-0035 B1). Thin: the resolvers are pure functions in
 //! `adaptive_regions`; this reads the stored face rows and the unedited, uncropped Develop preview (the frame every
-//! mask uses) and runs one of them. Nothing calls it from the UI yet (B2).
+//! mask uses) and runs one of them. The History panel's Adaptive block calls it through `actions/adaptiveActions.js` (B2).
 
 use crate::adaptive_regions::{self, FaceBox, RegionResult};
 use crate::{preview_cache, resolve_cache_root, AppState};

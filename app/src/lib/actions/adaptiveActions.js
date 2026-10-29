@@ -20,13 +20,15 @@ export async function handleApplyAdaptivePreset(presetId, amount) {
   if (!preset || versionId === null || running) return null;
   const image = library.images.find((img) => img.version_id === versionId);
   const contentHash = develop.imageContentHash;
-  if (!image || !contentHash) return null;
+  // Captured with the hash: a photo switch mid-run must not pair this photo's id and hash with the next one's path.
+  const imagePath = develop.imagePath;
+  if (!image || !contentHash || !imagePath) return null;
   running = true;
   develop.clearPreview();
   try {
     if (preset.rules.some((r) => r.region === "face") && !image.faces_scanned) await runFaceDetection([image.image_id], false);
     const results = [];
-    for (const rule of preset.rules) results.push(await resolveAdaptiveRegion(image.image_id, develop.imagePath, contentHash, rule.region));
+    for (const rule of preset.rules) results.push(await resolveAdaptiveRegion(image.image_id, imagePath, contentHash, rule.region));
     // The user may have moved to another photo while Rust was looking: never write one photo's masks onto another.
     if (develop.versionId !== versionId) {
       shell.notify(`${preset.name}: the photo changed while it was being analysed, nothing applied`);
@@ -34,8 +36,15 @@ export async function handleApplyAdaptivePreset(presetId, amount) {
     }
     const plan = planAdaptiveApply(develop.editStack, preset, results, amount);
     if (plan.changed) {
+      const before = develop.editStack;
       develop.editStack = plan.stack;
-      await develop.flushEditStack(adaptiveLabel(preset, amount));
+      try {
+        await develop.flushEditStack(adaptiveLabel(preset, amount));
+      } catch (e) {
+        // Not persisted: do not leave masks on the canvas that the catalog never got.
+        if (develop.versionId === versionId) develop.editStack = before;
+        throw e;
+      }
       regenerateThumbnailFor(versionId);
     }
     shell.notify(`${preset.name} ${amount} %: ${plan.changed ? "" : "nothing changed. "}${describeReport(plan.report)}`);

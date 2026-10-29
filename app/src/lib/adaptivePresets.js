@@ -167,5 +167,25 @@ export function describeReport(report) {
     .join("; ");
 }
 
+/**
+ * One photograph's line in a batch report (RFC-0035 B3). Nothing is hidden: every photo of the selection has a row.
+ * `applied`: masks added and nothing to look at. `check`: masks added and at least one is flagged. `nothing`: the region
+ * was not found, nothing changed. `kept`: an earlier mask of this preset was changed by the user and was left alone.
+ * `failed`: the photo could not be analysed or written (the reason is in `error`).
+ * @typedef {Object} BatchRow
+ * @property {number} versionId
+ * @property {string} name
+ * @property {"applied" | "check" | "nothing" | "kept" | "failed"} status
+ * @property {RuleReport[]} report
+ * @property {string=} error
+ */
+
+/** @param {RuleReport[]} report @returns {BatchRow["status"]} */
+export function batchStatus(report) {
+  const added = report.filter((r) => r.action !== "skipped");
+  if (added.length === 0) return report.some((r) => r.outcome !== "not_found" && r.action === "skipped" && /edited/.test(r.why ?? "")) ? "kept" : "nothing";
+  return added.some((r) => r.outcome === "check") ? "check" : "applied";
+}
+
 /** "Adaptive: Deepen sky 60 %", the History row of one apply (one undo step). */
 export const adaptiveLabel = (/** @type {AdaptivePreset} */ preset, /** @type {number} */ amount) => `Adaptive: ${preset.name} ${amount} %`;

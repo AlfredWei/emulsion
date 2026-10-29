@@ -2,6 +2,9 @@
   import "$lib/styles/tokens.css";
   import { onMount } from "svelte";
   import AppTitlebar from "$lib/components/AppTitlebar.svelte";
+  import AdaptiveBatchDialog from "$lib/components/AdaptiveBatchDialog.svelte";
+  import { ADAPTIVE_PRESETS } from "$lib/adaptivePresets.js";
+  import { handleOpenAdaptiveBatch } from "$lib/actions/adaptiveBatchActions.js";
   import ContextMenu from "$lib/components/ContextMenu.svelte";
   import { handleContextMenu, handleContextMenuKey, handleClickCapture } from "$lib/actions/contextMenuActions.js";
   import { contextMenu } from "$lib/state/contextMenu.svelte.js";
@@ -320,6 +323,8 @@
     {handleRemoveFromCollection}
     {handleAddToCollectionSelect}
     {handleApplyPresetToSelection}
+    adaptivePresets={ADAPTIVE_PRESETS}
+    handleApplyAdaptiveToSelection={handleOpenAdaptiveBatch}
     {handlePasteSettingsToSelection}
     {handleMergeHdrBracket}
     {handleMergePanorama}
@@ -336,6 +341,7 @@
 
   <ContextMenu />
 
+  <AdaptiveBatchDialog />
   <AppDialogs
     settingsOpen={shell.settingsOpen}
     exportItems={exportFlow.items}

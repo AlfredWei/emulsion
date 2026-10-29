@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, scaleAdjustments, buildMask, isEdited, planAdaptiveApply, describeReport, describeRule, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
+import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, scaleAdjustments, buildMask, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
 import { MAX_MASKS, listMasks, createBrushMask, addMask } from "$lib/api/develop.js";
 
 const sky = /** @type {any} */ (ADAPTIVE_PRESETS.find((p) => p.id === "deepen-sky"));
@@ -133,5 +133,13 @@ describe("adaptive presets", () => {
 
   it("the planned presets are not appliable ones", () => {
     for (const p of ADAPTIVE_PLANNED) expect(ADAPTIVE_PRESETS.some((a) => a.id === p.id)).toBe(false);
+  });
+  it("batchStatus names what happened to a photo: applied, to check, nothing, or kept", () => {
+    const rule = (/** @type {any} */ over) => /** @type {any} */ ({ region: "sky", outcome: "found", coverage: 0.3, reason: null, action: "added", ...over });
+    expect(batchStatus([rule({})])).toBe("applied");
+    expect(batchStatus([rule({ outcome: "check" })])).toBe("check");
+    expect(batchStatus([rule({ outcome: "not_found", action: "skipped" })])).toBe("nothing");
+    expect(batchStatus([rule({ action: "skipped", why: "an earlier mask from this preset was edited; confirm to replace it" })])).toBe("kept");
+    expect(batchStatus([rule({ action: "skipped", why: "the photo already has 12 masks" })])).toBe("nothing");
   });
 });

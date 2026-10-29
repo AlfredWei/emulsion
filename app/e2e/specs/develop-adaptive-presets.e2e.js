@@ -119,6 +119,20 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     expect(m.basis).toBe("original");
   });
 
+  it("the shadows mask is listed in the tool strip, and selecting it opens the panel on Original (RFC-0036)", async function () {
+    // A preset mask carries only the adjustments the preset sets; the panel used to throw on its missing exposure.
+    const probe = () =>
+      browser.execute(() => ({
+        chips: document.querySelectorAll(".mask-chip").length,
+        selected: document.querySelectorAll(".mask-chip.selected").length,
+        basis: /** @type {HTMLSelectElement | null} */ (document.querySelector("#mask-range-basis"))?.value ?? null,
+      }));
+    await waitFor(async () => (await probe()).chips === 1, "a chip for the resolver's mask");
+    await domClick(".mask-chip");
+    await waitFor(async () => (await probe()).selected === 1, "the chip selected");
+    expect((await probe()).basis).toBe("original");
+  });
+
   it("the panel's Measured on switch changes a drawn luminance mask's basis (RFC-0036)", async function () {
     const vid = state.corn.version_id;
     const lumas = async () => masksOf(await stackOf(vid)).filter((/** @type {any} */ o) => o.op === "luminance_range_mask");

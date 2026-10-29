@@ -22,6 +22,15 @@ describe("adaptive presets", () => {
     expect(isEdited({ ...m, contrast: 7 })).toBe(true);
   });
 
+  it("a preset that sets only some adjustments still builds a mask the panel can open (exposure, contrast, saturation present)", () => {
+    const shadows = ADAPTIVE_PRESETS.find((p) => p.id === "cool-shadows");
+    const m = /** @type {any} */ (buildMask(/** @type {any} */ (shadows).rules[0], found(), 100, "cool-shadows", 0));
+    expect(m.exposure).toBe(0);
+    expect(m.contrast).toBe(0);
+    expect(m.saturation).toBe(-5);
+    expect(m.temperature).toBe(-8);
+  });
+
   it("adds a found mask after the existing ones and leaves the rest of the stack alone", () => {
     const brush = createBrushMask();
     const start = addMask(empty, /** @type {any} */ (brush));

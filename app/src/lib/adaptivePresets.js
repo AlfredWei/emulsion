@@ -45,7 +45,10 @@ const signature = (/** @type {any} */ m, /** @type {string[]} */ keys) => JSON.s
  * @param {string} presetId @param {number} ruleIndex */
 export function buildMask(rule, result, amount, presetId, ruleIndex) {
   const adjustments = scaleAdjustments(rule.adjustments, amount);
-  const mask = { ...(result.mask ?? {}), id: crypto.randomUUID(), ...adjustments, ...(rule.feather !== undefined ? { feather: rule.feather } : {}) };
+  // The base three every mask carries: a preset that sets only some adjustments (shadows: temperature, saturation)
+  // must not leave the panel reading `undefined.toFixed` the moment the mask is selected (a stack loaded from the
+  // catalog gets these from Rust's defaults, this one never made the trip).
+  const mask = { exposure: 0, contrast: 0, saturation: 0, ...(result.mask ?? {}), id: crypto.randomUUID(), ...adjustments, ...(rule.feather !== undefined ? { feather: rule.feather } : {}) };
   return { ...mask, source: { preset: presetId, rule: ruleIndex, sig: signature(mask, Object.keys(adjustments)), keys: Object.keys(adjustments) } };
 }
 

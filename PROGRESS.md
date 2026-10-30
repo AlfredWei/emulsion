@@ -3,6 +3,22 @@
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
 
+## M7 adaptive tone: model-based sky on 45 real photographs (2026-10-30)
+
+`develop-adaptive-eval.e2e.js` with `ADAPTIVE_EVAL_REGION=sky` on `mask_training/gt_photos` (45 landscapes: sunsets, storms, fog, night sky, cities, trees against sky). There is no ground-truth mask for this set, so this is by eye on contact sheets. 22 found, 17 check, 6 not found. Good (about 33 of 45): sunsets and storms, mountains, city skylines, snow, desert, fog and mist, night sky with a milky way, power lines, sunflowers; edges clean against horizons, buildings and ridges, cloud patchiness closed. `check` is conservative where the colour rule and the model outline the sky differently (11: 15 % overlap on a correct mask).
+
+Misses, all one cause: when the colour rule finds no smooth region reaching the top edge it returns `not_found` and the model is never asked (22 bare branches against an overcast sky, 23 and 25 Amsterdam streets, 29 a fisheye night silhouette; 05 a painting and 40 flowers are correctly empty). Also weak, flagged `check`: sky seen through dense branches (18 at 3 %, 21 patchy). Not changed: a model-only fallback (a click at the top middle) would also fire on photographs with no sky and so make a plausible but wrong `check`; decide with a no-sky set in hand.
+
+## M7 adaptive tone: the person region on 37 real photographs (2026-10-30)
+
+First real-set evaluation of `resolve_person` (`develop-adaptive-eval.e2e.js`, local only, on `mask_training/people_eval_hires`: portraits, historical cabinet cards, groups, crowds, street, animals/statues). Result before tuning: 14 found, 10 check, 13 not found. By eye: single subjects, a child with a coat, three people on a lantern slide and two dancers were good; large groups were partial but flagged check (right); `not_found` on photographs with no face is right.
+
+Measured from a new trace (`EMULSION_ADAPTIVE_TRACE=<file>` appends each cut's confidence and size; off by default): cuts that looked right were rated 0.90-0.98 (two at 0.70-0.71); the doubted single subjects were 0.62 and 0.65. Changes: `PERSON_MIN_IOU` 0.7 -> 0.6 with a middle band (0.6-0.7 is used but forces `check`, "only moderately sure"), and `PERSON_BIG_COVERAGE` 0.85 -> 0.6 (an old cabinet card was flooded to 67 % at confidence 0.92, which only the coverage limit can catch; a real close-up can pass 60 % too, so it asks for a look rather than refusing). Face-to-mask area ratio was tried on paper and does not separate the cases. Re-run: 13 found, 14 check, 10 not found; the child holding a fish is now a good `check`, the flooded card is `check`, nothing new became `found` wrongly.
+
+Not fixed (not thresholds): the face detector fires on a dog, teddy bears and a statue, and `found` follows; people with no usable face (distant walker, a child hugging a toy, small children on a dock) are not found; the cabinet-card headshot at 0.65 gets only a face-sized mask. The WebDriver "hang" while evaluating was the harness: 90 s request timeout re-running a long call; face detection now goes one photograph per call.
+
+Not verified: Windows.
+
 ## Adjustable filmstrip height (2026-10-30)
 
 The bottom filmstrip (Library and Develop) was fixed at 72 px, too small to judge a photo by. Dragging its top edge now sets the height (72–260 px, double-click resets), the cells scale with it and keep their 3:2 shape, and the choice is kept in `localStorage` (`emulsion_filmstrip_height_v1`). The strip itself stays content-sized, so its scrollbar never clips the cells. State and clamping live in `shell.svelte.js` / `panelLayout.js`, with the same pointer-capture handling as the panel resize. Verified: vitest, svelte-check, and `library-filmstrip-resize.e2e.js` in the real window (drag, bounds, reload, reset; screenshot checked by eye). Not verified: Develop's filmstrip by eye (same component), Windows.

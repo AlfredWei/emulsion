@@ -269,3 +269,49 @@ describe("photo drag onto the map (shell.photoDrag)", () => {
     expect(shell.photoDrag).toEqual({ imageIds: [7], pointer: { x: 20, y: 0 } });
   });
 });
+
+describe("Filmstrip height resize", () => {
+/** Vitest runs in node, which has no localStorage: a map-backed stand-in for these tests. */
+function stubStorage() {
+  /** @type {Map<string, string>} */
+  const m = new Map();
+  vi.stubGlobal("localStorage", { getItem: (/** @type {string} */ k) => m.get(k) ?? null, setItem: (/** @type {string} */ k, /** @type {string} */ v) => void m.set(k, String(v)), clear: () => m.clear() });
+  return m;
+}
+  const ls = () => globalThis.localStorage;
+  beforeEach(() => void stubStorage());
+
+  it("starts at the given height, or the old fixed 72", () => {
+    expect(createShellStore(initial()).filmstripHeight).toBe(72);
+    expect(createShellStore({ ...initial(), filmstripHeight: 140 }).filmstripHeight).toBe(140);
+  });
+
+  it("dragging the top edge up makes it taller, down shorter, within 72..260, and saves on release", () => {
+    const shell = createShellStore(initial());
+    const down = pointer({ clientX: 0, clientY: 500 });
+    shell.handleFilmstripResizePointerDown(down);
+    expect(down.preventDefault).toHaveBeenCalled();
+    expect(down.currentTarget.setPointerCapture).toHaveBeenCalledWith(1);
+    shell.handleFilmstripResizePointerMove(pointer({ clientX: 0, clientY: 440 }));
+    expect(shell.filmstripHeight).toBe(132);
+    shell.handleFilmstripResizePointerMove(pointer({ clientX: 0, clientY: 100 }));
+    expect(shell.filmstripHeight).toBe(260);
+    shell.handleFilmstripResizePointerMove(pointer({ clientX: 0, clientY: 900 }));
+    expect(shell.filmstripHeight).toBe(72);
+    shell.handleFilmstripResizePointerMove(pointer({ clientX: 0, clientY: 450 }));
+    const up = pointer({ clientX: 0, clientY: 450 });
+    shell.handleFilmstripResizePointerUp(up);
+    expect(up.currentTarget.releasePointerCapture).toHaveBeenCalledWith(1);
+    expect(shell.filmstripResizeState).toBeNull();
+    expect(ls().getItem("emulsion_filmstrip_height_v1")).toBe("122");
+  });
+
+  it("moving without a drag started changes nothing; double-click puts the default back and saves it", () => {
+    const shell = createShellStore({ ...initial(), filmstripHeight: 150 });
+    shell.handleFilmstripResizePointerMove(pointer({ clientX: 0, clientY: 10 }));
+    expect(shell.filmstripHeight).toBe(150);
+    shell.handleFilmstripResizeReset();
+    expect(shell.filmstripHeight).toBe(72);
+    expect(ls().getItem("emulsion_filmstrip_height_v1")).toBe("72");
+  });
+});

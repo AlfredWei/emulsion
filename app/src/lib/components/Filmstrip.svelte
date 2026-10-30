@@ -1,6 +1,7 @@
 <script>
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { shell } from "$lib/state/shell.svelte.js";
+  import { FILMSTRIP_PADDING } from "$lib/panelLayout.js";
 
   /**
    * Persistent filmstrip, shared between Library and Develop
@@ -60,6 +61,20 @@
   }
 </script>
 
+<div class="filmstrip-wrap" style="--cell-h: {shell.filmstripHeight - FILMSTRIP_PADDING}px">
+  <!-- Drag the top edge to make the strip taller or shorter; double-click puts it back. -->
+  <div
+    class="resize-handle"
+    class:dragging={shell.filmstripResizeState !== null}
+    role="separator"
+    aria-orientation="horizontal"
+    aria-label="Resize the filmstrip"
+    title="Drag to resize the filmstrip; double-click to reset"
+    onpointerdown={shell.handleFilmstripResizePointerDown}
+    onpointermove={shell.handleFilmstripResizePointerMove}
+    onpointerup={shell.handleFilmstripResizePointerUp}
+    ondblclick={shell.handleFilmstripResizeReset}
+  ></div>
 <div class="filmstrip" bind:this={strip}>
   {#each images as image (image.version_id)}
     {@const thumbSrc = image.thumbnail_path ? convertFileSrc(image.thumbnail_path) : null}
@@ -85,10 +100,28 @@
     </div>
   {/each}
 </div>
+</div>
 
 <style>
-  .filmstrip {
+  .filmstrip-wrap {
     flex: none;
+    position: relative;
+  }
+  .resize-handle {
+    position: absolute;
+    top: -3px;
+    left: 0;
+    right: 0;
+    height: 7px;
+    z-index: 5;
+    cursor: ns-resize;
+    touch-action: none;
+  }
+  .resize-handle:hover,
+  .resize-handle.dragging {
+    background: var(--accent-soft);
+  }
+  .filmstrip {
     display: flex;
     gap: 7px;
     padding: 10px 14px;
@@ -99,9 +132,10 @@
   }
   .cell {
     all: unset;
+    box-sizing: border-box;
     position: relative;
     flex: none;
-    width: 76px;
+    height: var(--cell-h);
     aspect-ratio: 3 / 2;
     border-radius: var(--radius-s);
     overflow: hidden;

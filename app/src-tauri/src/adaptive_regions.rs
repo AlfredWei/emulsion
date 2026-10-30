@@ -247,16 +247,30 @@ pub trait ClickModel {
 /// Select Subject model. Faces below the pixel floor are not used (a face the detector may not even have right is a
 /// poor place to click), and a crowd is capped: each person is one decode.
 const PERSON_MAX: usize = 6;
-/// A cut the model rates under this is left out rather than merged.
-const PERSON_MIN_IOU: f32 = 0.7;
+/// A cut the model rates under this is left out rather than merged. Measured on 37 photographs (RFC-0035 §7): cuts that
+/// looked right were rated 0.90-0.98 (two scraped in at 0.70-0.71); the single subjects the model doubted were 0.62-0.65.
+const PERSON_MIN_IOU: f32 = 0.6;
+/// A cut rated between the two is used, but the result is `check`: the model was only moderately sure of it.
+const PERSON_SURE_IOU: f32 = 0.7;
 /// The torso click sits this many face-heights below the face centre.
 const PERSON_TORSO_DROP: f32 = 2.0;
 const PERSON_TORSO_LIMIT: f32 = 0.97;
 const PERSON_MIN_COVERAGE: f32 = 0.01;
-/// A close-up portrait really is over half the frame (61 % on the one real photograph looked at: the cut was the whole
-/// person); this only catches a cut that took the background too.
-const PERSON_BIG_COVERAGE: f32 = 0.85;
+/// Single subjects that looked right covered 6-38 % of the frame; the one flood (an old cabinet card: the cut took the
+/// whole mount, rated 0.92) covered 67 %. A real close-up can pass 60 % too (61 % on one photograph), so this only asks
+/// for a look.
+const PERSON_BIG_COVERAGE: f32 = 0.6;
 const PERSON_FEATHER: f32 = 30.0;
+
+/// Tuning aid: with `EMULSION_ADAPTIVE_TRACE=<file>` set, appends one line per decision (a person's cut: confidence and
+/// size) so thresholds can be chosen from what the model reported. Does nothing otherwise.
+pub(crate) fn trace(line: &str) {
+    use std::io::Write;
+    let Ok(path) = std::env::var("EMULSION_ADAPTIVE_TRACE") else { return };
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{line}");
+    }
+}
 
 /// The people of one photograph in one `segment_mask`: for the largest faces, a click on the face and one on the
 /// torso below it, the model's best cut for each, merged. `Err` is a model failure the caller shows as it is.
@@ -270,7 +284,7 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
     faces.truncate(PERSON_MAX);
 
     let mut merged = vec![-LOGIT_RANGE; RASTER * RASTER];
-    let (mut used, mut unsure) = (0usize, 0usize);
+    let (mut used, mut unsure, mut moderate) = (0usize, 0usize, 0usize);
     for f in &faces {
         let (cx, cy) = (f.x + f.w / 2.0, f.y + f.h / 2.0);
         let mut clicks = vec![(cx, cy, true)];
@@ -279,11 +293,18 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
             clicks.push((cx, torso, true));
         }
         let cut = model.cut(&clicks)?;
+        trace(&format!(
+            "person face=({:.3},{:.3},{:.3}x{:.3}) torso_click={} iou={:.3} cut_coverage={:.3}",
+            f.x, f.y, f.w, f.h, clicks.len() > 1, cut.iou, coverage_of(&cut.logits)
+        ));
         if cut.iou < PERSON_MIN_IOU || cut.logits.len() != merged.len() {
             unsure += 1;
             continue;
         }
         used += 1;
+        if cut.iou < PERSON_SURE_IOU {
+            moderate += 1;
+        }
         for (m, l) in merged.iter_mut().zip(&cut.logits) {
             *m = m.max(*l);
         }
@@ -305,6 +326,9 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
     }
     if unsure > 0 {
         why.push(format!("{unsure} person(s) the model was unsure of were left out"));
+    }
+    if moderate > 0 {
+        why.push(format!("the model was only moderately sure of {moderate} person(s)"));
     }
     if coverage > PERSON_BIG_COVERAGE {
         why.push(format!("the mask covers over {} of the frame", pct(PERSON_BIG_COVERAGE)));
@@ -759,6 +783,17 @@ mod tests {
     }
 
     #[test]
+    fn a_cut_between_the_two_confidence_limits_is_used_but_asks_for_a_look() {
+        let mut model = FakeModel::new(0.65);
+        let r = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::Check);
+        assert!(r.reason.as_deref().unwrap().contains("only moderately sure of 1 person"));
+        assert!(r.mask.is_some());
+        let mut model = FakeModel::new(0.75);
+        assert_eq!(resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut model).unwrap().outcome, Outcome::Found);
+    }
+
+    #[test]
     fn no_usable_face_is_not_found_without_asking_the_model() {
         let mut model = FakeModel::new(0.9);
         let r = resolve_person(&[], (1600, 1200), &mut model).unwrap();
@@ -782,7 +817,7 @@ mod tests {
         model.half = 0.45;
         let r = resolve_person(&[big_face(0.45, 0.05)], (1600, 1200), &mut model).unwrap();
         assert_eq!(r.outcome, Outcome::Check);
-        assert!(r.reason.as_deref().unwrap().contains("covers over 85 %"));
+        assert!(r.reason.as_deref().unwrap().contains("covers over 60 %"));
     }
 
     #[test]

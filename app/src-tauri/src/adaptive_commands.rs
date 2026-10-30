@@ -81,6 +81,7 @@ pub async fn resolve_adaptive_region(
                 // Faces to clicks (RFC-0033 section 3.1): the encoder runs once for the photograph, then one decode per person.
                 let dir = person_models.ok_or_else(|| "no model folder".to_string())?;
                 let mut model = prepare_model(helper, &dir, content_hash, &preview.path)?;
+                adaptive_regions::trace(&format!("photo {path}"));
                 adaptive_regions::resolve_person(&faces, (preview.width, preview.height), &mut model)
             }
             "shadows" | "sky" => {

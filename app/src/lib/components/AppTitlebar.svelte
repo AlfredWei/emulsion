@@ -27,6 +27,8 @@
    *   handleRemoveFromCollection: () => void,
    *   handleAddToCollectionSelect: (value: string) => void,
    *   handleApplyPresetToSelection: (presetId: string) => void,
+   *   adaptivePresets?: { id: string, name: string }[],
+   *   handleApplyAdaptiveToSelection?: (presetId: string) => void,
    *   handlePasteSettingsToSelection: () => void,
    *   handleMergeHdrBracket: () => void,
    *   handleMergePanorama: () => void,
@@ -65,6 +67,8 @@
     handleRemoveFromCollection,
     handleAddToCollectionSelect,
     handleApplyPresetToSelection,
+    adaptivePresets = [],
+    handleApplyAdaptiveToSelection = () => {},
     handlePasteSettingsToSelection,
     handleMergeHdrBracket,
     handleMergePanorama,
@@ -145,6 +149,21 @@
   >
     <option value="" disabled>{applyingPreset ? "Applying…" : "Apply Preset…"}</option>
     {#each presets as preset (preset.id)}
+      <option value={preset.id}>{preset.name}</option>
+    {/each}
+  </select>
+  <select
+    class="add-to-collection-select adaptive-select"
+    value=""
+    disabled={activeModule !== "library" || selectedIds.size === 0 || adaptivePresets.length === 0}
+    title="Apply an adaptive preset to every selected photo: it finds the sky, faces or shadows in each, and the report lists every photo"
+    onchange={(e) => {
+      handleApplyAdaptiveToSelection(e.currentTarget.value);
+      e.currentTarget.value = "";
+    }}
+  >
+    <option value="" disabled>Apply Adaptive…</option>
+    {#each adaptivePresets as preset (preset.id)}
       <option value={preset.id}>{preset.name}</option>
     {/each}
   </select>

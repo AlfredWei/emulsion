@@ -9,13 +9,14 @@ import { masks } from "$lib/state/masks.svelte.js";
 import { resolveAdaptiveRegion } from "$lib/api/adaptive.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
 import { runFaceDetection } from "$lib/actions/faceActions.js";
-import { ADAPTIVE_PRESETS, planAdaptiveApply, describeReport, adaptiveLabel } from "$lib/adaptivePresets.js";
+import { ADAPTIVE_PRESETS, needsFaces, planAdaptiveApply, describeReport, adaptiveLabel } from "$lib/adaptivePresets.js";
 
 let running = false;
 
 /** @param {string} presetId @param {number} amount 0-100
+ * @param {{ replaceEdited?: boolean }} [options] `replaceEdited`: the user agreed to replace a mask they had changed
  * @returns {Promise<import('$lib/adaptivePresets.js').RuleReport[] | null>} the per-rule report, or null when nothing ran */
-export async function handleApplyAdaptivePreset(presetId, amount) {
+export async function handleApplyAdaptivePreset(presetId, amount, options = {}) {
   const preset = ADAPTIVE_PRESETS.find((p) => p.id === presetId);
   const versionId = develop.versionId;
   if (!preset || versionId === null || running) return null;
@@ -27,7 +28,7 @@ export async function handleApplyAdaptivePreset(presetId, amount) {
   running = true;
   develop.clearPreview();
   try {
-    if (preset.rules.some((r) => r.region === "face") && !image.faces_scanned) await runFaceDetection([image.image_id], false);
+    if (needsFaces(preset) && !image.faces_scanned) await runFaceDetection([image.image_id], false);
     const results = [];
     for (const rule of preset.rules) results.push(await resolveAdaptiveRegion(image.image_id, imagePath, contentHash, rule.region));
     // The user may have moved to another photo while Rust was looking: never write one photo's masks onto another.
@@ -35,7 +36,7 @@ export async function handleApplyAdaptivePreset(presetId, amount) {
       shell.notify(`${preset.name}: the photo changed while it was being analysed, nothing applied`);
       return null;
     }
-    const plan = planAdaptiveApply(develop.editStack, preset, results, amount);
+    const plan = planAdaptiveApply(develop.editStack, preset, results, amount, options.replaceEdited === true);
     if (plan.changed) {
       const before = develop.editStack;
       develop.editStack = plan.stack;

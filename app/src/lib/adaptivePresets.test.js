@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ADAPTIVE_PRESETS, scaleAdjustments, buildMask, isEdited, planAdaptiveApply, describeReport, adaptiveLabel } from "./adaptivePresets.js";
+import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, needsFaces, scaleAdjustments, buildMask, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
 import { MAX_MASKS, listMasks, createBrushMask, addMask } from "$lib/api/develop.js";
 
 const sky = /** @type {any} */ (ADAPTIVE_PRESETS.find((p) => p.id === "deepen-sky"));
@@ -49,7 +49,7 @@ describe("adaptive presets", () => {
     const none = planAdaptiveApply(empty, sky, [notFound], 100);
     expect(none.changed).toBe(false);
     expect(none.stack).toBe(empty);
-    expect(describeReport(none.report)).toBe("Sky: not found (no smooth region)");
+    expect(describeReport(none.report)).toBe("Sky: not found: no smooth region");
   });
 
   it("changes nothing at Amount 0", () => {
@@ -90,6 +90,60 @@ describe("adaptive presets", () => {
   });
 
   it("every starter rule is bound to a region the resolvers know", () => {
-    for (const p of ADAPTIVE_PRESETS) for (const r of p.rules) expect(["sky", "face", "shadows"]).toContain(r.region);
+    for (const p of ADAPTIVE_PRESETS) for (const r of p.rules) expect(["sky", "face", "shadows", "person"]).toContain(r.region);
+  });
+  it("a check outcome is written into the mask's source, so the mask panel can ask the user to look", () => {
+    const checked = /** @type {any} */ (buildMask(sky.rules[0], found({ outcome: "check", reason: "only 4 % of the frame" }), 100, "deepen-sky", 0));
+    expect(checked.source.check).toBe("only 4 % of the frame");
+    const plain = /** @type {any} */ (buildMask(sky.rules[0], found(), 100, "deepen-sky", 0));
+    expect(plain.source.check).toBeUndefined();
+    expect(isEdited(checked)).toBe(false);
+  });
+
+  it("any change to the mask counts as the user's: an adjustment the preset did not set, a modifier, a range; key order does not", () => {
+    const m = /** @type {any} */ (buildMask(ADAPTIVE_PRESETS[2].rules[0], { outcome: "found", coverage: 0.2, reason: null, mask: { op: "luminance_range_mask", rangeMin: 0, rangeMax: 25, feather: 30, invert: false } }, 100, "cool-shadows", 0));
+    expect(isEdited(m)).toBe(false);
+    expect(isEdited({ ...m, exposure: 0.5 })).toBe(true);
+    expect(isEdited({ ...m, rangeMax: 30 })).toBe(true);
+    expect(isEdited({ ...m, modifiers: [{ id: "x" }] })).toBe(true);
+    const reordered = Object.fromEntries(Object.entries(m).reverse());
+    expect(isEdited(reordered)).toBe(false);
+    expect(isEdited(JSON.parse(JSON.stringify(m)))).toBe(false);
+  });
+
+  it("replaceEdited replaces a mask the user changed; without it the mask is kept and the report says why", () => {
+    const first = planAdaptiveApply(empty, sky, [found()], 100);
+    const mine = { ...first.stack, ops: first.stack.ops.map((o) => (/** @type {any} */ (o).source ? { ...o, exposure: -1 } : o)) };
+    const kept = planAdaptiveApply(/** @type {any} */ (mine), sky, [found()], 100);
+    expect(kept.changed).toBe(false);
+    expect(describeRule(kept.report[0]).kind).toBe("skipped");
+    const replaced = planAdaptiveApply(/** @type {any} */ (mine), sky, [found()], 100, true);
+    expect(replaced.changed).toBe(true);
+    expect(presetMasks(replaced.stack, "deepen-sky")).toHaveLength(1);
+    expect(/** @type {any} */ (presetMasks(replaced.stack, "deepen-sky")[0]).exposure).toBeCloseTo(-0.3);
+  });
+
+  it("presetMasks finds only the masks a preset wrote, and describeRule gives each outcome a kind", () => {
+    const plan = planAdaptiveApply(addMask(empty, /** @type {any} */ (createBrushMask())), sky, [found()], 100);
+    expect(presetMasks(plan.stack, "deepen-sky")).toHaveLength(1);
+    expect(presetMasks(plan.stack, "cool-shadows")).toHaveLength(0);
+    expect(describeRule(plan.report[0])).toEqual({ name: "Sky", text: "40 % of the frame", kind: "found" });
+    expect(describeRule({ region: "face", outcome: "not_found", coverage: 0, reason: "no face above 24 px", action: "skipped" }).kind).toBe("not_found");
+  });
+
+  it("the planned presets are not appliable ones", () => {
+    for (const p of ADAPTIVE_PLANNED) expect(ADAPTIVE_PRESETS.some((a) => a.id === p.id)).toBe(false);
+  });
+  it("batchStatus names what happened to a photo: applied, to check, nothing, or kept", () => {
+    const rule = (/** @type {any} */ over) => /** @type {any} */ ({ region: "sky", outcome: "found", coverage: 0.3, reason: null, action: "added", ...over });
+    expect(batchStatus([rule({})])).toBe("applied");
+    expect(batchStatus([rule({ outcome: "check" })])).toBe("check");
+    expect(batchStatus([rule({ outcome: "not_found", action: "skipped" })])).toBe("nothing");
+    expect(batchStatus([rule({ action: "skipped", why: "an earlier mask from this preset was edited; confirm to replace it" })])).toBe("kept");
+    expect(batchStatus([rule({ action: "skipped", why: "the photo already has 12 masks" })])).toBe("nothing");
+  });
+  it("the face and person presets need the faces scanned first; sky and shadows do not", () => {
+    const need = ADAPTIVE_PRESETS.filter(needsFaces).map((p) => p.id);
+    expect(need).toEqual(["brighten-faces", "lift-people"]);
   });
 });

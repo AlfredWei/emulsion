@@ -164,11 +164,11 @@ fn iou(a: &FaceBox, b: &FaceBox) -> f32 {
     if u > 0.0 { i / u } else { 0.0 }
 }
 
-/// All the faces of one photograph in one `segment_mask`, any number of them. `frame` is the pixel size of the
-/// image the boxes are relative to (only the aspect and the pixel floor use it).
-pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
+/// The faces worth using: identical boxes dropped (the catalog holds duplicate rows) and those under the pixel floor,
+/// or the `not_found` result that says why there are none. `frame` is the pixel size the boxes are relative to.
+fn kept_faces(boxes: &[FaceBox], frame: (u32, u32)) -> Result<Vec<FaceBox>, RegionResult> {
     if boxes.is_empty() {
-        return RegionResult::not_found("no face in this photograph");
+        return Err(RegionResult::not_found("no face in this photograph"));
     }
     let long = frame.0.max(frame.1) as f32;
     let side_px = |f: &FaceBox| (f.w * frame.0 as f32).min(f.h * frame.1 as f32) / long * FACE_REF_EDGE;
@@ -183,9 +183,18 @@ pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
     let total = kept.len();
     kept.retain(|f| side_px(f) >= FACE_MIN_SIDE_PX);
     if kept.is_empty() {
-        return RegionResult::not_found(format!("{total} face(s), all under the size floor ({FACE_MIN_SIDE_PX:.0} px at a {FACE_REF_EDGE:.0} px frame)"));
+        return Err(RegionResult::not_found(format!("{total} face(s), all under the size floor ({FACE_MIN_SIDE_PX:.0} px at a {FACE_REF_EDGE:.0} px frame)")));
     }
+    Ok(kept)
+}
 
+/// All the faces of one photograph in one `segment_mask`, any number of them. `frame` is the pixel size of the
+/// image the boxes are relative to (only the aspect and the pixel floor use it).
+pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
+    let kept = match kept_faces(boxes, frame) {
+        Ok(k) => k,
+        Err(none) => return none,
+    };
     let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
     for f in &kept {
         let (cx, cy) = (f.x + f.w / 2.0, f.y + f.h / 2.0 - FACE_LIFT_Y * f.h);
@@ -218,6 +227,104 @@ pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
     } else {
         RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), mask)
     }
+}
+
+// ---------------------------------------------------------------- click-select model (person, refined sky)
+
+/// What the click-select model gives for one set of clicks: the model's own quality estimate and the 256 x 256 logits.
+pub struct Cut {
+    pub iou: f32,
+    pub logits: Vec<f32>,
+}
+
+/// The click-select model, seen from the resolvers: clicks (normalised to the frame, `true` = part of it) in, a cut out. The real
+/// one asks the AI helper; the tests use a stand-in.
+pub trait ClickModel {
+    fn cut(&mut self, clicks: &[(f32, f32, bool)]) -> Result<Cut, String>;
+}
+
+/// RFC-0033 section 3.1: a person is found by clicking where their face is and where their torso should be, with the
+/// Select Subject model. Faces below the pixel floor are not used (a face the detector may not even have right is a
+/// poor place to click), and a crowd is capped: each person is one decode.
+const PERSON_MAX: usize = 6;
+/// A cut the model rates under this is left out rather than merged.
+const PERSON_MIN_IOU: f32 = 0.7;
+/// The torso click sits this many face-heights below the face centre.
+const PERSON_TORSO_DROP: f32 = 2.0;
+const PERSON_TORSO_LIMIT: f32 = 0.97;
+const PERSON_MIN_COVERAGE: f32 = 0.01;
+/// A close-up portrait really is over half the frame (61 % on the one real photograph looked at: the cut was the whole
+/// person); this only catches a cut that took the background too.
+const PERSON_BIG_COVERAGE: f32 = 0.85;
+const PERSON_FEATHER: f32 = 30.0;
+
+/// The people of one photograph in one `segment_mask`: for the largest faces, a click on the face and one on the
+/// torso below it, the model's best cut for each, merged. `Err` is a model failure the caller shows as it is.
+pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn ClickModel) -> Result<RegionResult, String> {
+    let mut faces = match kept_faces(boxes, frame) {
+        Ok(k) => k,
+        Err(none) => return Ok(none),
+    };
+    faces.sort_by(|a, b| (b.w * b.h).total_cmp(&(a.w * a.h)));
+    let beyond = faces.len().saturating_sub(PERSON_MAX);
+    faces.truncate(PERSON_MAX);
+
+    let mut merged = vec![-LOGIT_RANGE; RASTER * RASTER];
+    let (mut used, mut unsure) = (0usize, 0usize);
+    for f in &faces {
+        let (cx, cy) = (f.x + f.w / 2.0, f.y + f.h / 2.0);
+        let mut clicks = vec![(cx, cy, true)];
+        let torso = cy + PERSON_TORSO_DROP * f.h;
+        if torso < PERSON_TORSO_LIMIT {
+            clicks.push((cx, torso, true));
+        }
+        let cut = model.cut(&clicks)?;
+        if cut.iou < PERSON_MIN_IOU || cut.logits.len() != merged.len() {
+            unsure += 1;
+            continue;
+        }
+        used += 1;
+        for (m, l) in merged.iter_mut().zip(&cut.logits) {
+            *m = m.max(*l);
+        }
+    }
+    if used == 0 {
+        return Ok(RegionResult::not_found(if unsure > 0 {
+            "the model was not sure of anyone it was pointed at".to_string()
+        } else {
+            "no person found".to_string()
+        }));
+    }
+    let coverage = coverage_of(&merged);
+    if coverage < PERSON_MIN_COVERAGE {
+        return Ok(RegionResult::not_found(format!("the people cover only {} of the frame", pct(coverage))));
+    }
+    let mut why: Vec<String> = Vec::new();
+    if beyond > 0 {
+        why.push(format!("{beyond} more face(s) beyond the {PERSON_MAX} largest were not used"));
+    }
+    if unsure > 0 {
+        why.push(format!("{unsure} person(s) the model was unsure of were left out"));
+    }
+    if coverage > PERSON_BIG_COVERAGE {
+        why.push(format!("the mask covers over {} of the frame", pct(PERSON_BIG_COVERAGE)));
+    }
+    let mask = segment_mask(&merged, PERSON_FEATHER);
+    Ok(if why.is_empty() {
+        RegionResult::with_mask(Outcome::Found, coverage, None, mask)
+    } else {
+        RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), mask)
+    })
+}
+
+/// The inverse of `encode_logits`: a base64 256 x 256 gray PNG back to logits.
+pub fn decode_logits(b64: &str) -> Result<Vec<f32>, String> {
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| e.to_string())?;
+    let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(|e| e.to_string())?.to_luma8();
+    if img.width() as usize != RASTER || img.height() as usize != RASTER {
+        return Err(format!("the cut is {} x {}, expected {RASTER} x {RASTER}", img.width(), img.height()));
+    }
+    Ok(img.as_raw().iter().map(|&v| v as f32 / 255.0 * 2.0 * LOGIT_RANGE - LOGIT_RANGE).collect())
 }
 
 // ---------------------------------------------------------------- sky
@@ -391,6 +498,43 @@ fn sky_logits(a: &SkyAnalysis) -> Vec<f32> {
     blurred.pixels().map(|p| (p.0[0] as f32 / 255.0 - 0.5) * 2.0 * 3.75).collect()
 }
 
+/// One square-window pass over a boolean raster: `any` = dilation (inside if any texel of the window is), otherwise erosion
+/// (inside only if all are). The frame's edge counts as "inside" for erosion so the outline does not eat in from the border.
+fn window_pass(src: &[bool], r: isize, any: bool) -> Vec<bool> {
+    let n = RASTER as isize;
+    let mut out = vec![false; src.len()];
+    for y in 0..n {
+        for x in 0..n {
+            let mut result = !any;
+            'win: for dy in -r..=r {
+                for dx in -r..=r {
+                    let (yy, xx) = (y + dy, x + dx);
+                    let v = if yy < 0 || xx < 0 || yy >= n || xx >= n { !any } else { src[(yy * n + xx) as usize] };
+                    if any && v {
+                        result = true;
+                        break 'win;
+                    }
+                    if !any && !v {
+                        result = false;
+                        break 'win;
+                    }
+                }
+            }
+            out[(y * n + x) as usize] = result;
+        }
+    }
+    out
+}
+
+/// Morphological closing of a raster's inside (logit above 0) with a square of radius `r` texels: holes and gaps up to
+/// about `2r` wide are filled, the outline elsewhere stays. The edge is then softened the way the colour rule's is.
+fn close_inside(logits: &[f32], r: usize) -> Vec<f32> {
+    let inside: Vec<bool> = logits.iter().map(|&l| l > 0.0).collect();
+    let closed = window_pass(&window_pass(&inside, r as isize, true), r as isize, false);
+    let gray = GrayImage::from_raw(RASTER as u32, RASTER as u32, closed.iter().map(|&v| if v { 255 } else { 0 }).collect()).expect("raster size");
+    image::imageops::blur(&gray, 1.2).pixels().map(|p| (p.0[0] as f32 / 255.0 - 0.5) * 2.0 * 3.75).collect()
+}
+
 pub fn resolve_sky(img: &RgbImage) -> RegionResult {
     let a = analyse_sky(img);
     if a.mask.is_empty() {
@@ -419,6 +563,99 @@ pub fn resolve_sky(img: &RgbImage) -> RegionResult {
     RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), mask)
 }
 
+
+// ---------------------------------------------------------------- sky, refined by the click-select model
+
+/// The colour rule's sky (above) is only ever an estimate (it was never `found`: 12 of 33 overlapped the segmenter under 0.7).
+/// With the click-select model installed its confident region becomes the model's clicks, and the model's cut, which follows
+/// real edges, replaces it when the model is sure of it. The two are compared: they agree, and the sky is `found`; they do
+/// not, and it is flagged with how far apart they are.
+const SKY_MODEL_MIN_IOU: f32 = 0.7;
+/// The model's cut and the colour rule's must overlap at least this (IoU) for the sky to be `found`.
+const SKY_AGREE: f32 = 0.75;
+const SKY_MODEL_MIN_COVERAGE: f32 = 0.02;
+/// The model's cut is patchy inside clouds (a dither-like texture on the one cloudy photograph looked at); holes up to about
+/// this many texels wide (x2) are closed so a sky edit does not show them.
+const SKY_CLOSE_RADIUS: usize = 3;
+/// A band of the frame is clicked only if the sky covers at least this share of it.
+const SKY_BAND_MIN: f32 = 0.03;
+const SKY_BANDS: usize = 3;
+/// The ground click comes from the lowest quarter of the frame, if enough of it is not sky.
+const SKY_GROUND_ROWS: f32 = 0.25;
+const SKY_GROUND_MIN: f32 = 0.02;
+
+/// The sky cell of `cells` nearest to the mean position of them all (a mean can fall outside a ragged region).
+fn representative(cells: &[(usize, usize)]) -> (usize, usize) {
+    let n = cells.len() as f32;
+    let (mx, my) = (cells.iter().map(|c| c.0 as f32).sum::<f32>() / n, cells.iter().map(|c| c.1 as f32).sum::<f32>() / n);
+    *cells.iter().min_by(|a, b| ((a.0 as f32 - mx).powi(2) + (a.1 as f32 - my).powi(2)).total_cmp(&((b.0 as f32 - mx).powi(2) + (b.1 as f32 - my).powi(2)))).expect("non-empty")
+}
+
+/// Clicks for the model from the colour rule's raster: one positive click inside the sky in each band of columns that has
+/// enough of it, one negative in the lowest rows where it is not sky. `None` when there is no sky to click.
+fn sky_clicks(h: &[f32]) -> Option<Vec<(f32, f32, bool)>> {
+    let to_unit = |c: (usize, usize)| ((c.0 as f32 + 0.5) / RASTER as f32, (c.1 as f32 + 0.5) / RASTER as f32);
+    let band_w = RASTER / SKY_BANDS;
+    let mut clicks: Vec<(f32, f32, bool)> = Vec::new();
+    for b in 0..SKY_BANDS {
+        let (x0, x1) = (b * band_w, if b + 1 == SKY_BANDS { RASTER } else { (b + 1) * band_w });
+        let cells: Vec<(usize, usize)> = (0..RASTER).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| h[y * RASTER + x] > 0.0).collect();
+        if cells.len() as f32 >= SKY_BAND_MIN * ((x1 - x0) * RASTER) as f32 {
+            let (u, v) = to_unit(representative(&cells));
+            clicks.push((u, v, true));
+        }
+    }
+    if clicks.is_empty() {
+        return None;
+    }
+    let y0 = ((1.0 - SKY_GROUND_ROWS) * RASTER as f32) as usize;
+    let ground: Vec<(usize, usize)> = (y0..RASTER).flat_map(|y| (0..RASTER).map(move |x| (x, y))).filter(|&(x, y)| h[y * RASTER + x] <= 0.0).collect();
+    if ground.len() as f32 >= SKY_GROUND_MIN * ((RASTER - y0) * RASTER) as f32 {
+        let (u, v) = to_unit(representative(&ground));
+        clicks.push((u, v, false));
+    }
+    Some(clicks)
+}
+
+fn overlap(a: &[f32], b: &[f32]) -> f32 {
+    let (mut i, mut u) = (0usize, 0usize);
+    for (x, y) in a.iter().zip(b) {
+        let (p, q) = (*x > 0.0, *y > 0.0);
+        i += (p && q) as usize;
+        u += (p || q) as usize;
+    }
+    if u == 0 { 0.0 } else { i as f32 / u as f32 }
+}
+
+/// The sky of one photograph, outlined by the click-select model from the colour rule's clicks. Falls back to the colour rule's
+/// own result, unchanged, when there is nothing to click, the model fails, is unsure, or cuts almost nothing.
+pub fn resolve_sky_with_model(img: &RgbImage, model: &mut dyn ClickModel) -> RegionResult {
+    let base = resolve_sky(img);
+    let Some(h) = base.mask.as_ref().and_then(|m| m["logits"].as_str()).and_then(|b| decode_logits(b).ok()) else { return base };
+    let Some(clicks) = sky_clicks(&h) else { return base };
+    let Ok(cut) = model.cut(&clicks) else { return base };
+    let coverage = coverage_of(&cut.logits);
+    if cut.iou < SKY_MODEL_MIN_IOU || cut.logits.len() != h.len() || coverage < SKY_MODEL_MIN_COVERAGE {
+        return base;
+    }
+    let logits = close_inside(&cut.logits, SKY_CLOSE_RADIUS);
+    let coverage = coverage_of(&logits);
+    let agree = overlap(&h, &logits);
+    let mask = segment_mask(&logits, SKY_FEATHER);
+    let mut why: Vec<String> = Vec::new();
+    if agree < SKY_AGREE {
+        why.push(format!("the model and the colour rule outline the sky differently ({} overlap)", pct(agree)));
+    }
+    if coverage < SKY_CHECK_AREA {
+        why.push(format!("only {} of the frame", pct(coverage)));
+    }
+    if why.is_empty() {
+        RegionResult::with_mask(Outcome::Found, coverage, None, mask)
+    } else {
+        RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), mask)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,6 +676,125 @@ mod tests {
 
     fn at(l: &[f32], u: f32, v: f32) -> f32 {
         l[(v * RASTER as f32) as usize * RASTER + (u * RASTER as f32) as usize]
+    }
+
+    /// A stand-in for the click-select model: a person is a column of `half` width around the face's x and from the
+    /// face's top to the bottom of the frame, rated `iou`; it records every set of clicks it is given.
+    struct FakeModel {
+        iou: f32,
+        half: f32,
+        seen: Vec<Vec<(f32, f32, bool)>>,
+        fail: bool,
+    }
+    impl FakeModel {
+        fn new(iou: f32) -> Self {
+            FakeModel { iou, half: 0.06, seen: Vec::new(), fail: false }
+        }
+    }
+    impl ClickModel for FakeModel {
+        fn cut(&mut self, clicks: &[(f32, f32, bool)]) -> Result<Cut, String> {
+            if self.fail {
+                return Err("the click-select model is not installed".to_string());
+            }
+            self.seen.push(clicks.to_vec());
+            let (cx, cy, _) = clicks[0];
+            let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
+            for iy in 0..RASTER {
+                for ix in 0..RASTER {
+                    let (u, v) = ((ix as f32 + 0.5) / RASTER as f32, (iy as f32 + 0.5) / RASTER as f32);
+                    if (u - cx).abs() < self.half && v > cy - 0.05 {
+                        logits[iy * RASTER + ix] = LOGIT_RANGE;
+                    }
+                }
+            }
+            Ok(Cut { iou: self.iou, logits })
+        }
+    }
+
+    fn big_face(x: f32, y: f32) -> FaceBox {
+        FaceBox { x, y, w: 0.06, h: 0.09, score: Some(0.9) }
+    }
+
+    #[test]
+    fn a_person_is_clicked_on_the_face_and_on_the_torso_below_it() {
+        let mut model = FakeModel::new(0.9);
+        let r = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::Found);
+        assert_eq!(model.seen.len(), 1);
+        let clicks = &model.seen[0];
+        assert_eq!(clicks.len(), 2);
+        assert!((clicks[0].0 - 0.43).abs() < 1e-4 && (clicks[0].1 - 0.245).abs() < 1e-4, "face centre {:?}", clicks[0]);
+        assert!((clicks[1].0 - 0.43).abs() < 1e-4 && (clicks[1].1 - (0.245 + 2.0 * 0.09)).abs() < 1e-4, "torso {:?}", clicks[1]);
+        let l = decode(r.mask.as_ref().unwrap());
+        assert!(at(&l, 0.43, 0.5) > 1.0, "the person is selected");
+        assert!(at(&l, 0.9, 0.5) < -1.0, "elsewhere is not");
+    }
+
+    #[test]
+    fn a_face_near_the_bottom_gets_only_the_face_click() {
+        let mut model = FakeModel::new(0.9);
+        resolve_person(&[FaceBox { x: 0.4, y: 0.86, w: 0.06, h: 0.09, score: Some(0.9) }], (1600, 1200), &mut model).unwrap();
+        assert_eq!(model.seen[0].len(), 1);
+    }
+
+    #[test]
+    fn people_are_merged_and_the_smallest_faces_beyond_the_cap_are_left_out_and_said() {
+        let faces: Vec<FaceBox> = (0..8).map(|i| FaceBox { x: 0.05 + i as f32 * 0.11, y: 0.2, w: 0.05 + 0.001 * (8 - i) as f32, h: 0.08, score: Some(0.9) }).collect();
+        let mut model = FakeModel::new(0.9);
+        let r = resolve_person(&faces, (1600, 1200), &mut model).unwrap();
+        assert_eq!(model.seen.len(), PERSON_MAX);
+        assert_eq!(r.outcome, Outcome::Check);
+        assert!(r.reason.as_deref().unwrap().contains("2 more face(s) beyond the 6 largest"));
+        let l = decode(r.mask.as_ref().unwrap());
+        assert!(at(&l, 0.05 + 0.025, 0.6) > 1.0 && at(&l, 0.05 + 0.11 * 3.0 + 0.025, 0.6) > 1.0, "two of the merged people");
+    }
+
+    #[test]
+    fn a_cut_the_model_is_unsure_of_is_not_merged_and_nothing_found_says_why() {
+        let mut model = FakeModel::new(0.4);
+        let r = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        assert!(r.reason.as_deref().unwrap().contains("not sure"));
+        assert!(r.mask.is_none());
+    }
+
+    #[test]
+    fn no_usable_face_is_not_found_without_asking_the_model() {
+        let mut model = FakeModel::new(0.9);
+        let r = resolve_person(&[], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        let tiny = FaceBox { x: 0.5, y: 0.5, w: 0.005, h: 0.007, score: Some(0.9) };
+        let r = resolve_person(&[tiny], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        assert!(model.seen.is_empty());
+    }
+
+    #[test]
+    fn a_model_failure_reaches_the_caller_unchanged() {
+        let mut model = FakeModel::new(0.9);
+        model.fail = true;
+        assert_eq!(resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut model).err().as_deref(), Some("the click-select model is not installed"));
+    }
+
+    #[test]
+    fn a_mask_over_most_of_the_frame_is_flagged() {
+        let mut model = FakeModel::new(0.9);
+        model.half = 0.45;
+        let r = resolve_person(&[big_face(0.45, 0.05)], (1600, 1200), &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::Check);
+        assert!(r.reason.as_deref().unwrap().contains("covers over 85 %"));
+    }
+
+    #[test]
+    fn decode_logits_undoes_encode_logits() {
+        let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
+        logits[RASTER * 10 + 20] = LOGIT_RANGE;
+        logits[RASTER * 11 + 20] = 0.0;
+        let back = decode_logits(&encode_logits(&logits)).unwrap();
+        assert!((back[RASTER * 10 + 20] - LOGIT_RANGE).abs() < 0.05);
+        assert!((back[RASTER * 11 + 20]).abs() < 0.05);
+        assert!((back[0] + LOGIT_RANGE).abs() < 0.05);
+        assert!(decode_logits("not base64!").is_err());
     }
 
     /// Evaluation harness, not a regression test: `EMULSION_ADAPTIVE_EVAL_IN=<dir of photos> EMULSION_ADAPTIVE_EVAL_OUT=<dir>
@@ -639,6 +995,94 @@ mod tests {
         let l = decode(&r.mask.unwrap());
         assert!(at(&l, 0.5, 0.1) > 3.0);
         assert!(at(&l, 0.5, 0.8) < -3.0);
+    }
+
+    /// A stand-in model that cuts "the sky" as everything above `edge` (a share of the frame's height).
+    struct SkyModel {
+        edge: f32,
+        iou: f32,
+        fail: bool,
+        seen: Vec<Vec<(f32, f32, bool)>>,
+    }
+    impl ClickModel for SkyModel {
+        fn cut(&mut self, clicks: &[(f32, f32, bool)]) -> Result<Cut, String> {
+            if self.fail {
+                return Err("helper died".to_string());
+            }
+            self.seen.push(clicks.to_vec());
+            let logits = (0..RASTER * RASTER).map(|i| if ((i / RASTER) as f32 + 0.5) / (RASTER as f32) < self.edge { LOGIT_RANGE } else { -LOGIT_RANGE }).collect();
+            Ok(Cut { iou: self.iou, logits })
+        }
+    }
+
+    fn sky_over_ground() -> RgbImage {
+        let mut seed = 7u32;
+        RgbImage::from_fn(300, 200, |_, y| if y < 80 { Rgb([60 + (y / 4) as u8, 120 + (y / 4) as u8, 220]) } else { Rgb([noise(&mut seed), noise(&mut seed), noise(&mut seed)]) })
+    }
+
+    #[test]
+    fn a_model_that_agrees_with_the_colour_rule_makes_the_sky_found_and_its_cut_the_mask() {
+        let mut model = SkyModel { edge: 0.42, iou: 0.9, fail: false, seen: Vec::new() };
+        let r = resolve_sky_with_model(&sky_over_ground(), &mut model);
+        assert_eq!(r.outcome, Outcome::Found, "{r:?}");
+        assert!(r.reason.is_none());
+        assert!((r.coverage - 0.42).abs() < 0.02, "the model's own coverage: {}", r.coverage);
+        let clicks = &model.seen[0];
+        let (pos, neg): (Vec<&(f32, f32, bool)>, Vec<&(f32, f32, bool)>) = clicks.iter().partition(|c| c.2);
+        assert_eq!(pos.len(), 3, "one positive per band of columns: {clicks:?}");
+        assert!(pos.iter().all(|c| c.1 < 0.4), "positives are in the sky");
+        assert_eq!(neg.len(), 1);
+        assert!(neg[0].1 > 0.75, "the negative is in the lowest quarter: {neg:?}");
+    }
+
+    #[test]
+    fn close_inside_fills_small_holes_and_keeps_the_outline() {
+        let mut l = vec![-LOGIT_RANGE; RASTER * RASTER];
+        for y in 0..100 {
+            for x in 0..RASTER {
+                l[y * RASTER + x] = LOGIT_RANGE;
+            }
+        }
+        for (x, y) in [(50, 40), (51, 40), (52, 41), (120, 60), (121, 61), (122, 61), (200, 10)] {
+            l[y * RASTER + x] = -LOGIT_RANGE; // a scatter of 1-3 texel holes
+        }
+        let closed = close_inside(&l, SKY_CLOSE_RADIUS);
+        for (x, y) in [(50, 40), (51, 40), (52, 41), (120, 60), (121, 61), (200, 10)] {
+            assert!(closed[y * RASTER + x] > 0.0, "hole at ({x},{y}) closed");
+        }
+        assert!(closed[150 * RASTER + 128] < -3.0, "far below the sky stays outside");
+        assert!(closed[60 * RASTER + 128] > 3.0, "the sky stays inside");
+        assert!(closed[104 * RASTER + 128] < 0.0, "the lower edge did not creep down (4 texels below it)");
+    }
+
+    #[test]
+    fn a_model_that_outlines_the_sky_differently_is_flagged_with_the_overlap() {
+        let mut model = SkyModel { edge: 0.75, iou: 0.9, fail: false, seen: Vec::new() };
+        let r = resolve_sky_with_model(&sky_over_ground(), &mut model);
+        assert_eq!(r.outcome, Outcome::Check);
+        assert!(r.reason.as_deref().unwrap().contains("outline the sky differently"), "{r:?}");
+        assert!((r.coverage - 0.75).abs() < 0.02, "the mask is still the model's");
+    }
+
+    #[test]
+    fn an_unsure_or_failing_model_leaves_the_colour_rule_result_alone() {
+        let plain = resolve_sky(&sky_over_ground());
+        for (iou, fail) in [(0.5, false), (0.9, true)] {
+            let mut model = SkyModel { edge: 0.42, iou, fail, seen: Vec::new() };
+            let r = resolve_sky_with_model(&sky_over_ground(), &mut model);
+            assert_eq!(r.outcome, plain.outcome);
+            assert_eq!(r.reason, plain.reason);
+            assert_eq!(r.coverage, plain.coverage);
+        }
+    }
+
+    #[test]
+    fn no_sky_for_the_colour_rule_means_the_model_is_not_asked() {
+        let mut seed = 3u32;
+        let all_texture = RgbImage::from_fn(240, 160, |_, _| Rgb([noise(&mut seed), noise(&mut seed), noise(&mut seed)]));
+        let mut model = SkyModel { edge: 0.4, iou: 0.9, fail: false, seen: Vec::new() };
+        assert_eq!(resolve_sky_with_model(&all_texture, &mut model).outcome, Outcome::NotFound);
+        assert!(model.seen.is_empty());
     }
 
     #[test]

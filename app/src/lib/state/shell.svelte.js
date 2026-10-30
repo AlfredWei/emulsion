@@ -10,6 +10,11 @@ import { getStoredShortcuts } from "$lib/shortcuts.js";
 import {
   getStoredPanelWidths,
   saveStoredPanelWidths,
+  getStoredFilmstripHeight,
+  saveStoredFilmstripHeight,
+  FILMSTRIP_MIN_HEIGHT,
+  FILMSTRIP_MAX_HEIGHT,
+  FILMSTRIP_DEFAULT_HEIGHT,
   clamp as clampPanelWidth,
   HISTORY_PANEL_MIN_WIDTH,
   HISTORY_PANEL_MAX_WIDTH,
@@ -26,6 +31,7 @@ const PHOTO_DRAG_THRESHOLD = 4;
  * @typedef {{ imageIds: number[], pointer: { x: number, y: number } } | null} PhotoDragState
  * @typedef {Object} ShellInitial
  * @property {{ history: number, develop: number }} panelWidths
+ * @property {number=} filmstripHeight
  * @property {Record<string, string>} shortcuts
  */
 
@@ -40,6 +46,10 @@ export class ShellStore {
    * persisted across sessions -- see panelLayout.js. */
   panelWidths = $state(/** @type {{ history: number, develop: number }} */ ({ history: 0, develop: 0 }));
   panelResizeState = $state(/** @type {PanelResizeState} */ (null));
+  /** The filmstrip's height in px, drag-resizable by its top edge and persisted -- see panelLayout.js. */
+  filmstripHeight = $state(FILMSTRIP_DEFAULT_HEIGHT);
+  /** @type {{ startY: number, startHeight: number } | null} */
+  filmstripResizeState = $state(null);
   shortcuts = $state(/** @type {Record<string, string>} */ ({}));
   /** A photo drag toward the world map (M5.5), non-null only once the pointer has actually moved past
    * `PHOTO_DRAG_THRESHOLD` -- see the pointer handlers below for why this can't be native HTML5
@@ -55,6 +65,7 @@ export class ShellStore {
   /** @param {ShellInitial} initial */
   constructor(initial) {
     this.panelWidths = initial.panelWidths;
+    this.filmstripHeight = initial.filmstripHeight ?? FILMSTRIP_DEFAULT_HEIGHT;
     this.shortcuts = initial.shortcuts;
   }
 
@@ -99,6 +110,39 @@ export class ShellStore {
     }
     if (this.panelResizeState) saveStoredPanelWidths(this.panelWidths);
     this.panelResizeState = null;
+  };
+
+  // The filmstrip grows upward: dragging its top edge up (smaller clientY) makes it taller. Same pointer-capture
+  // skeleton as the panel resize above; a double-click on the edge puts the default height back.
+  handleFilmstripResizePointerDown = (/** @type {PointerEvent} */ e) => {
+    e.preventDefault();
+    this.filmstripResizeState = { startY: e.clientY, startHeight: this.filmstripHeight };
+    try {
+      /** @type {HTMLElement} */ (e.currentTarget).setPointerCapture(e.pointerId);
+    } catch {
+      // Non-fatal -- see DevelopCanvas's crop-handle drag for why.
+    }
+  };
+
+  handleFilmstripResizePointerMove = (/** @type {PointerEvent} */ e) => {
+    if (!this.filmstripResizeState) return;
+    const { startY, startHeight } = this.filmstripResizeState;
+    this.filmstripHeight = clampPanelWidth(startHeight + (startY - e.clientY), FILMSTRIP_MIN_HEIGHT, FILMSTRIP_MAX_HEIGHT);
+  };
+
+  handleFilmstripResizePointerUp = (/** @type {PointerEvent} */ e) => {
+    try {
+      /** @type {HTMLElement} */ (e.currentTarget).releasePointerCapture(e.pointerId);
+    } catch {
+      // Non-fatal -- see DevelopCanvas's crop-handle drag for why.
+    }
+    if (this.filmstripResizeState) saveStoredFilmstripHeight(this.filmstripHeight);
+    this.filmstripResizeState = null;
+  };
+
+  handleFilmstripResizeReset = () => {
+    this.filmstripHeight = FILMSTRIP_DEFAULT_HEIGHT;
+    saveStoredFilmstripHeight(this.filmstripHeight);
   };
 
   // Dragging a Filmstrip photo onto the world map (M5.5, RFC-0007): plain pointer events, not native
@@ -165,4 +209,4 @@ export function createShellStore(initial) {
   return new ShellStore(initial);
 }
 
-export const shell = createShellStore({ panelWidths: getStoredPanelWidths(), shortcuts: getStoredShortcuts() });
+export const shell = createShellStore({ panelWidths: getStoredPanelWidths(), shortcuts: getStoredShortcuts(), filmstripHeight: getStoredFilmstripHeight() });

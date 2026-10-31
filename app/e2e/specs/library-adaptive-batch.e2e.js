@@ -46,9 +46,16 @@ describe("Library: apply an adaptive preset to the selection (RFC-0035 B3)", fun
 
   it("the dialog asks for Amount, then reports every selected photo and matches what was written", async function () {
     const ids = state.imgs.map((/** @type {any} */ i) => i.version_id);
-    await clickCell(ids[0]);
-    await clickCell(ids[1], { metaKey: true, ctrlKey: true });
-    await clickCell(ids[2], { metaKey: true, ctrlKey: true });
+    // Right after the reload the grid is still filling in (thumbnails, the import's refreshes), and a refresh in the
+    // middle of the three clicks drops the selection on slow runners (CI macOS saw "1 photo" and "2 photos"): select
+    // again until all three cells show as selected.
+    await waitFor(async () => {
+      await clickCell(ids[0]);
+      await clickCell(ids[1], { metaKey: true, ctrlKey: true });
+      await clickCell(ids[2], { metaKey: true, ctrlKey: true });
+      await new Promise((r) => setTimeout(r, 500));
+      return browser.execute((list) => list.every((/** @type {number} */ vid) => document.querySelector(`[data-ctx-photo="${vid}"]`)?.classList.contains("selected")), ids);
+    }, "all three photos selected");
     await browser.execute(() => {
       const sel = /** @type {HTMLSelectElement} */ (document.querySelector(".adaptive-select"));
       sel.value = "cool-shadows";

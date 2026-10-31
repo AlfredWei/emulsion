@@ -264,6 +264,8 @@ const PERSON_SURE_IOU: f32 = 0.7;
 /// The torso click sits this many face-heights below the face centre.
 const PERSON_TORSO_DROP: f32 = 2.0;
 const PERSON_TORSO_LIMIT: f32 = 0.97;
+/// The nearer retry click: about one face-height below the face centre is the chest of a bust-length portrait.
+const PERSON_CHEST_DROP: f32 = 1.0;
 const PERSON_MIN_COVERAGE: f32 = 0.01;
 /// Single subjects that looked right covered 6-38 % of the frame; the one flood (an old cabinet card: the cut took the
 /// whole mount, rated 0.92) covered 67 %. A real close-up can pass 60 % too (61 % on one photograph), so this only asks
@@ -302,7 +304,19 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
         if torso < PERSON_TORSO_LIMIT {
             clicks.push((cx, torso, true));
         }
-        let cut = model.cut(&clicks)?;
+        let mut cut = model.cut(&clicks)?;
+        // On a bust-length portrait (a cabinet card, a passport crop) the torso click can land on the mount or the frame, not on the
+        // person: the model is then only moderately sure (0.65 where the cuts that looked right were 0.90 and up). Try a nearer
+        // chest click and keep whichever cut the model rates higher. (The face alone is no use: it cuts just the face, rated 0.92.)
+        if clicks.len() > 1 && cut.iou < PERSON_SURE_IOU {
+            let near = [clicks[0], (cx, cy + PERSON_CHEST_DROP * f.h, true)];
+            if let Ok(chest) = model.cut(&near) {
+                trace(&format!("person chest_click iou={:.3} cut_coverage={:.3} (two clicks {:.3})", chest.iou, coverage_of(&chest.logits), cut.iou));
+                if chest.iou > cut.iou {
+                    cut = chest;
+                }
+            }
+        }
         trace(&format!(
             "person face=({:.3},{:.3},{:.3}x{:.3}) score={} torso_click={} iou={:.3} cut_coverage={:.3}",
             f.x, f.y, f.w, f.h, f.score.map_or("?".to_string(), |s| format!("{s:.3}")), clicks.len() > 1, cut.iou, coverage_of(&cut.logits)
@@ -813,6 +827,36 @@ mod tests {
         assert_eq!(resolve_person(&group, (1600, 1200), &mut FakeModel::new(0.9)).unwrap().outcome, Outcome::Found);
         // A face row from before scores were kept (None) is never held against it.
         assert_eq!(at(FaceBox { score: None, ..big_face(0.4, 0.2) }).outcome, Outcome::Found);
+    }
+
+    /// Rates its cuts in the order they are asked for: the first is the face and torso, the second the nearer chest click.
+    struct ByCall {
+        rates: Vec<f32>,
+        calls: Vec<Vec<(f32, f32, bool)>>,
+    }
+    impl ClickModel for ByCall {
+        fn cut(&mut self, clicks: &[(f32, f32, bool)]) -> Result<Cut, String> {
+            let rate = self.rates[self.calls.len().min(self.rates.len() - 1)];
+            self.calls.push(clicks.to_vec());
+            FakeModel::new(rate).cut(clicks)
+        }
+    }
+
+    #[test]
+    fn a_moderately_sure_two_click_cut_is_retried_with_a_nearer_chest_click_and_the_surer_cut_kept() {
+        let face = [big_face(0.4, 0.2)];
+        let mut spoiled = ByCall { rates: vec![0.65, 0.92], calls: Vec::new() };
+        let r = resolve_person(&face, (1600, 1200), &mut spoiled).unwrap();
+        assert_eq!(spoiled.calls.len(), 2);
+        let (far, near) = (spoiled.calls[0][1], spoiled.calls[1][1]);
+        assert!(near.1 < far.1 && (near.1 - (0.245 + 0.09)).abs() < 1e-4, "the retry clicks one face-height below the face centre: {near:?}");
+        assert_eq!(r.outcome, Outcome::Found, "the chest-click cut was sure: {r:?}");
+        let mut worse = ByCall { rates: vec![0.65, 0.5], calls: Vec::new() };
+        let r = resolve_person(&face, (1600, 1200), &mut worse).unwrap();
+        assert_eq!(r.outcome, Outcome::Check, "the first cut stays when it is the better one: {r:?}");
+        let mut sure = ByCall { rates: vec![0.9, 0.95], calls: Vec::new() };
+        resolve_person(&face, (1600, 1200), &mut sure).unwrap();
+        assert_eq!(sure.calls.len(), 1, "a sure cut costs no second decode");
     }
 
     #[test]

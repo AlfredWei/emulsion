@@ -114,16 +114,18 @@ pub async fn resolve_adaptive_region(
                 let mut model = prepare_model(helper.clone(), &dir, content_hash, &preview.path)?;
                 adaptive_regions::trace(&format!("photo {path}"));
                 let by_face = adaptive_regions::resolve_person(&faces, (preview.width, preview.height), &mut model)?;
-                if by_face.outcome != Outcome::NotFound {
-                    return Ok(by_face);
-                }
-                // Nobody with a usable face: look for people by their shape (RFC-0037). Without the detector model, or if it
+                // The detector is a second look (RFC-0037): for a photograph with no usable face it is the only way to find
+                // anyone; for one with faces it may add the people the faces missed. Without the detector model, or if it
                 // fails, the face-only answer stands.
                 match detect_people(&helper, &dir, &preview.path) {
                     Ok(people) => {
                         adaptive_regions::trace(&format!("person detector found {} candidate(s)", people.len()));
-                        let by_shape = adaptive_regions::resolve_person_by_detection(&people, &mut model)?;
-                        Ok(if by_shape.outcome == Outcome::NotFound { by_face } else { by_shape })
+                        if by_face.outcome == Outcome::NotFound {
+                            let by_shape = adaptive_regions::resolve_person_by_detection(&people, &mut model)?;
+                            Ok(if by_shape.outcome == Outcome::NotFound { by_face } else { by_shape })
+                        } else {
+                            Ok(adaptive_regions::add_people_by_detection(by_face.clone(), &people, &faces, (preview.width, preview.height), &mut model).unwrap_or(by_face))
+                        }
                     }
                     Err(e) => {
                         adaptive_regions::trace(&format!("person detector unavailable: {e}"));

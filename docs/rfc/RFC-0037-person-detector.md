@@ -1,70 +1,94 @@
 # RFC-0037: Finding people who show no usable face (M7 adaptive tone, `person` region)
 
-- Status: **Draft, 2026-10-31. Nothing built. Awaiting a go / no-go (§7).** The measurements in §2 were taken on local photographs with the trace hook (`EMULSION_ADAPTIVE_TRACE`); the figures about candidate models in §4 come from web search results and are marked where they were not confirmed.
+- Status: **Draft, 2026-10-31. Models compared on COCO val2017 (§3); nothing built in the app. Awaiting a go / no-go (§8).** The comparison ran offline in Python, with no app launches; the scripts are in [RFC-0037-appendix](RFC-0037-appendix/). Model sizes were measured on the downloaded files. Licences are taken from the Hugging Face model cards (Apache-2.0) and still need a check against each upstream repository's LICENSE file.
 - Companion documents: [RFC-0033](RFC-0033-adaptive-tone-presets.md) §3.1 (the face-to-click design this extends), [RFC-0035](RFC-0035-region-bound-presets.md) (region-bound presets), [PROGRESS.md](../../PROGRESS.md) (entries of 2026-10-30 and 2026-10-31)
 
 ## 1. Problem
 
 The `person` region finds people **from their faces**: the stored face box becomes a click on the face and one on the torso, and the click-select model (SAM 2 Tiny) cuts each person. A photograph where nobody shows a usable face (seen from behind, a silhouette, a head turned away, a crowd of tiny faces under the 24 px floor) returns `not_found`. "Lift people" then does nothing, which is the honest answer, but it is a gap for landscapes with a figure, street and event photographs.
 
-## 2. How big is the gap (measured 2026-10-31)
+## 2. How big is the gap on our own photographs (2026-10-31)
 
-On the 40 portraits and crowds of `mask_training/people_eval_hires` (the person region traced end to end), ten photographs were `not_found`. Looked at one by one:
+On the 40 portraits and crowds of `mask_training/people_eval_hires`, ten photographs were `not_found`. Looked at one by one, **two of 40** are real misses (28, a tiny silhouette on a beach; 24, a tiny crowd); the others are correct (a card back, cats and a dog), arguable (a child behind a teddy bear) or face / model problems. That set has almost no people seen from behind, so it cannot size the problem. §3 measures it on a larger public set instead.
 
-| Photograph | Why `not_found` | A real miss? |
-|---|---|---|
-| 03 | the back of a cabinet card, no person | no (correct) |
-| 31, 32, 37 | cats and a dog | no (correct) |
-| 35 | a child hidden behind a teddy bear | arguable |
-| 21, 11 | faces found but under the model's confidence | no (a face problem, not this one) |
-| 23 | a basketball game, the model is unsure of the one face | no (a model problem) |
-| 28 | a tiny silhouette walking on a beach | **yes** |
-| 24 | a tiny crowd in front of a building | **yes** |
+Two cheap answers were tried and rejected: a blind click trusting the click-select model's confidence (it was confident and wrong for the sky, IoU 0.86-0.98 for right and wrong alike), and lowering the face detector's score (it already fires on a dog, teddy bears and a statue at 0.71-0.80).
 
-So **two of 40 photographs** are real misses, and **the set contains almost no people seen from behind**, which is exactly the case this RFC is about. The evidence is too thin to size the problem; it shows only that the cases exist. Building the evaluation set (§6) is the first step whatever is decided.
+## 3. Measured: which detector, and how to cut from its box
 
-Two experiments argue against the cheap answers:
+**Set.** COCO val2017, 700 images, each person with a COCO box and mask. A person is *faceless* when the app's face detector (the numpy port of YuNet, with the app's 24 px floor at a 1600 px frame) finds no face centred in the upper half of the person's box, and the person is at least 8 % of the frame tall. 300 images have no kept face at all (the app answers `not_found` today), 200 have a face elsewhere plus a faceless person, 200 have no person (half animals and toys). That is 1,248 faceless target persons; by height 438 / 406 / 265 / 139 for 8-15 / 15-30 / 30-60 / over 60 % of the frame. All Flickr licences are used: this is a local evaluation, nothing is trained, shipped or redistributed; the licence id is kept per image so a run on the permissive subset (ids 4, 7, 8) is possible. COCO images are about 640 px, smaller than the app's 1600 px preview, which makes small figures harder than they would be in the app.
 
-- **No model, a blind click** (tried for the sky, 2026-10-31, rejected): clicking where a region is expected and trusting the click-select model's confidence does not work; it was confident and wrong (the branches, not the sky; 0.86-0.98 for right and wrong alike). The same would happen for a person.
-- **Face detector scores** cannot be lowered to find more people: the detector already fires on a dog, teddy bears and a statue at 0.71-0.80 (kept now as `faces.score`).
+**Detectors** (20 scored; every file or weight set under the 200 MB target). `found` is the share of faceless persons detected (box IoU 0.5) at the lowest threshold that flags at most 10 % of the person-free images; `ms` is per image (torch models on the Apple GPU, YOLOX on the ONNX Runtime CPU: indicative, not in-app numbers).
 
-## 3. Code facts (read 2026-10-31)
+| Model | Licence (card) | Size | ms | AP50 | found | 8-15 % tall |
+|---|---|---|---|---|---|---|
+| D-FINE medium | Apache-2.0 | 79 MB | 73 | 0.879 | **0.95** | 0.91 |
+| RT-DETRv2 r50 | Apache-2.0 | 172 MB | 119 | 0.887 | 0.94 | 0.90 |
+| Faster R-CNN v2 (torchvision) | BSD-3 | 175 MB | 275 | 0.884 | 0.94 | 0.90 |
+| D-FINE small | Apache-2.0 | **42 MB** | 48 | 0.860 | 0.93 | 0.87 |
+| RT-DETRv2 r18 | Apache-2.0 | 81 MB | 57 | 0.866 | 0.92 | 0.88 |
+| YOLOX-m | Apache-2.0 | 101 MB | 252 | 0.867 | 0.92 | 0.87 |
+| Mask R-CNN v2 (torchvision) | BSD-3 | 185 MB | 375 | 0.881 | 0.92 | 0.89 |
+| YOLOX-s | Apache-2.0 | 36 MB | 107 | 0.826 | 0.88 | 0.82 |
+| YOLOX-tiny | Apache-2.0 | 20 MB | 33 | 0.760 | 0.82 | 0.72 |
+| YOLOX-nano | Apache-2.0 | 3.7 MB | 16 | 0.684 | 0.75 | 0.59 |
+| SSDlite320 MobileNetV3 | BSD-3 | 14 MB | 79 | 0.471 | 0.65 | 0.37 |
+
+The remaining nine (RT-DETR r18 / r34 / r50, YOLOX-l, YOLOS tiny / small, RetinaNet v2, FCOS, Faster R-CNN MobileNetV3) fall between these rows (found 0.82-0.94); the full output is reproducible with the appendix scripts. DETR ResNet-50 (167 MB) was not scored: it needs `timm`, which was installed too late to run it.
+
+- **The nano-class models from the first draft of this RFC lose clearly**: YOLOX-nano finds 75 %, and only 59 % of the small figures, where the 200 MB budget buys D-FINE at 93-95 %.
+- **Detection is not the limit; D-FINE small, D-FINE medium and RT-DETRv2 r18 cut the same.** Their SAM cuts are within a point of each other, so the choice is size and speed.
+- **ONNX:** D-FINE medium exports to a 78.6 MB ONNX (opset 17, fixed 640 x 640 input) whose output matches the torch model exactly on real photographs, so it can run in the AI helper's ONNX Runtime. The first comparison on random noise looked wrong only because the decoder's top-k picks differ on ties. CPU timing in the helper was not measured cleanly (the machine was busy).
+
+**From box to mask.** The detector box goes to SAM 2 Tiny (the app's own preprocessing and decoder, ONNX Runtime), scored against the COCO mask on the faceless persons that were detected (D-FINE small, score at least 0.5, 869 persons):
+
+| Prompt | IoU at least 0.7 | IoU at least 0.5 | mean IoU |
+|---|---|---|---|
+| one click, middle of the box | 0.46 | 0.61 | 0.56 |
+| two clicks, 35 % and 65 % of the height (today's face-based style) | 0.65 | 0.82 | 0.68 |
+| **the box itself** (SAM 2 box prompt: two corner points, labels 2 and 3) | **0.82** | **0.97** | **0.80** |
+| box plus a click in the middle | 0.81 | 0.95 | 0.79 |
+
+The box prompt is clearly the best and needs a small protocol change: `Prompt` carries a `positive` flag only, so it needs a label (positive, negative, box corner 1, box corner 2).
+
+**SAM's own confidence cannot reject a wrong detection.** At the app's gate (predicted IoU 0.6), 91 % of the cuts of real people pass but so do 80-88 % of the cuts of false detections (with the box prompt 100 % and 99 %). A detection that is not a person is cut as confidently as one that is. **The detector's own score has to be the gate.**
+
+**Combined estimate (D-FINE small, detector score 0.4, box prompt).** Faceless persons detected: 0.87 (0.80 / 0.87 / 0.95 / 0.95 by size). The cut statistics above were taken at detector score 0.5, so this is approximate at 0.4. Of the detected ones, 0.82 get a mask at IoU 0.7 or better and 0.97 at IoU 0.5 or better, so about **0.71 of all faceless people get a mask at IoU 0.7 (0.84 at IoU 0.5)**. Person-free photographs flagged: **4.0 %** (animals and toys 4.0 %); at score 0.5 it is 1.5 % with 0.81 found. D-FINE medium at 0.5: 0.85 found, 5.0 % flagged. This meets the §7 bar (at least 70 % usable, at most 1 in 10 flagged) **on COCO**, with IoU 0.7 as the strict reading of "usable"; it has not yet been shown on our own photographs.
+
+## 4. Code facts (read 2026-10-31)
 
 - `adaptive_regions::resolve_person(boxes, frame, model)` takes `FaceBox` rows and a `ClickModel`; every person is one face-and-torso cut. It has no other source of people.
-- The click-select protocol (`ai/protocol.rs`: `SegmentPrepare`, `SegmentDecode`) carries **point prompts only** (`Prompt { x, y, positive }`). SAM 2's decoder takes a box prompt too, but nothing here sends one; using it needs a protocol and helper change.
-- Two inference runtimes exist: `tract-onnx` in the Rust core (the face detector, ADR-0007) and `ort` (ONNX Runtime) in the AI helper process (SAM, NAFNet, Real-ESRGAN).
+- The click-select protocol (`ai/protocol.rs`: `SegmentPrepare`, `SegmentDecode`) carries **point prompts only** (`Prompt { x, y, positive }`). SAM 2's decoder takes box corners as points with labels 2 and 3 and the helper already feeds `point_labels`, so the change is a label field in `Prompt` and in `pack_prompts` (and no padding point when a box is present).
+- Two inference runtimes exist: `tract-onnx` in the Rust core (the face detector, ADR-0007) and `ort` (ONNX Runtime) in the AI helper (SAM, NAFNet, Real-ESRGAN). A transformer-decoder detector belongs in the helper.
 - Models: three are bundled today (`sam2_hiera_tiny` 155 MB, `nafnet_sidd_w32` 117 MB, `realesr_general_x4v3` 4.9 MB), listed in `models/bundled-models.json`, seeded on first launch.
 
-## 4. Alternatives
+## 5. Alternatives
 
-1. **Leave as is.** Honest `not_found`, no new model, the user selects the person by hand (Select Subject) after the report says "not found". Cost: none. Recommended unless the evaluation set (§6) shows the gap is large.
-2. **A COCO person detector in the AI helper**, giving person boxes; each box goes to the click-select model (centre and torso clicks inside the box, or a box prompt after a protocol change); boxes that overlap an existing face-based person are dropped.
-   - **YOLOX-Nano** (Megvii, Apache-2.0): about 0.91 M parameters, 416 px input, 25.3-25.8 mAP on COCO; an ONNX export is reported at about 3.5 MB (**unconfirmed**: a third-party listing; the official weights are `.pth`, so the export would be ours to produce and to check).
-   - **NanoDet-Plus-m** (RangiLyu): 30.4 mAP at 416 px, 1.17 M parameters, about 2.3 MB at FP16; has an ONNX export script. **Licence unconfirmed from upstream** (only a fork's metadata said Apache-2.0); read the upstream LICENSE first.
-   - **YOLOv8 / Ultralytics: rejected**, AGPL-3.0, which a closed or MIT-licensed distribution cannot take on without a separate commercial licence.
-   - Costs: a new model file and its licence and attribution, a second inference per photograph (tens of milliseconds for a nano model; not measured here), the risk of a person detected with no good cut (the same "moderately sure" band as now), and a failure mode on small figures (a nano detector is weak under about 32 px).
-3. **Pose or body-part keypoints** (to click on the torso accurately): more accuracy for the torso click, but a bigger model, and the detector alone does not need it. Not pursued.
-4. **SAM automatic mask generation** (a grid of clicks, keep person-like shapes): needs a classifier to say which cuts are people, so it needs a second model anyway, and a grid is many decodes. Rejected for cost.
+1. **Leave as is.** Honest `not_found`; the user selects the person by hand. Cost: none. The measured gap on COCO (§3) is not small: of the people the face path cannot see, about 70 % could get a usable mask.
+2. **A COCO person detector in the AI helper, boxes cut with a SAM box prompt (recommended if go).** D-FINE small (42 MB) or medium (79 MB); RT-DETRv2 r18 (81 MB) is an equal alternative on quality.
+3. **YOLOX / NanoDet nano models** (the draft's first candidates): rejected by §3, too weak on small figures.
+4. **YOLOv8 / Ultralytics: rejected**, AGPL-3.0.
+5. **Mask R-CNN as detector and cutter in one** (185 MB): not better (found 0.92) and bigger than D-FINE plus SAM, which is already installed.
+6. **Pose keypoints, SAM automatic masks:** more cost, no measured need.
 
-## 5. Proposal (if the answer to §7 is go)
+## 6. Proposal (if the answer to §8 is go)
 
-Alternative 2 with the smallest change set, behind the same trace hook so thresholds come from measurement as the face-based ones did (RFC-0035 §8):
+- The AI helper gets a `detect_people` request returning boxes with scores (D-FINE, fixed 640 x 640 squashed input, sigmoid on the person logit, score floor 0.4). The model follows the Select Subject download flow, or is bundled if the choice is the 42 MB small one.
+- `SegmentDecode` accepts box prompts (label field on `Prompt`).
+- `resolve_person` gains a second source: detector boxes without an overlapping face-based person (IoU of the box with the face-based cut over 0.3 drops it). Each is cut with the box prompt; boxes the cut covers under 1 % of the frame are dropped, as for faces.
+- **Never `found` from a detector box alone at first**: a person with no face is reported as `check` ("found without a face"), because SAM's confidence cannot tell a wrong detection from a right one. The detector's score is the only gate (§3).
+- A photograph with faces never calls the detector unless the face path leaves the frame with a large uncovered person; the first version calls it only when the face path returns `not_found`, so the common case costs nothing.
+- Face-based behaviour and its tests stay as they are. Thresholds come from the trace hook (`EMULSION_ADAPTIVE_TRACE`) on our own photographs, as for the face-based ones.
 
-- The AI helper gets a `detect_people` request returning boxes with scores (`score >= 0.5`, non-max suppressed). The model is bundled like the others only if its size stays in the single megabytes; otherwise it follows the Select Subject download flow.
-- `resolve_person` gains a second source: person boxes without an overlapping face-based person (IoU of the box with the face-based cut over 0.3 drops it). Each becomes a centre click and a click at the lower-middle of the box, cut by the same `ClickModel`; the same confidence band (`PERSON_MIN_IOU`, `PERSON_SURE_IOU`) applies.
-- **Never `found` from a detector box alone at first**: a person with no face is reported as `check` ("found without a face"), as the model-only sky would have been, until the evaluation set shows the rate of wrong cuts.
-- Face-based behaviour and its tests stay as they are; a photograph with faces never calls the detector (no new cost for the common case).
+## 7. Evaluation still to do before the code is trusted
 
-## 6. Evaluation before any code
+COCO is a proxy: small images, a public benchmark the detectors were trained on the train split of. Before shipping: run the same thing on our own photographs, about 30 people seen from behind, in silhouette or small in a landscape plus 20 with no person (freely licensed, like the existing sets), by eye on a contact sheet, in one app launch. Success: at least 70 % of the people found with a mask worth keeping, at most 1 in 10 no-person photographs flagged (COCO estimate: 71 % and 4 %). The two real misses of §2 (28 and 24) are the first cases to look at: the smoke test finds the beach silhouette at 0.91-0.99 and 21-34 people in the tiny crowd.
 
-A set that does not exist yet: roughly 30 photographs with people **seen from behind, in silhouette, turned away, small in a landscape, and in crowds**, plus 20 with no person (landscapes, animals, statues, mannequins, posters), from freely licensed sources like the existing sets, each with a person yes/no and, for the yes ones, a hand-checked mask or at least a pass/fail by eye on a contact sheet. Success means: at least 70 % of the people found with a mask worth keeping, and at most 1 in 10 of the no-person photographs getting a `check`. The same harness (`develop-adaptive-eval.e2e.js`, one launch for the whole set) is used; it opens the app once per run.
+## 8. Decisions needed from the user
 
-## 7. Decisions needed from the user
-
-1. **Go or no-go on a person detector at all.** Recommendation: **build the set first (§6); decide with its numbers.** Without it the case for a new model is two photographs.
-2. If go: **YOLOX-Nano or NanoDet-Plus** (licences to be confirmed first, §4), and whether the detector is **bundled or downloaded**.
+1. **Go or no-go on a person detector.** The comparison removed the doubt about feasibility; what is left is whether the feature is worth a 42-79 MB model and a protocol change. Recommendation: **go**, as `check` only, behind the §7 check on our own photographs.
+2. **Which model and how it ships:** D-FINE small (42 MB, bundled) or medium (79 MB, downloaded; 5 points more recall at the same false-alarm rate). Recommendation: small, bundled, with medium as a later upgrade.
 3. Whether a person found without a face may ever be `found`, or stays `check`.
 
-## 8. What this does not change
+## 9. What this does not change
 
 The face-based path, the face score rules (2026-10-31), the chest-click retry, and the sky are untouched. The catalog schema does not change.

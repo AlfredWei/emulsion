@@ -12,6 +12,7 @@
 //! that arrives meanwhile waits in order for the job to finish (RFC-0027 §3.4).
 
 mod denoise;
+mod detect;
 #[path = "../../ai/protocol.rs"]
 mod protocol;
 mod segment;
@@ -26,8 +27,9 @@ mod upscale_pipeline;
 mod upscale_tiling;
 
 use denoise::{DenoiseError, Denoiser};
+use detect::{DetectError, Detector};
 use protocol::{
-    Candidate, ErrorBody, Frame, HelloResult, ModelPaths, PrepareResult, Progress, Prompt, Region, Request, Response, PROTOCOL_VERSION,
+    BBox, Candidate, ErrorBody, Frame, HelloResult, ModelPaths, PersonBox, PrepareResult, Progress, Prompt, Region, Request, Response, PROTOCOL_VERSION,
 };
 use segment::{SegmentError, Segmenter};
 use upscale::{Job, UpscaleError, Upscaler};
@@ -70,10 +72,21 @@ fn segment_prepare(seg: &Segmenter, id: u64, models: &ModelPaths, content_hash: 
     }
 }
 
-fn segment_decode(seg: &Segmenter, id: u64, models: &ModelPaths, content_hash: &str, prompts: &[Prompt], refine: Option<&str>) -> Response {
-    match seg.decode(models, content_hash, prompts, refine) {
+fn segment_decode(seg: &Segmenter, id: u64, models: &ModelPaths, content_hash: &str, prompts: &[Prompt], refine: Option<&str>, bbox: Option<&BBox>) -> Response {
+    match seg.decode(models, content_hash, prompts, refine, bbox) {
         Ok(c) => ok::<Vec<Candidate>>(id, &c),
         Err(e) => fail(id, error_code(&e), e.to_string()),
+    }
+}
+
+fn detect_people(det: &Detector, id: u64, model: &std::path::Path, image_path: &std::path::Path, min_score: f32) -> Response {
+    let img = match image::open(image_path) {
+        Ok(i) => i.to_rgb8(),
+        Err(e) => return fail(id, "image", format!("could not read {}: {e}", image_path.display())),
+    };
+    match det.detect(model, &img, min_score) {
+        Ok(people) => ok::<Vec<PersonBox>>(id, &people),
+        Err(e) => fail(id, match e { DetectError::Poisoned => "internal", _ => "inference" }, e.to_string()),
     }
 }
 
@@ -181,6 +194,7 @@ fn main() {
     let seg = Segmenter::default();
     let den = Denoiser::default();
     let up = Upscaler::default();
+    let det = Detector::default();
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
@@ -204,9 +218,10 @@ fn main() {
             Ok(Frame { id, request }) => match request {
                 Request::Hello => ok(id, &HelloResult { protocol: PROTOCOL_VERSION, pid: std::process::id() }),
                 Request::SegmentPrepare { models, content_hash, image_path } => segment_prepare(&seg, id, &models, &content_hash, &image_path),
-                Request::SegmentDecode { models, content_hash, prompts, refine } => {
-                    segment_decode(&seg, id, &models, &content_hash, &prompts, refine.as_deref())
+                Request::SegmentDecode { models, content_hash, prompts, refine, bbox } => {
+                    segment_decode(&seg, id, &models, &content_hash, &prompts, refine.as_deref(), bbox.as_ref())
                 }
+                Request::DetectPeople { model, image_path, min_score } => detect_people(&det, id, &model, &image_path, min_score),
                 Request::DenoiseRun { model, image_path, out_path, region } => denoise_run(&den, id, (&model, &image_path, &out_path, region), &rx, &mut backlog),
                 Request::UpscaleRun { model, image_path, out_path, out_width, out_height, strength, jpeg_quality, region } => upscale_run(
                     &up,
@@ -221,6 +236,7 @@ fn main() {
                     seg.release();
                     den.release();
                     up.release();
+                    det.release();
                     ok(id, &serde_json::json!({}))
                 }
                 Request::Shutdown => {

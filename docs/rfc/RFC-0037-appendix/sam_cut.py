@@ -17,9 +17,9 @@ class Sam:
         x = ((x - MEAN) / STD).transpose(2, 0, 1)[None].astype(np.float32)
         o = self.enc.run(None, {"image": x})
         self.emb = {"high_res_feats_0": o[0], "high_res_feats_1": o[1], "image_embed": o[2]}
-    def cut(self, clicks):
-        pts = [[min(max(x, 0), 1) * 1024, min(max(y, 0), 1) * 1024] for x, y, _ in clicks] + [[0.0, 0.0]]
-        lab = [(1.0 if p else 0.0) if isinstance(p, bool) else float(p) for *_, p in clicks] + [-1.0]     # ints: SAM 2 labels, 2/3 = box corners
+    def cut(self, clicks, pad=True):
+        pts = [[min(max(x, 0), 1) * 1024, min(max(y, 0), 1) * 1024] for x, y, _ in clicks] + ([[0.0, 0.0]] if pad else [])
+        lab = [(1.0 if p else 0.0) if isinstance(p, bool) else float(p) for *_, p in clicks] + ([-1.0] if pad else [])     # ints: SAM 2 labels, 2/3 = box corners
         o = self.dec.run(None, {**self.emb, "point_coords": np.array([pts], np.float32), "point_labels": np.array([lab], np.float32),
                                 "mask_input": np.zeros((1, 1, 256, 256), np.float32), "has_mask_input": np.zeros(1, np.float32)})
         k = int(np.argmax(o[1][0]))

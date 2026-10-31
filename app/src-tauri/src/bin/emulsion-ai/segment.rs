@@ -25,7 +25,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::protocol::{Candidate, ModelPaths, Prompt};
+use crate::protocol::{BBox, Candidate, ModelPaths, Prompt};
 
 /// Side of the square the model sees.
 pub const MODEL_SIZE: usize = 1024;
@@ -85,18 +85,26 @@ pub fn preprocess(img: &image::RgbImage) -> Vec<f32> {
 }
 
 /// Packs prompts for the decoder: coordinates in model pixels plus labels
-/// (1 positive, 0 negative). SAM's convention for "no box prompt" appends one
-/// padding point at (0, 0) with label -1, which the reference also does.
-pub fn pack_prompts(prompts: &[Prompt]) -> (Vec<f32>, Vec<f32>) {
-    let mut coords = Vec::with_capacity((prompts.len() + 1) * 2);
-    let mut labels = Vec::with_capacity(prompts.len() + 1);
+/// (1 positive, 0 negative). A box goes first as its two corners, labels 2 (top left) and 3 (bottom right), SAM 2's own
+/// encoding (RFC-0037). SAM's convention for "no box prompt" appends one padding point at (0, 0) with label -1,
+/// which the reference also does; with a box there is none.
+pub fn pack_prompts(prompts: &[Prompt], bbox: Option<&BBox>) -> (Vec<f32>, Vec<f32>) {
+    let px = |v: f32| v.clamp(0.0, 1.0) * MODEL_SIZE as f32;
+    let mut coords = Vec::with_capacity((prompts.len() + 2) * 2);
+    let mut labels = Vec::with_capacity(prompts.len() + 2);
+    if let Some(b) = bbox {
+        coords.extend([px(b.x0.min(b.x1)), px(b.y0.min(b.y1)), px(b.x0.max(b.x1)), px(b.y0.max(b.y1))]);
+        labels.extend([2.0, 3.0]);
+    }
     for p in prompts {
-        coords.push(p.x.clamp(0.0, 1.0) * MODEL_SIZE as f32);
-        coords.push(p.y.clamp(0.0, 1.0) * MODEL_SIZE as f32);
+        coords.push(px(p.x));
+        coords.push(px(p.y));
         labels.push(if p.positive { 1.0 } else { 0.0 });
     }
-    coords.extend([0.0, 0.0]);
-    labels.push(-1.0);
+    if bbox.is_none() {
+        coords.extend([0.0, 0.0]);
+        labels.push(-1.0);
+    }
     (coords, labels)
 }
 
@@ -230,11 +238,12 @@ impl Segmenter {
         content_hash: &str,
         prompts: &[Prompt],
         refine: Option<&str>,
+        bbox: Option<&BBox>,
     ) -> Result<Vec<Candidate>, SegmentError> {
         let emb_guard = self.embedding.lock().map_err(|_| SegmentError::Poisoned)?;
         let emb = emb_guard.as_ref().filter(|e| e.content_hash == content_hash).ok_or_else(|| SegmentError::NotPrepared(content_hash.to_string()))?;
 
-        let (coords, labels) = pack_prompts(prompts);
+        let (coords, labels) = pack_prompts(prompts, bbox);
         let n = labels.len();
         let (mask_input, has_mask) = match refine {
             Some(png) => (decode_logits_png(&unb64(png)?)?, 1.0f32),
@@ -314,12 +323,25 @@ mod tests {
 
     #[test]
     fn prompts_scale_to_model_pixels_and_get_the_sam_padding_point() {
-        let (coords, labels) = pack_prompts(&[
-            Prompt { x: 0.5, y: 0.25, positive: true },
-            Prompt { x: 1.5, y: -1.0, positive: false }, // out of range clamps to the frame
-        ]);
+        let (coords, labels) = pack_prompts(
+            &[
+                Prompt { x: 0.5, y: 0.25, positive: true },
+                Prompt { x: 1.5, y: -1.0, positive: false }, // out of range clamps to the frame
+            ],
+            None,
+        );
         assert_eq!(coords, vec![512.0, 256.0, 1024.0, 0.0, 0.0, 0.0]);
         assert_eq!(labels, vec![1.0, 0.0, -1.0]);
+    }
+
+    #[test]
+    fn a_box_is_two_corner_points_labelled_2_and_3_and_takes_no_padding_point() {
+        // Corners given the wrong way round are put right; a click after the box keeps its label.
+        let (coords, labels) = pack_prompts(&[Prompt { x: 0.5, y: 0.5, positive: true }], Some(&BBox { x0: 0.75, y0: 1.0, x1: 0.25, y1: 0.5 }));
+        assert_eq!(coords, vec![256.0, 512.0, 768.0, 1024.0, 512.0, 512.0]);
+        assert_eq!(labels, vec![2.0, 3.0, 1.0]);
+        let (coords, labels) = pack_prompts(&[], Some(&BBox { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }));
+        assert_eq!((coords.len(), labels), (4, vec![2.0, 3.0]));
     }
 
     #[test]
@@ -357,7 +379,7 @@ mod tests {
         let seg = Segmenter::default();
         assert!(!seg.has_embedding("abc"));
         let paths = ModelPaths { encoder: "e".into(), decoder: "d".into() };
-        assert!(matches!(seg.decode(&paths, "abc", &[], None), Err(SegmentError::NotPrepared(_))));
+        assert!(matches!(seg.decode(&paths, "abc", &[], None, None), Err(SegmentError::NotPrepared(_))));
     }
 
     fn rss_mb() -> u64 {
@@ -394,7 +416,7 @@ mod tests {
             let t = Instant::now();
             let enc_ms = seg.prepare(&paths, file, &img).unwrap();
             let t_dec = Instant::now();
-            let cands = seg.decode(&paths, file, &[Prompt { x: *x, y: *y, positive: true }], None).unwrap();
+            let cands = seg.decode(&paths, file, &[Prompt { x: *x, y: *y, positive: true }], None, None).unwrap();
             let dec_ms = t_dec.elapsed().as_millis();
             let ref_logits = read_f32(refs.join(format!("case{i}.logits.f32")));
             let ref_iou = read_f32(refs.join(format!("case{i}.iou.f32")));

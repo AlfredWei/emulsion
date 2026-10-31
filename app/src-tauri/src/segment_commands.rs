@@ -133,7 +133,7 @@ pub async fn segment_decode(
         let paths = segment_models::ready_paths(&dir).ok_or_else(|| "the click-select model is not installed".to_string())?;
         let v = helper
             .request(
-                Request::SegmentDecode { models: ModelPaths { encoder: paths.encoder, decoder: paths.decoder }, content_hash, prompts, refine },
+                Request::SegmentDecode { models: ModelPaths { encoder: paths.encoder, decoder: paths.decoder }, content_hash, prompts, refine, bbox: None },
                 DECODE_TIMEOUT,
             )
             .map_err(|e| e.to_string())?;

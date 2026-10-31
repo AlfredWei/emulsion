@@ -14,6 +14,13 @@ x = torch.rand(1, 3, 640, 640)
 out = ROOT / "onnx" / f"{name}.onnx"
 torch.onnx.export(W(m), (x,), str(out), input_names=["pixel_values"], output_names=["logits", "pred_boxes"], opset_version=17, dynamo=False)
 print("exported", out.stat().st_size / 1e6, "MB")
+# The helper's ONNX Runtime (ort 2.0.0-rc.13) has no CPU kernel for Cos, which the positional embedding of a fixed 640 x 640 grid needs;
+# the ORT basic graph optimisation folds those constants (and only standard ai.onnx ops are left), 3431 -> 1085 nodes.
+so = ort.SessionOptions(); so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+folded = ROOT / "onnx" / f"{name}_folded.onnx"; so.optimized_model_filepath = str(folded)
+ort.InferenceSession(str(out), so, providers=["CPUExecutionProvider"])
+print("folded", folded.stat().st_size, "bytes; this is the file the app ships")
+out = folded
 sess = ort.InferenceSession(str(out), providers=["CPUExecutionProvider"])
 with torch.no_grad(): ref = W(m)(x)
 got = sess.run(None, {"pixel_values": x.numpy()})

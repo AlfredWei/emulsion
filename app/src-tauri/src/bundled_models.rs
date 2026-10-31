@@ -1,6 +1,7 @@
 //! Model files shipped inside the installer (user decision, 2026-10-09): the denoise model and the two Select
 //! Subject files, so both features work straight after installation with no download. The AI enlargement model
-//! (4.8 MB, committed in `models/`) joined them on 2026-10-17 (user decision).
+//! (4.8 MB, committed in `models/`) joined them on 2026-10-17 (user decision), and the person detector (79 MB, RFC-0037)
+//! on 2026-10-31.
 //!
 //! A release build (`npm run build:release`) puts them in the app's resources under `models/`. On first use they
 //! are **copied into the same model directories the downloads use** (verified by size and SHA-256 on the way), so
@@ -26,6 +27,9 @@ pub const SEGMENT: [Shipped; 2] = [
     Shipped { name: crate::segment_models::ENCODER.filename, size: crate::segment_models::ENCODER.size, sha256: crate::segment_models::ENCODER.sha256 },
     Shipped { name: crate::segment_models::DECODER.filename, size: crate::segment_models::DECODER.size, sha256: crate::segment_models::DECODER.sha256 },
 ];
+
+/// The person detector (RFC-0037), installed beside the Select Subject files: the detector's boxes are cut by that model.
+pub const DETECT: [Shipped; 1] = [Shipped { name: crate::detect_models::FILENAME, size: crate::detect_models::SIZE, sha256: crate::detect_models::SHA256 }];
 
 pub const UPSCALE: [Shipped; 1] = [Shipped { name: crate::upscale_models::FILENAME, size: crate::upscale_models::SIZE, sha256: crate::upscale_models::SHA256 }];
 
@@ -140,7 +144,7 @@ mod tests {
             .iter()
             .map(|f| (f["name"].as_str().unwrap().into(), f["size"].as_u64().unwrap(), f["sha256"].as_str().unwrap().into(), f["url"].as_str().unwrap_or("").to_string(), f["path"].as_str().map(String::from)))
             .collect();
-        let known: Vec<&Shipped> = DENOISE.iter().chain(SEGMENT.iter()).chain(UPSCALE.iter()).collect();
+        let known: Vec<&Shipped> = DENOISE.iter().chain(SEGMENT.iter()).chain(DETECT.iter()).chain(UPSCALE.iter()).collect();
         assert_eq!(listed.len(), known.len());
         for (name, size, sha, url, path) in &listed {
             let k = known.iter().find(|k| k.name == name).unwrap_or_else(|| panic!("{name} is not a model the app verifies"));

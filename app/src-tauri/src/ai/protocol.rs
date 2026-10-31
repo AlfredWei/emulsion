@@ -22,6 +22,26 @@ pub struct Prompt {
     pub positive: bool,
 }
 
+/// A box prompt, normalized to the full, uncropped image (0..1 on both axes): "everything inside this is one thing".
+/// SAM 2 takes it as two corner points; with a box present it adds no padding point (`pack_prompts`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BBox {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+/// One person the detector found (RFC-0037): a box normalized like `BBox`, and the detector's own score.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PersonBox {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub score: f32,
+}
+
 /// One decoder candidate: the 256x256 logits as a quantised grayscale PNG,
 /// the model's own IoU estimate, and the candidate's index in model order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,8 +66,12 @@ pub enum Request {
     /// Encode the image at `image_path` (the unedited Develop preview) unless
     /// its embedding is cached under `content_hash`; answers `PrepareResult`.
     SegmentPrepare { models: ModelPaths, content_hash: String, image_path: PathBuf },
-    /// Decoder only; answers `Vec<Candidate>`, best predicted IoU first.
-    SegmentDecode { models: ModelPaths, content_hash: String, prompts: Vec<Prompt>, refine: Option<String> },
+    /// Decoder only; answers `Vec<Candidate>`, best predicted IoU first. `bbox` (RFC-0037) cuts whatever is inside a box
+    /// instead of, or together with, clicks; requests from before it existed have none.
+    SegmentDecode { models: ModelPaths, content_hash: String, prompts: Vec<Prompt>, refine: Option<String>, #[serde(default)] bbox: Option<BBox> },
+    /// Find the people in the image at `image_path` with the ONNX person detector at `model` (RFC-0037); answers
+    /// `Vec<PersonBox>` scoring at least `min_score`, best first.
+    DetectPeople { model: PathBuf, image_path: PathBuf, min_score: f32 },
     /// Denoise the image at `image_path` (or just `region` of it) with the ONNX model at `model`, in overlapping
     /// tiles (RFC-0027 §3.4), and write the result as a PNG at `out_path` (full-image size, or region size).
     /// Streams `progress` lines under the same id; answers `DenoiseResult`, or the error `cancelled`.
@@ -160,6 +184,7 @@ mod tests {
                 content_hash: "abc".into(),
                 prompts: vec![Prompt { x: 0.5, y: 0.25, positive: true }],
                 refine: None,
+                bbox: None,
             },
         };
         let line = serde_json::to_string(&frame).unwrap();
@@ -227,6 +252,32 @@ mod tests {
         assert!(matches!(plain.request, Request::UpscaleRun { region: None, strength: 100, .. }));
         // Every field is required: a request that forgets the size must not default to something.
         assert!(serde_json::from_str::<Frame>(r#"{"id":1,"op":"upscale_run","model":"m","image_path":"i","out_path":"o","region":null}"#).is_err());
+    }
+
+    #[test]
+    fn a_box_prompt_and_a_person_detection_round_trip_and_old_decode_requests_still_parse() {
+        let frame = Frame {
+            id: 5,
+            request: Request::SegmentDecode {
+                models: ModelPaths { encoder: "e.onnx".into(), decoder: "d.onnx".into() },
+                content_hash: "abc".into(),
+                prompts: vec![],
+                refine: None,
+                bbox: Some(BBox { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.9 }),
+            },
+        };
+        let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&frame).unwrap()).unwrap();
+        assert_eq!((v["bbox"]["x0"].as_f64().map(|x| (x * 10.0).round()), v["bbox"]["y1"].as_f64().map(|y| (y * 10.0).round())), (Some(1.0), Some(9.0)));
+        // A request written before boxes existed has no `bbox` field and means "no box".
+        let old: Frame = serde_json::from_str(
+            r#"{"id":1,"op":"segment_decode","models":{"encoder":"e","decoder":"d"},"content_hash":"h","prompts":[],"refine":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(old.request, Request::SegmentDecode { bbox: None, .. }));
+        let detect: Frame = serde_json::from_str(r#"{"id":2,"op":"detect_people","model":"m.onnx","image_path":"i.png","min_score":0.4}"#).unwrap();
+        assert!(matches!(detect.request, Request::DetectPeople { min_score, .. } if (min_score - 0.4).abs() < 1e-6));
+        // Every field is required: a detection request must say how sure the boxes have to be.
+        assert!(serde_json::from_str::<Frame>(r#"{"id":2,"op":"detect_people","model":"m.onnx","image_path":"i.png"}"#).is_err());
     }
 
     #[test]

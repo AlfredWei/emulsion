@@ -97,7 +97,7 @@ COCO is a proxy: small images, a public benchmark the detectors were trained on 
 
 ## 9. What this does not change
 
-The face-based path, the face score rules (2026-10-31), the chest-click retry, and the sky are untouched. The catalog schema does not change.
+The face-based path, the face score rules (2026-10-31), the chest-click retry, and the sky are untouched (§11 adds a second look after the face path, it does not change it). The catalog schema does not change.
 
 ## 10. Build notes (2026-10-31)
 
@@ -108,3 +108,17 @@ The face-based path, the face score rules (2026-10-31), the chest-click retry, a
 - Real weights through the real helper (no app): the beach silhouette (28) is detected at 0.93 and its box cut is rated 0.94; the tiny crowd (24) gives 15 people, cuts rated 0.85-0.90.
 - **In the app, one launch over the 37 portraits and crowds (the `develop-adaptive-eval` harness, region `person`):** the five photographs with a real person and no usable face now give a `check` with a good outline on a contact sheet: 28, the beach silhouette (1 person, reflection not selected); 24, the tiny crowd (8 of 15 figures); 11, the group of ministers (8 largest of 16; the face path had given up); 21, the festival crowd (8 of 12, the seated people in front); 23, the basketball game (4). The five photographs with nobody to find stay `not_found`, and the detector returned **no candidate at all** on them: the back of a cabinet card (03), two cats (31, 32), a dog (37) and the child hidden behind a teddy bear (35). Every photograph that had a face path result keeps it (the detector runs only after `not_found`). A call that falls through to the detector takes 3.3-5.4 s (the Select Subject encoder about 2-3 s, the detector about 1 s, and up to 8 cuts of about 50 ms).
 - **Release asset not yet published.** `models/bundled-models.json` names `https://github.com/AlfredWei/emulsion/releases/download/person-detector-dfine-medium-coco-v1/dfine_medium_coco.onnx`; the release (a public upload of the 79 MB file) has to be created before `npm run build:release` can fetch it.
+
+## 11. Mixed photographs: people with a face and people without (2026-11-01, `feature/person-mixed`)
+
+§6 ran the detector only when the face path found nobody, so a photograph with one face and three figures seen from behind got the one face. Now the detector also runs when the face path gave a `found` or `check`, and `add_people_by_detection` adds the people the faces missed:
+
+- Each detection at score 0.5 or more (largest first, at most 8) is cut with its box. It is **not a new person** when its box holds the centre of a face the face path used (a bust-length portrait: the clicks took the head, the box takes the shoulders), or when at least half of its cut already lies inside the face-based mask. Otherwise, with the model at least 0.6 sure of the cut, it is added to the same mask.
+- With no new person the face answer comes back untouched, so a clean `found` stays `found`. With one or more it is a `check`, for the reason of §8 (a detector box is never `found`), and the reason keeps the face path's own notes and adds "N more people found by shape, without a face".
+- Detector or helper failure, or no detector installed: the face answer stands, as before. The cost is one detection (about a second) on every person apply, found or not.
+
+**First attempt and what it got wrong.** Deduplicating by mask overlap alone flagged 7 of 10 control photographs (single portraits and a group, all with their faces found) as "1 more person": on a head-and-shoulders portrait the box cut is bigger than the face-click cut, so less than half of it lay inside the face mask. The Max Hechtman headshot grew from 20 % to 49 % of the frame and was flagged. Holding-a-face is the fix.
+
+**Measured in the app (one launch of the `develop-adaptive-eval` harness, region `person`, after the fix):** 18 COCO photographs that have a face and at least one faceless person of 10 % of the frame or more, and 10 of the 37 portraits and crowds as controls (all with faces found). Controls: 7 of 10 unchanged (`found`, the same masks as before) and 3 changed, all three right by eye (the market crowd gains its distant people, the crosswalk photograph the woman in boots walking away, the street photograph the man walking beside the poster). COCO set: 15 of 18 gain people (tennis, two men in hats with the figures behind them, skateboarders, surfers, a restaurant table, a crowd on a square and others), outlined well by eye; 1 stays a low-confidence-face `check` with nothing added, and 2 stay `found`. The face-based cuts are unchanged. Not measured: how often an added figure is wrong. The only reference is a look at 28 photographs, and a statue or a mannequin taken for a person would be a wrong addition (a `check` whose reason says "found by shape").
+
+**Not done.** A face the face path used but the model was unsure of is skipped by holds-a-face and not rescued by the detector. Faces beyond the 6 largest are in the same position (their note remains).

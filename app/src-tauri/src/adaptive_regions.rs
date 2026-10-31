@@ -438,6 +438,83 @@ pub fn resolve_person_by_detection(people: &[PersonBox], model: &mut dyn ClickMo
     Ok(RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), segment_mask(&merged, PERSON_FEATHER)))
 }
 
+/// A detected person whose cut shares at least this much of its area with what the face-based path already masked is that same
+/// person (or a neighbour the face-based cut already took in); it is not a new one.
+const PERSON_ALREADY_MASKED: f32 = 0.5;
+/// A detected person whose box holds the centre of a face the face-based path used is that face's person, even when the box cut
+/// is bigger than the face-click cut (a bust-length portrait: the clicks took the head, the box takes the shoulders).
+fn holds_a_face(p: &PersonBox, faces: &[FaceBox]) -> bool {
+    faces.iter().any(|f| {
+        let (cx, cy) = (f.x + f.w / 2.0, f.y + f.h / 2.0);
+        cx > p.x0 && cx < p.x1 && cy > p.y0 && cy < p.y1
+    })
+}
+
+/// RFC-0037, mixed photographs: the face-based path found some people (`base`, a `found` or `check`), and the detector may see
+/// others it has no face for (seen from behind, in silhouette, a small figure in the background). Each person the detector is sure of
+/// is cut with a box prompt; a cut that mostly lies inside the mask already there is the same person and is ignored, a cut that does not
+/// is a new person and is added. With no new person `base` comes back untouched (a clean `found` stays `found`); with one the result is
+/// `check`, for the same reason as `resolve_person_by_detection`. A detection that holds a face the face-based path used is that
+/// face's person and is not even cut. `Err` is a model failure; the caller keeps `base` then.
+pub fn add_people_by_detection(
+    base: RegionResult,
+    people: &[PersonBox],
+    boxes: &[FaceBox],
+    frame: (u32, u32),
+    model: &mut dyn ClickModel,
+) -> Result<RegionResult, String> {
+    let Some(mask) = base.mask.as_ref() else { return Ok(base) };
+    let faces = kept_faces(boxes, frame).unwrap_or_default();
+    let mut merged = decode_logits(mask["logits"].as_str().ok_or("the person mask has no raster")?)?;
+    let mut people: Vec<PersonBox> = people.iter().copied().filter(|p| p.score >= PERSON_DETECT_MIN_SCORE && !holds_a_face(p, &faces)).collect();
+    let area = |p: &PersonBox| (p.x1 - p.x0) * (p.y1 - p.y0);
+    people.sort_by(|a, b| area(b).total_cmp(&area(a)));
+    let beyond = people.len().saturating_sub(PERSON_DETECT_MAX);
+    people.truncate(PERSON_DETECT_MAX);
+
+    let (mut added, mut unsure) = (0usize, 0usize);
+    for p in &people {
+        let cut = model.cut_box(&BBox { x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1 })?;
+        if cut.logits.len() != merged.len() {
+            unsure += 1;
+            continue;
+        }
+        let (size, inside) = cut.logits.iter().zip(&merged).fold((0usize, 0usize), |(n, k), (c, m)| if *c > 0.0 { (n + 1, k + usize::from(*m > 0.0)) } else { (n, k) });
+        let (size_share, inside_share) = (size as f32 / merged.len() as f32, if size == 0 { 1.0 } else { inside as f32 / size as f32 });
+        trace(&format!(
+            "person detected-in-mixed box=({:.3},{:.3},{:.3},{:.3}) score={:.3} iou={:.3} cut_coverage={:.3} already_masked={:.3}",
+            p.x0, p.y0, p.x1, p.y1, p.score, cut.iou, size_share, inside_share
+        ));
+        if size_share < PERSON_DETECT_MIN_COVERAGE || inside_share >= PERSON_ALREADY_MASKED {
+            continue;
+        }
+        if cut.iou < PERSON_MIN_IOU {
+            unsure += 1;
+            continue;
+        }
+        added += 1;
+        for (m, l) in merged.iter_mut().zip(&cut.logits) {
+            *m = m.max(*l);
+        }
+    }
+    if added == 0 {
+        return Ok(base);
+    }
+    let coverage = coverage_of(&merged);
+    let mut why: Vec<String> = base.reason.iter().cloned().collect();
+    why.push(format!("{} found by shape, without a face", if added == 1 { "1 more person".to_string() } else { format!("{added} more people") }));
+    if beyond > 0 {
+        why.push(format!("{beyond} more beyond the {PERSON_DETECT_MAX} largest were not used"));
+    }
+    if unsure > 0 {
+        why.push(format!("{unsure} the model was unsure of were left out"));
+    }
+    if coverage > PERSON_BIG_COVERAGE && !why.iter().any(|w| w.starts_with("the mask covers over")) {
+        why.push(format!("the mask covers over {} of the frame", pct(PERSON_BIG_COVERAGE)));
+    }
+    Ok(RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), segment_mask(&merged, PERSON_FEATHER)))
+}
+
 /// The inverse of `encode_logits`: a base64 256 x 256 gray PNG back to logits.
 pub fn decode_logits(b64: &str) -> Result<Vec<f32>, String> {
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| e.to_string())?;
@@ -926,6 +1003,90 @@ mod tests {
     fn a_model_without_box_prompts_fails_loudly_instead_of_guessing() {
         let mut model = FakeModel::new(0.9);
         assert!(resolve_person_by_detection(&[person(0.4, 0.3, 0.5, 0.7, 0.9)], &mut model).is_err());
+    }
+
+    /// A photograph where the face-based path found one person (a column around x = 0.43, from y = 0.15 down).
+    fn one_person_by_face() -> RegionResult {
+        let r = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut FakeModel::new(0.9)).unwrap();
+        assert_eq!(r.outcome, Outcome::Found);
+        r
+    }
+
+    /// `add_people_by_detection` for the photograph of `one_person_by_face`.
+    fn add_in_the_face_photo(base: RegionResult, people: &[PersonBox], model: &mut dyn ClickModel) -> Result<RegionResult, String> {
+        add_people_by_detection(base, people, &[big_face(0.4, 0.2)], (1600, 1200), model)
+    }
+
+    #[test]
+    fn a_detection_holding_a_face_the_path_used_is_that_persons_and_is_not_even_cut() {
+        // A bust-length portrait: the box takes the shoulders the face clicks did not, which is not a new person.
+        let base = one_person_by_face();
+        let mut model = BoxModel { iou: 0.95, seen: Vec::new() };
+        let r = add_in_the_face_photo(base.clone(), &[person(0.2, 0.15, 0.7, 0.95, 0.95)], &mut model).unwrap();
+        assert!(model.seen.is_empty());
+        assert_eq!((r.outcome, r.mask), (Outcome::Found, base.mask));
+    }
+
+    #[test]
+    fn a_detection_of_the_person_the_face_path_already_found_changes_nothing() {
+        let base = one_person_by_face();
+        let mut model = BoxModel { iou: 0.95, seen: Vec::new() };
+        let r = add_in_the_face_photo(base.clone(), &[person(0.38, 0.3, 0.48, 0.9, 0.9)], &mut model).unwrap();
+        assert_eq!(model.seen.len(), 1, "the detection was cut, to compare it with what is masked");
+        assert_eq!(r.outcome, Outcome::Found, "no new person: a clean found stays found");
+        assert_eq!((r.coverage, r.reason), (base.coverage, base.reason));
+        assert_eq!(r.mask, base.mask);
+    }
+
+    #[test]
+    fn a_figure_the_face_path_missed_is_added_and_the_result_asks_for_a_look() {
+        let base = one_person_by_face();
+        let mut model = BoxModel { iou: 0.95, seen: Vec::new() };
+        let r = add_in_the_face_photo(base.clone(), &[person(0.38, 0.3, 0.48, 0.9, 0.9), person(0.7, 0.4, 0.8, 0.9, 0.8)], &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::Check);
+        assert!(r.coverage > base.coverage + 0.04, "{} vs {}", r.coverage, base.coverage);
+        let why = r.reason.unwrap();
+        assert!(why.contains("1 more person found by shape, without a face"), "{why}");
+        let logits = decode(&r.mask.unwrap());
+        assert!(at(&logits, 0.43, 0.5) > 0.0 && at(&logits, 0.75, 0.6) > 0.0 && at(&logits, 0.6, 0.6) < 0.0);
+    }
+
+    #[test]
+    fn an_added_figure_keeps_what_the_face_path_already_said() {
+        // A moderately sure face cut is a check with a reason; the added figure's note comes after it.
+        let base = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut FakeModel::new(0.65)).unwrap();
+        assert_eq!(base.outcome, Outcome::Check);
+        let r = add_in_the_face_photo(base.clone(), &[person(0.7, 0.4, 0.8, 0.9, 0.8)], &mut BoxModel { iou: 0.95, seen: Vec::new() }).unwrap();
+        let why = r.reason.unwrap();
+        assert!(why.starts_with(base.reason.unwrap().as_str()) && why.contains("1 more person found by shape"), "{why}");
+    }
+
+    #[test]
+    fn weak_doubtful_and_speck_detections_add_nothing_to_a_face_result() {
+        let base = one_person_by_face();
+        let mut model = BoxModel { iou: 0.95, seen: Vec::new() };
+        let r = add_in_the_face_photo(base.clone(), &[person(0.7, 0.4, 0.8, 0.9, PERSON_DETECT_MIN_SCORE - 0.01)], &mut model).unwrap();
+        assert!(model.seen.is_empty() && r.mask == base.mask, "a weak detection is not even cut");
+        let r = add_in_the_face_photo(base.clone(), &[person(0.7, 0.4, 0.8, 0.9, 0.9)], &mut BoxModel { iou: PERSON_MIN_IOU - 0.05, seen: Vec::new() }).unwrap();
+        assert!(r.mask == base.mask && r.outcome == Outcome::Found, "a cut the model doubts is left out");
+        let r = add_in_the_face_photo(base.clone(), &[person(0.7, 0.4, 0.73, 0.41, 0.9)], &mut BoxModel { iou: 0.95, seen: Vec::new() }).unwrap();
+        assert!(r.mask == base.mask, "a speck is left out");
+    }
+
+    #[test]
+    fn two_boxes_on_the_same_new_figure_count_once_and_a_not_found_base_is_returned_as_it_is() {
+        let base = one_person_by_face();
+        let twin = [person(0.7, 0.4, 0.8, 0.9, 0.9), person(0.71, 0.41, 0.8, 0.9, 0.8)];
+        let r = add_in_the_face_photo(base, &twin, &mut BoxModel { iou: 0.95, seen: Vec::new() }).unwrap();
+        assert!(r.reason.unwrap().contains("1 more person"), "the second box is already masked by the first");
+        let none = RegionResult::not_found("no person found");
+        let r = add_in_the_face_photo(none, &[person(0.7, 0.4, 0.8, 0.9, 0.9)], &mut BoxModel { iou: 0.95, seen: Vec::new() }).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound, "that case is resolve_person_by_detection's");
+    }
+
+    #[test]
+    fn a_model_failure_while_looking_for_more_people_is_an_error_the_caller_can_ignore() {
+        assert!(add_in_the_face_photo(one_person_by_face(), &[person(0.7, 0.4, 0.8, 0.9, 0.9)], &mut FakeModel::new(0.9)).is_err());
     }
 
     #[test]

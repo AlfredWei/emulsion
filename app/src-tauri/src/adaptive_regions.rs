@@ -6,6 +6,7 @@
 //! `adaptive_commands.rs`. Every number below is a *starting value* from RFC-0033 §9-§10's small by-eye sets
 //! and is judged again on photographs in B1 (RFC-0035 §4); the outcome words are the contract.
 
+use crate::ai::protocol::{BBox, PersonBox};
 use base64::Engine;
 use image::{imageops::FilterType, GrayImage, RgbImage};
 use serde::Serialize;
@@ -250,6 +251,11 @@ pub struct Cut {
 /// one asks the AI helper; the tests use a stand-in.
 pub trait ClickModel {
     fn cut(&mut self, clicks: &[(f32, f32, bool)]) -> Result<Cut, String>;
+    /// The model's best cut of whatever is inside `bbox` (SAM 2's box prompt, RFC-0037: 82 % of detected people cut at IoU 0.7
+    /// against 65 % with two clicks). A model without box prompts says so.
+    fn cut_box(&mut self, _bbox: &BBox) -> Result<Cut, String> {
+        Err("this click-select model has no box prompt".to_string())
+    }
 }
 
 /// RFC-0033 section 3.1: a person is found by clicking where their face is and where their torso should be, with the
@@ -369,6 +375,67 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
     } else {
         RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), mask)
     })
+}
+
+// ---------------------------------------------------------------- people without a face (RFC-0037)
+
+/// People the detector is at least this sure of are used. Measured on 700 COCO photographs (D-FINE medium, people with no usable face):
+/// at 0.4 it finds 89 % of them and flags 6.5 % of the person-free photographs, at 0.5 85 % and 5.0 %, at 0.6 78 % and 2.0 %.
+pub const PERSON_DETECT_MIN_SCORE: f32 = 0.5;
+/// A crowd is capped like the face-based path; the largest figures are the ones worth a mask.
+const PERSON_DETECT_MAX: usize = 8;
+/// A figure 8 % of the frame tall and a third as wide covers about 0.2 % of the frame, and the figures of a tiny crowd (2 % wide,
+/// 5 % tall) 0.1 %, so the floor for a detected person is far lower than the face-based path's 1 %.
+const PERSON_DETECT_MIN_COVERAGE: f32 = 0.0005;
+
+/// RFC-0037: the people the detector found, each cut with a box prompt, merged. Used when the face-based path found nobody, so
+/// the result is always `check`: SAM's own confidence cannot tell a wrong detection from a right one (measured: 99 % of false
+/// detections pass the 0.6 gate), so the detector's score is the only gate and the user is asked to look. `Err` is a model failure.
+pub fn resolve_person_by_detection(people: &[PersonBox], model: &mut dyn ClickModel) -> Result<RegionResult, String> {
+    let mut people: Vec<PersonBox> = people.iter().copied().filter(|p| p.score >= PERSON_DETECT_MIN_SCORE).collect();
+    if people.is_empty() {
+        return Ok(RegionResult::not_found("no person found"));
+    }
+    let area = |p: &PersonBox| (p.x1 - p.x0) * (p.y1 - p.y0);
+    people.sort_by(|a, b| area(b).total_cmp(&area(a)));
+    let beyond = people.len().saturating_sub(PERSON_DETECT_MAX);
+    people.truncate(PERSON_DETECT_MAX);
+
+    let mut merged = vec![-LOGIT_RANGE; RASTER * RASTER];
+    let (mut used, mut unsure) = (0usize, 0usize);
+    for p in &people {
+        let cut = model.cut_box(&BBox { x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1 })?;
+        trace(&format!(
+            "person detected box=({:.3},{:.3},{:.3},{:.3}) score={:.3} iou={:.3} cut_coverage={:.3}",
+            p.x0, p.y0, p.x1, p.y1, p.score, cut.iou, coverage_of(&cut.logits)
+        ));
+        if cut.iou < PERSON_MIN_IOU || cut.logits.len() != merged.len() || coverage_of(&cut.logits) < PERSON_DETECT_MIN_COVERAGE {
+            unsure += 1;
+            continue;
+        }
+        used += 1;
+        for (m, l) in merged.iter_mut().zip(&cut.logits) {
+            *m = m.max(*l);
+        }
+    }
+    if used == 0 {
+        return Ok(RegionResult::not_found("the model was not sure of anyone it was pointed at"));
+    }
+    let coverage = coverage_of(&merged);
+    let mut why = vec![format!(
+        "{} found by shape, without a face",
+        if used == 1 { "1 person".to_string() } else { format!("{used} people") }
+    )];
+    if beyond > 0 {
+        why.push(format!("{beyond} more beyond the {PERSON_DETECT_MAX} largest were not used"));
+    }
+    if unsure > 0 {
+        why.push(format!("{unsure} the model was unsure of were left out"));
+    }
+    if coverage > PERSON_BIG_COVERAGE {
+        why.push(format!("the mask covers over {} of the frame", pct(PERSON_BIG_COVERAGE)));
+    }
+    Ok(RegionResult::with_mask(Outcome::Check, coverage, Some(why.join("; ")), segment_mask(&merged, PERSON_FEATHER)))
 }
 
 /// The inverse of `encode_logits`: a base64 256 x 256 gray PNG back to logits.
@@ -767,6 +834,98 @@ mod tests {
 
     fn big_face(x: f32, y: f32) -> FaceBox {
         FaceBox { x, y, w: 0.06, h: 0.09, score: Some(0.9) }
+    }
+
+    /// A stand-in with box prompts: a cut is exactly the box, rated `iou`; it records the boxes it is given.
+    struct BoxModel {
+        iou: f32,
+        seen: Vec<BBox>,
+    }
+    impl ClickModel for BoxModel {
+        fn cut(&mut self, _clicks: &[(f32, f32, bool)]) -> Result<Cut, String> {
+            Err("clicks are not used for a detected person".to_string())
+        }
+        fn cut_box(&mut self, b: &BBox) -> Result<Cut, String> {
+            self.seen.push(*b);
+            let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
+            for iy in 0..RASTER {
+                for ix in 0..RASTER {
+                    let (u, v) = ((ix as f32 + 0.5) / RASTER as f32, (iy as f32 + 0.5) / RASTER as f32);
+                    if u > b.x0 && u < b.x1 && v > b.y0 && v < b.y1 {
+                        logits[iy * RASTER + ix] = LOGIT_RANGE;
+                    }
+                }
+            }
+            Ok(Cut { iou: self.iou, logits })
+        }
+    }
+
+    fn person(x0: f32, y0: f32, x1: f32, y1: f32, score: f32) -> PersonBox {
+        PersonBox { x0, y0, x1, y1, score }
+    }
+
+    #[test]
+    fn a_detected_person_is_cut_with_its_box_and_is_only_ever_a_check() {
+        let mut model = BoxModel { iou: 0.95, seen: Vec::new() };
+        let r = resolve_person_by_detection(&[person(0.4, 0.3, 0.5, 0.7, 0.9)], &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::Check, "the detector's score is the only gate, so a person without a face is never `found`");
+        assert_eq!(model.seen, vec![BBox { x0: 0.4, y0: 0.3, x1: 0.5, y1: 0.7 }]);
+        assert!((r.coverage - 0.04).abs() < 0.005, "{}", r.coverage);
+        assert!(r.reason.as_deref().unwrap().contains("1 person") && r.reason.unwrap().contains("without a face"));
+        let logits = decode(&r.mask.unwrap());
+        assert!(at(&logits, 0.45, 0.5) > 0.0 && at(&logits, 0.2, 0.5) < 0.0);
+    }
+
+    #[test]
+    fn detections_under_the_score_are_ignored_and_none_left_is_not_found() {
+        let mut model = BoxModel { iou: 0.95, seen: Vec::new() };
+        let r = resolve_person_by_detection(&[person(0.4, 0.3, 0.5, 0.7, PERSON_DETECT_MIN_SCORE - 0.01)], &mut model).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        assert!(model.seen.is_empty(), "a weak detection is not even cut");
+        assert_eq!(resolve_person_by_detection(&[], &mut model).unwrap().outcome, Outcome::NotFound);
+    }
+
+    #[test]
+    fn a_crowd_keeps_the_largest_figures_and_says_how_many_were_left_out() {
+        let mut model = BoxModel { iou: 0.95, seen: Vec::new() };
+        // Ten figures of growing height, side by side.
+        let people: Vec<PersonBox> = (0..10).map(|i| person(0.05 + 0.09 * i as f32, 0.9 - 0.02 * (i + 1) as f32, 0.09 + 0.09 * i as f32, 0.9, 0.8)).collect();
+        let r = resolve_person_by_detection(&people, &mut model).unwrap();
+        assert_eq!(model.seen.len(), PERSON_DETECT_MAX);
+        assert!(model.seen.iter().all(|b| b.y1 - b.y0 > 0.04 + 0.001), "the two smallest are the ones dropped");
+        let why = r.reason.unwrap();
+        assert!(why.contains("8 people") && why.contains("2 more beyond"), "{why}");
+    }
+
+    #[test]
+    fn a_cut_the_model_doubts_or_that_is_a_speck_is_left_out() {
+        let mut doubtful = BoxModel { iou: PERSON_MIN_IOU - 0.05, seen: Vec::new() };
+        let r = resolve_person_by_detection(&[person(0.4, 0.3, 0.5, 0.7, 0.9)], &mut doubtful).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        // A box far smaller than the floor (0.03 x 0.01 of the frame = 0.03 %).
+        let mut sure = BoxModel { iou: 0.95, seen: Vec::new() };
+        let speck = resolve_person_by_detection(&[person(0.4, 0.3, 0.43, 0.31, 0.9)], &mut sure).unwrap();
+        assert_eq!(speck.outcome, Outcome::NotFound);
+        // A good one next to a doubtful one: used, with the doubtful one counted.
+        struct Mixed(usize);
+        impl ClickModel for Mixed {
+            fn cut(&mut self, _: &[(f32, f32, bool)]) -> Result<Cut, String> {
+                Err("no clicks".into())
+            }
+            fn cut_box(&mut self, b: &BBox) -> Result<Cut, String> {
+                self.0 += 1;
+                BoxModel { iou: if self.0 == 1 { 0.95 } else { 0.4 }, seen: Vec::new() }.cut_box(b)
+            }
+        }
+        let both = resolve_person_by_detection(&[person(0.1, 0.2, 0.3, 0.9, 0.9), person(0.6, 0.3, 0.7, 0.7, 0.9)], &mut Mixed(0)).unwrap();
+        assert_eq!(both.outcome, Outcome::Check);
+        assert!(both.reason.unwrap().contains("1 the model was unsure of"));
+    }
+
+    #[test]
+    fn a_model_without_box_prompts_fails_loudly_instead_of_guessing() {
+        let mut model = FakeModel::new(0.9);
+        assert!(resolve_person_by_detection(&[person(0.4, 0.3, 0.5, 0.7, 0.9)], &mut model).is_err());
     }
 
     #[test]

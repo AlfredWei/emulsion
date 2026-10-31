@@ -1,6 +1,6 @@
 # RFC-0037: Finding people who show no usable face (M7 adaptive tone, `person` region)
 
-- Status: **Draft, 2026-10-31. Models compared on COCO val2017 (§3); nothing built in the app. Awaiting a go / no-go (§8).** The comparison ran offline in Python, with no app launches; the scripts are in [RFC-0037-appendix](RFC-0037-appendix/). Model sizes were measured on the downloaded files. Licences are taken from the Hugging Face model cards (Apache-2.0) and still need a check against each upstream repository's LICENSE file.
+- Status: **Accepted 2026-10-31: go, D-FINE medium, never `found` from a detector box alone (§8); being built on `feature/person-detector` (§10).** Models were compared on COCO val2017 (§3). The comparison ran offline in Python, with no app launches; the scripts are in [RFC-0037-appendix](RFC-0037-appendix/). Model sizes were measured on the downloaded files. Licences are taken from the Hugging Face model cards (Apache-2.0) and still need a check against each upstream repository's LICENSE file.
 - Companion documents: [RFC-0033](RFC-0033-adaptive-tone-presets.md) §3.1 (the face-to-click design this extends), [RFC-0035](RFC-0035-region-bound-presets.md) (region-bound presets), [PROGRESS.md](../../PROGRESS.md) (entries of 2026-10-30 and 2026-10-31)
 
 ## 1. Problem
@@ -89,6 +89,22 @@ COCO is a proxy: small images, a public benchmark the detectors were trained on 
 2. **Which model and how it ships:** D-FINE small (42 MB, bundled) or medium (79 MB, downloaded; 5 points more recall at the same false-alarm rate). Recommendation: small, bundled, with medium as a later upgrade.
 3. Whether a person found without a face may ever be `found`, or stays `check`.
 
+### Decisions (2026-10-31)
+
+1. **Go.**
+2. **D-FINE medium** (79 MB), shipped in the installer beside the Select Subject files like the other models (no download dialog in this slice).
+3. **Never `found` from a detector box alone**: the result is `check` (the default proposed in §6, not objected to).
+
 ## 9. What this does not change
 
 The face-based path, the face score rules (2026-10-31), the chest-click retry, and the sky are untouched. The catalog schema does not change.
+
+## 10. Build notes (2026-10-31)
+
+- **The helper's ONNX Runtime (ort 2.0.0-rc.13) has no CPU kernel for `Cos`**, which D-FINE's positional embedding needs; the Python runtime (1.30) ran the same file. The shipped file is therefore the export constant-folded with ORT's basic graph optimisation (3431 to 1085 nodes, only standard ai.onnx ops, 78,809,647 bytes, output equal to the original to 1e-5). `export_onnx.py` does both steps.
+- **A box prompt carries no padding point** (SAM's convention; the earlier Python test had one). Measured on D-FINE medium, 559 faceless people: 82.1 % of cuts at IoU 0.7 without it, 81.6 % with it.
+- **Per-person coverage floor 0.05 %** (not the face path's 1 %): the figures of the tiny crowd (photo 24) are 2 % wide and 5 % tall, about 0.1 % of the frame each.
+- **Detector score floor 0.5**, from the D-FINE medium curve: 0.4 finds 89 % and flags 6.5 % of person-free photographs, 0.5 finds 85 % and flags 5.0 %, 0.6 finds 78 % and flags 2.0 %.
+- Real weights through the real helper (no app): the beach silhouette (28) is detected at 0.93 and its box cut is rated 0.94; the tiny crowd (24) gives 15 people, cuts rated 0.85-0.90.
+- **In the app, one launch over the 37 portraits and crowds (the `develop-adaptive-eval` harness, region `person`):** the five photographs with a real person and no usable face now give a `check` with a good outline on a contact sheet: 28, the beach silhouette (1 person, reflection not selected); 24, the tiny crowd (8 of 15 figures); 11, the group of ministers (8 largest of 16; the face path had given up); 21, the festival crowd (8 of 12, the seated people in front); 23, the basketball game (4). The five photographs with nobody to find stay `not_found`, and the detector returned **no candidate at all** on them: the back of a cabinet card (03), two cats (31, 32), a dog (37) and the child hidden behind a teddy bear (35). Every photograph that had a face path result keeps it (the detector runs only after `not_found`). A call that falls through to the detector takes 3.3-5.4 s (the Select Subject encoder about 2-3 s, the detector about 1 s, and up to 8 cuts of about 50 ms).
+- **Release asset not yet published.** `models/bundled-models.json` names `https://github.com/AlfredWei/emulsion/releases/download/person-detector-dfine-medium-coco-v1/dfine_medium_coco.onnx`; the release (a public upload of the 79 MB file) has to be created before `npm run build:release` can fetch it.

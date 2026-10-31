@@ -23,7 +23,7 @@ fn models() -> ModelPaths {
 }
 
 fn decode_request() -> Request {
-    Request::SegmentDecode { models: models(), content_hash: "never-prepared".into(), prompts: vec![Prompt { x: 0.5, y: 0.5, positive: true }], refine: None }
+    Request::SegmentDecode { models: models(), content_hash: "never-prepared".into(), prompts: vec![Prompt { x: 0.5, y: 0.5, positive: true }], refine: None, bbox: None }
 }
 
 fn pid_alive(pid: u32) -> bool {
@@ -163,7 +163,7 @@ fn real_model_memory_lives_in_the_helper_and_is_returned_when_it_exits() {
     println!("prepare via the helper: {} ms encoder, {} ms round trip", prep.encode_ms, t.elapsed().as_millis());
     let t = Instant::now();
     let v = h
-        .request(Request::SegmentDecode { models, content_hash: "corn".into(), prompts: vec![Prompt { x: 0.5, y: 0.75, positive: true }], refine: None }, Duration::from_secs(30))
+        .request(Request::SegmentDecode { models, content_hash: "corn".into(), prompts: vec![Prompt { x: 0.5, y: 0.75, positive: true }], refine: None, bbox: None }, Duration::from_secs(30))
         .expect("decode");
     let cands: Vec<ai::protocol::Candidate> = serde_json::from_value(v).unwrap();
     println!("decode via the helper: {} candidates, best iou {:.3}, {} ms round trip (incl. {} KB of PNGs)", cands.len(), cands[0].iou, t.elapsed().as_millis(), cands.iter().map(|c| c.logits_png.len()).sum::<usize>() / 1024);
@@ -174,6 +174,40 @@ fn real_model_memory_lives_in_the_helper_and_is_returned_when_it_exits() {
     assert!(rss_mb(std::process::id()) < 400, "the app process must not hold the model memory");
     wait_until("the helper to idle out", || !pid_alive(pid));
     println!("helper exited after idling; its {} MB went back to the OS", rss_mb(pid).max(0));
+}
+
+/// Real weights, the whole RFC-0037 path through the real helper: the detector finds people in a photograph, each box is cut by
+/// SAM 2 as a box prompt. `SEGMENT_MODELS_DIR=<dir with the SAM files> DETECT_MODEL=<dfine_medium_coco.onnx> DETECT_IMAGE=<photo>
+/// cargo test --test ai_helper -- --ignored --nocapture real_models_detect`. Prints one line per person; the cut must cover
+/// roughly what its box covers.
+#[test]
+#[ignore]
+fn real_models_detect_people_then_cut_each_box() {
+    use ai::protocol::{BBox, Candidate, PersonBox};
+    let dir = PathBuf::from(std::env::var("SEGMENT_MODELS_DIR").expect("SEGMENT_MODELS_DIR"));
+    let models = ModelPaths { encoder: dir.join("sam2_hiera_tiny.encoder.onnx"), decoder: dir.join("sam2_hiera_tiny.decoder.onnx") };
+    let detector = PathBuf::from(std::env::var("DETECT_MODEL").expect("DETECT_MODEL"));
+    let image = PathBuf::from(std::env::var("DETECT_IMAGE").expect("DETECT_IMAGE"));
+    let h = AiHelper::new(helper_exe(), 0);
+    let t = Instant::now();
+    let v = h.request(Request::DetectPeople { model: detector, image_path: image.clone(), min_score: 0.5 }, Duration::from_secs(120)).expect("detect");
+    let people: Vec<PersonBox> = serde_json::from_value(v).unwrap();
+    println!("detect: {} people in {} ms (first call loads the model)", people.len(), t.elapsed().as_millis());
+    assert!(!people.is_empty() && people.windows(2).all(|w| w[0].score >= w[1].score));
+    h.request(Request::SegmentPrepare { models: models.clone(), content_hash: "d".into(), image_path: image }, Duration::from_secs(120)).expect("prepare");
+    for p in people.iter().take(6) {
+        let t = Instant::now();
+        let v = h
+            .request(
+                Request::SegmentDecode { models: models.clone(), content_hash: "d".into(), prompts: vec![], refine: None, bbox: Some(BBox { x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1 }) },
+                Duration::from_secs(30),
+            )
+            .expect("decode");
+        let cands: Vec<Candidate> = serde_json::from_value(v).unwrap();
+        let logits = ai::protocol::Candidate::clone(&cands[0]);
+        println!("person score {:.2} box {:.3}x{:.3}: best cut iou {:.3} ({} ms, {} KB png)", p.score, p.x1 - p.x0, p.y1 - p.y0, logits.iou, t.elapsed().as_millis(), logits.logits_png.len() / 1024);
+        assert!(!cands.is_empty());
+    }
 }
 
 // ---- denoise (RFC-0027): the whole job path with a stand-in model ---------------------------------------

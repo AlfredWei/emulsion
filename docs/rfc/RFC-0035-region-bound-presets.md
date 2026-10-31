@@ -46,7 +46,7 @@ A resolver takes the photograph's preview and returns **`found(mask)`, `check(ma
 
 ### 3.4 What the user is told (the three outcomes)
 
-The apply reports per rule: **found** ("Sky: 38 % of the frame"), **check** (applied and flagged, with the reason and "Select the sky yourself" opening the manual route: a Luminance Range mask or one Select Subject click, the preset's adjustments moving to it), **not found** (skipped, with the reason). A hover shows the mask as the existing selected-mask overlay. The wording and layout are slice C's UX mock; B delivers the data (`outcome`, `coverage`, `reason` per rule) the UI will show.
+The apply reports per rule: **found** ("Sky: 38 % of the frame"), **check** (applied and flagged, with the reason and "Select the sky yourself" opening the manual route: a Luminance Range mask or one Select Subject click, the preset's adjustments moving to it) (built: the first Select Subject click replaces the flagged mask and keeps its adjustments as they stand then, minus the preset's `source`, so a Re-apply leaves it alone; Esc restores the flagged mask; the Luminance Range route is not offered), **not found** (skipped, with the reason). A hover shows the mask as the existing selected-mask overlay. The wording and layout are slice C's UX mock; B delivers the data (`outcome`, `coverage`, `reason` per rule) the UI will show.
 
 ### 3.5 What is not in this slice
 

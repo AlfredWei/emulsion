@@ -22,6 +22,7 @@ import { develop } from "$lib/state/develop.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
 import { segment } from "$lib/state/segment.svelte.js";
+import { buildMask } from "$lib/adaptivePresets.js";
 import { addMask, createRadialGradientMask, createSegmentMask, createModifier, addModifier, listModifiers } from "$lib/api/develop.js";
 
 const m = /** @type {Record<string, import('vitest').Mock>} */ (/** @type {any} */ (api));
@@ -419,5 +420,56 @@ describe("refining a saved Subject mask", () => {
     await A.handleSegmentRefine();
     expect(masks.activeTool).toBeNull();
     expect(m.segmentModelStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("Select it yourself on a flagged adaptive mask (RFC-0035 3.4)", () => {
+  /** A sky mask the preset flagged, in the stack, with the user's own tweak on it. */
+  function flaggedSky() {
+    const flagged = /** @type {any} */ (
+      buildMask({ region: "sky", adjustments: { exposure: -0.3, contrast: 12, saturation: 10 } }, { outcome: "check", coverage: 0.4, reason: "look", mask: { op: "segment_mask", logits: "PRESET", feather: 40, grow: 0, invert: false } }, 100, "deepen-sky", 0)
+    );
+    develop.editStack = addMask(develop.editStack, { ...flagged, exposure: -0.5 });
+    return flagged;
+  }
+
+  it("the first click makes the user's selection carry the adjustments, and the flagged mask is gone", async () => {
+    const flagged = flaggedSky();
+    await A.handleSegmentToolToggle(flagged.id);
+    m.segmentDecode.mockResolvedValue([cand(0, "MINE")]);
+    await A.handleSegmentClick({ x: 0.5, y: 0.2, positive: true });
+    const [mine, ...rest] = /** @type {any[]} */ (develop.editStack.ops);
+    expect(rest).toEqual([]);
+    expect(mine).toMatchObject({ op: "segment_mask", logits: "MINE", exposure: -0.5, contrast: 12, saturation: 10 });
+    expect(mine.source).toBeUndefined(); // the user's own mask: a Re-apply will not replace it
+  });
+
+  it("a refining click does not take anything over again", async () => {
+    const flagged = flaggedSky();
+    await A.handleSegmentToolToggle(flagged.id);
+    m.segmentDecode.mockResolvedValue([cand(0, "MINE")]);
+    await A.handleSegmentClick({ x: 0.5, y: 0.2, positive: true });
+    m.segmentDecode.mockResolvedValue([cand(0, "MINE2")]);
+    await A.handleSegmentClick({ x: 0.6, y: 0.2, positive: true });
+    expect(develop.editStack.ops).toHaveLength(1);
+    expect(develop.editStack.ops[0]).toMatchObject({ logits: "MINE2", exposure: -0.5 });
+  });
+
+  it("Esc puts the flagged mask back as it was", async () => {
+    const flagged = flaggedSky();
+    await A.handleSegmentToolToggle(flagged.id);
+    m.segmentDecode.mockResolvedValue([cand(0, "MINE")]);
+    await A.handleSegmentClick({ x: 0.5, y: 0.2, positive: true });
+    A.handleSegmentCancel();
+    expect(develop.editStack.ops).toHaveLength(1);
+    expect(develop.editStack.ops[0]).toMatchObject({ id: flagged.id, exposure: -0.5, source: { preset: "deepen-sky" } });
+  });
+
+  it("without a hand-off the flagged mask is left alone", async () => {
+    flaggedSky();
+    await armed();
+    m.segmentDecode.mockResolvedValue([cand(0, "MINE")]);
+    await A.handleSegmentClick({ x: 0.5, y: 0.2, positive: true });
+    expect(develop.editStack.ops).toHaveLength(2);
   });
 });

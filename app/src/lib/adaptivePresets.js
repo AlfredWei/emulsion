@@ -89,6 +89,19 @@ export function presetMasks(stack, presetId) {
   return /** @type {any[]} */ (listMasks(stack)).filter((m) => m.source?.preset === presetId);
 }
 
+/** "Select it yourself" (RFC-0035 §3.4): the adjustments of the flagged preset mask `fromId`, as they stand now (the
+ * user may have moved a slider), for the mask the user makes by hand to carry instead. Only the controls the preset's
+ * rule sets, plus the base three every mask has; null when `fromId` is not a mask a preset wrote.
+ * @param {import('$lib/api/develop.js').EditStack} stack @param {string} fromId
+ * @returns {Record<string, number> | null} */
+export function handOffAdjustments(stack, fromId) {
+  const from = /** @type {any} */ (listMasks(stack).find((m) => /** @type {any} */ (m).id === fromId));
+  const rule = ADAPTIVE_PRESETS.find((p) => p.id === from?.source?.preset)?.rules[from?.source?.rule];
+  if (!from || !rule) return null;
+  const keys = new Set(["exposure", "contrast", "saturation", ...Object.keys(rule.adjustments)]);
+  return Object.fromEntries([...keys].filter((k) => typeof from[k] === "number").map((k) => [k, from[k]]));
+}
+
 /** A mask the user changed since the preset wrote it (anything in it, not only the preset's own adjustments). */
 export function isEdited(/** @type {any} */ mask) {
   const s = mask.source;

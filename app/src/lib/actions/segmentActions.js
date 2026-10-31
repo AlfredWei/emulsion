@@ -23,7 +23,8 @@ import {
   isNotPrepared,
   isCancelled,
 } from "$lib/api/segment.js";
-import { createSegmentMask, findModifierOwner, updateMask, updateModifier } from "$lib/api/develop.js";
+import { addMask, createSegmentMask, findModifierOwner, listMasks, removeMask, updateMask, updateModifier } from "$lib/api/develop.js";
+import { handOffAdjustments } from "$lib/adaptivePresets.js";
 import { handleMaskCreated, handleAddShape, handleShapeRemoved, handleMaskDeleted } from "./maskActions.js";
 
 /** @param {unknown} e */
@@ -32,8 +33,9 @@ function message(e) {
   return s.replace(/^Error:\s*/, "");
 }
 
-/** Select Subject button: arms the tool (checking the model first), or keeps what it made and leaves. */
-export async function handleSegmentToolToggle() {
+/** Select Subject button: arms the tool (checking the model first), or keeps what it made and leaves.
+ * `handOffFrom` is a flagged adaptive mask the first selection takes the adjustments over from ("Select it yourself"). */
+export async function handleSegmentToolToggle(handOffFrom = null) {
   if (masks.activeTool === "segment") {
     if (segment.dialog !== null) handleSegmentDialogCancel();
     else handleSegmentAccept();
@@ -41,7 +43,7 @@ export async function handleSegmentToolToggle() {
   }
   masks.shapeTarget = null;
   masks.activeTool = "segment";
-  await startSegmentSession();
+  await startSegmentSession(null, handOffFrom);
 }
 
 /** Add shape ▸ Subject in the mask panel: the next decoded click becomes a shape of the selected mask. */
@@ -65,9 +67,10 @@ export async function handleSegmentRefine() {
 /** Checks the model files and, when they are there, prepares the current image.
  * @param {{ id: string, prompts: import('$lib/api/develop.js').SegmentPrompt[], logits: string, candidate: number | undefined } | null} seed
  *   a saved mask to resume once the image is prepared */
-export async function startSegmentSession(seed = null) {
+export async function startSegmentSession(seed = null, handOffFrom = null) {
   segment.reset();
   segment.seed = seed;
+  segment.handOffFrom = handOffFrom;
   const gen = segment.generation;
   segment.phase = "checking";
   try {
@@ -178,6 +181,15 @@ function writeCandidate() {
   if (segment.maskId === null) {
     const mask = createSegmentMask(c.logits_png, prompts, c.index);
     segment.maskId = mask.id;
+    // "Select it yourself": the user's own selection replaces the flagged preset mask and keeps its adjustments.
+    const fromId = segment.handOffFrom;
+    const adjustments = fromId ? handOffAdjustments(develop.editStack, fromId) : null;
+    segment.handOffFrom = null;
+    if (fromId && adjustments) {
+      segment.handedOff = listMasks(develop.editStack).find((m) => /** @type {any} */ (m).id === fromId) ?? null;
+      Object.assign(mask, adjustments);
+      develop.editStack = removeMask(develop.editStack, fromId);
+    }
     handleMaskCreated({ kind: "segment", mask });
     return;
   }
@@ -219,6 +231,7 @@ export function handleSegmentAccept() {
 export function handleSegmentCancel() {
   const id = segment.maskId;
   const original = segment.original;
+  const handedOff = segment.handedOff;
   masks.activeTool = null;
   masks.shapeTarget = null;
   if (id === null) return;
@@ -231,6 +244,11 @@ export function handleSegmentCancel() {
     handleShapeRemoved(id);
   } else if (masks.selectedMaskId === id) {
     handleMaskDeleted();
+  }
+  // Esc on a "Select it yourself" selection gives the flagged preset mask back, as it was.
+  if (handedOff) {
+    develop.editStack = addMask(develop.editStack, handedOff);
+    develop.scheduleFlush("Select Subject");
   }
 }
 

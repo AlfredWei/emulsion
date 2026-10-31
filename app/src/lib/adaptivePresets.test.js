@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, needsFaces, scaleAdjustments, buildMask, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
+import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, needsFaces, scaleAdjustments, buildMask, handOffAdjustments, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
 import { MAX_MASKS, listMasks, createBrushMask, addMask } from "$lib/api/develop.js";
 
 const sky = /** @type {any} */ (ADAPTIVE_PRESETS.find((p) => p.id === "deepen-sky"));
@@ -145,5 +145,17 @@ describe("adaptive presets", () => {
   it("the face and person presets need the faces scanned first; sky and shadows do not", () => {
     const need = ADAPTIVE_PRESETS.filter(needsFaces).map((p) => p.id);
     expect(need).toEqual(["brighten-faces", "lift-people"]);
+  });
+
+  it("hand-off: the flagged mask's adjustments as they stand now, only the preset's controls and the base three", () => {
+    const mask = /** @type {any} */ (buildMask(sky.rules[0], found({ outcome: "check", reason: "look" }), 50, "deepen-sky", 0));
+    const stack = addMask(empty, { ...mask, exposure: -0.4, highlights: 30 });
+    expect(handOffAdjustments(stack, mask.id)).toEqual({ exposure: -0.4, contrast: 6, saturation: 5 });
+  });
+
+  it("hand-off: nothing for a mask no preset wrote, or one that is gone", () => {
+    const brush = /** @type {any} */ (createBrushMask("b1"));
+    expect(handOffAdjustments(addMask(empty, brush), brush.id)).toBeNull();
+    expect(handOffAdjustments(empty, "nope")).toBeNull();
   });
 });

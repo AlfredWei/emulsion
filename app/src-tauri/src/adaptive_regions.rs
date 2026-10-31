@@ -148,6 +148,9 @@ const FACE_LOW_SCORE: f32 = 0.75;
 const FACE_BIG_COVERAGE: f32 = 0.40;
 /// A weak score only matters when it is most of the result: in a crowd one stray blob is harmless.
 const FACE_FEW: usize = 2;
+/// A face box over this share of the frame is a statue, a poster or an animal, not a person to adjust. Measured on 40 portraits
+/// and crowds: the false positives (a statue's head, a dog) were 33-38 %, the largest real close-up 19 %; only asks for a look.
+const FACE_HUGE_AREA: f32 = 0.25;
 /// The tight box ends at forehead and chin; the ellipse reaches hair and neck.
 const FACE_GROW_X: f32 = 1.3;
 const FACE_GROW_Y: f32 = 1.5;
@@ -188,6 +191,12 @@ fn kept_faces(boxes: &[FaceBox], frame: (u32, u32)) -> Result<Vec<FaceBox>, Regi
     Ok(kept)
 }
 
+/// Few faces, one of them with a weak detector score: the detector's score is the only signal that tells a dog or a toy from a
+/// face (measured 0.71-0.80 where real faces are mostly 0.85 and up, though in a crowd real ones dip to 0.65).
+fn weak_detection(kept: &[FaceBox]) -> bool {
+    kept.len() <= FACE_FEW && kept.iter().any(|f| f.score.is_some_and(|s| s < FACE_LOW_SCORE))
+}
+
 /// All the faces of one photograph in one `segment_mask`, any number of them. `frame` is the pixel size of the
 /// image the boxes are relative to (only the aspect and the pixel floor use it).
 pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
@@ -219,7 +228,7 @@ pub fn resolve_faces(boxes: &[FaceBox], frame: (u32, u32)) -> RegionResult {
     if coverage > FACE_BIG_COVERAGE {
         why.push(format!("the face covers over {} of the frame (statue, poster or animal?)", pct(FACE_BIG_COVERAGE)));
     }
-    if kept.len() <= FACE_FEW && kept.iter().any(|f| f.score.is_some_and(|s| s < FACE_LOW_SCORE)) {
+    if weak_detection(&kept) {
         why.push("a face was detected with low confidence".to_string());
     }
     if why.is_empty() {
@@ -279,6 +288,7 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
         Ok(k) => k,
         Err(none) => return Ok(none),
     };
+    let (weak, huge) = (weak_detection(&faces), faces.iter().any(|f| f.w * f.h > FACE_HUGE_AREA));
     faces.sort_by(|a, b| (b.w * b.h).total_cmp(&(a.w * a.h)));
     let beyond = faces.len().saturating_sub(PERSON_MAX);
     faces.truncate(PERSON_MAX);
@@ -294,8 +304,8 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
         }
         let cut = model.cut(&clicks)?;
         trace(&format!(
-            "person face=({:.3},{:.3},{:.3}x{:.3}) torso_click={} iou={:.3} cut_coverage={:.3}",
-            f.x, f.y, f.w, f.h, clicks.len() > 1, cut.iou, coverage_of(&cut.logits)
+            "person face=({:.3},{:.3},{:.3}x{:.3}) score={} torso_click={} iou={:.3} cut_coverage={:.3}",
+            f.x, f.y, f.w, f.h, f.score.map_or("?".to_string(), |s| format!("{s:.3}")), clicks.len() > 1, cut.iou, coverage_of(&cut.logits)
         ));
         if cut.iou < PERSON_MIN_IOU || cut.logits.len() != merged.len() {
             unsure += 1;
@@ -321,6 +331,12 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
         return Ok(RegionResult::not_found(format!("the people cover only {} of the frame", pct(coverage))));
     }
     let mut why: Vec<String> = Vec::new();
+    if weak {
+        why.push("a face was detected with low confidence (an animal or a statue?)".to_string());
+    }
+    if huge {
+        why.push(format!("a face fills over {} of the frame (a statue, a poster or an animal?)", pct(FACE_HUGE_AREA)));
+    }
     if beyond > 0 {
         why.push(format!("{beyond} more face(s) beyond the {PERSON_MAX} largest were not used"));
     }
@@ -780,6 +796,23 @@ mod tests {
         assert_eq!(r.outcome, Outcome::NotFound);
         assert!(r.reason.as_deref().unwrap().contains("not sure"));
         assert!(r.mask.is_none());
+    }
+
+    #[test]
+    fn a_weakly_detected_lone_face_or_a_huge_one_asks_for_a_look_but_a_crowd_does_not() {
+        let at = |face: FaceBox| resolve_person(&[face], (1600, 1200), &mut FakeModel::new(0.9)).unwrap();
+        assert_eq!(at(big_face(0.4, 0.2)).outcome, Outcome::Found);
+        let weak = at(FaceBox { score: Some(0.71), ..big_face(0.4, 0.2) });
+        assert_eq!(weak.outcome, Outcome::Check);
+        assert!(weak.reason.as_deref().unwrap().contains("low confidence"), "{weak:?}");
+        let huge = at(FaceBox { x: 0.2, y: 0.1, w: 0.6, h: 0.63, score: Some(0.95) });
+        assert_eq!(huge.outcome, Outcome::Check);
+        assert!(huge.reason.as_deref().unwrap().contains("fills over 25 %"), "{huge:?}");
+        // Three faces, one of them weak: in a group one stray detection is harmless.
+        let group = [big_face(0.1, 0.2), big_face(0.4, 0.2), FaceBox { score: Some(0.7), ..big_face(0.7, 0.2) }];
+        assert_eq!(resolve_person(&group, (1600, 1200), &mut FakeModel::new(0.9)).unwrap().outcome, Outcome::Found);
+        // A face row from before scores were kept (None) is never held against it.
+        assert_eq!(at(FaceBox { score: None, ..big_face(0.4, 0.2) }).outcome, Outcome::Found);
     }
 
     #[test]

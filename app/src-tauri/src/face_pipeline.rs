@@ -125,7 +125,7 @@ fn detect_one_image(
     for face in detector.detect(&image)? {
         let landmarks_px = face.landmarks.map(|(x, y)| (x * image.width() as f32, y * image.height() as f32));
         let embedding = embedder.embed(&image, &landmarks_px)?;
-        let face_id = catalog.add_face(image_id, (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h), &embedding)?;
+        let face_id = catalog.add_face(image_id, (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h), Some(face.score), &embedding)?;
         assign_and_persist(catalog, clusters, person_ids, face_id, &embedding, threshold, || {
             catalog.create_person(face_id).map_err(FacePipelineError::from)
         })?;
@@ -257,8 +257,8 @@ mod tests {
     fn recluster_all_reuses_an_existing_persons_id_instead_of_minting_a_new_one() {
         let catalog = Catalog::open_in_memory().unwrap();
         let image_id = catalog.add_image("/a.jpg").unwrap();
-        let face_a = catalog.add_face(image_id, (0.0, 0.0, 0.1, 0.1), &unit_vec(4, 0)).unwrap();
-        let face_b = catalog.add_face(image_id, (0.2, 0.2, 0.1, 0.1), &unit_vec(4, 0)).unwrap();
+        let face_a = catalog.add_face(image_id, (0.0, 0.0, 0.1, 0.1), None, &unit_vec(4, 0)).unwrap();
+        let face_b = catalog.add_face(image_id, (0.2, 0.2, 0.1, 0.1), None, &unit_vec(4, 0)).unwrap();
         let person = catalog.create_person(face_a).unwrap();
         catalog.set_face_person(face_a, Some(person)).unwrap();
         catalog.set_face_person(face_b, Some(person)).unwrap();
@@ -339,8 +339,8 @@ mod tests {
     fn recluster_all_still_separates_two_genuinely_different_people() {
         let catalog = Catalog::open_in_memory().unwrap();
         let image_id = catalog.add_image("/a.jpg").unwrap();
-        let face_a = catalog.add_face(image_id, (0.0, 0.0, 0.1, 0.1), &unit_vec(4, 0)).unwrap();
-        let face_b = catalog.add_face(image_id, (0.2, 0.2, 0.1, 0.1), &unit_vec(4, 1)).unwrap();
+        let face_a = catalog.add_face(image_id, (0.0, 0.0, 0.1, 0.1), None, &unit_vec(4, 0)).unwrap();
+        let face_b = catalog.add_face(image_id, (0.2, 0.2, 0.1, 0.1), None, &unit_vec(4, 1)).unwrap();
 
         recluster_all(&catalog, 0.1).unwrap();
 
@@ -359,7 +359,7 @@ mod tests {
         // of the invariant this codebase can no longer assume in code.
         let catalog = Catalog::open_in_memory().unwrap();
         let image_id = catalog.add_image("/a.jpg").unwrap();
-        let face_id = catalog.add_face(image_id, (0.0, 0.0, 0.1, 0.1), &[]).unwrap();
+        let face_id = catalog.add_face(image_id, (0.0, 0.0, 0.1, 0.1), None, &[]).unwrap();
         let mut clusters: Vec<Cluster> = Vec::new();
         let mut person_ids: Vec<i64> = Vec::new();
 

@@ -15,6 +15,8 @@ pub struct FaceRow {
     pub bbox_y: f32,
     pub bbox_w: f32,
     pub bbox_h: f32,
+    /// The detector's confidence, `None` for a row detected before it was stored.
+    pub score: Option<f32>,
 }
 
 /// One row of the People grid (RFC-0005 §3.6): `name` is `None` until the
@@ -50,10 +52,10 @@ impl Catalog {
     /// bytes via `bytemuck` -- every platform this app targets (x86_64,
     /// arm64) is little-endian, so this matches the schema's own
     /// "little-endian" comment without a manual byte-swap.
-    pub fn add_face(&self, image_id: i64, bbox: (f32, f32, f32, f32), embedding: &[f32]) -> Result<i64> {
+    pub fn add_face(&self, image_id: i64, bbox: (f32, f32, f32, f32), score: Option<f32>, embedding: &[f32]) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO faces (image_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![image_id, bbox.0, bbox.1, bbox.2, bbox.3, bytemuck::cast_slice::<f32, u8>(embedding)],
+            "INSERT INTO faces (image_id, bbox_x, bbox_y, bbox_w, bbox_h, score, embedding) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![image_id, bbox.0, bbox.1, bbox.2, bbox.3, score, bytemuck::cast_slice::<f32, u8>(embedding)],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -89,7 +91,7 @@ impl Catalog {
     /// no separate `list_people` round-trip needed to label each box.
     pub fn get_faces_for_image(&self, image_id: i64) -> Result<Vec<FaceRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT f.id, f.image_id, f.person_id, p.name, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h
+            "SELECT f.id, f.image_id, f.person_id, p.name, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h, f.score
              FROM faces f LEFT JOIN people p ON p.id = f.person_id
              WHERE f.image_id = ?1 AND f.excluded = 0
              ORDER BY f.id",
@@ -105,6 +107,7 @@ impl Catalog {
                     bbox_y: row.get(5)?,
                     bbox_w: row.get(6)?,
                     bbox_h: row.get(7)?,
+                    score: row.get(8)?,
                 })
             })?
             .collect();
@@ -208,7 +211,7 @@ mod tests {
     fn list_people_resolves_the_cover_faces_photo_and_bbox() {
         let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
         let image_id = catalog.add_image("/a.jpg").unwrap();
-        let face_id = catalog.add_face(image_id, (0.1, 0.2, 0.3, 0.4), &[1.0, 0.0]).unwrap();
+        let face_id = catalog.add_face(image_id, (0.1, 0.2, 0.3, 0.4), None, &[1.0, 0.0]).unwrap();
         let person_id = catalog.create_person(face_id).unwrap();
         catalog.set_face_person(face_id, Some(person_id)).unwrap();
 
@@ -236,19 +239,19 @@ mod tests {
         let image_c = catalog.add_image("/c.jpg").unwrap();
 
         // Two faces of the same person on image_a -- must not double-count.
-        let face_a1 = catalog.add_face(image_a, (0.0, 0.0, 0.1, 0.1), &[1.0, 0.0]).unwrap();
-        let face_a2 = catalog.add_face(image_a, (0.2, 0.2, 0.1, 0.1), &[1.0, 0.0]).unwrap();
+        let face_a1 = catalog.add_face(image_a, (0.0, 0.0, 0.1, 0.1), None, &[1.0, 0.0]).unwrap();
+        let face_a2 = catalog.add_face(image_a, (0.2, 0.2, 0.1, 0.1), None, &[1.0, 0.0]).unwrap();
         let person = catalog.create_person(face_a1).unwrap();
         catalog.set_face_person(face_a1, Some(person)).unwrap();
         catalog.set_face_person(face_a2, Some(person)).unwrap();
 
         // A second person's face on image_b -- must not leak in.
-        let face_b = catalog.add_face(image_b, (0.0, 0.0, 0.1, 0.1), &[0.0, 1.0]).unwrap();
+        let face_b = catalog.add_face(image_b, (0.0, 0.0, 0.1, 0.1), None, &[0.0, 1.0]).unwrap();
         let other_person = catalog.create_person(face_b).unwrap();
         catalog.set_face_person(face_b, Some(other_person)).unwrap();
 
         // This person's face on image_c, but excluded -- must not count.
-        let face_c = catalog.add_face(image_c, (0.0, 0.0, 0.1, 0.1), &[1.0, 0.0]).unwrap();
+        let face_c = catalog.add_face(image_c, (0.0, 0.0, 0.1, 0.1), None, &[1.0, 0.0]).unwrap();
         catalog.set_face_person(face_c, Some(person)).unwrap();
         catalog.set_face_excluded(face_c, true).unwrap();
 
@@ -271,6 +274,16 @@ mod tests {
         let images = catalog.list_images().unwrap();
         assert_eq!(images.len(), 1);
         assert!(!images[0].faces_scanned);
+    }
+
+    #[test]
+    fn a_faces_detector_score_is_kept_and_an_unscored_row_reads_as_none() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog.add_image("/a.jpg").unwrap();
+        catalog.add_face(image_id, (0.1, 0.1, 0.2, 0.2), Some(0.83), &[0.0]).unwrap();
+        catalog.add_face(image_id, (0.5, 0.5, 0.2, 0.2), None, &[0.0]).unwrap();
+        let scores: Vec<Option<f32>> = catalog.get_faces_for_image(image_id).unwrap().iter().map(|f| f.score).collect();
+        assert_eq!(scores, vec![Some(0.83), None]);
     }
 
     #[test]

@@ -430,6 +430,9 @@ impl Catalog {
             // scanned" and is what makes per-photo/per-folder on-demand
             // detection below actually run for them.
             "ALTER TABLE images ADD COLUMN faces_scanned INTEGER NOT NULL DEFAULT 0",
+            // The detector's confidence (0.6..1) for this box. NULL for rows detected before it was kept: they read as "unknown"
+            // and are never held against a face (adaptive presets weigh a weak detection; the rest of the app ignores it).
+            "ALTER TABLE faces ADD COLUMN score REAL",
         ] {
             add_column_if_missing(conn, ddl)?;
         }

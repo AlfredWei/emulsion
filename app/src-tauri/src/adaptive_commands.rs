@@ -64,7 +64,7 @@ pub async fn resolve_adaptive_region(
             .get_faces_for_image(image_id)
             .map_err(|e| e.to_string())?
             .into_iter()
-            .map(|f| FaceBox { x: f.bbox_x, y: f.bbox_y, w: f.bbox_w, h: f.bbox_h, score: None })
+            .map(|f| FaceBox { x: f.bbox_x, y: f.bbox_y, w: f.bbox_w, h: f.bbox_h, score: f.score })
             .collect()
     } else {
         Vec::new()

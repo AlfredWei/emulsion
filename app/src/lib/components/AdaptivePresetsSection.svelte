@@ -8,7 +8,6 @@
   /**
    * @type {{
    *   presets: { id: string, name: string, rules: { region: string }[] }[],
-   *   planned: { id: string, name: string, region: string, needs: string }[],
    *   applied: Record<string, { edited: boolean }>,
    *   photoKey: unknown,
    *   onApply: (presetId: string, amount: number, options: { replaceEdited: boolean }) => Promise<import('$lib/adaptivePresets.js').RuleReport[] | null>,
@@ -16,7 +15,7 @@
    *   onSelectItYourself: (presetId: string, ruleIndex: number) => void,
    * }}
    */
-  let { presets, planned, applied, photoKey, onApply, onOpenApplied, onSelectItYourself } = $props();
+  let { presets, applied, photoKey, onApply, onOpenApplied, onSelectItYourself } = $props();
 
   let selectedId = $state(/** @type {string | null} */ (null));
   let amount = $state(100);
@@ -73,12 +72,6 @@
       <span class="name">{p.name}</span>
       <span class="chip">{p.rules.map((r) => r.region).join(", ")}</span>
     </button>
-  {/each}
-  {#each planned as p (p.id)}
-    <div class="adaptive-row off" title={p.needs}>
-      <span class="name">{p.name}<span class="needs">{p.needs}</span></span>
-      <span class="chip">{p.region}</span>
-    </div>
   {/each}
 
   <label class="adaptive-amount">
@@ -157,21 +150,9 @@
     border-color: var(--accent);
     background: var(--accent-soft);
   }
-  .adaptive-row.off {
-    cursor: default;
-    opacity: 0.55;
-  }
-  .adaptive-row.off:hover {
-    border-color: var(--border-subtle);
-  }
   .name {
     flex: 1;
     min-width: 0;
-  }
-  .needs {
-    display: block;
-    font-size: 10.5px;
-    color: var(--text-tertiary);
   }
   .chip {
     font-size: 10.5px;

@@ -35,14 +35,6 @@ export const ADAPTIVE_PRESETS = [
  * @param {AdaptivePreset} preset */
 export const needsFaces = (preset) => preset.rules.some((r) => r.region === "face" || r.region === "person");
 
-/** Shown greyed out in the section so the user knows they are coming: they need the segmenter (one click, GPU
- * only, RFC-0035 §3.5). Not appliable.
- * @type {{ id: string, name: string, region: string, needs: string }[]} */
-export const ADAPTIVE_PLANNED = [
-  { id: "separate-subject", name: "Separate the subject", region: "subject", needs: "Needs a click and GPU acceleration" },
-  { id: "soften-background", name: "Soften the background", region: "background", needs: "Needs a click and GPU acceleration" },
-];
-
 /** Amount (0-100 %) is applied once, here: the numbers written are the real ones the mask panel shows. Exact for
  * every pointwise control and Texture, which are linear in strength (RFC-0034 §3.2).
  * @param {Record<string, number>} adjustments @param {number} amount */

@@ -21,6 +21,7 @@
  * @property {() => void} handleDeselectAll
  * @property {(target: string) => Promise<void>} switchModule
  * @property {() => void} handleToggleClippingOverlay
+ * @property {() => void} toggleSoftChips
  */
 
 /** @param {MenuContext} ctx */
@@ -95,6 +96,9 @@ export function createMenuHandler(ctx) {
         break;
       case "toggle_clipping":
         if (ctx.activeModule === "develop") ctx.handleToggleClippingOverlay();
+        break;
+      case "toggle_soft_chips":
+        ctx.toggleSoftChips();
         break;
       case "toggle_before_after":
         if (ctx.activeModule === "develop") ctx.showOriginal = !ctx.showOriginal;

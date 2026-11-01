@@ -15,6 +15,7 @@
    * @type {{
    *   images: import('$lib/api/catalog.js').ImageSummary[],
    *   selectedIds: Set<number>,
+   *   softIds?: Set<number> | null,
    *   onSelect: (versionId: number, event?: MouseEvent) => void,
    *   onOpen: (versionId: number) => void,
    *   onRatingChange: (versionId: number, rating: number) => void,
@@ -22,7 +23,7 @@
    *   onColorLabelChange: (versionId: number, colorLabel: string) => void,
    * }}
    */
-  let { images, selectedIds, onSelect, onOpen, onRatingChange, onFlagChange, onColorLabelChange } =
+  let { images, selectedIds, softIds = null, onSelect, onOpen, onRatingChange, onFlagChange, onColorLabelChange } =
     $props();
 
   const CELL_MIN_WIDTH = 140;
@@ -70,6 +71,7 @@
         <GridCell
           {image}
           selected={selectedIds.has(image.version_id)}
+          soft={softIds?.has(image.version_id) ?? false}
           onSelect={(e) => onSelect(image.version_id, e)}
           onOpen={() => onOpen(image.version_id)}
           onRatingChange={(rating) => onRatingChange(image.version_id, rating)}

@@ -10,6 +10,7 @@
    * @type {{
    *   image: import('$lib/api/catalog.js').ImageSummary,
    *   selected: boolean,
+   *   soft?: boolean,
    *   onSelect: (event?: MouseEvent) => void,
    *   onOpen: () => void,
    *   onRatingChange: (rating: number) => void,
@@ -17,7 +18,7 @@
    *   onColorLabelChange: (colorLabel: string) => void,
    * }}
    */
-  let { image, selected, onSelect, onOpen, onRatingChange, onFlagChange, onColorLabelChange } =
+  let { image, selected, soft = false, onSelect, onOpen, onRatingChange, onFlagChange, onColorLabelChange } =
     $props();
 
   const COLOR_CYCLE = ["none", "red", "yellow", "green", "blue", "purple"];
@@ -84,6 +85,10 @@
         </span>
       {/if}
     </div>
+  {/if}
+
+  {#if soft}
+    <span class="soft-chip" data-testid="cell-soft-chip" title="Soft: much less sharp than the sharpest of its similar photos">Soft</span>
   {/if}
 
   <div class="file-label" class:has-cues={enlargedChip || enlargementCount > 0} title="{filename}&#10;{image.path}">
@@ -235,6 +240,24 @@
   }
   .ai-link {
     padding: 0 4px;
+  }
+  .soft-chip {
+    position: absolute;
+    top: 24px;
+    right: 5px;
+    display: inline-flex;
+    align-items: center;
+    min-height: 16px;
+    padding: 0 5px;
+    border-radius: var(--radius-s);
+    background: rgba(0, 0, 0, 0.62);
+    border: 1px solid var(--label-yellow, var(--text-secondary));
+    color: var(--label-yellow, var(--text-primary));
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    pointer-events: none;
   }
   .badge-row {
     position: absolute;

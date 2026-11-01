@@ -7,6 +7,7 @@ import { library } from "./library.svelte.js";
 import { buildGroupViews } from "$lib/similar.js";
 
 const STORAGE_KEY = "emulsion_similarity_v1";
+const SOFT_CHIPS_KEY = "emulsion_soft_chips_v1";
 export const DEFAULT_SIMILARITY = 0.5;
 
 function storedSimilarity() {
@@ -17,6 +18,14 @@ function storedSimilarity() {
     // no storage: the default
   }
   return DEFAULT_SIMILARITY;
+}
+
+function storedSoftChips() {
+  try {
+    return localStorage.getItem(SOFT_CHIPS_KEY) === "1";
+  } catch {
+    return false; // no storage: off, as by default
+  }
 }
 
 export class SimilarStore {
@@ -33,6 +42,10 @@ export class SimilarStore {
   /** @type {{ analysed: number, total: number } | null} */
   status = $state(null);
   loaded = $state(false);
+  /** The grid's "Soft" chips (View menu; off by default): a chip on each photo that is soft inside a group. */
+  showSoftChips = $state(storedSoftChips());
+  /** Versions that are soft inside some group, from the groups last fetched (the same ones the Similar view shows). */
+  softVersionIds = $derived(new Set(this.groups.flatMap((g) => g.members.filter((m) => m.soft).map((m) => m.version_id))));
   /** The open group, by its key (first member's image id); null shows the list of groups. */
   openKey = $state(/** @type {number | null} */ (null));
   /** A "Reject the others" waiting for its confirmation. */
@@ -47,6 +60,14 @@ export class SimilarStore {
     this.active = false;
     this.openKey = null;
     this.pendingReject = null;
+  }
+
+  saveSoftChips() {
+    try {
+      localStorage.setItem(SOFT_CHIPS_KEY, this.showSoftChips ? "1" : "0");
+    } catch {
+      // not persisted; fine
+    }
   }
 
   saveSimilarity() {

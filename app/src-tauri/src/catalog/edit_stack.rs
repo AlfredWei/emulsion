@@ -54,6 +54,10 @@ fn merge_ops(target: &EditStack, ops: &[serde_json::Value], removed_ops: &[Strin
 /// pruned first once exceeded. See `record_edit_stack`.
 const MAX_HISTORY_ENTRIES: i64 = 100;
 
+/// The label of the row `write_edit_stack` records for the stack a version had BEFORE its first history
+/// row, so the first edit can be undone (Lightroom's "Import" row; this project's name for it).
+pub const ORIGINAL_LABEL: &str = "Original";
+
 /// One entry in a version's linear undo/redo history (M3). Deliberately
 /// does NOT include `edit_stack_json` -- the History panel only ever needs
 /// to LIST entries (id/label/timestamp); the full stack is fetched only
@@ -118,7 +122,9 @@ impl Catalog {
     ///    `restore_history_entry`/`restore_snapshot`, which set the live
     ///    stack to content that ALREADY has a matching row. If no match
     ///    is found (the very first edit ever for this version), the
-    ///    cursor is treated as "before all history" -- nothing to delete.
+    ///    cursor is treated as "before all history" -- nothing to delete,
+    ///    and the pre-write stack is recorded first as an `ORIGINAL_LABEL`
+    ///    row (the thing the first edit's undo goes back to).
     ///    Every history row NEWER than the cursor is then deleted --
     ///    discards the abandoned redo branch, the same "a new edit after
     ///    undo cuts off redo" behavior every text editor and real
@@ -186,6 +192,15 @@ impl Catalog {
                     "DELETE FROM edit_history WHERE version_id = ?1 AND id > ?2",
                     params![version_id, cursor_id.unwrap_or(0)],
                 )?;
+                if cursor_id.is_none() {
+                    // The live stack matches no history row (the very first edit ever, or a stack written
+                    // outside this path): record it first as the row to undo back to, so even the first
+                    // edit has a "before" (`ORIGINAL_LABEL`).
+                    tx.execute(
+                        "INSERT INTO edit_history (version_id, edit_stack_json, label) VALUES (?1, ?2, ?3)",
+                        params![version_id, current_json, ORIGINAL_LABEL],
+                    )?;
+                }
                 tx.execute(
                     "INSERT INTO edit_history (version_id, edit_stack_json, label) VALUES (?1, ?2, ?3)",
                     params![version_id, new_json, label],
@@ -395,9 +410,27 @@ mod tests {
             .record_edit_stack(version_id, &stack_with("exposure", 0.5), Some("Exposure"))
             .unwrap();
 
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].label, "Exposure");
+        // The first edit records the stack it started from as "Original", so it has a "before" to undo to.
+        assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "Exposure"]);
+        assert_eq!(catalog.peek_history_entry(version_id, history[0].id).unwrap(), EditStack::empty());
         assert_eq!(catalog.get_edit_stack(version_id).unwrap(), stack_with("exposure", 0.5));
+    }
+
+    #[test]
+    fn the_original_row_keeps_the_stack_a_version_started_with_and_is_written_once() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let started = stack_with("contrast", 12.0);
+        let version_id = catalog.add_edit_stack(catalog.add_image("/a.CR3").unwrap(), &started).unwrap();
+
+        catalog.record_edit_stack(version_id, &stack_with("exposure", 0.5), Some("Exposure")).unwrap();
+        let history = catalog.record_edit_stack(version_id, &stack_with("exposure", 0.9), Some("Exposure 2")).unwrap();
+
+        assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "Exposure", "Exposure 2"]);
+        assert_eq!(catalog.peek_history_entry(version_id, history[0].id).unwrap(), started, "not an empty stack: what the version had");
+        // Undoing the first edit lands on it, and the next edit from there does not add a second "Original".
+        catalog.restore_history_entry(version_id, history[0].id).unwrap();
+        let after = catalog.record_edit_stack(version_id, &stack_with("exposure", 0.2), Some("Exposure 3")).unwrap();
+        assert_eq!(after.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "Exposure 3"]);
     }
 
     #[test]
@@ -414,7 +447,7 @@ mod tests {
         // spammed second history row.
         let history = catalog.record_edit_stack(version_id, &stack, Some("Exposure")).unwrap();
 
-        assert_eq!(history.len(), 1);
+        assert_eq!(history.len(), 2, "Original and Exposure, and no third row");
     }
 
     #[test]
@@ -438,7 +471,7 @@ mod tests {
 
         catalog.record_edit_stack(version_id, &stack_with("exposure", 0.1), Some("Exposure 1")).unwrap();
         let history = catalog.record_edit_stack(version_id, &stack_with("exposure", 0.2), Some("Exposure 2")).unwrap();
-        let first_id = history[0].id;
+        let first_id = history[1].id; // [0] is "Original"
 
         // Undo back to the first entry (restore, not a new edit).
         catalog.restore_history_entry(version_id, first_id).unwrap();
@@ -447,7 +480,7 @@ mod tests {
         // off "Exposure 2" -- the abandoned redo branch.
         let history = catalog.record_edit_stack(version_id, &stack_with("contrast", 5.0), Some("Contrast")).unwrap();
 
-        assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec!["Exposure 1", "Contrast"]);
+        assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "Exposure 1", "Contrast"]);
     }
 
     #[test]
@@ -479,15 +512,15 @@ mod tests {
         let history = catalog
             .record_edit_stack(version_id, &stack_with("exposure", 0.5), Some("Exposure"))
             .unwrap();
-        let entry_id = history[0].id;
+        let entry_id = history[1].id; // [0] is "Original"
         catalog.record_edit_stack(version_id, &stack_with("exposure", 0.9), Some("Exposure 2")).unwrap();
 
         let restored = catalog.restore_history_entry(version_id, entry_id).unwrap();
 
         assert_eq!(restored, stack_with("exposure", 0.5));
         assert_eq!(catalog.get_edit_stack(version_id).unwrap(), stack_with("exposure", 0.5));
-        // Restoring itself must not add a third row.
-        assert_eq!(catalog.get_history(version_id).unwrap().len(), 2);
+        // Restoring itself must not add a row: Original, Exposure, Exposure 2.
+        assert_eq!(catalog.get_history(version_id).unwrap().len(), 3);
     }
 
     #[test]
@@ -499,7 +532,7 @@ mod tests {
         let history = catalog
             .record_edit_stack(version_id, &stack_with("exposure", 0.5), Some("Exposure"))
             .unwrap();
-        let entry_id = history[0].id;
+        let entry_id = history[1].id; // [0] is "Original"
         catalog.record_edit_stack(version_id, &stack_with("exposure", 0.9), Some("Exposure 2")).unwrap();
 
         let peeked = catalog.peek_history_entry(version_id, entry_id).unwrap();
@@ -508,7 +541,7 @@ mod tests {
         // Unlike restore_history_entry, the live stack (and history) must
         // be completely untouched by a peek.
         assert_eq!(catalog.get_edit_stack(version_id).unwrap(), stack_with("exposure", 0.9));
-        assert_eq!(catalog.get_history(version_id).unwrap().len(), 2);
+        assert_eq!(catalog.get_history(version_id).unwrap().len(), 3);
     }
 
     #[test]
@@ -559,7 +592,7 @@ mod tests {
         // new history row of its own -- it's an undoable step, not a
         // silent side channel outside the undo system.
         assert_eq!(history.last().unwrap().label, "Restore Snapshot: Checkpoint");
-        assert_eq!(catalog.get_history(version_id).unwrap().len(), 3);
+        assert_eq!(catalog.get_history(version_id).unwrap().len(), 4);
     }
 
     #[test]
@@ -576,9 +609,9 @@ mod tests {
 
         assert_eq!(peeked, stack_with("exposure", 0.5));
         // Unlike restore_snapshot, a peek must not touch the live stack or
-        // add a history row.
+        // add a history row (Original, Exposure, Exposure 2).
         assert_eq!(catalog.get_edit_stack(version_id).unwrap(), stack_with("exposure", 0.9));
-        assert_eq!(catalog.get_history(version_id).unwrap().len(), 2);
+        assert_eq!(catalog.get_history(version_id).unwrap().len(), 3);
     }
 
     #[test]
@@ -591,7 +624,7 @@ mod tests {
         catalog.record_edit_stack(version_id, &stack_with("exposure", 0.2), Some("Second")).unwrap();
 
         let history = catalog.get_history(version_id).unwrap();
-        assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec!["First", "Second"]);
+        assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "First", "Second"]);
     }
 
     #[test]
@@ -642,7 +675,7 @@ mod tests {
             "replaced in place, the target's contrast untouched"
         );
         assert_eq!(catalog.get_edit_stack(c).unwrap().ops, vec![json!({"op": "exposure", "value": 0.8})]);
-        assert_eq!(catalog.get_history(b).unwrap().iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec!["Auto Sync: Exposure"]);
+        assert_eq!(catalog.get_history(b).unwrap().iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "Auto Sync: Exposure"]);
     }
 
     #[test]

@@ -109,7 +109,8 @@ describe("Develop Auto Sync", function () {
     expect(opOf(await stackOf(ids.source), "exposure")).toBe(1.25); // the open photo's own edit is unaffected
     expect(opOf(await stackOf(ids.outsider), "exposure")).toBeUndefined();
     const after = await historyOf(ids.target);
-    const added = after.filter((/** @type {any} */ h) => h.id > (before.length ? before[before.length - 1].id : 0));
+    // The first edit a photograph gets also records an "Original" row (what its undo goes back to).
+    const added = after.filter((/** @type {any} */ h) => h.label !== "Original" && h.id > (before.length ? before[before.length - 1].id : 0));
     expect(added.map((/** @type {any} */ h) => h.label)).toEqual(["Auto Sync: Exposure"]);
   });
 

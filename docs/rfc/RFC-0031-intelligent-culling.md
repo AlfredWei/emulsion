@@ -1,6 +1,6 @@
 # RFC-0031: Intelligent culling: similar-photo groups and a soft-shot cue (M7 slice 1)
 
-- Status: Draft for review (slices A and B built; slice C's UX mock added)
+- Status: Draft for review (slices A, B, C built; slice E surveyed in §8, desk research only)
 - Date: 2026-10-20
 - UX mock: [similar-photos-mockup.html](../ux/mockups/similar-photos-mockup.html)
 - Relates to: [MILESTONES.md](../../PRD/MILESTONES.md) M7, PRD §7.2 (duplicate detection) and §7.3 (stacking), [RFC-0030](RFC-0030-import-and-export-speed.md) (thumbnail tiers, the background-pass pattern this reuses), [RFC-0005](RFC-0005-face-detection-people-view.md) (face landmarks, for the later blink slice), [RFC-0023](RFC-0023-on-device-ai-inference.md) (model survey method, the later generative slice), [ADR-0009](../adr/ADR-0009-ml-inference-runtime.md)
@@ -131,3 +131,49 @@ M7's exit criterion ("measurably reduce time-to-cull on a large event / burst-he
 2. **Similarity:** one slider ("looser ↔ stricter") is the plan. Is a fixed value enough for the first version?
 3. **Real bursts:** can you provide (or point to) a folder of unculled burst-heavy photos, ideally RAW and JPEG, for slice D? Without them the thresholds stay unproven.
 4. **Order of E:** blink detection first or the single-photo quality model first, after slice D?
+
+## 8. Slice E survey: blink detection and a single-photo quality model (desk research, 2026-11-01)
+
+Per §5 and RFC-0023's method (size, licence, accuracy, hardware, **before any build**). **This is desk research only: no model was downloaded and nothing was run**, because downloading weights needs the user's go-ahead (§8.6). Sources are model cards and repositories read on 2026-11-01; where a card does not say, this section says "not stated" rather than guessing. §7's question 4 (which first) is answered in §8.5.
+
+### 8.1 What the app already has for blinks
+
+- The face pipeline (RFC-0005, `face_detect.rs`) runs **YuNet** at 640 px input and returns, per face, a box, a score and **five landmarks: both eye centres, nose, mouth corners**. Eye centres are enough to cut an eye crop; **eyelid points are not available**, so a geometric eye-aspect-ratio is not possible with it.
+- **The catalog does not keep the landmarks** (`faces`: box, score, embedding, person, excluded; `schema.rs`). A blink pass needs either a re-detection per photograph (YuNet is the cheap part of the scan) or new columns for the two eye centres. Either way **a blink result needs the face scan to have run**, which the culling analysis (§3.1) does not require today.
+- Slice B's groups give the natural place for the result: "closed eyes" only matters when choosing between near-duplicates, and the Suggested frame should not be one with a blink if another frame has open eyes.
+
+### 8.2 Candidates for closed-eyes detection
+
+| Candidate | What it is | Size | Licence (read) | Evidence of accuracy | Fit |
+|---|---|---|---|---|---|
+| **BlinkLinMulT / `blinkcnn-onnx`** ([model card](https://huggingface.co/fodorad/blink_detection), [repo](https://github.com/fodorad/BlinkLinMulT)) | Eye-state per **64 x 64 eye crop** (input `(B, T, 3, 64, 64)`, `T = 1` is one frame); four ONNX models, one PyTorch | not stated per file; ONNX-only install about 100 MB; CPU 4.15 ms per frame (card, own machine) | **Code and weights MIT.** Trained on seven public corpora (CEW and MRL-Eye stills among them) that "each carry their own licence" and are not redistributed; **those licences are not stated on the pages read** | Card reports **no accuracy or F1 for eye state**; the one figure is average precision for *blink events* on a video set (blinkcnn 0.79, with a wide interval). Export parity with PyTorch is checked | Plausible, cheap, reuses YuNet's eye centres. The eye-state score on a still is the use (the blink-event part needs video and is **not** what culling needs). Licence of the training data is the open point |
+| **MediaPipe Face Mesh V2 + Blendshapes (ONNX conversions)** ([landmarks](https://huggingface.co/fernandotonon/QtMeshEditor-facemesh-onnx), [blendshapes](https://huggingface.co/fernandotonon/QtMeshEditor-faceblendshapes-onnx)) | A 256 x 256 face crop to 478 landmarks (with eyelids), a 146-landmark subset to 52 blendshape scores including `eyeBlinkLeft` / `eyeBlinkRight` (0 to 1) | not stated | **Apache-2.0 code and weights** (Google's model cards, community ONNX conversions repeat it); the conversions are third-party mirrors, so **upstream terms must be checked before shipping** | No accuracy given; a parity check against the Python reference is linked, results not shown | Two models in series, so heavier and more to get wrong; but it also tells **half-closed** from closed, and works from eyelid geometry, not a trained eye classifier. Cleanest licence |
+| Open / closed eye ONNX from Hugging Face (`MichalMlodawski/open-closed-eye-detection`) | Eye classifier | not stated | **CC BY-NC-SA 4.0** (non-commercial, share-alike) | not stated | **Out** (licence) |
+| EAR threshold on landmarks (classical) | Ratio of eyelid distances | none | the one paper found is GPL-licensed code; the method itself is free | thresholds are person- and camera-dependent (the paper says so) | Needs eyelid landmarks, so only with the MediaPipe mesh; usable as a cross-check, not alone |
+| Commercial culling tools (Imagen, Aftershoot) | Closed / partly closed per eye, folded into a score; shots are demoted, not deleted | n/a | n/a | **Vendor claims only** (99.2 % and 96 % in two posts, no method, no independent test) | Not evidence; it does show the **demote, never delete** behaviour users expect, which matches "Suggested" and the existing confirm-before-reject |
+
+### 8.3 Candidates for a single-photo quality model
+
+[A Hugging Face repo](https://huggingface.co/86Cao/IQA-ONNX-Models) holds ONNX exports (from IQA-PyTorch v0.1.15) of the usual no-reference models, all at 224 x 224 input: **MUSIQ about 104 MB** (single-scale simplification), **CLIP-IQA about 146 MB**, DBCNN about 59 MB, HyperIQA about 105 MB, MANIQA about 437 MB, TReS about 575 MB, LIQE about 675 MB. The repo is tagged Apache-2.0, says "original model weights are subject to their respective licences" and **names none**; all were **pre-trained on KonIQ-10k, which the dataset page calls "freely available to the research community" and gives no commercial terms**. No quality-prediction accuracy is reported (only export parity). Not stated either: speed. So **licence is unresolved for every one**, and the quality of a 224 px resize of a 24-megapixel photograph for judging sharpness is **doubtful by construction** (a soft-focus miss is a pixel-level defect; §2 shows the relative sharpness score already does that job).
+
+### 8.4 Risks that apply to any blink model (read from the app, not measured)
+
+- **Face size.** Faces under 24 px at a 1600 px reference are already dropped (`FACE_MIN_SIDE_PX`). An eye is roughly a quarter of a face's width (an estimate): at that floor it is about 6 px wide, stretched to a 64 px crop. A group photograph (the app's own set has frames with 17 to 59 faces) is mostly such faces. **A blink verdict needs a minimum eye size and must say "cannot tell" under it**, in the project's own style (found / check / not found).
+- **What is a blink:** a person looking down, squinting in sun, laughing, wearing glasses with glare or sunglasses are all "eyes not open" to a classifier. Every tool above says nothing about these. The cue must be a **relative badge inside a group** ("eyes closed in 2 of 5 frames"), like Soft (§3.3), never an absolute reject.
+- **Which pixels:** the grid thumbnails (1024 px) are too small for eye crops from a group; the Develop preview or the source is needed for a blink pass, which costs a decode that the sharpness pass avoided (§3.1).
+- **Windows:** nothing here was run on it.
+
+### 8.5 Recommendation
+
+1. **Blink first, the quality model not at all for now** (§7 question 4). Closed eyes is a decision people actually make between near-duplicates and a model's wrong answer is cheap to check by eye; "best frame" is subjective and the single-photo scores have no usable licence and no accuracy evidence for this use.
+2. **Two candidates go to a measurement, not to a build:** (a) YuNet eye centres + the BlinkCNN eye-state model (smallest and simplest, MIT, training-data licences to be read in the repository's `docs/data.md`); (b) MediaPipe Face Mesh + Blendshapes (Apache-2.0, eyelid-level, half-closed). The measurement decides between them, or neither.
+3. **The measurement** (needs the user's photographs, like slice D, and a download go-ahead): about 150 faces from the user's own events, each marked open / closed / half by the user, at three face sizes; report per size: accuracy, "cannot tell" rate, time per face, and the model files' sizes. A model is worth building only if it is right on clearly open and clearly closed eyes at the sizes where it speaks and says "cannot tell" at the rest.
+4. **If built (slice E1):** blink results stored per face (or recomputed from stored eye centres), shown as a badge on group members, folded into "Suggested" as a tiebreak only; nothing rejects by itself.
+
+### 8.6 What the next step needs from the user
+
+- **Go-ahead to download** the two candidate sets into the scratch area (`mask_training/`-style, outside the repo): the BlinkCNN ONNX file(s) (sizes to be read from the repository when downloading) and the MediaPipe face landmark and blendshape ONNX files. Nothing is bundled by this.
+- **Photographs with people** for the measurement (the slice D bursts, if they include portraits and groups, would do).
+- The training-data licences of the BlinkCNN corpora are to be read from the repository's `docs/data.md` (not reachable in this survey); if any is research-only, candidate (a) falls under the same question as the sky model's training data (`mask_training/README.md`).
+
+**Not verified in this section:** everything about accuracy (no model run), every file size marked "not stated", the training-data licences, upstream terms behind the community ONNX conversions, the eye-width estimate, Windows.

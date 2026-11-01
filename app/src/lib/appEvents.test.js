@@ -20,7 +20,7 @@ const imp = vi.hoisted(() => ({ handleDropImport: vi.fn(), regenerateThumbnailFo
 vi.mock("$lib/actions/importActions.js", () => imp);
 const pre = vi.hoisted(() => ({ refreshPresets: vi.fn() }));
 vi.mock("$lib/actions/presetActions.js", () => pre);
-vi.mock("$lib/actions/similarActions.js", () => ({ refreshSimilar: vi.fn() }));
+vi.mock("$lib/actions/similarActions.js", () => ({ refreshSimilar: vi.fn(), resumeSoftChips: vi.fn() }));
 
 import { installAppEvents } from "./appEvents.js";
 import { shell } from "$lib/state/shell.svelte.js";

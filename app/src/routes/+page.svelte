@@ -69,6 +69,7 @@
   } from "$lib/actions/importActions.js";
   import { handleRatingChange, handleFlagChange, handleColorLabelChange } from "$lib/actions/metadataActions.js";
   import { handleToggleClippingOverlay } from "$lib/actions/developActions.js";
+  import { toggleSoftChips } from "$lib/actions/similarActions.js";
     import { handleCreateSnapshotConfirmed, handleCreatePresetConfirmed, handleDeletePresetConfirmed, handleApplyPresetToSelection, handleCopySettingsRequest, handleCopySettingsConfirmed, handlePasteSettings, handlePasteSettingsToSelection } from "$lib/actions/presetActions.js";
     import { handleUndo, handleRedo, handleResetEditStack } from "$lib/actions/historyActions.js";
   import {
@@ -208,6 +209,7 @@
     handleRedo,
     handleSelectAll,
     handleToggleClippingOverlay,
+    toggleSoftChips,
     handleUndo,
     get libraryViewMode() {
       return library.libraryViewMode;

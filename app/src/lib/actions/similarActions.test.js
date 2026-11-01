@@ -5,7 +5,7 @@ const catalog = vi.hoisted(() => ({ setFlag: vi.fn(), listImages: vi.fn() }));
 vi.mock("$lib/api/cull.js", () => cullApi);
 vi.mock("$lib/api/catalog.js", () => catalog);
 
-import { refreshSimilar, showSimilar, leaveSimilar, setSimilarity, openSimilarGroup, closeSimilarGroup, askRejectOthers, cancelRejectOthers, confirmRejectOthers } from "./similarActions.js";
+import { refreshSimilar, showSimilar, leaveSimilar, setSimilarity, openSimilarGroup, closeSimilarGroup, askRejectOthers, cancelRejectOthers, confirmRejectOthers, toggleSoftChips, resumeSoftChips } from "./similarActions.js";
 import { selectAllPhotos } from "./libraryActions.js";
 import { library } from "$lib/state/library.svelte.js";
 import { selection } from "$lib/state/selection.svelte.js";
@@ -29,6 +29,7 @@ beforeEach(() => {
   similar.status = null;
   similar.loaded = false;
   similar.similarity = 0.5;
+  similar.showSoftChips = false;
   selection.selectedId = null;
   selection.selectedIds = new Set();
   vi.spyOn(shell, "notify").mockImplementation(() => {});
@@ -196,5 +197,70 @@ describe("opening a group and rejecting the others", () => {
     await confirmRejectOthers();
     expect(library.images.every((i) => i.flag === "none")).toBe(true);
     expect(shell.notify).toHaveBeenCalledWith("Could not save the Reject flags");
+  });
+});
+
+describe("Soft chips on the grid", () => {
+  it("are off by default and list no version until the groups are fetched", () => {
+    expect(similar.showSoftChips).toBe(false);
+    expect(similar.softVersionIds.size).toBe(0);
+  });
+
+  it("the soft set is exactly the soft members of the fetched groups", async () => {
+    await refreshSimilar();
+    expect([...similar.softVersionIds]).toEqual([20]);
+  });
+
+  it("turning them on fetches the groups outside the Similar view and keeps them current", async () => {
+    toggleSoftChips();
+    expect(similar.showSoftChips).toBe(true);
+    expect(similar.active).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cullApi.listSimilarGroups).toHaveBeenCalledWith(0.5);
+    expect([...similar.softVersionIds]).toEqual([20]);
+    cullApi.cullAnalysisStatus.mockResolvedValue({ analysed: 4, total: 4 });
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(cullApi.listSimilarGroups).toHaveBeenCalledTimes(2);
+    expect(shell.notify).toHaveBeenCalledWith(expect.stringContaining("Soft chips on"));
+  });
+
+  it("turning them off stops the polling when the view is not on, and keeps it when it is", async () => {
+    toggleSoftChips();
+    await vi.advanceTimersByTimeAsync(0);
+    toggleSoftChips();
+    expect(similar.showSoftChips).toBe(false);
+    cullApi.cullAnalysisStatus.mockClear();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(cullApi.cullAnalysisStatus).not.toHaveBeenCalled();
+
+    showSimilar();
+    toggleSoftChips();
+    toggleSoftChips();
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(cullApi.cullAnalysisStatus).toHaveBeenCalled();
+  });
+
+  it("leaving the view keeps the polling while the chips are on", async () => {
+    showSimilar();
+    toggleSoftChips();
+    leaveSimilar();
+    cullApi.cullAnalysisStatus.mockClear();
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(cullApi.cullAnalysisStatus).toHaveBeenCalled();
+  });
+
+  it("the choice is remembered, and chips left on resume their polling at startup", async () => {
+    const stored = new Map();
+    vi.stubGlobal("localStorage", { getItem: (/** @type {string} */ k) => stored.get(k) ?? null, setItem: (/** @type {string} */ k, /** @type {string} */ v) => stored.set(k, v) });
+    toggleSoftChips();
+    expect(stored.get("emulsion_soft_chips_v1")).toBe("1");
+    leaveSimilar();
+    cullApi.cullAnalysisStatus.mockClear();
+    resumeSoftChips();
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(cullApi.cullAnalysisStatus).toHaveBeenCalled();
+    toggleSoftChips();
+    expect(stored.get("emulsion_soft_chips_v1")).toBe("0");
+    vi.unstubAllGlobals();
   });
 });

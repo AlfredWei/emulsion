@@ -50,14 +50,32 @@ export function showSimilar() {
 /** Leaves the view (the rail's other sources do the same through `similar.leave()`, and the poll then stops itself). */
 export function leaveSimilar() {
   similar.leave();
-  stopPolling();
+  if (!similar.showSoftChips) stopPolling();
 }
 
-/** While the view is on and photos are still being measured, groups are fetched again as the count moves. */
+/** View > Toggle Soft Chips on Grid: the grid's "Soft" chips on or off. On, the groups are kept current like the view's. */
+export function toggleSoftChips() {
+  similar.showSoftChips = !similar.showSoftChips;
+  similar.saveSoftChips();
+  if (similar.showSoftChips) {
+    refreshSimilar();
+    startPolling();
+  } else if (!similar.active) {
+    stopPolling();
+  }
+  shell.notify(similar.showSoftChips ? "Soft chips on: photos much softer than a similar one are marked on the grid" : "Soft chips off");
+}
+
+/** Startup: chips left on in the last session need their groups kept current from the start. */
+export function resumeSoftChips() {
+  if (similar.showSoftChips) startPolling();
+}
+
+/** While the view or the chips are on, groups are fetched again as the count of measured photos moves. */
 function startPolling() {
   stopPolling();
   pollTimer = setInterval(async () => {
-    if (!similar.active) return stopPolling();
+    if (!similar.active && !similar.showSoftChips) return stopPolling();
     const before = similar.status?.analysed ?? -1;
     try {
       const status = await cullAnalysisStatus();

@@ -33,6 +33,15 @@ const TOLERANCE = 4;
 // constant/mis-ported-formula bug would produce at these op magnitudes.
 const HUE_SENSITIVE_TOLERANCE = 20;
 
+// The GPU side of every comparison is read back from the 256 x 256 histogram
+// texture (gpuHandles.js HISTOGRAM_SIZE): fs_mask re-draws the frame into it and
+// takes, for histogram texel (col, row), the SOURCE pixel floor((col + 0.5) / 256 * dim) -- for
+// this 2048 x 1536 fixture (col * 8 + 4, row * 6 + 3), not floor(u * dim). On a flat patch the two
+// are the same colour; on grain, which is independent from pixel to pixel at the default cell
+// (under one pixel), they are different samples and can never agree. So the CPU side reads
+// the pixel the GPU readback actually took. Keep equal to HISTOGRAM_SIZE.
+const GPU_READBACK_GRID = 256;
+
 // Normalized (u, v) image-fraction coordinates of large, genuinely flat
 // regions of the fixture -- picked by DIRECT PIXEL-NEIGHBORHOOD INSPECTION
 // (an 11x11-window per-channel stdev check), not just by eye, after an
@@ -226,7 +235,14 @@ describe("Develop CPU/GPU parity", () => {
     throw new Error("edit stack's debounced catalog flush never completed within 8s");
   }
 
+  /** True when the control already holds `value`: setting it again changes nothing, so there is
+   * no catalog flush to wait for (the Grain scenarios restate the sliders the previous one set). */
+  async function alreadyHolds(/** @type {string} */ id, /** @type {string} */ value) {
+    return browser.execute((elId, v) => document.getElementById(elId)?.value === v, id, value);
+  }
+
   async function setSliderValue(/** @type {string} */ id, /** @type {number} */ value) {
+    if (await alreadyHolds(id, String(value))) return;
     const before = JSON.stringify(await getEditStack());
     await browser.execute(
       (elId, v) => {
@@ -245,6 +261,7 @@ describe("Develop CPU/GPU parity", () => {
    * `onchange` listens for the bubbling `change` event. Same wait-for-flush
    * discipline as `setSliderValue`. */
   async function selectOption(/** @type {string} */ id, /** @type {string} */ value) {
+    if (await alreadyHolds(id, value)) return;
     const before = JSON.stringify(await getEditStack());
     await browser.execute(
       (elId, v) => {
@@ -286,21 +303,24 @@ describe("Develop CPU/GPU parity", () => {
    * eyedropper source-sampling already use. No new Node dependency. */
   async function readCpuPixel(/** @type {string} */ previewPath, /** @type {number} */ u, /** @type {number} */ v) {
     return browser.execute(
-      async (p, nx, ny) => {
+      async (p, nx, ny, grid) => {
         const url = window.__TAURI__.core.convertFileSrc(p);
         const resp = await fetch(url);
         const bitmap = await createImageBitmap(await resp.blob());
         const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
         const ctx = canvas.getContext("2d");
         ctx.drawImage(bitmap, 0, 0);
-        const px = Math.min(bitmap.width - 1, Math.floor(nx * bitmap.width));
-        const py = Math.min(bitmap.height - 1, Math.floor(ny * bitmap.height));
+        const texel = (/** @type {number} */ n, /** @type {number} */ dim) =>
+          Math.min(dim - 1, Math.floor(((Math.min(grid - 1, Math.floor(n * grid)) + 0.5) / grid) * dim));
+        const px = texel(nx, bitmap.width);
+        const py = texel(ny, bitmap.height);
         const d = ctx.getImageData(px, py, 1, 1).data;
         return { r: d[0], g: d[1], b: d[2], width: bitmap.width, height: bitmap.height };
       },
       previewPath,
       u,
       v,
+      GPU_READBACK_GRID,
     );
   }
 
@@ -354,11 +374,12 @@ describe("Develop CPU/GPU parity", () => {
   }
 
   /** Fetches the REAL live edit stack (never hand-built JSON) and renders
-   * it via the CPU path, then compares against the GPU-rendered value at
-   * the same normalized coordinate. */
-  async function assertParityAt(
-    /** @type {{u: number, v: number}} */ patch,
-    /** @type {string} */ label,
+   * it via the CPU path ONCE, then compares against the GPU-rendered value at
+   * each normalized coordinate. A CPU render of the whole frame is the slow part
+   * (seconds in this debug build, much more with colour grain), so scenarios that
+   * look at several points of one stack share it. */
+  async function assertParityAtAll(
+    /** @type {{patch: {u: number, v: number}, label: string}[]} */ points,
     /** @type {number} */ tolerance = TOLERANCE,
   ) {
     const stack = await browser.execute(
@@ -372,22 +393,132 @@ describe("Develop CPU/GPU parity", () => {
       stack,
     );
 
-    const cpu = await readCpuPixel(preview.path, patch.u, patch.v);
-    const gpu = await readGpuPixel(patch.u, patch.v);
+    for (const { patch, label } of points) {
+      const cpu = await readCpuPixel(preview.path, patch.u, patch.v);
+      const gpu = await readGpuPixel(patch.u, patch.v);
 
-    // WebdriverIO's `expect()` (expect-webdriverio), unlike Vitest's,
-    // doesn't accept a second "message" argument -- plain throws give a
-    // more useful failure description than its default output would here.
-    if (gpu === null) {
-      throw new Error(`${label}: GPU hover-pixel readback never stabilized`);
-    }
-    for (const ch of /** @type {const} */ (["r", "g", "b"])) {
-      const diff = Math.abs(cpu[ch] - gpu[ch]);
-      if (diff > tolerance) {
-        throw new Error(`${label} channel ${ch}: CPU=${cpu[ch]} GPU=${gpu[ch]} diff=${diff} exceeds tolerance ${tolerance} | full cpu=${JSON.stringify(cpu)} gpu=${JSON.stringify(gpu)}`);
+      // WebdriverIO's `expect()` (expect-webdriverio), unlike Vitest's,
+      // doesn't accept a second "message" argument -- plain throws give a
+      // more useful failure description than its default output would here.
+      if (gpu === null) {
+        throw new Error(`${label}: GPU hover-pixel readback never stabilized`);
+      }
+      for (const ch of /** @type {const} */ (["r", "g", "b"])) {
+        const diff = Math.abs(cpu[ch] - gpu[ch]);
+        if (diff > tolerance) {
+          throw new Error(`${label} channel ${ch}: CPU=${cpu[ch]} GPU=${gpu[ch]} diff=${diff} exceeds tolerance ${tolerance} | full cpu=${JSON.stringify(cpu)} gpu=${JSON.stringify(gpu)}`);
+        }
       }
     }
   }
+
+  async function assertParityAt(
+    /** @type {{u: number, v: number}} */ patch,
+    /** @type {string} */ label,
+    /** @type {number} */ tolerance = TOLERANCE,
+  ) {
+    return assertParityAtAll([{ patch, label }], tolerance);
+  }
+
+  /** The three separate points along the road strip the grain scenarios compare. */
+  const roadStripPoints = (/** @type {string} */ label) =>
+    [0, 0.005, 0.011].map((du) => ({ patch: { u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, label: `${label} (u+${du})` }));
+
+  // The grain scenarios run FIRST, on the empty stack the top-level `before` leaves. They used to
+  // run last, on top of everything below (Exposure +2, Highlights / Whites +100, a tone curve),
+  // which drove the road strip to 253 / 255 / 255 before any grain was added: at a clipped pixel
+  // one-sided clipping hides the grain's sign on one side and the two renderers' sub-8-bit
+  // differences decide the rest, so the comparison was not a test of the grain at all. The last
+  // grain scenario switches the grain off (film "None" zeroes Amount, Tone and Colour), so the
+  // scenarios after them see the same pixels as before they existed. (Not a nested `describe`:
+  // Mocha runs a suite's own tests before its child suites, which would put these last again.)
+  it("Grain: the road strip has room for grain on both sides", async () => {
+    // Room for a +-3 sigma grain, or the scenarios below are weak witnesses again.
+    const base = await readGpuPixel(ROAD_PATCH.u, ROAD_PATCH.v);
+    if (!base || Math.max(base.r, base.g, base.b) > 210) {
+      throw new Error(`the road strip is too bright for a grain comparison: ${JSON.stringify(base)}`);
+    }
+  });
+
+  // RFC-0020: the test that never existed. Before it, the CPU and GPU grain
+  // fields were uncorrelated (sin-hash error x 43758), so the two paths drew
+  // DIFFERENT grain from the same sliders and nothing here could see it.
+  // Grain is per-pixel noise, so a single pixel is a weak witness: at
+  // Amount 100 the delta std is ~13/255, and two independent fields would
+  // still land inside TOLERANCE about a quarter of the time. Three separate
+  // points along the same flat road strip (each one still needs the
+  // underlying image to be flat, see ROAD_PATCH's own doc comment) drop
+  // that chance of a false pass to ~1.5%; a correct port agrees to 8-bit
+  // quantization at every one.
+  it("Grain: CPU and GPU render the same grain pattern", async () => {
+    await setSliderValue("grain-amount", 100);
+    await setSliderValue("grain-size", 30);
+    await setSliderValue("grain-roughness", 60);
+    await assertParityAtAll(roadStripPoints(`Grain`));
+  });
+
+  // RFC-0022 slice 2: wiring check for the Tone slider (slider -> op ->
+  // uniform -> shader) on the same three points. This is a WEAK witness for
+  // the weight's value: the road strip is mid-tone gray, where w is near 1,
+  // so a dropped weight would likely stay inside TOLERANCE. The weight's numbers are pinned instead by the Rust
+  // hand-value test and the real-GPU probe (docs/rfc/RFC-0022-appendix/
+  // gpu_grain_probe.js); this scenario catches the gross failures (field not
+  // plumbed, crash, wrong uniform slot shifting Amount/Size/Roughness).
+  it("Grain: Tone weight agrees between CPU and GPU", async () => {
+    await setSliderValue("grain-amount", 100);
+    await setSliderValue("grain-size", 30);
+    await setSliderValue("grain-roughness", 60);
+    await setSliderValue("grain-tone", 100);
+    await assertParityAtAll(roadStripPoints(`Grain Tone 100`));
+  });
+
+  // RFC-0022 slice 3: colour grain. Unlike Tone this IS a strong witness: at
+  // Colour 100 the three channels carry independent fields (distinct seeds), so
+  // a swapped/mismatched channel seed, a wrong mix, or a uniform-layout slip
+  // moves one channel by ~13/255 and breaks parity on that channel. Tone is
+  // reset first so only the colour path is under test.
+  it("Grain: colour grain renders the same per-channel pattern on CPU and GPU", async () => {
+    await setSliderValue("grain-amount", 100);
+    await setSliderValue("grain-size", 30);
+    await setSliderValue("grain-roughness", 60);
+    await setSliderValue("grain-tone", 0);
+    await setSliderValue("grain-chroma", 100);
+    await assertParityAtAll(roadStripPoints(`Grain Colour 100`));
+  });
+
+  // RFC-0022 slice 4: the film picker only loads slider values, so these are
+  // the same per-channel/tone paths as above, reached through a stock. Two
+  // stocks because they exercise opposite ends: Portra 400 (Colour 80, Tone 50:
+  // three partly-independent fields under a tonal weight) and Tri-X 400
+  // (Colour 0: one shared field). Three points each (the RFC-0020 lesson).
+  for (const [stock, label] of [["portra400", "colour stock (Portra 400)"], ["trix400", "B&W stock (Tri-X 400)"]]) {
+    it(`Grain: ${label} renders the same grain pattern on CPU and GPU`, async () => {
+      await selectOption("grain-stock", stock);
+      const grain = (await getEditStack()).ops.find((/** @type {any} */ o) => o.op === "grain");
+      expect(grain.stock).toBe(stock);
+      await assertParityAtAll(roadStripPoints(`Grain ${label}`));
+    });
+  }
+
+  it("Grain: moving a slider after loading a stock shows Custom and offers Reset to that stock", async () => {
+    await selectOption("grain-stock", "portra400");
+    await setSliderValue("grain-roughness", 21);
+    expect(await browser.execute(() => document.getElementById("grain-stock").value)).toBe("custom");
+    const reset = await $("#grain-stock-reset");
+    expect(await reset.getText()).toBe("Reset to Kodak Portra 400");
+    const before = JSON.stringify(await getEditStack());
+    await reset.click();
+    await waitForEditStackFlush(before);
+    const grain = (await getEditStack()).ops.find((/** @type {any} */ o) => o.op === "grain");
+    expect([grain.amount, grain.size, grain.roughness, grain.tone, grain.chroma]).toEqual([40, 17, 20, 50, 80]);
+    expect(await browser.execute(() => document.getElementById("grain-stock").value)).toBe("portra400");
+  });
+
+  it("Grain: film None switches the grain off for the scenarios after it", async () => {
+    await selectOption("grain-stock", "none");
+    const grain = (await getEditStack()).ops.find((/** @type {any} */ o) => o.op === "grain");
+    expect([grain.amount, grain.tone, grain.chroma]).toEqual([0, 0, 0]);
+  });
 
   it("Exposure: CPU and GPU renders agree", async () => {
     await setSliderValue("exposure", 1.5);
@@ -453,85 +584,4 @@ describe("Develop CPU/GPU parity", () => {
     await assertParityAt(GREEN_PATCH, "Split toning", HUE_SENSITIVE_TOLERANCE);
   });
 
-  // RFC-0020: the test that never existed. Before it, the CPU and GPU grain
-  // fields were uncorrelated (sin-hash error x 43758), so the two paths drew
-  // DIFFERENT grain from the same sliders and nothing here could see it.
-  // Grain is per-pixel noise, so a single pixel is a weak witness: at
-  // Amount 100 the delta std is ~13/255, and two independent fields would
-  // still land inside TOLERANCE about a quarter of the time. Three separate
-  // points along the same flat road strip (each one still needs the
-  // underlying image to be flat, see ROAD_PATCH's own doc comment) drop
-  // that chance of a false pass to ~1.5%; a correct port agrees to 8-bit
-  // quantization at every one.
-  it("Grain: CPU and GPU render the same grain pattern", async () => {
-    await setSliderValue("grain-amount", 100);
-    await setSliderValue("grain-size", 30);
-    await setSliderValue("grain-roughness", 60);
-    for (const du of [0, 0.005, 0.011]) {
-      await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain (u+${du})`);
-    }
-  });
-
-  // RFC-0022 slice 2: wiring check for the Tone slider (slider -> op ->
-  // uniform -> shader) on the same three points. This is a WEAK witness for
-  // the weight's value: the road strip is mid-tone gray, where w is near 1,
-  // so a dropped weight would likely stay inside TOLERANCE. The weight's numbers are pinned instead by the Rust
-  // hand-value test and the real-GPU probe (docs/rfc/RFC-0022-appendix/
-  // gpu_grain_probe.js); this scenario catches the gross failures (field not
-  // plumbed, crash, wrong uniform slot shifting Amount/Size/Roughness).
-  it("Grain: Tone weight agrees between CPU and GPU", async () => {
-    await setSliderValue("grain-amount", 100);
-    await setSliderValue("grain-size", 30);
-    await setSliderValue("grain-roughness", 60);
-    await setSliderValue("grain-tone", 100);
-    for (const du of [0, 0.005, 0.011]) {
-      await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain Tone 100 (u+${du})`);
-    }
-  });
-
-  // RFC-0022 slice 3: colour grain. Unlike Tone this IS a strong witness: at
-  // Colour 100 the three channels carry independent fields (distinct seeds), so
-  // a swapped/mismatched channel seed, a wrong mix, or a uniform-layout slip
-  // moves one channel by ~13/255 and breaks parity on that channel. Tone is
-  // reset first so only the colour path is under test.
-  it("Grain: colour grain renders the same per-channel pattern on CPU and GPU", async () => {
-    await setSliderValue("grain-amount", 100);
-    await setSliderValue("grain-size", 30);
-    await setSliderValue("grain-roughness", 60);
-    await setSliderValue("grain-tone", 0);
-    await setSliderValue("grain-chroma", 100);
-    for (const du of [0, 0.005, 0.011]) {
-      await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain Colour 100 (u+${du})`);
-    }
-  });
-
-  // RFC-0022 slice 4: the film picker only loads slider values, so these are
-  // the same per-channel/tone paths as above, reached through a stock. Two
-  // stocks because they exercise opposite ends: Portra 400 (Colour 80, Tone 50:
-  // three partly-independent fields under a tonal weight) and Tri-X 400
-  // (Colour 0: one shared field). Three points each (the RFC-0020 lesson).
-  for (const [stock, label] of [["portra400", "colour stock (Portra 400)"], ["trix400", "B&W stock (Tri-X 400)"]]) {
-    it(`Grain: ${label} renders the same grain pattern on CPU and GPU`, async () => {
-      await selectOption("grain-stock", stock);
-      const grain = (await getEditStack()).ops.find((/** @type {any} */ o) => o.op === "grain");
-      expect(grain.stock).toBe(stock);
-      for (const du of [0, 0.005, 0.011]) {
-        await assertParityAt({ u: ROAD_PATCH.u + du, v: ROAD_PATCH.v }, `Grain ${label} (u+${du})`);
-      }
-    });
-  }
-
-  it("Grain: moving a slider after loading a stock shows Custom and offers Reset to that stock", async () => {
-    await selectOption("grain-stock", "portra400");
-    await setSliderValue("grain-roughness", 21);
-    expect(await browser.execute(() => document.getElementById("grain-stock").value)).toBe("custom");
-    const reset = await $("#grain-stock-reset");
-    expect(await reset.getText()).toBe("Reset to Kodak Portra 400");
-    const before = JSON.stringify(await getEditStack());
-    await reset.click();
-    await waitForEditStackFlush(before);
-    const grain = (await getEditStack()).ops.find((/** @type {any} */ o) => o.op === "grain");
-    expect([grain.amount, grain.size, grain.roughness, grain.tone, grain.chroma]).toEqual([40, 17, 20, 50, 80]);
-    expect(await browser.execute(() => document.getElementById("grain-stock").value)).toBe("portra400");
-  });
 });

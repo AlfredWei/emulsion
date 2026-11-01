@@ -60,6 +60,13 @@ impl Catalog {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Records the detector's score for a face stored without one (a photograph scanned before `faces.score` existed). Touches nothing
+    /// else: the person, the exclusion and the embedding stay as the user and the clustering left them.
+    pub fn set_face_score(&self, face_id: i64, score: Option<f32>) -> Result<()> {
+        self.conn.execute("UPDATE faces SET score = ?1 WHERE id = ?2", params![score, face_id])?;
+        Ok(())
+    }
+
     pub fn set_face_person(&self, face_id: i64, person_id: Option<i64>) -> Result<()> {
         self.conn.execute("UPDATE faces SET person_id = ?1 WHERE id = ?2", params![person_id, face_id])?;
         Ok(())
@@ -284,6 +291,19 @@ mod tests {
         catalog.add_face(image_id, (0.5, 0.5, 0.2, 0.2), None, &[0.0]).unwrap();
         let scores: Vec<Option<f32>> = catalog.get_faces_for_image(image_id).unwrap().iter().map(|f| f.score).collect();
         assert_eq!(scores, vec![Some(0.83), None]);
+    }
+
+    #[test]
+    fn setting_a_faces_score_changes_the_score_and_nothing_else() {
+        let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
+        let image_id = catalog.add_image("/a.jpg").unwrap();
+        let face = catalog.add_face(image_id, (0.1, 0.1, 0.2, 0.2), None, &[0.5]).unwrap();
+        let person = catalog.create_person(face).unwrap();
+        catalog.set_face_person(face, Some(person)).unwrap();
+        catalog.set_face_score(face, Some(0.77)).unwrap();
+        let row = catalog.get_faces_for_image(image_id).unwrap().remove(0);
+        assert_eq!((row.score, row.person_id), (Some(0.77), Some(person)));
+        assert_eq!(catalog.get_clusterable_faces().unwrap()[0].2, vec![0.5], "the embedding is untouched");
     }
 
     #[test]

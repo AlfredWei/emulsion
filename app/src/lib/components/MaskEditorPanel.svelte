@@ -30,6 +30,7 @@
    *   modifierCount?: number,
    *   brushLayers?: number,
    *   onRefineSubject?: () => void,
+   *   onSelectItYourself?: (() => void) | null,
    * }}
    */
   let {
@@ -52,6 +53,7 @@
     modifierCount = 0,
     brushLayers = 0,
     onRefineSubject = () => {},
+    onSelectItYourself = null,
   } = $props();
 
   // RFC-0034: the controls beyond Exposure / Contrast / Saturation, in two groups, the same ranges and
@@ -187,6 +189,10 @@
   {#if checkNote}
     <!-- RFC-0035 §3.4: an adaptive preset applied this selection but is not sure of it; the overlay shows what it found. -->
     <p class="check-note" role="note">Check this selection: it is highlighted on the photo. {checkNote}.</p>
+    {#if onSelectItYourself}
+      <!-- The panel covers the presets list, where the same button lives, as soon as the mask is selected. -->
+      <button type="button" class="check-yourself" onclick={onSelectItYourself}>Select it yourself</button>
+    {/if}
   {/if}
 
   {#if mask.op === "spot_mask"}
@@ -1017,5 +1023,18 @@
     margin: 0 0 8px;
     font-size: 11px;
     color: var(--label-yellow, var(--text-secondary));
+  }
+  .check-yourself {
+    all: unset;
+    cursor: pointer;
+    margin: 0 0 8px;
+    padding: 3px 8px;
+    font-size: 11px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-s);
+    color: var(--text-primary);
+  }
+  .check-yourself:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
   }
 </style>

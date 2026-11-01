@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, needsFaces, scaleAdjustments, buildMask, handOffAdjustments, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
+import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, needsFaces, scaleAdjustments, buildMask, handOffAdjustments, canSelectItYourself, selectItYourselfTarget, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
 import { MAX_MASKS, listMasks, createBrushMask, addMask } from "$lib/api/develop.js";
 
 const sky = /** @type {any} */ (ADAPTIVE_PRESETS.find((p) => p.id === "deepen-sky"));
@@ -157,5 +157,18 @@ describe("adaptive presets", () => {
     const brush = /** @type {any} */ (createBrushMask("b1"));
     expect(handOffAdjustments(addMask(empty, brush), brush.id)).toBeNull();
     expect(handOffAdjustments(empty, "nope")).toBeNull();
+  });
+
+  it("offers Select it yourself on a flagged mask of a sky, face or person rule, and nowhere else", () => {
+    expect(["sky", "face", "person"].every(canSelectItYourself)).toBe(true);
+    expect(canSelectItYourself("shadows")).toBe(false);
+    const flagged = (/** @type {string} */ preset, /** @type {any} */ check = "the model was unsure") => ({ source: { preset, rule: 0, sig: "x", check } });
+    expect(selectItYourselfTarget(flagged("lift-people"))).toEqual({ presetId: "lift-people", ruleIndex: 0 });
+    expect(selectItYourselfTarget(flagged("deepen-sky"))).toEqual({ presetId: "deepen-sky", ruleIndex: 0 });
+    expect(selectItYourselfTarget(flagged("lift-people", null))).toBeNull(); // a clean mask: nothing to redo
+    expect(selectItYourselfTarget(flagged("cool-shadows"))).toBeNull(); // no click-select equivalent for a brightness range
+    expect(selectItYourselfTarget(flagged("no-such-preset"))).toBeNull();
+    expect(selectItYourselfTarget({ op: "brush_mask" })).toBeNull(); // not a preset mask
+    expect(selectItYourselfTarget(null)).toBeNull();
   });
 });

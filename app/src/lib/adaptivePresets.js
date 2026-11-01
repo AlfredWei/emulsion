@@ -176,6 +176,24 @@ export function describeRule(r) {
   return { name, text: pct, kind: "found" };
 }
 
+/** The regions a person can outline by hand with the Select Subject tool: "Select it yourself" is offered on a flagged one
+ * (the colour-range rules, shadows, have no click-select equivalent).
+ * @param {string} region */
+export function canSelectItYourself(region) {
+  return region === "sky" || region === "face" || region === "person";
+}
+
+/** The preset id and rule index of a flagged adaptive mask the user can redo by hand, or null: the mask must carry a
+ * `check` note (the preset was not sure of it) and come from a rule whose region `canSelectItYourself`.
+ * @param {any} mask
+ * @returns {{ presetId: string, ruleIndex: number } | null} */
+export function selectItYourselfTarget(mask) {
+  const source = mask?.source;
+  if (!source?.check) return null;
+  const region = ADAPTIVE_PRESETS.find((p) => p.id === source.preset)?.rules[source.rule]?.region;
+  return region && canSelectItYourself(region) ? { presetId: source.preset, ruleIndex: source.rule } : null;
+}
+
 /** The whole report on one line, for the notification.
  * @param {RuleReport[]} report */
 export function describeReport(report) {

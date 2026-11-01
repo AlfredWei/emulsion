@@ -7,7 +7,7 @@
   import { handleDeleteSnapshot, handlePeekHistory, handlePeekSnapshot, handleCropChange, handleSourceDimensions, handleHistogramUpdate, handleHoverPixel, handleToggleClippingOverlay, handleAdjustmentChange, handleAutoWhiteBalance, handleAutoTone, handleWbPresetChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleGrainStockChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropAspectPreset, handleCropReset, handleTogglePanelVisibility, handleResetPanel } from "$lib/actions/developActions.js";
   import { handleAutoSyncToggle } from "$lib/actions/autoSyncActions.js";
   import { handleApplyAdaptivePreset } from "$lib/actions/adaptiveActions.js";
-  import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, presetMasks, isEdited } from "$lib/adaptivePresets.js";
+  import { ADAPTIVE_PRESETS, ADAPTIVE_PLANNED, presetMasks, isEdited, selectItYourselfTarget } from "$lib/adaptivePresets.js";
   import { handleApplyPreset, handleSaveCurrentAsPresetRequest, handleExportPreset, handleDeletePresetRequest, handleImportPresetRequest, handlePeekPreset, handleCopySettingsRequest, handlePasteSettings, handleSyncSettingsRequest } from "$lib/actions/presetActions.js";
   import { shell } from "$lib/state/shell.svelte.js";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
@@ -42,6 +42,9 @@
   }
   /** "Select it yourself" on a flagged sky, face or person: the Select Subject tool, one click on the real thing. The
    * selection takes the flagged mask's place and adjustments (RFC-0035 §3.4). */
+  /** The selected mask, when it is a flagged adaptive one the user can redo by hand: the panel offers the same button. */
+  const selectItYourself = $derived(selectItYourselfTarget(masks.selectedMask));
+
   function handleSelectItYourself(/** @type {string} */ presetId, /** @type {number} */ ruleIndex) {
     if (masks.activeTool === "segment") return;
     const flagged = presetMasks(develop.editStack, presetId).find((m) => m.source?.rule === ruleIndex);
@@ -183,6 +186,7 @@
       onChange={(patch) => handleMaskUpdated(/** @type {string} */ (masks.selectedMaskId), patch)}
       onDelete={handleMaskDeleted}
       onClose={() => (masks.selectedMaskId = null)}
+      onSelectItYourself={selectItYourself ? () => handleSelectItYourself(selectItYourself.presetId, selectItYourself.ruleIndex) : null}
       showMaskOverlay={masks.showMaskOverlay}
       onShowOverlayChange={(v) => (masks.showMaskOverlay = v)}
       isResamplingColor={masks.isResamplingColor}

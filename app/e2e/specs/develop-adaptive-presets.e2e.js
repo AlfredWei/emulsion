@@ -270,7 +270,9 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     const flagged = masksOf(await stackOf(vid)).find((/** @type {any} */ m) => m.source?.preset === "lift-people");
     expect(flagged).toBeTruthy();
     const rowsBefore = await history(vid);
-    await domClick(".adaptive-yourself");
+    // After Apply the new mask is selected and its panel covers the presets list, so the button is also in the panel's note.
+    await waitFor(() => browser.execute(() => !!document.querySelector(".check-note + .check-yourself")), "the Select it yourself button in the mask panel", 10000);
+    await domClick(".check-yourself");
     await waitFor(() => browser.execute(() => /Click the subject/.test(document.querySelector('[data-testid="segment-options"]')?.textContent ?? "")), "ready for clicks", 120000);
     await browser.execute(() => {
       const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector(".canvas-wrap canvas"));

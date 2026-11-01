@@ -151,14 +151,16 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
       browser.execute(() => ({
         lines: Array.from(document.querySelectorAll(".adaptive-report .line")).map((e) => `${e.className}|${e.textContent}`),
         button: document.querySelector(".adaptive-apply")?.textContent?.trim() ?? "",
-        planned: Array.from(document.querySelectorAll(".adaptive-row.off")).map((e) => e.textContent ?? ""),
+        rows: Array.from(document.querySelectorAll(".adaptive-row")).map((e) => e.textContent ?? ""),
       }));
     await waitFor(async () => (await text()).lines.length > 0, "a report line");
     const now = await text();
     expect(now.lines[0]).toMatch(/^line (found|check)/);
     expect(now.lines[0]).toContain("Shadows");
     expect(now.button).toBe("Re-apply");
-    expect(now.planned.join(" ")).toContain("Needs a click and GPU acceleration");
+    // Only presets that work are listed: no greyed-out placeholders for ones that are not built.
+    expect(now.rows.join(" ")).not.toContain("Needs a click and GPU acceleration");
+    expect(now.rows.some((r) => /Cool the shadows/.test(r))).toBe(true);
   });
 
   it("Re-apply asks before replacing a mask the user changed; Keep mine keeps it, Replace restores the preset", async function () {

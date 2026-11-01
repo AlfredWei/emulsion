@@ -74,6 +74,54 @@ fn coverage_of(logits: &[f32]) -> f32 {
     logits.iter().filter(|&&l| l > 0.0).count() as f32 / logits.len() as f32
 }
 
+/// The share of a mask's area that lies in islands smaller than 1 % of the mask itself (4-connected). A cut of a person is one
+/// or a few solid pieces; a cut that has leaked onto a textured background (a cabinet card's mount, a patterned wall) comes back
+/// stippled, with hundreds of small islands.
+fn speck_share(logits: &[f32]) -> f32 {
+    let on = |i: usize| logits[i] > 0.0;
+    let area = logits.iter().filter(|&&l| l > 0.0).count();
+    if area == 0 {
+        return 0.0;
+    }
+    let limit = (area as f32 * 0.01).max(1.0);
+    let mut seen = vec![false; logits.len()];
+    let (mut speck_px, mut stack) = (0usize, Vec::new());
+    for start in 0..logits.len() {
+        if !on(start) || seen[start] {
+            continue;
+        }
+        seen[start] = true;
+        stack.push(start);
+        let mut size = 0usize;
+        while let Some(i) = stack.pop() {
+            size += 1;
+            let (x, y) = (i % RASTER, i / RASTER);
+            let mut visit = |j: usize| {
+                if on(j) && !seen[j] {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            };
+            if x > 0 {
+                visit(i - 1);
+            }
+            if x + 1 < RASTER {
+                visit(i + 1);
+            }
+            if y > 0 {
+                visit(i - RASTER);
+            }
+            if y + 1 < RASTER {
+                visit(i + RASTER);
+            }
+        }
+        if (size as f32) < limit {
+            speck_px += size;
+        }
+    }
+    speck_px as f32 / area as f32
+}
+
 // ---------------------------------------------------------------- shadows
 
 /// "Shadows" is a range of the photograph's own brightness, so it is a `luminance_range_mask` (stored
@@ -277,6 +325,10 @@ const PERSON_MIN_COVERAGE: f32 = 0.01;
 /// whole mount, rated 0.92) covered 67 %. A real close-up can pass 60 % too (61 % on one photograph), so this only asks
 /// for a look.
 const PERSON_BIG_COVERAGE: f32 = 0.6;
+/// A cut with more than this share of its area in specks (`speck_share`) is flagged. Measured on the 37-photograph set (RFC-0035 §7):
+/// the cuts reported clean and right had 0-1.9 %; the cabinet card whose cut took part of the mount at 48 % of the frame, under the
+/// coverage limit above, had 3.6 %. Ragged cuts that were flagged anyway (a fish, a group, the teddy bears) had 3.2-5.5 %.
+const PERSON_SPECK_SHARE: f32 = 0.03;
 const PERSON_FEATHER: f32 = 30.0;
 
 /// Tuning aid: with `EMULSION_ADAPTIVE_TRACE=<file>` set, appends one line per decision (a person's cut: confidence and
@@ -368,6 +420,11 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
     }
     if coverage > PERSON_BIG_COVERAGE {
         why.push(format!("the mask covers over {} of the frame", pct(PERSON_BIG_COVERAGE)));
+    }
+    let specks = speck_share(&merged);
+    trace(&format!("person speck_share={specks:.3}"));
+    if specks > PERSON_SPECK_SHARE {
+        why.push("the cut is ragged, with scattered specks (it may have taken part of the background)".to_string());
     }
     let mask = segment_mask(&merged, PERSON_FEATHER);
     Ok(if why.is_empty() {
@@ -883,10 +940,12 @@ mod tests {
         half: f32,
         seen: Vec<Vec<(f32, f32, bool)>>,
         fail: bool,
+        /// Also scatters 2 x 2 islands on a grid in the left margin: a cut that has leaked onto a textured background.
+        specks: bool,
     }
     impl FakeModel {
         fn new(iou: f32) -> Self {
-            FakeModel { iou, half: 0.06, seen: Vec::new(), fail: false }
+            FakeModel { iou, half: 0.06, seen: Vec::new(), fail: false, specks: false }
         }
     }
     impl ClickModel for FakeModel {
@@ -902,6 +961,15 @@ mod tests {
                     let (u, v) = ((ix as f32 + 0.5) / RASTER as f32, (iy as f32 + 0.5) / RASTER as f32);
                     if (u - cx).abs() < self.half && v > cy - 0.05 {
                         logits[iy * RASTER + ix] = LOGIT_RANGE;
+                    }
+                }
+            }
+            if self.specks {
+                for gy in (2..RASTER - 2).step_by(8) {
+                    for gx in (2..22).step_by(8) {
+                        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                            logits[(gy + dy) * RASTER + gx + dx] = LOGIT_RANGE;
+                        }
                     }
                 }
             }
@@ -1003,6 +1071,38 @@ mod tests {
     fn a_model_without_box_prompts_fails_loudly_instead_of_guessing() {
         let mut model = FakeModel::new(0.9);
         assert!(resolve_person_by_detection(&[person(0.4, 0.3, 0.5, 0.7, 0.9)], &mut model).is_err());
+    }
+
+    #[test]
+    fn speck_share_is_zero_for_a_solid_cut_and_counts_the_area_in_small_islands() {
+        let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
+        for y in 40..200 {
+            for x in 100..140 {
+                logits[y * RASTER + x] = LOGIT_RANGE;
+            }
+        }
+        assert_eq!(speck_share(&logits), 0.0, "one solid piece");
+        assert_eq!(speck_share(&vec![-LOGIT_RANGE; RASTER * RASTER]), 0.0, "an empty cut");
+        // 10 islands of 2 x 2 (40 px) beside the 6400 px block: 40 / 6440 of the mask's area.
+        for k in 0..10 {
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                logits[(10 + k * 8 + dy) * RASTER + 10 + dx] = LOGIT_RANGE;
+            }
+        }
+        assert!((speck_share(&logits) - 40.0 / 6440.0).abs() < 1e-6, "{}", speck_share(&logits));
+    }
+
+    #[test]
+    fn a_ragged_cut_is_flagged_even_under_the_coverage_limit_and_a_solid_one_is_not() {
+        let solid = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut FakeModel::new(0.9)).unwrap();
+        assert_eq!(solid.outcome, Outcome::Found, "a solid cut that the model is sure of stays clean");
+
+        let mut leaky = FakeModel::new(0.9);
+        leaky.specks = true;
+        let r = resolve_person(&[big_face(0.4, 0.2)], (1600, 1200), &mut leaky).unwrap();
+        assert!(r.coverage < PERSON_BIG_COVERAGE, "the case is one the coverage limit lets through: {}", r.coverage);
+        assert_eq!(r.outcome, Outcome::Check);
+        assert!(r.reason.as_deref().unwrap_or("").contains("ragged"), "{:?}", r.reason);
     }
 
     /// A photograph where the face-based path found one person (a column around x = 0.43, from y = 0.15 down).

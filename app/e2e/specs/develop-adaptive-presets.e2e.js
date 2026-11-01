@@ -241,7 +241,7 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     state.skyStatus = status;
   });
 
-  it("Select it yourself: the first click replaces a flagged mask and keeps its adjustments (local: needs SEGMENT_MODELS_DIR, WebGPU and ADAPTIVE_CHECK_PHOTO)", async function () {
+  it("Add a person yourself: the first click joins the flagged people mask as an added shape, keeps it and its adjustments, and Esc takes it off (local: needs SEGMENT_MODELS_DIR, WebGPU and ADAPTIVE_CHECK_PHOTO)", async function () {
     this.timeout(300000);
     // A flagged (`check`) result is what offers the button, and the repository's own photographs give none: point
     // ADAPTIVE_CHECK_PHOTO at a photograph of several people (Lift people finds some by shape, which is always `check`).
@@ -283,20 +283,30 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
       canvas.dispatchEvent(new PointerEvent("pointerdown", init));
       canvas.dispatchEvent(new PointerEvent("pointerup", init));
     });
+    // A person mask is several people, so the click is ADDED to them (a shape of the same mask) instead of replacing them all.
     const stack = await waitFor(async () => {
       const s = await stackOf(vid);
       const ms = masksOf(s);
-      return ms.length === 1 && ms[0].op === "segment_mask" && ms[0].id !== flagged.id ? s : null;
-    }, "the user's selection replaced the flagged mask", 60000);
+      return ms.length === 1 && ms[0].id === flagged.id && (ms[0].modifiers ?? []).length === 1 ? s : null;
+    }, "the click was added to the flagged mask as a shape", 60000);
     const mine = masksOf(stack)[0];
-    console.log(`SELECT_YOURSELF_E2E exposure=${mine.exposure} shadows=${mine.shadows} texture=${mine.texture} source=${JSON.stringify(mine.source)} prompts=${JSON.stringify(mine.prompts)}`);
+    console.log(`SELECT_YOURSELF_E2E exposure=${mine.exposure} modifiers=${JSON.stringify((mine.modifiers ?? []).map((/** @type {any} */ m) => [m.combine, m.shape.op]))}`);
+    expect(mine.modifiers[0].combine).toBe("add");
+    expect(mine.modifiers[0].shape.op).toBe("segment_mask");
+    expect(mine.logits).toBe(flagged.logits); // the people the model found are untouched
     expect(mine.exposure).toBeCloseTo(flagged.exposure, 5);
-    expect(mine.shadows).toBe(flagged.shadows);
-    expect(mine.texture).toBe(flagged.texture);
-    expect(mine.source).toBeUndefined();
+    expect(mine.source).toBeTruthy(); // still the preset's mask (now edited, so Re-apply asks before replacing it)
     const rowsAfter = await history(vid);
     console.log(`SELECT_YOURSELF_E2E history rows ${rowsBefore.length} -> ${rowsAfter.length}: ${rowsAfter.slice(rowsBefore.length).map((/** @type {any} */ r) => r.label).join(" | ")}`);
     expect(rowsAfter.length).toBe(rowsBefore.length + 1);
+    // Esc takes the added shape off again and leaves the flagged mask as it was.
+    await browser.keys(["Escape"]);
+    const back = await waitFor(async () => {
+      const m = masksOf(await stackOf(vid))[0];
+      return m && (m.modifiers ?? []).length === 0 ? m : null;
+    }, "Esc removed the added shape", 30000);
+    expect(back.id).toBe(flagged.id);
+    expect(back.logits).toBe(flagged.logits);
   });
 
   it("the CPU render of the stack differs from the unmasked one (the masks reach the pixels)", async function () {

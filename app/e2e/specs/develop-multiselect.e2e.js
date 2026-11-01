@@ -137,7 +137,8 @@ describe("Develop multi-select and Sync Settings", function () {
     const newest = targetAfter[targetAfter.length - 1];
     expect(newest.label).toBe("Sync Settings");
     expect(newest.id).toBeGreaterThan(targetBefore.length ? targetBefore[targetBefore.length - 1].id : 0);
-    expect(targetAfter.filter((/** @type {any} */ h) => h.id > (targetBefore.length ? targetBefore[targetBefore.length - 1].id : 0)).length).toBe(1);
+    // (The first edit a photograph gets also records an "Original" row, which is not an edit.)
+    expect(targetAfter.filter((/** @type {any} */ h) => h.label !== "Original" && h.id > (targetBefore.length ? targetBefore[targetBefore.length - 1].id : 0)).length).toBe(1);
   });
 
   it("Cmd/Ctrl-A selects the whole filmstrip and a plain click on the active photo collapses it", async () => {

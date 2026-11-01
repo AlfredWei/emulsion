@@ -59,16 +59,11 @@ export class DevelopStore {
   historyIndex = $state(-1);
   snapshots = $state(/** @type {import('$lib/api/develop.js').SnapshotEntry[]} */ ([]));
 
-  // Undo is disabled at historyIndex 0 (the version's oldest-ever labeled
-  // edit) -- there's no history row representing "before the first edit"
-  // to restore TO (edit_history only ever gains a row once a real edit
-  // happens; the version's original untouched state is never itself
-  // stored as one). A named, accepted scope cut, not a bug: the very
-  // first edit ever made to a photo simply can't be undone via Ctrl+Z,
-  // matching this session's "mid-drag undo guard" precedent of a
-  // documented limitation over unrequested complexity (a synthetic
-  // "Import" seed row, which real Lightroom itself uses for exactly this
-  // reason -- deliberately out of scope here).
+  // Undo is disabled at historyIndex 0, the oldest row of the version's history. That row is the
+  // stack the photo had BEFORE its first edit, labelled "Original": Catalog::record_edit_stack
+  // writes it together with the first edit's own row (a version has no row for its untouched state
+  // until something is edited), so even the first edit can be undone. A photo with no edits yet
+  // has no rows, hence nothing to undo.
   canUndo = $derived(this.historyIndex > 0);
   canRedo = $derived(this.historyIndex < this.history.length - 1);
 

@@ -58,6 +58,8 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
   const stackOf = (/** @type {number} */ vid) => invoke("get_edit_stack", { versionId: vid });
   const masksOf = (/** @type {any} */ s) => s.ops.filter((/** @type {any} */ o) => /_mask$/.test(o.op));
   const history = (/** @type {number} */ vid) => invoke("get_history", { versionId: vid });
+  /** The rows an edit wrote: the first edit of a photograph also records an "Original" row to undo back to. */
+  const editRows = (/** @type {any[]} */ rows) => rows.filter((r) => r.label !== "Original");
 
   async function setAmount(/** @type {number} */ v) {
     await browser.execute((val) => {
@@ -89,7 +91,7 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
 
   it("Cool the shadows adds one luminance-range mask under one History row, scaled by Amount", async function () {
     const vid = state.corn.version_id;
-    const before = (await history(vid)).length;
+    const before = editRows(await history(vid)).length;
     await setAmount(60);
     await applyPreset("Cool the shadows");
     const stack = await waitFor(async () => {
@@ -102,7 +104,7 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     expect(m.temperature).toBeCloseTo(-4.8, 5);
     expect(m.saturation).toBeCloseTo(-3, 5);
     expect(m.source.preset).toBe("cool-shadows");
-    const rows = await history(vid);
+    const rows = editRows(await history(vid));
     expect(rows.length).toBe(before + 1);
     expect(rows[rows.length - 1].label).toBe("Adaptive: Cool the shadows 60 %");
     state.shadowRange = m.rangeMax;

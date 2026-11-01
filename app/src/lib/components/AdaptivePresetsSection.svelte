@@ -3,7 +3,7 @@
   // report below says per rule what was found, flagged for a look, or not found. Applying again (Re-apply) replaces the
   // masks the preset made, and asks first when the user changed one. The new mask is opened by the apply itself
   // (adaptiveActions.js), so what was found is on screen with its overlay.
-  import { describeRule, canSelectItYourself } from "$lib/adaptivePresets.js";
+  import { describeRule, canSelectItYourself, selectItYourselfLabel } from "$lib/adaptivePresets.js";
 
   /**
    * @type {{
@@ -111,7 +111,7 @@
             <div class="rname">{d.name}</div>
             <div class="rtext">{d.text}</div>
             {#if d.kind === "check" && canSelectItYourself(r.region)}
-              <button type="button" class="adaptive-yourself" onclick={() => selected && onSelectItYourself(selected.id, i)}>Select it yourself</button>
+              <button type="button" class="adaptive-yourself" onclick={() => selected && onSelectItYourself(selected.id, i)}>{selectItYourselfLabel(r.region)}</button>
             {/if}
           </div>
         </div>

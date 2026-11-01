@@ -73,6 +73,34 @@ fn prepare_model(helper: Arc<AiHelper>, dir: &std::path::Path, content_hash: Str
 
 /// Resolves `region` (`"shadows"`, `"face"`, `"person"` or `"sky"`) for one photograph. The face and person resolvers
 /// read the stored `faces` rows, so the caller scans first (`faces_scanned` on the image) -- no rows reads as "no face".
+/// Photographs scanned before `faces.score` existed have faces with no score, and without it a dog or a statue cannot be told from a
+/// face. Before a face or person region is resolved, give such a photograph its scores (`face_pipeline::backfill_scores_for_image`):
+/// one detection, nothing else in the catalog changes. Best effort, and never a download: without the detector already cached
+/// from an earlier scan, or if anything fails, the faces stay unscored, which is never held against them.
+async fn backfill_unscored_faces(app: &AppHandle, state: &AppState, image_id: i64) {
+    let catalog = state.catalog.clone();
+    let unscored = catalog
+        .lock()
+        .ok()
+        .and_then(|c| c.get_faces_for_image(image_id).ok())
+        .is_some_and(|faces| faces.iter().any(|f| f.score.is_none()));
+    if !unscored {
+        return;
+    }
+    let Ok(root) = resolve_cache_root(app, &catalog) else { return };
+    let Some(yunet) = crate::face_models::cached_detector(&root.join("face_models")) else { return };
+    let outcome = tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
+        let detector = crate::face_detect::FaceDetector::load(&yunet).map_err(|e| e.to_string())?;
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        crate::face_pipeline::backfill_scores_for_image(&catalog, &detector, image_id).map_err(|e| e.to_string())
+    })
+    .await;
+    match outcome {
+        Ok(Ok(n)) => adaptive_regions::trace(&format!("score backfill image={image_id} scored={n}")),
+        _ => adaptive_regions::trace(&format!("score backfill image={image_id} failed")),
+    }
+}
+
 #[tauri::command]
 pub async fn resolve_adaptive_region(
     app: AppHandle,
@@ -84,6 +112,7 @@ pub async fn resolve_adaptive_region(
     region: String,
 ) -> Result<RegionResult, String> {
     let faces = if region == "face" || region == "person" {
+        backfill_unscored_faces(&app, &state, image_id).await;
         let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
         catalog
             .get_faces_for_image(image_id)

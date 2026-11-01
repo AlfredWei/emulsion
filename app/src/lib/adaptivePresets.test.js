@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ADAPTIVE_PRESETS, needsFaces, scaleAdjustments, buildMask, handOffAdjustments, canSelectItYourself, selectItYourselfTarget, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
+import { ADAPTIVE_PRESETS, needsFaces, scaleAdjustments, buildMask, handOffAdjustments, canSelectItYourself, selectItYourselfAdds, selectItYourselfLabel, selectItYourselfTarget, isEdited, planAdaptiveApply, describeReport, describeRule, batchStatus, presetMasks, adaptiveLabel } from "./adaptivePresets.js";
 import { MAX_MASKS, listMasks, createBrushMask, addMask } from "$lib/api/develop.js";
 
 const sky = /** @type {any} */ (ADAPTIVE_PRESETS.find((p) => p.id === "deepen-sky"));
@@ -156,12 +156,19 @@ describe("adaptive presets", () => {
     expect(handOffAdjustments(empty, "nope")).toBeNull();
   });
 
+  it("a person mask takes the click as an addition and says so, a sky or a face is replaced", () => {
+    expect(selectItYourselfAdds("person")).toBe(true);
+    expect(["sky", "face", "shadows"].some(selectItYourselfAdds)).toBe(false);
+    expect(selectItYourselfLabel("person")).toBe("Add a person yourself");
+    expect(selectItYourselfLabel("sky")).toBe("Select it yourself");
+  });
+
   it("offers Select it yourself on a flagged mask of a sky, face or person rule, and nowhere else", () => {
     expect(["sky", "face", "person"].every(canSelectItYourself)).toBe(true);
     expect(canSelectItYourself("shadows")).toBe(false);
     const flagged = (/** @type {string} */ preset, /** @type {any} */ check = "the model was unsure") => ({ source: { preset, rule: 0, sig: "x", check } });
-    expect(selectItYourselfTarget(flagged("lift-people"))).toEqual({ presetId: "lift-people", ruleIndex: 0 });
-    expect(selectItYourselfTarget(flagged("deepen-sky"))).toEqual({ presetId: "deepen-sky", ruleIndex: 0 });
+    expect(selectItYourselfTarget(flagged("lift-people"))).toEqual({ presetId: "lift-people", ruleIndex: 0, region: "person", adds: true });
+    expect(selectItYourselfTarget(flagged("deepen-sky"))).toEqual({ presetId: "deepen-sky", ruleIndex: 0, region: "sky", adds: false });
     expect(selectItYourselfTarget(flagged("lift-people", null))).toBeNull(); // a clean mask: nothing to redo
     expect(selectItYourselfTarget(flagged("cool-shadows"))).toBeNull(); // no click-select equivalent for a brightness range
     expect(selectItYourselfTarget(flagged("no-such-preset"))).toBeNull();

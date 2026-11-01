@@ -7,7 +7,7 @@
   import { handleDeleteSnapshot, handlePeekHistory, handlePeekSnapshot, handleCropChange, handleSourceDimensions, handleHistogramUpdate, handleHoverPixel, handleToggleClippingOverlay, handleAdjustmentChange, handleAutoWhiteBalance, handleAutoTone, handleWbPresetChange, handleToneCurveChange, handleHslBandChange, handleSplitToningZoneChange, handleSplitToningBalanceChange, handleVignetteChange, handleLensCorrectionChange, handlePerspectiveChange, handleGrainChange, handleGrainStockChange, handleSharpenChange, handleLumaNRChange, handleColorNRChange, handleCropAspectPreset, handleCropReset, handleTogglePanelVisibility, handleResetPanel } from "$lib/actions/developActions.js";
   import { handleAutoSyncToggle } from "$lib/actions/autoSyncActions.js";
   import { handleApplyAdaptivePreset } from "$lib/actions/adaptiveActions.js";
-  import { ADAPTIVE_PRESETS, presetMasks, isEdited, selectItYourselfTarget } from "$lib/adaptivePresets.js";
+  import { ADAPTIVE_PRESETS, presetMasks, isEdited, selectItYourselfAdds, selectItYourselfLabel, selectItYourselfTarget } from "$lib/adaptivePresets.js";
   import { handleApplyPreset, handleSaveCurrentAsPresetRequest, handleExportPreset, handleDeletePresetRequest, handleImportPresetRequest, handlePeekPreset, handleCopySettingsRequest, handlePasteSettings, handleSyncSettingsRequest } from "$lib/actions/presetActions.js";
   import { shell } from "$lib/state/shell.svelte.js";
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
@@ -48,6 +48,14 @@
   function handleSelectItYourself(/** @type {string} */ presetId, /** @type {number} */ ruleIndex) {
     if (masks.activeTool === "segment") return;
     const flagged = presetMasks(develop.editStack, presetId).find((m) => m.source?.rule === ruleIndex);
+    const region = ADAPTIVE_PRESETS.find((p) => p.id === presetId)?.rules[ruleIndex]?.region ?? "";
+    if (flagged && selectItYourselfAdds(region)) {
+      // People: the click joins the people already found (a shape of the flagged mask, Esc takes it off again).
+      masks.selectedMaskId = flagged.id;
+      masks.showMaskOverlay = true;
+      void handleAddSegmentShape("add");
+      return;
+    }
     void handleSegmentToolToggle(flagged?.id ?? null);
   }
 </script>
@@ -186,6 +194,7 @@
       onDelete={handleMaskDeleted}
       onClose={() => (masks.selectedMaskId = null)}
       onSelectItYourself={selectItYourself ? () => handleSelectItYourself(selectItYourself.presetId, selectItYourself.ruleIndex) : null}
+      selectItYourselfText={selectItYourself ? selectItYourselfLabel(selectItYourself.region) : undefined}
       showMaskOverlay={masks.showMaskOverlay}
       onShowOverlayChange={(v) => (masks.showMaskOverlay = v)}
       isResamplingColor={masks.isResamplingColor}

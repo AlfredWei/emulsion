@@ -31,6 +31,7 @@
    *   brushLayers?: number,
    *   onRefineSubject?: () => void,
    *   onSelectItYourself?: (() => void) | null,
+   *   selectItYourselfText?: string,
    * }}
    */
   let {
@@ -54,6 +55,7 @@
     brushLayers = 0,
     onRefineSubject = () => {},
     onSelectItYourself = null,
+    selectItYourselfText = "Select it yourself",
   } = $props();
 
   // RFC-0034: the controls beyond Exposure / Contrast / Saturation, in two groups, the same ranges and
@@ -191,7 +193,7 @@
     <p class="check-note" role="note">Check this selection: it is highlighted on the photo. {checkNote}.</p>
     {#if onSelectItYourself}
       <!-- The panel covers the presets list, where the same button lives, as soon as the mask is selected. -->
-      <button type="button" class="check-yourself" onclick={onSelectItYourself}>Select it yourself</button>
+      <button type="button" class="check-yourself" onclick={onSelectItYourself}>{selectItYourselfText}</button>
     {/if}
   {/if}
 

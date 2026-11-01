@@ -175,15 +175,30 @@ export function canSelectItYourself(region) {
   return region === "sky" || region === "face" || region === "person";
 }
 
+/** What the click does on a flagged mask of this region. A sky or a face is one thing, so the user's selection replaces it. A person
+ * mask is several people the model mostly got right (a flagged one is "unsure of one", "missed one", "a speck"), so the click is ADDED
+ * to it: replacing it with one selection threw away the other people (a five-person mask, 11 % of the frame, became 0.2 % of it).
+ * @param {string} region */
+export function selectItYourselfAdds(region) {
+  return region === "person";
+}
+
+/** The button's words for a flagged mask of this region.
+ * @param {string} region */
+export function selectItYourselfLabel(region) {
+  return selectItYourselfAdds(region) ? "Add a person yourself" : "Select it yourself";
+}
+
 /** The preset id and rule index of a flagged adaptive mask the user can redo by hand, or null: the mask must carry a
- * `check` note (the preset was not sure of it) and come from a rule whose region `canSelectItYourself`.
+ * `check` note (the preset was not sure of it) and come from a rule whose region `canSelectItYourself`. `adds` says the click is
+ * added to the mask instead of replacing it (`selectItYourselfAdds`).
  * @param {any} mask
- * @returns {{ presetId: string, ruleIndex: number } | null} */
+ * @returns {{ presetId: string, ruleIndex: number, region: string, adds: boolean } | null} */
 export function selectItYourselfTarget(mask) {
   const source = mask?.source;
   if (!source?.check) return null;
   const region = ADAPTIVE_PRESETS.find((p) => p.id === source.preset)?.rules[source.rule]?.region;
-  return region && canSelectItYourself(region) ? { presetId: source.preset, ruleIndex: source.rule } : null;
+  return region && canSelectItYourself(region) ? { presetId: source.preset, ruleIndex: source.rule, region, adds: selectItYourselfAdds(region) } : null;
 }
 
 /** The whole report on one line, for the notification.

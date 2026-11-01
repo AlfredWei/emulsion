@@ -3,6 +3,32 @@
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
 
+## M7: where it stands and the plan for what remains (2026-11-01, `docs/m7-remaining-plan`)
+
+Read from this log, RFC-0031 / 0032 / 0033 and the code (no inpainting model, no `remove` op and no blink detection exists in the app; `inpaint_patchmatch.rs` and `inpaint_probe.rs` are bake-off code).
+
+**State by scope line** (PRD/MILESTONES.md M7).
+- **Adaptive auto-tone presets: mostly done.** Richer mask adjustments (RFC-0034), the sky / face / person / shadows resolvers, the Adaptive section, the batch dialog, the person detector (RFC-0037), "Select it yourself" / "Add a person yourself", score backfill. Of RFC-0033's five starter presets three exist (Deepen sky, Brighten faces, Cool the shadows) plus Lift people; **Soften the background** (needs a blur the engine does not have) and **Lift subject** are not built (their greyed placeholder rows were removed). **R1, a scene-aware Auto Tone, is slice D: deferred by the user, only if blind pairs say it wins.**
+- **Duplicate detection and culling aids: RFC-0031 slices A, B, C built** (stored sharpness and hash per photo, similar-photo groups, the Similar view with Suggested / Soft badges, Reject the others). **D (tuning on the user's real bursts) and E (blink detection; a single-photo quality model) are not done.** Known gaps: Soft chips on the plain grid, RAW, real bursts, Windows.
+- **Generative removal / fill: decided on paper only.** RFC-0032: bake-off (A) done, LaMa proposed as the engine, Remove tool mock (C) done, stored-vs-regenerated measured (C2). Slices B (licence / ADR), D (engine, job, stored patches, CPU + GPU compositing), E (Remove tool UI), F (quality) are not started; G (diffusion, prompted fill) is unscheduled by the user's decision.
+
+**Exit criteria.** (1) Fill approach documented before implementation: proposed in RFC-0032 §3.1, **not ratified** (waits on the licence decision). (2) Measurably faster culling: **not measured** (needs a real burst-heavy folder and a with / without comparison).
+
+**Decisions only the user can make (they block the critical path).**
+1. Is LaMa (trained on Places2) acceptable for this product, and is the by-eye ruling right (LaMa the engine, MI-GAN out above small holes, a guard for large holes)? (RFC-0032 §8 A, B)
+2. Bundle LaMa (208 MB more in the installer) or download on first use? (§8 C)
+3. A folder of unculled, burst-heavy photographs, ideally RAW and JPEG, for culling slice D (RFC-0031 §7 Q3).
+4. Run the small stored-vs-regenerated study with people (protocol in RFC-0032-appendix), or accept "the stored patch is the truth".
+
+**Plan, in order.**
+1. **Culling D** (small; needs decision 3): choose the time window, hash distance and suggestion margin from labelled sets, then the time-to-cull comparison that closes exit criterion 2; also RAW and the Soft chips on the plain grid.
+2. **Object removal** (the large block; starts after decisions 1, 2, 4): **B** a short ADR (licence, bundle or download, where patches live); **D** `inpaint_run` helper op with LaMa, crop / blend, detail transfer for the soft large holes, the `remove` op with stored patches, CPU and GPU compositing; **E** the Remove tool (paint, click, lasso, accept / undo, "use Heal instead", the large-region guard); **F** grain and detail matching, halo growth. Per the M5 practice, the GPU-heavy slices get an RFC before and an ADR update after.
+3. **Culling E**: survey first (size, licence, accuracy, hardware; RFC-0023's method), then blink detection on the existing face crops; the single-photo quality model is optional and last.
+4. **Auto Tone R1**: only if the user wants it; blind pairs decide.
+5. **M7 close**: the verification backlog (Windows by eye, wrong-person rate beyond the 37 photographs, the added-person overlay and the GPU canvas by eye, a GPU CI runner for the parity spec), then the full manual pass.
+
+**Can start without the user:** the culling E survey and the preparation for removal slice D. The removal engine itself waits for the licence decision.
+
 ## Adaptive section: the two greyed-out placeholder rows are removed (2026-11-01, `fix/remove-unbuilt-adaptive-rows`)
 
 The Adaptive list showed "Separate the subject" and "Soften the background" greyed out ("Needs a click and GPU acceleration"): placeholders for presets that are not built (RFC-0035 §3.5), which read as broken buttons. `ADAPTIVE_PLANNED`, the `planned` prop of `AdaptivePresetsSection.svelte` and the `.off` / `.needs` styles are gone; the list now shows only presets that work (Deepen sky, Brighten faces, Cool the shadows, Lift people). The features themselves do not exist: the app has no background blur and no subject cut-out (a Subject mask can only be adjusted, inverted and combined), and they are not in the milestones; if wanted they need an RFC. **Verified:** vitest 1180 (the one test that checked the placeholders is removed), svelte-check clean, the `develop-adaptive-presets` spec 10 passing in the real window (its assertion now checks no placeholder text is listed). **Not verified:** the section looked at by eye after the change.

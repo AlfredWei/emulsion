@@ -343,7 +343,35 @@ pub(crate) fn trace(line: &str) {
 
 /// The people of one photograph in one `segment_mask`: for the largest faces, a click on the face and one on the
 /// torso below it, the model's best cut for each, merged. `Err` is a model failure the caller shows as it is.
+#[cfg(test)]
 pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn ClickModel) -> Result<RegionResult, String> {
+    resolve_person_rescuing(boxes, frame, model, &[])
+}
+
+/// A face whose click cut the model was not sure of gets a second chance from the detector: the smallest detected person (sure
+/// enough, `PERSON_DETECT_MIN_SCORE`) whose box holds the face's centre is cut with a box prompt, which the model gets right far
+/// more often than two clicks (RFC-0037: 82 % against 65 % at IoU 0.7). The face and the box agreeing on a person is the evidence
+/// the detection-only path lacks, but the cut still has to clear the model's own floor and is reported, not hidden.
+fn rescue_cut(face: &FaceBox, people: &[PersonBox], model: &mut dyn ClickModel) -> Option<Cut> {
+    let (cx, cy) = (face.x + face.w / 2.0, face.y + face.h / 2.0);
+    let area = |p: &PersonBox| (p.x1 - p.x0) * (p.y1 - p.y0);
+    let holder = people
+        .iter()
+        .filter(|p| p.score >= PERSON_DETECT_MIN_SCORE && cx > p.x0 && cx < p.x1 && cy > p.y0 && cy < p.y1)
+        .min_by(|a, b| area(a).total_cmp(&area(b)))?;
+    let cut = model.cut_box(&BBox { x0: holder.x0, y0: holder.y0, x1: holder.x1, y1: holder.y1 }).ok()?;
+    trace(&format!(
+        "person rescue box=({:.3},{:.3},{:.3},{:.3}) score={:.3} iou={:.3} cut_coverage={:.3}",
+        holder.x0, holder.y0, holder.x1, holder.y1, holder.score, cut.iou, coverage_of(&cut.logits)
+    ));
+    let sure = cut.iou >= PERSON_MIN_IOU && cut.logits.len() == RASTER * RASTER && coverage_of(&cut.logits) >= PERSON_DETECT_MIN_COVERAGE;
+    sure.then_some(cut)
+}
+
+/// `resolve_person` with the detector's people at hand (RFC-0037) for the faces the click cut could not settle. The detector settles
+/// them only around people the clicks did find: when the clicks found nobody, the photograph as a whole goes to the by-shape
+/// fallback (`resolve_person_by_detection`), which cuts every detected person and not just the ones holding a face.
+pub fn resolve_person_rescuing(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn ClickModel, people: &[PersonBox]) -> Result<RegionResult, String> {
     let mut faces = match kept_faces(boxes, frame) {
         Ok(k) => k,
         Err(none) => return Ok(none),
@@ -354,7 +382,8 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
     faces.truncate(PERSON_MAX);
 
     let mut merged = vec![-LOGIT_RANGE; RASTER * RASTER];
-    let (mut used, mut unsure, mut moderate) = (0usize, 0usize, 0usize);
+    let (mut used, mut unsure, mut moderate, mut rescued) = (0usize, 0usize, 0usize, 0usize);
+    let mut pending: Vec<&FaceBox> = Vec::new();
     for f in &faces {
         let (cx, cy) = (f.x + f.w / 2.0, f.y + f.h / 2.0);
         let mut clicks = vec![(cx, cy, true)];
@@ -380,7 +409,7 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
             f.x, f.y, f.w, f.h, f.score.map_or("?".to_string(), |s| format!("{s:.3}")), clicks.len() > 1, cut.iou, coverage_of(&cut.logits)
         ));
         if cut.iou < PERSON_MIN_IOU || cut.logits.len() != merged.len() {
-            unsure += 1;
+            pending.push(f);
             continue;
         }
         used += 1;
@@ -389,6 +418,20 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
         }
         for (m, l) in merged.iter_mut().zip(&cut.logits) {
             *m = m.max(*l);
+        }
+    }
+    // "Found someone" is judged as the result will be: people covering under the floor are not found (and go to the fallback).
+    let anchored = used > 0 && coverage_of(&merged) >= PERSON_MIN_COVERAGE;
+    for f in pending {
+        match anchored.then(|| rescue_cut(f, people, model)).flatten() {
+            Some(by_box) => {
+                used += 1;
+                rescued += 1;
+                for (m, l) in merged.iter_mut().zip(&by_box.logits) {
+                    *m = m.max(*l);
+                }
+            }
+            None => unsure += 1,
         }
     }
     if used == 0 {
@@ -414,6 +457,9 @@ pub fn resolve_person(boxes: &[FaceBox], frame: (u32, u32), model: &mut dyn Clic
     }
     if unsure > 0 {
         why.push(format!("{unsure} person(s) the model was unsure of were left out"));
+    }
+    if rescued > 0 {
+        why.push(format!("{rescued} person(s) the face click could not settle were cut from the detector's box instead"));
     }
     if moderate > 0 {
         why.push(format!("the model was only moderately sure of {moderate} person(s)"));
@@ -1230,6 +1276,121 @@ mod tests {
         assert_eq!(r.outcome, Outcome::NotFound);
         assert!(r.reason.as_deref().unwrap().contains("not sure"));
         assert!(r.mask.is_none());
+    }
+
+    /// Clicks near `doubtful_x` get a cut the model rates `click_iou`, the others 0.9; a box prompt gets `box_iou`. Records the boxes.
+    struct DoubtfulClicks {
+        doubtful_x: f32,
+        click_iou: f32,
+        boxes: BoxModel,
+    }
+    impl DoubtfulClicks {
+        fn new(doubtful_x: f32, click_iou: f32, box_iou: f32) -> Self {
+            DoubtfulClicks { doubtful_x, click_iou, boxes: BoxModel { iou: box_iou, seen: Vec::new() } }
+        }
+    }
+    impl ClickModel for DoubtfulClicks {
+        fn cut(&mut self, clicks: &[(f32, f32, bool)]) -> Result<Cut, String> {
+            let iou = if (clicks[0].0 - self.doubtful_x).abs() < 0.1 { self.click_iou } else { 0.9 };
+            FakeModel::new(iou).cut(clicks)
+        }
+        fn cut_box(&mut self, b: &BBox) -> Result<Cut, String> {
+            self.boxes.cut_box(b)
+        }
+    }
+
+    /// The face at 0.4 is the one the clicks doubt; the one at 0.7 is cut by the clicks for sure.
+    fn two_faces() -> [FaceBox; 2] {
+        [big_face(0.4, 0.2), big_face(0.7, 0.2)]
+    }
+
+    #[test]
+    fn a_face_the_clicks_could_not_settle_is_cut_from_the_detectors_box_and_says_so() {
+        // The face is at (0.4..0.46, 0.2..0.29); the detector's person around it is the box below.
+        let body = person(0.35, 0.15, 0.55, 0.9, 0.8);
+        let mut model = DoubtfulClicks::new(0.4, 0.4, 0.95);
+        let r = resolve_person_rescuing(&two_faces(), (1600, 1200), &mut model, &[body]).unwrap();
+        assert_eq!(r.outcome, Outcome::Check, "a rescued person is always asked to be looked at");
+        assert_eq!(model.boxes.seen, vec![BBox { x0: 0.35, y0: 0.15, x1: 0.55, y1: 0.9 }]);
+        let why = r.reason.unwrap();
+        assert!(why.contains("1 person(s) the face click could not settle were cut from the detector's box"), "{why}");
+        assert!(!why.contains("unsure"), "a rescued person is not also reported as left out: {why}");
+        let l = decode(&r.mask.unwrap());
+        assert!(at(&l, 0.45, 0.5) > 1.0 && at(&l, 0.73, 0.5) > 1.0 && at(&l, 0.2, 0.5) < -1.0, "both people, the first from the detector's box");
+    }
+
+    #[test]
+    fn the_rescue_needs_a_sure_detection_that_holds_the_face_and_a_cut_the_model_trusts() {
+        let left_out = |people: &[PersonBox], box_iou: f32| {
+            let mut model = DoubtfulClicks::new(0.4, 0.4, box_iou);
+            let r = resolve_person_rescuing(&two_faces(), (1600, 1200), &mut model, people).unwrap();
+            (r, model)
+        };
+        let why_of = |r: RegionResult| r.reason.unwrap();
+        // The detection is elsewhere, or weak: nothing is cut, the face stays left out (and the other person is still found).
+        let (r, m) = left_out(&[person(0.55, 0.15, 0.65, 0.9, 0.9)], 0.95);
+        assert!(m.boxes.seen.is_empty());
+        assert!(why_of(r).contains("1 person(s) the model was unsure of were left out"));
+        let (r, m) = left_out(&[person(0.35, 0.15, 0.55, 0.9, PERSON_DETECT_MIN_SCORE - 0.01)], 0.95);
+        assert!(m.boxes.seen.is_empty(), "a weak detection is not even cut");
+        assert!(why_of(r).contains("unsure"));
+        // The box cut is as doubtful as the clicks: still left out, and said so.
+        let (r, m) = left_out(&[person(0.35, 0.15, 0.55, 0.9, 0.9)], PERSON_MIN_IOU - 0.05);
+        assert_eq!(m.boxes.seen.len(), 1);
+        assert!(why_of(r).contains("1 person(s) the model was unsure of were left out"));
+        // A face the clicks settled never asks the detector.
+        let mut sure = DoubtfulClicks::new(0.4, 0.9, 0.95);
+        let r = resolve_person_rescuing(&two_faces(), (1600, 1200), &mut sure, &[person(0.35, 0.15, 0.55, 0.9, 0.9)]).unwrap();
+        assert_eq!(r.outcome, Outcome::Found);
+        assert!(sure.boxes.seen.is_empty());
+    }
+
+    #[test]
+    fn with_nobody_found_by_the_clicks_the_detector_is_not_asked_here_the_by_shape_path_takes_the_photograph() {
+        let mut model = DoubtfulClicks::new(0.4, 0.4, 0.95);
+        let r = resolve_person_rescuing(&[big_face(0.4, 0.2)], (1600, 1200), &mut model, &[person(0.35, 0.15, 0.55, 0.9, 0.9)]).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        assert!(model.boxes.seen.is_empty());
+    }
+
+    /// The clicks at 0.7 cut a 10 x 10 texel blob (0.15 % of the frame, under the coverage floor) the model is sure of; the clicks at
+    /// 0.4 get a cut it doubts; a box prompt cuts exactly the box.
+    struct TinySure(BoxModel);
+    impl ClickModel for TinySure {
+        fn cut(&mut self, clicks: &[(f32, f32, bool)]) -> Result<Cut, String> {
+            let mut logits = vec![-LOGIT_RANGE; RASTER * RASTER];
+            let sure = clicks[0].0 > 0.6;
+            if sure {
+                for iy in 20..30 {
+                    for ix in 180..190 {
+                        logits[iy * RASTER + ix] = LOGIT_RANGE;
+                    }
+                }
+            }
+            Ok(Cut { iou: if sure { 0.9 } else { 0.4 }, logits })
+        }
+        fn cut_box(&mut self, b: &BBox) -> Result<Cut, String> {
+            self.0.cut_box(b)
+        }
+    }
+
+    #[test]
+    fn people_the_clicks_found_but_that_cover_under_the_floor_do_not_count_as_found_for_the_rescue() {
+        // The result would be not-found and the by-shape path takes the whole photograph, so the rescue must not lift it over the floor
+        // first (it did, on a group photograph where the by-shape path found eight people and the rescue four).
+        let mut model = TinySure(BoxModel { iou: 0.95, seen: Vec::new() });
+        let r = resolve_person_rescuing(&two_faces(), (1600, 1200), &mut model, &[person(0.35, 0.15, 0.55, 0.9, 0.9)]).unwrap();
+        assert_eq!(r.outcome, Outcome::NotFound);
+        assert!(model.0.seen.is_empty());
+    }
+
+    #[test]
+    fn the_smallest_box_holding_the_face_is_the_one_cut() {
+        let inner = person(0.36, 0.15, 0.5, 0.9, 0.9);
+        let outer = person(0.1, 0.05, 0.6, 0.95, 0.9);
+        let mut model = DoubtfulClicks::new(0.4, 0.4, 0.95);
+        resolve_person_rescuing(&two_faces(), (1600, 1200), &mut model, &[outer, inner]).unwrap();
+        assert_eq!(model.boxes.seen, vec![BBox { x0: 0.36, y0: 0.15, x1: 0.5, y1: 0.9 }]);
     }
 
     #[test]

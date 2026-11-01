@@ -113,11 +113,13 @@ pub async fn resolve_adaptive_region(
                 let dir = person_models.ok_or_else(|| "no model folder".to_string())?;
                 let mut model = prepare_model(helper.clone(), &dir, content_hash, &preview.path)?;
                 adaptive_regions::trace(&format!("photo {path}"));
-                let by_face = adaptive_regions::resolve_person(&faces, (preview.width, preview.height), &mut model)?;
                 // The detector is a second look (RFC-0037): for a photograph with no usable face it is the only way to find
-                // anyone; for one with faces it may add the people the faces missed. Without the detector model, or if it
-                // fails, the face-only answer stands.
-                match detect_people(&helper, &dir, &preview.path) {
+                // anyone; for one with faces it settles the faces whose click cut the model was unsure of and may add the people
+                // the faces missed. Without the detector model, or if it fails, the face-only answer stands.
+                let detected = detect_people(&helper, &dir, &preview.path);
+                let seen: &[PersonBox] = detected.as_deref().unwrap_or(&[]);
+                let by_face = adaptive_regions::resolve_person_rescuing(&faces, (preview.width, preview.height), &mut model, seen)?;
+                match detected {
                     Ok(people) => {
                         adaptive_regions::trace(&format!("person detector found {} candidate(s)", people.len()));
                         if by_face.outcome == Outcome::NotFound {

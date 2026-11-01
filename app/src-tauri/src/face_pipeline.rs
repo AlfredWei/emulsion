@@ -133,6 +133,66 @@ fn detect_one_image(
     Ok(())
 }
 
+/// A stored face and a fresh detection are the same face when their boxes overlap at least this much (both come from the same
+/// detector on the same decode, so a true match is near 1.0).
+const SCORE_MATCH_IOU: f32 = 0.5;
+
+fn box_iou(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
+    let (ix, iy) = ((a.0 + a.2).min(b.0 + b.2) - a.0.max(b.0), (a.1 + a.3).min(b.1 + b.3) - a.1.max(b.1));
+    if ix <= 0.0 || iy <= 0.0 {
+        return 0.0;
+    }
+    let inter = ix * iy;
+    inter / (a.2 * a.3 + b.2 * b.3 - inter)
+}
+
+/// For each stored face `(id, box)`, the score of the detection that overlaps it most (at least `SCORE_MATCH_IOU`), each detection used
+/// at most once. A stored face no detection matches is left out, so it stays unscored.
+fn match_scores(stored: &[(i64, (f32, f32, f32, f32))], detected: &[crate::face_detect::DetectedFace]) -> Vec<(i64, f32)> {
+    let mut taken = vec![false; detected.len()];
+    let mut out = Vec::new();
+    for &(id, b) in stored {
+        let best = detected
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !taken[*i])
+            .map(|(i, d)| (i, box_iou(b, (d.bbox_x, d.bbox_y, d.bbox_w, d.bbox_h))))
+            .filter(|(_, iou)| *iou >= SCORE_MATCH_IOU)
+            .max_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = best {
+            taken[i] = true;
+            out.push((id, detected[i].score));
+        }
+    }
+    out
+}
+
+/// Photographs scanned before `faces.score` existed hold faces with no score, and the adaptive people/face regions cannot tell a dog
+/// or a statue from a face without it. This detects again and writes the score onto each stored face the new detection matches, and
+/// nothing else: no face is added or removed, and nobody's person, exclusion or embedding changes (a re-scan would redo the clustering
+/// and could orphan names). Returns how many faces got a score. A decode failure scores nothing.
+pub fn backfill_scores_for_image(catalog: &Catalog, detector: &FaceDetector, image_id: i64) -> Result<usize, FacePipelineError> {
+    let unscored: Vec<(i64, (f32, f32, f32, f32))> = catalog
+        .get_faces_for_image(image_id)?
+        .into_iter()
+        .filter(|f| f.score.is_none())
+        .map(|f| (f.id, (f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h)))
+        .collect();
+    if unscored.is_empty() {
+        return Ok(0);
+    }
+    let path = catalog.get_image_path(image_id)?;
+    let decoded = path.as_deref().and_then(|p| source_decode::decode_preview(std::path::Path::new(p)).ok());
+    let Some(image) = decoded.and_then(|d| image::RgbImage::from_raw(d.width, d.height, d.rgb)) else {
+        return Ok(0);
+    };
+    let matched = match_scores(&unscored, &detector.detect(&image)?);
+    for &(id, score) in &matched {
+        catalog.set_face_score(id, Some(score))?;
+    }
+    Ok(matched.len())
+}
+
 /// Runs detection + embedding + incremental clustering for a batch of
 /// images -- new faces are compared only against existing clusters'
 /// centroids, not re-clustering the whole catalog. `on_progress(current,
@@ -271,6 +331,21 @@ mod tests {
         assert_eq!(people[0].photo_count, 1);
     }
 
+    fn detected(x: f32, y: f32, w: f32, h: f32, score: f32) -> crate::face_detect::DetectedFace {
+        crate::face_detect::DetectedFace { bbox_x: x, bbox_y: y, bbox_w: w, bbox_h: h, landmarks: [(0.0, 0.0); 5], score }
+    }
+
+    #[test]
+    fn a_stored_face_takes_the_score_of_the_detection_it_overlaps_most_and_each_detection_is_used_once() {
+        let stored = [(1, (0.10, 0.10, 0.20, 0.20)), (2, (0.12, 0.10, 0.20, 0.20)), (3, (0.70, 0.70, 0.10, 0.10))];
+        let found = [detected(0.11, 0.10, 0.20, 0.20, 0.91), detected(0.7, 0.7, 0.1, 0.1, 0.62)];
+        let scores = match_scores(&stored, &found);
+        // Face 1 takes the one detection near it; face 2 would overlap the same one, but it is taken, so it stays unscored.
+        assert_eq!(scores, vec![(1, 0.91), (3, 0.62)]);
+        assert!(match_scores(&stored, &[]).is_empty());
+        assert!(match_scores(&[(9, (0.0, 0.0, 0.1, 0.1))], &[detected(0.5, 0.5, 0.1, 0.1, 0.9)]).is_empty(), "no overlap, no score");
+    }
+
     // --- Real-model tests for detect_faces_for_batch's own new behavior
     // (People-tab UX fix, 2026-09-16), gated exactly like face_detect.rs's
     // own real-model tests -- see that module's test-section header for
@@ -304,6 +379,39 @@ mod tests {
         let images = catalog.list_images().unwrap();
         assert!(images.iter().find(|i| i.image_id == image_id).unwrap().faces_scanned);
         assert!(!catalog.get_faces_for_image(image_id).unwrap().is_empty(), "expected a real face to be detected");
+    }
+
+    #[test]
+    fn backfill_restores_a_wiped_score_and_leaves_the_person_and_embedding_alone() {
+        let Some(dir) = models_dir() else {
+            eprintln!("skipping: EMULSION_TEST_FACE_MODELS_DIR not set");
+            return;
+        };
+        let detector = FaceDetector::load(&dir.join("yunet.onnx")).unwrap();
+        let embedder = FaceEmbedder::load(&dir.join("sface.onnx")).unwrap();
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog
+            .add_image_with_edit_stack(
+                "../../test_image/Smiling-woman-pink-shirt-portrait.jpg",
+                "hash-face-pipeline-backfill",
+                4096,
+                &crate::catalog::EditStack::empty(),
+                &crate::metadata::ImageMetadata::default(),
+            )
+            .unwrap();
+        detect_faces_for_batch(&catalog, &detector, &embedder, &[image_id], DEFAULT_CLUSTER_THRESHOLD, |_, _| {}, || false).unwrap();
+        let scanned = catalog.get_faces_for_image(image_id).unwrap();
+        assert!(!scanned.is_empty() && scanned.iter().all(|f| f.score.is_some()), "a fresh scan stores the score");
+        let embeddings = catalog.get_clusterable_faces().unwrap();
+
+        for f in &scanned {
+            catalog.set_face_score(f.id, None).unwrap(); // what a photograph scanned before `faces.score` looks like
+        }
+        assert_eq!(backfill_scores_for_image(&catalog, &detector, image_id).unwrap(), scanned.len());
+        let after = catalog.get_faces_for_image(image_id).unwrap();
+        assert_eq!(after, scanned, "the same score, box and person as the scan gave");
+        assert_eq!(catalog.get_clusterable_faces().unwrap(), embeddings);
+        assert_eq!(backfill_scores_for_image(&catalog, &detector, image_id).unwrap(), 0, "nothing left to score");
     }
 
     #[test]

@@ -112,6 +112,13 @@ async fn ensure_one(client: &reqwest::Client, cache_dir: &Path, spec: &ModelSpec
     Ok(dest)
 }
 
+/// The face detector's file when it is already cached and valid, without ever fetching it: for the callers that only want to
+/// use a detector that an earlier face scan has already put there.
+pub fn cached_detector(cache_dir: &Path) -> Option<PathBuf> {
+    let path = cache_dir.join(YUNET.filename);
+    is_valid_cache(&path, YUNET.sha256).then_some(path)
+}
+
 /// Ensures both model files exist, valid, in `cache_dir` -- downloading
 /// whichever ones are missing or fail checksum verification -- and returns
 /// their paths. Safe to call on every app start: a fully-cached, valid

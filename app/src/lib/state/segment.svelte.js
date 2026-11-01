@@ -42,6 +42,13 @@ export class SegmentStore {
   seedLogits = null;
   /** @type {null | { logits: string, prompts: import('$lib/api/develop.js').SegmentPrompt[], candidate: number | undefined }} */
   original = null;
+  /** "Select it yourself" on a flagged adaptive mask (RFC-0035 §3.4): the id of the preset's mask whose adjustments the
+   * first selection of this session takes over. Set by the action that arms the tool, cleared with the session.
+   * @type {string | null} */
+  handOffFrom = null;
+  /** The preset mask that was taken over (removed from the stack when the first click landed), so Esc can put it back.
+   * @type {any} */
+  handedOff = null;
   /** Content hash the helper currently holds an embedding for (so it can be released on image change). */
   preparedHash = /** @type {string | null} */ (null);
   /** Bumped on every reset so an answer for an abandoned session is ignored. */
@@ -69,6 +76,8 @@ export class SegmentStore {
     this.seed = null;
     this.seedLogits = null;
     this.original = null;
+    this.handOffFrom = null;
+    this.handedOff = null;
   }
 
   install() {

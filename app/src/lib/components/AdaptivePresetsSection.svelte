@@ -13,7 +13,7 @@
    *   photoKey: unknown,
    *   onApply: (presetId: string, amount: number, options: { replaceEdited: boolean }) => Promise<import('$lib/adaptivePresets.js').RuleReport[] | null>,
    *   onOpenApplied: (presetId: string) => void,
-   *   onSelectItYourself: (region: string) => void,
+   *   onSelectItYourself: (presetId: string, ruleIndex: number) => void,
    * }}
    */
   let { presets, planned, applied, photoKey, onApply, onOpenApplied, onSelectItYourself } = $props();
@@ -111,7 +111,7 @@
             <div class="rname">{d.name}</div>
             <div class="rtext">{d.text}</div>
             {#if d.kind === "check" && (r.region === "sky" || r.region === "face" || r.region === "person")}
-              <button type="button" class="adaptive-yourself" onclick={() => onSelectItYourself(r.region)}>Select it yourself</button>
+              <button type="button" class="adaptive-yourself" onclick={() => selected && onSelectItYourself(selected.id, i)}>Select it yourself</button>
             {/if}
           </div>
         </div>

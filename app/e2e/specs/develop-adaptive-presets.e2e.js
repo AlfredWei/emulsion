@@ -239,6 +239,62 @@ describe("Develop adaptive presets (RFC-0035 B2)", function () {
     state.skyStatus = status;
   });
 
+  it("Select it yourself: the first click replaces a flagged mask and keeps its adjustments (local: needs SEGMENT_MODELS_DIR, WebGPU and ADAPTIVE_CHECK_PHOTO)", async function () {
+    this.timeout(300000);
+    // A flagged (`check`) result is what offers the button, and the repository's own photographs give none: point
+    // ADAPTIVE_CHECK_PHOTO at a photograph of several people (Lift people finds some by shape, which is always `check`).
+    const modelsDir = process.env.SEGMENT_MODELS_DIR ?? "";
+    const photoPath = process.env.ADAPTIVE_CHECK_PHOTO ?? "";
+    if (!modelsDir || !photoPath) this.skip();
+    const gpu = await browser.execute(async () => {
+      try {
+        return !!navigator.gpu && !!(await navigator.gpu.requestAdapter());
+      } catch {
+        return false;
+      }
+    });
+    if (!gpu) this.skip();
+    const status = await invoke("segment_import_model_files", { paths: [`${modelsDir}/sam2_hiera_tiny.encoder.onnx`, `${modelsDir}/sam2_hiera_tiny.decoder.onnx`] });
+    expect(status.state).toBe("ready");
+    const photo = await importFixture(photoPath);
+    await browser.refresh();
+    await openDevelopFor(path.basename(photoPath).replace(/\.[^.]+$/, ""));
+    await (await $("#exposure")).waitForExist({ timeout: 30000 });
+    await openPresetsTab();
+    await setAmount(100);
+    await applyPreset("Lift people");
+    const line = await waitFor(() => browser.execute(() => document.querySelector(".adaptive-report .line")?.textContent ?? ""), "a report line", 120000);
+    console.log(`SELECT_YOURSELF_E2E ${path.basename(photoPath)}: ${line.trim()}`);
+    await waitFor(() => browser.execute(() => !!document.querySelector(".adaptive-yourself")), "the Select it yourself button (the result must be flagged)", 10000);
+    const vid = photo.version_id;
+    const flagged = masksOf(await stackOf(vid)).find((/** @type {any} */ m) => m.source?.preset === "lift-people");
+    expect(flagged).toBeTruthy();
+    const rowsBefore = await history(vid);
+    await domClick(".adaptive-yourself");
+    await waitFor(() => browser.execute(() => /Click the subject/.test(document.querySelector('[data-testid="segment-options"]')?.textContent ?? "")), "ready for clicks", 120000);
+    await browser.execute(() => {
+      const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector(".canvas-wrap canvas"));
+      const r = canvas.getBoundingClientRect();
+      const init = { clientX: r.left + 0.5 * r.width, clientY: r.top + 0.5 * r.height, bubbles: true, pointerId: 1, button: 0 };
+      canvas.dispatchEvent(new PointerEvent("pointerdown", init));
+      canvas.dispatchEvent(new PointerEvent("pointerup", init));
+    });
+    const stack = await waitFor(async () => {
+      const s = await stackOf(vid);
+      const ms = masksOf(s);
+      return ms.length === 1 && ms[0].op === "segment_mask" && ms[0].id !== flagged.id ? s : null;
+    }, "the user's selection replaced the flagged mask", 60000);
+    const mine = masksOf(stack)[0];
+    console.log(`SELECT_YOURSELF_E2E exposure=${mine.exposure} shadows=${mine.shadows} texture=${mine.texture} source=${JSON.stringify(mine.source)} prompts=${JSON.stringify(mine.prompts)}`);
+    expect(mine.exposure).toBeCloseTo(flagged.exposure, 5);
+    expect(mine.shadows).toBe(flagged.shadows);
+    expect(mine.texture).toBe(flagged.texture);
+    expect(mine.source).toBeUndefined();
+    const rowsAfter = await history(vid);
+    console.log(`SELECT_YOURSELF_E2E history rows ${rowsBefore.length} -> ${rowsAfter.length}: ${rowsAfter.slice(rowsBefore.length).map((/** @type {any} */ r) => r.label).join(" | ")}`);
+    expect(rowsAfter.length).toBe(rowsBefore.length + 1);
+  });
+
   it("the CPU render of the stack differs from the unmasked one (the masks reach the pixels)", async function () {
     const vid = state.corn.version_id;
     const stack = await stackOf(vid);

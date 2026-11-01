@@ -40,9 +40,12 @@
     masks.showMaskOverlay = true;
     masks.selectedMaskId = first.id;
   }
-  /** "Select it yourself" on a flagged sky or face: the Select Subject tool, one click on the real thing. */
-  function handleSelectItYourself(/** @type {string} */ _region) {
-    if (masks.activeTool !== "segment") void handleSegmentToolToggle();
+  /** "Select it yourself" on a flagged sky, face or person: the Select Subject tool, one click on the real thing. The
+   * selection takes the flagged mask's place and adjustments (RFC-0035 §3.4). */
+  function handleSelectItYourself(/** @type {string} */ presetId, /** @type {number} */ ruleIndex) {
+    if (masks.activeTool === "segment") return;
+    const flagged = presetMasks(develop.editStack, presetId).find((m) => m.source?.rule === ruleIndex);
+    void handleSegmentToolToggle(flagged?.id ?? null);
   }
 </script>
 

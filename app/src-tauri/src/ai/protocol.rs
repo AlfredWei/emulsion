@@ -90,6 +90,11 @@ pub enum Request {
         jpeg_quality: u8,
         region: Option<Region>,
     },
+    /// Remove an object (RFC-0032, ADR-0010): fill the filled pixels of the 8-bit grayscale PNG `mask_path` (the size of
+    /// the image at `image_path`) with the LaMa ONNX model at `model`, and write the result as an RGBA PNG patch at
+    /// `out_path` (opaque on the mask, faded just beyond it). Streams `progress` lines; answers `InpaintResult`, or
+    /// the error `cancelled`.
+    InpaintRun { model: PathBuf, image_path: PathBuf, mask_path: PathBuf, out_path: PathBuf },
     /// Ask the running request `target` to stop at its next tile boundary; answers at once, whether or not
     /// `target` is still running (so a late cancel is harmless).
     Cancel { target: u64 },
@@ -171,9 +176,32 @@ pub struct UpscaleResult {
     pub ms: u64,
 }
 
+/// Where the patch of an `InpaintRun` goes in the photograph, and how it was made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InpaintResult {
+    /// The patch's top-left corner and size in full-image pixels.
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// The window the network saw, in full-image pixels.
+    pub window: Region,
+    /// The window was shown to the network at another size than its own (a bigger hole, or a small image), so the fill is softer.
+    pub reduced: bool,
+    pub ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_inpaint_request_carries_its_four_paths_under_the_op_tag() {
+        let line = r#"{"id":3,"op":"inpaint_run","model":"m","image_path":"i","mask_path":"k","out_path":"o"}"#;
+        let frame: Frame = serde_json::from_str(line).unwrap();
+        assert!(matches!(frame.request, Request::InpaintRun { .. }));
+        assert!(serde_json::from_str::<Frame>(r#"{"id":3,"op":"inpaint_run","model":"m","image_path":"i","out_path":"o"}"#).is_err());
+    }
 
     #[test]
     fn a_request_frame_is_one_flat_json_object_with_the_op_tag() {

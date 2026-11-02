@@ -13,6 +13,9 @@
 
 mod denoise;
 mod detect;
+mod inpaint;
+#[path = "../../ai/inpaint_pipeline.rs"]
+mod inpaint_pipeline;
 #[path = "../../ai/protocol.rs"]
 mod protocol;
 mod segment;
@@ -28,6 +31,7 @@ mod upscale_tiling;
 
 use denoise::{DenoiseError, Denoiser};
 use detect::{DetectError, Detector};
+use inpaint::{InpaintError, Inpainter};
 use protocol::{
     BBox, Candidate, ErrorBody, Frame, HelloResult, ModelPaths, PersonBox, PrepareResult, Progress, Prompt, Region, Request, Response, PROTOCOL_VERSION,
 };
@@ -169,6 +173,30 @@ fn upscale_run(
     }
 }
 
+fn inpaint_error_code(e: &InpaintError) -> &'static str {
+    match e {
+        InpaintError::Ort(_) | InpaintError::BadOutput(_) => "inference",
+        InpaintError::Image(_) => "image",
+        InpaintError::BadRequest(_) => "bad_request",
+        InpaintError::Cancelled => "cancelled",
+        InpaintError::Poisoned => "internal",
+    }
+}
+
+fn inpaint_run(
+    inp: &Inpainter,
+    id: u64,
+    request: (&std::path::Path, &std::path::Path, &std::path::Path, &std::path::Path),
+    rx: &std::sync::mpsc::Receiver<String>,
+    backlog: &mut VecDeque<String>,
+) -> Response {
+    let (model, image_path, mask_path, out_path) = request;
+    match run_job(id, rx, backlog, |progress| inp.run(model, image_path, mask_path, out_path, progress)) {
+        Ok(r) => ok(id, &r),
+        Err(e) => fail(id, inpaint_error_code(&e), e.to_string()),
+    }
+}
+
 fn main() {
     let mut idle_secs = DEFAULT_IDLE_SECS;
     let args: Vec<String> = std::env::args().collect();
@@ -195,6 +223,7 @@ fn main() {
     let den = Denoiser::default();
     let up = Upscaler::default();
     let det = Detector::default();
+    let inp = Inpainter::default();
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
@@ -230,6 +259,7 @@ fn main() {
                     &rx,
                     &mut backlog,
                 ),
+                Request::InpaintRun { model, image_path, mask_path, out_path } => inpaint_run(&inp, id, (&model, &image_path, &mask_path, &out_path), &rx, &mut backlog),
                 // A cancel that finds nothing running: harmless (the job it named already finished).
                 Request::Cancel { .. } => ok(id, &serde_json::json!({})),
                 Request::Release => {
@@ -237,6 +267,7 @@ fn main() {
                     den.release();
                     up.release();
                     det.release();
+                    inp.release();
                     ok(id, &serde_json::json!({}))
                 }
                 Request::Shutdown => {

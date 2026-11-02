@@ -1,6 +1,6 @@
 # RFC-0032: Remove objects: AI inpainting for spot removal (M7, the "generative fill" decision)
 
-- Status: Draft for review (slice A, the bake-off, run on 2026-10-26: results in §9; user answers to §8 recorded there)
+- Status: Engine, licence and bundling decided 2026-11-02 in [ADR-0010](../adr/ADR-0010-object-removal-engine.md) (slice B done); slice A results in §9; slices D to F not started
 - Date: 2026-10-26
 - Relates to: [MILESTONES.md](../../PRD/MILESTONES.md) M7 (the decision this RFC must make before any implementation), [RFC-0023](RFC-0023-on-device-ai-inference.md) §5.6 (generative removal "not surveyed"; M7 owns it), [RFC-0031](RFC-0031-intelligent-culling.md) §5 slice F (the user's decision: generative fill, framed as spot removal, after culling), [RFC-0026](RFC-0026-click-select-segmentation.md) (click-to-select an object: the natural way to make the mask), [RFC-0027](RFC-0027-ai-denoise.md) / [RFC-0029](RFC-0029-ai-super-resolution.md) (the `emulsion-ai` helper, the model manager and consent flow, a cached result beside the edit stack), [RFC-0025](RFC-0025-composable-masking.md), [RFC-0020](RFC-0020-grain-particle-noise.md) (grain, for matching a patch to its surroundings), [ADR-0009](../adr/ADR-0009-ml-inference-runtime.md)
 
@@ -62,7 +62,7 @@ The pipeline applies patches **first**, to the source pixels, before tone, colou
 
 - **Non-destructive and undoable** through the existing history, like any op.
 - **Per-photo**: excluded from Copy Settings and Auto Sync the way crop and spot removal already are (RFC-0028 §3.5), because a mask is only meaningful on its own photo.
-- **The patch is a stored file, not a cache entry (provisional: the user asked for a small study of this before it is decided, slice C2; §10 measured that the reason given here is much weaker than assumed for LaMa).** A GAN's output can differ between CPU and CoreML, so regenerating it later could change a picture the user already accepted. It lives next to the catalog data (backed up with it) and is deleted with its op. If the file is missing the op shows a "needs regenerating" state rather than silently re-running.
+- **The patch is a stored blob in the catalog database, not a cache entry and not a file (ADR-0010 §4: the backup is the SQLite file alone; still provisional: the user asked for a small study of this before it is decided, slice C2; §10 measured that the reason given here is much weaker than assumed for LaMa).** A GAN's output can differ between CPU and CoreML, so regenerating it later could change a picture the user already accepted. It lives in the catalog database (so every backup and catalog copy carries it) and is deleted with its op. If the blob is missing the op shows a "needs regenerating" state rather than silently re-running.
 - **Not exportable to XMP** (no standard to carry it); the existing sidecar story for AI results applies.
 - CPU interpreter and GPU path both just **composite a stored image over a region**; no model runs in the render path.
 
@@ -103,10 +103,10 @@ Measured: **time and peak memory** on this Mac (CPU, and CoreML where the model 
 | Slice | What | Status |
 |---|---|---|
 | **A** | Bake-off: PatchMatch, MI-GAN, LaMa on 60 hole cases over 20 photographs; times, memory, providers | **Done (§9)**; the by-eye table awaits the user's ruling |
-| **B** | Licence step and ADR: Places2 terms (§9.4), LaMa weights file, bundle vs download of 208 MB, where patches live | Needs the user's licence decision |
+| **B** | Licence step and ADR: Places2 terms (§9.4), LaMa weights file, bundle vs download of 208 MB, where patches live | **Done 2026-11-02: [ADR-0010](../adr/ADR-0010-object-removal-engine.md)** (LaMa accepted, bundled, patches in the catalog) |
 | **C** | UX mock of the Remove tool (§3.4): [remove-tool-mockup.html](../ux/mockups/remove-tool-mockup.html) | **Done** (awaits the user's use of it) |
 | **C2** | **Small study: stored patch vs regenerate on demand** (§3.2, the user's question 3). **Measured part done (§10); the study with people is ready to run ([protocol](RFC-0032-appendix/c2-patch-study.md)).** Run with the mock and a prototype: 5 to 8 photographers (the user first), tasks "remove, edit further, close, come back / open on the other machine / copy the catalog", compare *a fixed stored result* with *a result that re-runs and may differ*: measure surprise, trust, and what they would pick. Decides §3.2 before slice D builds it | After C |
-| **D** | Engine and job: `inpaint_run` helper op (LaMa), crop / blend, **detail transfer** for holes the 512 px network sees reduced, the `remove` op with stored patches, CPU and GPU compositing | After B and C2 |
+| **D** | Engine and job: `inpaint_run` helper op (LaMa), crop / blend, **detail transfer** for holes the 512 px network sees reduced, the `remove` op with stored patches (a catalog table, ADR-0010 §4), CPU and GPU compositing, the bundled-models entry | Next (B is done; C2's study with people not run, ADR-0010 "Not settled") |
 | **E** | Develop UI: the Remove tool, paint / click / lasso, accept / undo, Heal fallback, large-region guard, history entries, model manager entry | After D |
 | **F** | Quality work the bake-off shows is needed: detail and grain matching, halo growth, better PatchMatch as a no-download fallback if wanted | After E |
 | **G** | **Later, optional: the complex part** (prompted fill, diffusion), only if the user wants it after living with removal | Not scheduled |
@@ -132,7 +132,9 @@ Answered by the user on 2026-10-26:
 4. **If no model beats the non-model fill, ship the non-model fill alone:** yes (a model did beat it, so this did not trigger; see §3.1).
 5. **Test photographs:** find them on the web: people, portrait, landscape, architecture, building (done: 20 Commons photographs, §0).
 
-Open, for the user:
+Answered by the user on 2026-11-02 (recorded in [ADR-0010](../adr/ADR-0010-object-removal-engine.md)): **A and B: accept** (LaMa is the engine, MI-GAN out above small holes, a guard for large holes; Places2-trained weights accepted, its terms still unread); **C: bundle it** (installer about 208 MB larger). The three items below are kept as the questions were asked.
+
+Was open, for the user:
 
 - **A. The by-eye ruling (§9.3):** do you agree LaMa is the engine, MI-GAN is out above small holes, and large holes get a guard? The contact sheets are in `mask_training/inpaint/out/sheets/`.
 - **B. The licence question (§9.4):** is a model trained on Places2 acceptable for this product? (The same kind of question as the sky model's CC BY training data in `mask_training/README.md`.)

@@ -22,7 +22,7 @@ import { getBackupSettings, isBackupDue } from "$lib/api/backup.js";
 import { refresh, refreshCollections, handleBatchThumbnailsComplete, handleThumbnailsReady, refreshWhileImporting } from "$lib/actions/libraryActions.js";
 import { handleDropImport, regenerateThumbnailFor, pollUntilThumbnailsReadyOnStartup } from "$lib/actions/importActions.js";
 import { refreshPresets } from "$lib/actions/presetActions.js";
-import { refreshSimilar } from "$lib/actions/similarActions.js";
+import { refreshSimilar, resumeSoftChips } from "$lib/actions/similarActions.js";
 
 /**
  * @param {{ handleMenuAction: (action: string) => void }} ctx
@@ -37,6 +37,7 @@ export function installAppEvents({ handleMenuAction }) {
   refreshCollections();
   // The Similar entry of the rail shows its group count from the start (RFC-0031); cheap, and it only reads stored numbers.
   refreshSimilar();
+  resumeSoftChips();
   // Photos catalogued without a pixel size (older imports, files whose EXIF has none) get it from the file, then the
   // list is read again so the grid and the Enlarge dialog show it.
   backfillImageDimensions()

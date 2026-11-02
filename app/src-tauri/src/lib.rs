@@ -2134,6 +2134,8 @@ fn build_menu<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::men
         MenuItemBuilder::with_id("toggle_clipping", "Toggle Clipping Overlay").build(app)?;
     let toggle_before_after =
         MenuItemBuilder::with_id("toggle_before_after", "Toggle Before / After").build(app)?;
+    let toggle_soft_chips =
+        MenuItemBuilder::with_id("toggle_soft_chips", "Toggle Soft Chips on Grid").build(app)?;
     let view_menu = SubmenuBuilder::new(app, "View")
         .item(&view_library)
         .item(&view_develop)
@@ -2146,6 +2148,7 @@ fn build_menu<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::men
         .separator()
         .item(&toggle_clipping)
         .item(&toggle_before_after)
+        .item(&toggle_soft_chips)
         .build()?;
     builder = builder.item(&view_menu);
 

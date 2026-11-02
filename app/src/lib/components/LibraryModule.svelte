@@ -145,6 +145,7 @@
         <LibraryGrid
           images={library.filteredImages}
           selectedIds={selection.selectedIds}
+          softIds={similar.showSoftChips ? similar.softVersionIds : null}
           onSelect={handleSelect}
           onOpen={(vid) => {
             selection.selectedId = vid;

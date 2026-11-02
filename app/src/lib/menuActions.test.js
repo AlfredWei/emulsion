@@ -19,6 +19,7 @@ function makeCtx(over = {}) {
     handleDeselectAll: vi.fn(),
     switchModule: vi.fn(/** @type {(target: string) => Promise<void>} */ (async () => {})),
     handleToggleClippingOverlay: vi.fn(),
+    toggleSoftChips: vi.fn(),
     ...over,
   };
 }
@@ -82,6 +83,14 @@ describe("menu actions", () => {
     expect(dev.handleRedo).toHaveBeenCalledTimes(1);
     expect(dev.handleToggleClippingOverlay).toHaveBeenCalledTimes(1);
     expect(dev.showOriginal).toBe(true);
+  });
+
+  it("Toggle Soft Chips on Grid works from any module", () => {
+    for (const activeModule of ["library", "develop", "print"]) {
+      const ctx = makeCtx({ activeModule });
+      createMenuHandler(ctx)("toggle_soft_chips");
+      expect(ctx.toggleSoftChips).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("Library-only selection actions no-op elsewhere", () => {

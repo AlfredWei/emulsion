@@ -152,7 +152,7 @@ src/
 │   │                        print.svelte.js (Print module settings/state), faces.svelte.js (People/Faces state +
 │   │                        import-time detection prompt), importFlow.svelte.js (import/merge progress + the
 │   │                        close-time backup prompt), library.svelte.js (image list, sources,
-│   │                        similar.svelte.js (Similar view: slider, fetched groups, open group, pending Reject-the-others; RFC-0031),
+│   │                        similar.svelte.js (Similar view: slider, fetched groups, open group, pending Reject-the-others, the grid's Soft chips switch and set; RFC-0031),
 │   │                        filters, collections + their derived sets), selection.svelte.js (selected ids/anchor, selected images,
 │   │                        Compare pair), develop.svelte.js (open image, live edit stack, history/snapshots, preview,
 │   │                        canvas readouts, edit-stack persistence), developView.svelte.js (per-adjustment derived

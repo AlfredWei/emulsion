@@ -9,7 +9,7 @@
 // Shared by `#[path]` with the helper binary.
 #![allow(dead_code)]
 
-use crate::protocol::Region;
+use super::protocol::Region;
 use image::{imageops::FilterType, GrayImage, Luma, RgbImage, RgbaImage};
 
 /// Side of the network's window.

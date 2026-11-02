@@ -28,6 +28,7 @@ mod faces;
 mod geo;
 mod images;
 mod keywords;
+mod removal_patches;
 mod merge_sources;
 mod presets;
 mod schema;
@@ -40,6 +41,8 @@ pub use presets::PresetEntry;
 pub use export_plugins::ExportPlugin;
 pub use images::ImageSummary;
 pub use faces::{FaceRow, PersonRow};
+#[allow(unused_imports)] // used by the removal job and the render path of slice D
+pub use removal_patches::StoredPatch;
 pub use keywords::{KeywordRef, KeywordNode, ImageKeywordAssignment};
 pub use collections::CollectionSummary;
 pub use backup::{BackupOutcome, BackupSettings};

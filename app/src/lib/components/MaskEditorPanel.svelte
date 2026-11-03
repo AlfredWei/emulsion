@@ -1,6 +1,7 @@
 <script>
   import { OVERLAY_CAPABLE_MASK_OPS, MAX_MASKS, MAX_MODIFIERS, COMBINE_MODES, isModifiableOp, listModifiers } from "$lib/api/develop.js";
   import { nudgeValue } from "$lib/stepMath.js";
+  import { clampPanelPosition, loadPanelPosition, savePanelPosition } from "$lib/panelDrag.js";
 
   /**
    * Floating panel for the currently-selected mask (M3 Slice 5) -- not a
@@ -149,6 +150,69 @@
                   ? "Red Eye Correction"
                   : "Linear Gradient",
   );
+
+  // The panel can be dragged by its header (it sits over the canvas and covers whatever is under it). The position is a
+  // left / top offset in the canvas area, kept inside it, remembered between selections and launches; double-click the
+  // header to put it back where the stylesheet has it.
+  const POSITION_KEY = "emulsion_mask_panel_pos_v1";
+  let panelEl = $state(/** @type {HTMLElement | null} */ (null));
+  let pos = $state(/** @type {import('$lib/panelDrag.js').PanelPosition | null} */ (loadPanelPosition(POSITION_KEY)));
+  let dragging = $state(false);
+  /** @type {{ px: number, py: number, x: number, y: number } | null} */
+  let drag = null;
+
+  /** @returns {{ panel: { w: number, h: number }, container: { w: number, h: number } } | null} */
+  function sizes() {
+    const parent = panelEl?.offsetParent;
+    if (!panelEl || !parent) return null;
+    return { panel: { w: panelEl.offsetWidth, h: panelEl.offsetHeight }, container: { w: parent.clientWidth, h: parent.clientHeight } };
+  }
+
+  /** @param {PointerEvent} e */
+  function startDrag(e) {
+    if (e.button !== 0 || /** @type {HTMLElement} */ (e.target).closest("button") || !panelEl) return;
+    e.preventDefault();
+    try {
+      // Keeps the moves coming when the pointer leaves the header; a pointer that is not active (a synthetic event) cannot be captured.
+      /** @type {HTMLElement} */ (e.currentTarget).setPointerCapture(e.pointerId);
+    } catch {
+      // the drag still works while the pointer stays over the header
+    }
+    drag = { px: e.clientX, py: e.clientY, x: panelEl.offsetLeft, y: panelEl.offsetTop };
+    dragging = true;
+  }
+
+  /** @param {PointerEvent} e */
+  function moveDrag(e) {
+    const s = drag && sizes();
+    if (!drag || !s) return;
+    pos = clampPanelPosition({ x: drag.x + e.clientX - drag.px, y: drag.y + e.clientY - drag.py }, s.panel, s.container);
+  }
+
+  function endDrag() {
+    if (!drag) return;
+    drag = null;
+    dragging = false;
+    savePanelPosition(POSITION_KEY, pos);
+  }
+
+  function resetPosition() {
+    pos = null;
+    savePanelPosition(POSITION_KEY, null);
+  }
+
+  /** A smaller window must not leave the panel outside it: bring it back in. */
+  function keepInside() {
+    const s = pos && sizes();
+    if (!pos || !s) return;
+    const inside = clampPanelPosition(pos, s.panel, s.container);
+    if (inside.x !== pos.x || inside.y !== pos.y) pos = inside;
+  }
+
+  // A position remembered from a larger window may be outside this one.
+  $effect(() => {
+    if (panelEl) keepInside();
+  });
 </script>
 
 <!-- Step-nudge (up/down) buttons, same as DevelopPanel.svelte's own
@@ -182,8 +246,29 @@
   </div>
 {/snippet}
 
-<div class="panel" role="dialog" aria-label="{title} adjustments" data-ctx-mask={mask.id} data-ctx-title={title}>
-  <div class="header">
+<svelte:window onresize={keepInside} />
+
+<div
+  class="panel"
+  class:moved={pos !== null}
+  class:dragging
+  bind:this={panelEl}
+  style={pos ? `left: ${pos.x}px; top: ${pos.y}px; max-height: calc(100% - ${pos.y + 14}px)` : undefined}
+  role="dialog"
+  aria-label="{title} adjustments"
+  data-ctx-mask={mask.id}
+  data-ctx-title={title}
+>
+  <div
+    class="header"
+    role="presentation"
+    title="Drag to move. Double-click to put it back."
+    onpointerdown={startDrag}
+    onpointermove={moveDrag}
+    onpointerup={endDrag}
+    onpointercancel={endDrag}
+    ondblclick={resetPosition}
+  >
     <span class="title">{title}</span>
     <button class="close" type="button" title="Deselect" onclick={onClose}>×</button>
   </div>
@@ -648,6 +733,16 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+  }
+  .panel.dragging .header {
+    cursor: grabbing;
+  }
+  .panel.dragging {
+    /* no text selection or hover flicker over the controls while it moves */
+    user-select: none;
   }
   .title {
     font-size: 11.5px;

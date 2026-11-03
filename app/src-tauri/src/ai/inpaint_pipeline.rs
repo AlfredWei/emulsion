@@ -74,7 +74,7 @@ pub fn to_net_input(crop: &RgbImage, mask: &GrayImage) -> (Vec<f32>, Vec<f32>) {
 }
 
 /// Grows the filled area by `r` pixels (a separable maximum filter).
-fn dilate(mask: &GrayImage, r: u32) -> GrayImage {
+pub fn dilate(mask: &GrayImage, r: u32) -> GrayImage {
     if r == 0 {
         return mask.clone();
     }

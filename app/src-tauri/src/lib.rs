@@ -34,12 +34,14 @@ mod panorama_merge;
 mod preview_cache;
 #[allow(dead_code)] // the render path of slice D uses it next
 mod removal;
+mod removal_commands;
 mod ai;
 mod bundled_models;
 mod denoise_cache;
 mod denoise_commands;
 mod denoise_models;
 mod detect_models;
+mod inpaint_models;
 mod denoise_preview;
 mod segment_commands;
 mod segment_models;
@@ -2231,6 +2233,7 @@ pub fn run() {
                     bundled_models::seed_from_app(&handle, &root.join("segment_models"), &bundled_models::SEGMENT);
                     bundled_models::seed_from_app(&handle, &root.join("segment_models"), &bundled_models::DETECT);
                     bundled_models::seed_from_app(&handle, &root.join("upscale_models"), &bundled_models::UPSCALE);
+                    bundled_models::seed_from_app(&handle, &root.join("inpaint_models"), &bundled_models::INPAINT);
                 });
             }
 
@@ -2264,6 +2267,8 @@ pub fn run() {
             denoise_commands::denoise_cancel_download,
             denoise_commands::denoise_import_model,
             denoise_commands::denoise_cache_info,
+            removal_commands::remove_object,
+            removal_commands::removal_cancel,
             denoise_commands::denoise_run,
             denoise_commands::denoise_cancel,
             denoise_commands::denoise_remove_cache,

@@ -12,6 +12,10 @@ import {
   computeAutoTone,
   PANEL_OP_NAMES,
   getAiDenoise,
+  getRemovals,
+  setRemovals,
+  addRemovals,
+  removeRemoval,
   upsertAiDenoise,
   IDENTITY_AI_DENOISE,
   getGrain,
@@ -91,7 +95,7 @@ describe("presetEligibleOps", () => {
     });
   });
 
-  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 8 mask kinds plus crop, lens_correction, perspective and ai_denoise", () => {
+  test("PRESET_EXCLUDED_OP_NAMES covers exactly the 8 mask kinds plus crop, lens_correction, perspective, ai_denoise and remove", () => {
     expect(PRESET_EXCLUDED_OP_NAMES.sort()).toEqual(
       [
         "crop",
@@ -106,6 +110,7 @@ describe("presetEligibleOps", () => {
         "spot_mask",
         "red_eye_mask",
         "ai_denoise",
+        "remove",
       ].sort(),
     );
   });
@@ -712,5 +717,40 @@ describe("AI Denoise op", () => {
     }
     expect(Object.keys(fromRust).length).toBe(12);
     expect(fromRust).toEqual(Object.fromEntries(Object.entries(PANEL_OP_NAMES).map(([k, v]) => [k, [...v]])));
+  });
+});
+
+// RFC-0032 §12: one `remove` op holds every removal of a photograph.
+describe("remove op", () => {
+  const empty = /** @type {EditStack} */ ({ schema_version: 1, ops: [{ op: "exposure", value: 0.5 }] });
+
+  test("reads as no removals when absent, and drops items that are not a patch id and an engine", () => {
+    expect(getRemovals(empty)).toEqual([]);
+    const messy = /** @type {EditStack} */ (/** @type {any} */ ({ schema_version: 1, ops: [{ op: "remove", items: [{ patch: 3, engine: "lama" }, { patch: 0, engine: "lama" }, { patch: "4", engine: "lama" }, { patch: 5 }, null, { patch: 6, engine: "lama", extra: 1 }] }] }));
+    expect(getRemovals(messy)).toEqual([{ patch: 3, engine: "lama" }, { patch: 6, engine: "lama" }]);
+    expect(getRemovals(/** @type {any} */ ({ schema_version: 1, ops: [{ op: "remove", items: "no" }] }))).toEqual([]);
+  });
+
+  test("adding keeps one op in order, never twice for one patch, and leaves the rest of the stack alone", () => {
+    const one = addRemovals(empty, [{ patch: 1, engine: "lama" }]);
+    const two = addRemovals(one, [{ patch: 2, engine: "lama" }, { patch: 1, engine: "lama" }]);
+    expect(two.ops.filter((o) => o.op === "remove")).toHaveLength(1);
+    expect(getRemovals(two).map((i) => i.patch)).toEqual([1, 2]);
+    expect(two.ops).toContainEqual({ op: "exposure", value: 0.5 });
+    expect(empty.ops).toHaveLength(1); // the input is not mutated
+  });
+
+  test("deleting the last removal removes the op itself, not an empty one", () => {
+    const stack = addRemovals(empty, [{ patch: 1, engine: "lama" }, { patch: 2, engine: "lama" }]);
+    const one = removeRemoval(stack, 1);
+    expect(getRemovals(one).map((i) => i.patch)).toEqual([2]);
+    const none = removeRemoval(one, 2);
+    expect(none.ops.some((o) => o.op === "remove")).toBe(false);
+    expect(removeRemoval(none, 9)).toEqual(none);
+  });
+
+  test("copying settings and presets leave it behind", () => {
+    const stack = addRemovals(empty, [{ patch: 1, engine: "lama" }]);
+    expect(presetEligibleOps(stack).ops).toEqual([{ op: "exposure", value: 0.5 }]);
   });
 });

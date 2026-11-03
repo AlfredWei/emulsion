@@ -1453,6 +1453,47 @@ export function upsertAiDenoise(
   return { ...stack, ops };
 }
 
+// Object removal (M7, RFC-0032 §12, ADR-0010): ONE op named `remove` holds every removal of the photograph (the stack
+// merges ops by name), in the order they were made. An item carries the id of its stored patch (the catalog's
+// `removal_patches`, a PNG blob) and the engine that made it, never pixels. Per-photo like `ai_denoise`: the patch only
+// means something on the picture it was made from, so the op is in PRESET_EXCLUDED_OP_NAMES.
+
+/**
+ * One removal of the `remove` op.
+ * @typedef {Object} RemovalItem
+ * @property {number} patch - id of the stored patch
+ * @property {string} engine - what made it, e.g. "lama-512-places2"
+ */
+
+/** The removals of `stack`, oldest first; an item that is not `{ patch: positive integer, engine: string }` is dropped.
+ * @returns {RemovalItem[]} */
+export function getRemovals(/** @type {EditStack} */ stack) {
+  const op = /** @type {any} */ (stack.ops.find((o) => o.op === "remove"));
+  if (!op || !Array.isArray(op.items)) return [];
+  return op.items.filter((/** @type {any} */ i) => i && Number.isInteger(i.patch) && i.patch > 0 && typeof i.engine === "string").map((/** @type {any} */ i) => ({ patch: i.patch, engine: i.engine }));
+}
+
+/** `stack` with `items` as its removals; no items means no op at all (an empty `remove` op would only be noise in every history row).
+ * @returns {EditStack} */
+export function setRemovals(/** @type {EditStack} */ stack, /** @type {RemovalItem[]} */ items) {
+  const ops = stack.ops.filter((o) => o.op !== "remove");
+  if (items.length > 0) ops.push(/** @type {any} */ ({ op: "remove", items: items.map((i) => ({ patch: i.patch, engine: i.engine })) }));
+  return { ...stack, ops };
+}
+
+/** `stack` with `added` after its existing removals; a patch that is already there is not added twice.
+ * @returns {EditStack} */
+export function addRemovals(/** @type {EditStack} */ stack, /** @type {RemovalItem[]} */ added) {
+  const have = getRemovals(stack);
+  return setRemovals(stack, [...have, ...added.filter((a) => !have.some((h) => h.patch === a.patch))]);
+}
+
+/** `stack` without the removal that used `patch` (the patch itself stays in the catalog: undo can bring the item back).
+ * @returns {EditStack} */
+export function removeRemoval(/** @type {EditStack} */ stack, /** @type {number} */ patch) {
+  return setRemovals(stack, getRemovals(stack).filter((i) => i.patch !== patch));
+}
+
 // Crop & Straighten (M3): a flat, non-nested payload -- same shape as
 // every other structured op above. UNLIKE every other op, this has no
 // WGSL uniform/buffer twin at all -- it's deliberately kept out of the
@@ -1640,7 +1681,8 @@ const MASK_OP_NAMES = [
 // one"), not because it's tied to the source image like the other four.
 // `ai_denoise` is excluded because its amount only means something for a photo that has its own denoised
 // copy (a separate per-photo job); pasted onto others it would read "Not denoised yet" everywhere.
-export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop", "lens_correction", "perspective", "ai_denoise"];
+// `remove` (object removal) is excluded for the same reason as `crop` and the masks: its patches belong to one photograph.
+export const PRESET_EXCLUDED_OP_NAMES = [...MASK_OP_NAMES, "crop", "lens_correction", "perspective", "ai_denoise", "remove"];
 
 // Mask kinds with no on-canvas geometry to show (brush's painted region,
 // luminance range's pixel-value-based selection) get a toggleable colored

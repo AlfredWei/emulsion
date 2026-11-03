@@ -324,6 +324,26 @@ impl Catalog {
                 algo INTEGER NOT NULL,
                 analysed_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            -- Object removal (M7, RFC-0032 §12, ADR-0010 §4): the stored result of one removal, an RGBA PNG that is
+            -- opaque on the removed object and fades just beyond it. It lives in the catalog, not in a folder, so every
+            -- backup and catalog copy carries it. `x`, `y`, `w`, `h` place it in the photograph's full decode of
+            -- `src_w` x `src_h` pixels (a preview is a smaller decode of the same picture, so it is scaled by the ratio).
+            -- A patch is kept as long as its version is: undoing in the history can bring back an op that names it.
+            CREATE TABLE IF NOT EXISTS removal_patches (
+                id INTEGER PRIMARY KEY,
+                version_id INTEGER NOT NULL REFERENCES image_versions(id) ON DELETE CASCADE,
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                w INTEGER NOT NULL,
+                h INTEGER NOT NULL,
+                src_w INTEGER NOT NULL,
+                src_h INTEGER NOT NULL,
+                engine TEXT NOT NULL,
+                png BLOB NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_removal_patches_version ON removal_patches(version_id);
             ",
         )?;
 

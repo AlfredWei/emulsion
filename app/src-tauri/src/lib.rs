@@ -32,6 +32,8 @@ mod metadata;
 mod metadata_writer;
 mod panorama_merge;
 mod preview_cache;
+#[allow(dead_code)] // the render path of slice D uses it next
+mod removal;
 mod ai;
 mod bundled_models;
 mod denoise_cache;

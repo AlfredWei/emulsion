@@ -336,6 +336,19 @@ mod tests {
     }
 
     #[test]
+    fn the_render_pipeline_ignores_the_remove_op_it_carries_ids_not_pixels() {
+        use crate::catalog::EditStack;
+        let base = EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "exposure", "value": 0.5})] };
+        let mut with = base.clone();
+        with.ops.push(serde_json::json!({"op": "remove", "items": [{"patch": 7, "engine": "lama-512-places2"}]}));
+        let (mut a, mut b) = (RgbImage::from_pixel(8, 8, image::Rgb([90, 80, 70])), RgbImage::from_pixel(8, 8, image::Rgb([90, 80, 70])));
+        crate::develop_engine::apply_edit_stack(&mut a, &base);
+        crate::develop_engine::apply_edit_stack(&mut b, &with);
+        assert_eq!(a, b);
+        assert_ne!(a, RgbImage::from_pixel(8, 8, image::Rgb([90, 80, 70])), "the exposure did apply");
+    }
+
+    #[test]
     fn a_patch_hanging_off_the_picture_is_cut_not_a_panic() {
         let mut img = RgbImage::from_pixel(100, 100, image::Rgb([10, 10, 10]));
         assert_eq!(apply_removals(&mut img, &[square_patch(90, 90, 20, (100, 100), [5, 5, 5])]), 1);

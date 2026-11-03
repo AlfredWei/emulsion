@@ -45,8 +45,8 @@ describe("diffSyncableOps", () => {
     expect(d.ops).toEqual([{ op: "exposure", value: 1 }]);
   });
 
-  it("excludes every mask kind, crop, lens profile, perspective, ai_denoise and panel_hidden", () => {
-    for (const name of ["linear_gradient_mask", "radial_gradient_mask", "brush_mask", "luminance_range_mask", "color_range_mask", "segment_mask", "spot_mask", "red_eye_mask", "crop", "lens_correction", "perspective", "ai_denoise", "panel_hidden"]) {
+  it("excludes every mask kind, crop, lens profile, perspective, ai_denoise, remove and panel_hidden", () => {
+    for (const name of ["linear_gradient_mask", "radial_gradient_mask", "brush_mask", "luminance_range_mask", "color_range_mask", "segment_mask", "spot_mask", "red_eye_mask", "crop", "lens_correction", "perspective", "ai_denoise", "remove", "panel_hidden"]) {
       expect(AUTO_SYNC_EXCLUDED_OP_NAMES).toContain(name);
     }
   });

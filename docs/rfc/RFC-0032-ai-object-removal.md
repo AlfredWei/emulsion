@@ -243,7 +243,7 @@ Develop's GPU canvas grades a *source texture* (a downscaled decode). When a pho
 
 ### 12.3 What is built, what is next
 
-Built (slice D2a, this section's PR): the table and its catalog functions, `removal::apply_removals`. **D2b, built (the same PR series): the `remove_object` command** (below). **Next, in order:** (D2c) the `remove` op in the stack and the exclusion from presets and sync; (D2d) the baked source for Develop (a command beside `get_denoised_develop_preview`, the canvas's settle logic taking it in), the graded preview and thumbnail, and export; (D2e) done early with D2b: the bundled-models entry, `models/INPAINT_MODEL.md`, startup seeding into `inpaint_models/`.
+Built (slice D2a, this section's PR): the table and its catalog functions, `removal::apply_removals`. **D2b, built: the `remove_object` command** (§12.4). **D2c, built: the `remove` op helpers in `api/develop.js` and its exclusion from presets, Copy Settings and Auto Sync.** **Next:** (D2d) the baked source for Develop (a command beside `get_denoised_develop_preview`, the canvas's settle logic taking it in), the graded preview and thumbnail, and export; (D2e) done early with D2b: the bundled-models entry, `models/INPAINT_MODEL.md`, startup seeding into `inpaint_models/`.
 
 **Not verified:** all of §12.1 on the screen (only the pure scaling is tested); the cost of writing the source PNG for a 24 MP full tier (the denoise blend's number is the proxy; not measured here); that the canvas can take a second kind of replacement source without disturbing the denoise swap's sequencing (`DevelopCanvas.svelte` guards it with sequence numbers; this is the riskiest edit in D).
 

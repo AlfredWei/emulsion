@@ -26,6 +26,12 @@
       "url": "https://github.com/AlfredWei/emulsion/releases/download/person-detector-dfine-medium-coco-v1/dfine_medium_coco.onnx"
     },
     {
+      "name": "lama_fp32.onnx",
+      "size": 208044816,
+      "sha256": "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
+      "url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/c3c0c9e468934d62e79c329e35d82dd09ff8c444/lama_fp32.onnx"
+    },
+    {
       "name": "realesr_general_x4v3.onnx",
       "size": 4866388,
       "sha256": "a337283437fd0fc12e6882a4f4cc0467cf2f275782e8290f487d755f806137fb",

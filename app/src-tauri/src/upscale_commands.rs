@@ -286,13 +286,16 @@ fn run_job(
     metadata_note: bool,
 ) -> Result<UpscaleJobResult, String> {
     let model = upscale_models::ready_path(models).ok_or_else(|| "the AI enlargement model is not installed".to_string())?;
-    let (source_path, stack) = {
+    let (source_path, stack, render_stack) = {
         let catalog = catalog.lock().map_err(|e| e.to_string())?;
         let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
         if catalog.is_enlargement(source.image_id).map_err(|e| e.to_string())? {
             return Err(ENLARGEMENT_OF_ENLARGEMENT.to_string());
         }
-        (PathBuf::from(source.path), catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?)
+        let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
+        // The render gets the removal patches the stack names; `stack` itself (what the result records its hash of) stays as stored.
+        let render_stack = crate::removal::inline_patches(&catalog, version_id, &stack);
+        (PathBuf::from(source.path), stack, render_stack)
     };
     // Next to the original, never overwriting (RFC §3.1): `<stem>-Enlarged-4x.jpg`, `-2`, `-3` ... on a clash.
     let dir = match source_path.parent() {
@@ -303,7 +306,7 @@ fn run_job(
     let stem = file_name.and_then(clean_stem).unwrap_or_else(|| upscale_job::result_stem(original_stem, target));
     let out_path = export::unique_output_path(&dir, &stem, "jpg");
 
-    let spec = Spec { source_path: &source_path, stack: &stack, denoise_dir: Some(denoise_dir), scratch_dir: scratch, model: &model, out_path: &out_path, target, strength, jpeg_quality };
+    let spec = Spec { source_path: &source_path, stack: &render_stack, denoise_dir: Some(denoise_dir), scratch_dir: scratch, model: &model, out_path: &out_path, target, strength, jpeg_quality };
     let enlarged = upscale_job::run_enlargement(&spec, id, |req: Request| {
         helper
             .request_with_id(id, req, SILENCE_TIMEOUT, |p: Progress| emit(JobProgress { done: p.done, total: p.total }))
@@ -397,19 +400,22 @@ fn run_preview_job(
     centre: (f64, f64),
 ) -> Result<UpscalePreviewResult, String> {
     let model = upscale_models::ready_path(models).ok_or_else(|| "the AI enlargement model is not installed".to_string())?;
-    let (source_path, stack) = {
+    let (source_path, render_stack) = {
         let catalog = catalog.lock().map_err(|e| e.to_string())?;
         let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
         if catalog.is_enlargement(source.image_id).map_err(|e| e.to_string())? {
             return Err(ENLARGEMENT_OF_ENLARGEMENT.to_string());
         }
-        (PathBuf::from(source.path), catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?)
+        let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
+        // The render gets the removal patches the stack names (RFC-0032 §12).
+        let render_stack = crate::removal::inline_patches(&catalog, version_id, &stack);
+        (PathBuf::from(source.path), render_stack)
     };
     std::fs::create_dir_all(previews).map_err(|e| format!("could not create {}: {e}", previews.display()))?;
     // A new name every time, so the webview never shows the previous picture from its cache.
     let stem = format!("{PREVIEW_PREFIX}{version_id}-{}", PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed));
     let (before, after) = (previews.join(format!("{stem}-before.png")), previews.join(format!("{stem}-after.jpg")));
-    let spec = PreviewSpec { source_path: &source_path, stack: &stack, denoise_dir: Some(denoise_dir), scratch_dir: scratch, model: &model, target, centre, before_path: &before, after_path: &after };
+    let spec = PreviewSpec { source_path: &source_path, stack: &render_stack, denoise_dir: Some(denoise_dir), scratch_dir: scratch, model: &model, target, centre, before_path: &before, after_path: &after };
     let outcome: PreviewOutcome = upscale_job::run_preview(&spec, id, |req: Request| {
         helper
             .request_with_id(id, req, SILENCE_TIMEOUT, |_: Progress| {})

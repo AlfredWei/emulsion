@@ -293,5 +293,6 @@ export function handlePeekPreset(/** @type {number} */ presetId) {
   const mergedStack = applyPresetOps(develop.editStack, preset.edit_stack);
   const path = develop.imagePath;
   const contentHash = develop.imageContentHash;
-  develop.schedulePreview(() => previewEditStack(path, contentHash, mergedStack));
+  const versionId = develop.versionId;
+  develop.schedulePreview(() => previewEditStack(path, contentHash, mergedStack, versionId));
 }

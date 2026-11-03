@@ -89,7 +89,7 @@ describe("Develop AI Denoise", function () {
 
   it("has no kept copy or preview blend for a photo that was never denoised", async () => {
     expect((await invoke("denoise_cache_info", { contentHash: "0".repeat(64) })).ok).toBeNull();
-    expect((await invoke("get_denoised_develop_preview", { path: FIXTURE_PATH, contentHash: "0".repeat(64), amount: 60, full: false })).ok).toBeNull();
+    expect((await invoke("get_develop_source_preview", { path: FIXTURE_PATH, contentHash: "0".repeat(64), amount: 60, full: false })).ok).toBeNull();
     expect((await invoke("denoise_cancel")).err).toBeUndefined(); // nothing runs: a no-op
     expect((await invoke("denoise_remove_cache", { contentHash: "0".repeat(64) })).err).toBeUndefined();
   });

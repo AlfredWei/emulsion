@@ -354,7 +354,7 @@ describe("DevelopStore.installCpuFallback", () => {
     expect(api.previewEditStack).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(api.previewEditStack).toHaveBeenCalledTimes(1);
-    expect(api.previewEditStack).toHaveBeenCalledWith("/p/a.raw", null, develop.editStack);
+    expect(api.previewEditStack).toHaveBeenCalledWith("/p/a.raw", null, develop.editStack, develop.versionId);
     expect(develop.cpuFallbackPreviewUrl).toBe("asset:///tmp/cpu.png");
     stop();
   });
@@ -365,7 +365,7 @@ describe("DevelopStore.installCpuFallback", () => {
     develop.gpuFallbackActive = true;
     const stop = installed(develop);
     await vi.advanceTimersByTimeAsync(250);
-    expect(api.previewEditStack).toHaveBeenCalledWith("/p/a.raw", "h1", develop.editStack);
+    expect(api.previewEditStack).toHaveBeenCalledWith("/p/a.raw", "h1", develop.editStack, develop.versionId);
     stop();
   });
 

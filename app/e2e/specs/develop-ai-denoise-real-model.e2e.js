@@ -186,7 +186,7 @@ describe("Develop AI Denoise, real model", function () {
     const plain = await browser.execute((p, h) => window.__TAURI__.core.invoke("get_develop_preview", { path: p, contentHash: h }), FIXTURE_PATH, hash);
     // Only the latest blend per photo and tier is kept, so each one is measured right after it is built.
     const blend = (/** @type {number} */ amount) =>
-      browser.execute((p, h, a) => window.__TAURI__.core.invoke("get_denoised_develop_preview", { path: p, contentHash: h, amount: a, full: false }), FIXTURE_PATH, hash, amount);
+      browser.execute((p, h, a) => window.__TAURI__.core.invoke("get_develop_source_preview", { path: p, contentHash: h, amount: a, full: false }), FIXTURE_PATH, hash, amount);
     const plainSds = await blockSds(plain.path);
     const halfInfo = await blend(50);
     const halfSds = await blockSds(halfInfo.path);

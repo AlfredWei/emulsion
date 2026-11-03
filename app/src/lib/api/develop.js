@@ -393,13 +393,16 @@ export function previewSnapshot(
  * memory (`PresetEntry.edit_stack`), so the caller merges it onto the
  * currently open image's real edit stack itself (`applyPresetOps`) and
  * only needs Rust to render the resulting look, not look anything up.
+ * `versionId` is the photograph the stack is for: its `remove` op names stored patches by id, and only the catalog can
+ * give their pixels (RFC-0032 §12), so without it a removal is not in the picture.
  * @returns {Promise<DevelopPreviewInfo>} */
 export function previewEditStack(
   /** @type {string} */ path,
   /** @type {string | null} */ contentHash,
   /** @type {EditStack} */ stack,
+  /** @type {number | null} */ versionId = null,
 ) {
-  return invoke("preview_edit_stack", { path, contentHash, stack });
+  return invoke("preview_edit_stack", { path, contentHash, stack, versionId });
 }
 
 /** @returns {Promise<void>} */

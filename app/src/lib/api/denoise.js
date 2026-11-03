@@ -84,12 +84,14 @@ export function denoiseRemoveCache(contentHash) {
   return invoke("denoise_remove_cache", { contentHash });
 }
 
-/** The Develop canvas's source with the kept denoised copy mixed in at `amount`; null = use the plain
- * preview (amount 0, nothing kept, or not of this picture). `full` asks for the 1:1 tier.
+/** The Develop canvas's source: the plain preview with the kept denoised copy mixed in at `amount` (0 = none) and the
+ * removal patches `patchIds` of `versionId` laid over it (RFC-0032 §12.1); null = use the plain preview (nothing to
+ * mix, nothing to lay, or none of it is of this picture). `full` asks for the 1:1 tier.
  * @param {string} path @param {string} contentHash @param {number} amount @param {boolean} full
+ * @param {number | null} [versionId] @param {number[]} [patchIds]
  * @returns {Promise<{ path: string, width: number, height: number, is_smart_preview: boolean } | null>} */
-export function getDenoisedDevelopPreview(path, contentHash, amount, full) {
-  return invoke("get_denoised_develop_preview", { path, contentHash, amount, full });
+export function getDevelopSourcePreview(path, contentHash, amount, full, versionId = null, patchIds = []) {
+  return invoke("get_develop_source_preview", { path, contentHash, amount, full, versionId, patchIds });
 }
 
 /** Model download progress events (`{downloaded, total}` bytes). Resolves to the unlisten function.

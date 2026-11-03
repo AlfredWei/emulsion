@@ -8,7 +8,7 @@
   import { rasterizeDab, rasterizeSpotDab } from "$lib/gpu/brushRaster.js";
   import { tick, flushSync, untrack } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getDenoisedDevelopPreview } from "$lib/api/denoise.js";
+  import { getDevelopSourcePreview } from "$lib/api/denoise.js";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
   import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { FIT, fitScale, effectiveScale, reduceZoom, contentOffset, visibleRegion, scrollForFocus, focusAtViewportPoint } from "$lib/zoomMath.js";
@@ -23,6 +23,8 @@
    *   imageContentHash?: string | null,
    *   aiDenoiseAmount?: number,
    *   denoiseVersion?: number,
+   *   versionId?: number | null,
+   *   removalPatchIds?: number[],
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
@@ -108,6 +110,8 @@
     imageContentHash = null,
     aiDenoiseAmount = 0,
     denoiseVersion = 0,
+    versionId = null,
+    removalPatchIds = [],
     exposure,
     contrast,
     saturation,
@@ -297,14 +301,22 @@
   // (`amount` 0) or its mix with the kept denoised copy at that amount. `version` is the store's
   // `cacheVersion` it was built under (a re-run or a removal makes an equal amount stale).
   // Imperative bookkeeping like `activeTier`: markup never reads it.
-  let appliedDenoise = { path: "", tier: "draft", amount: 0, version: 0 };
+  // Object removal (RFC-0032 §12.1) rides the same swap: `removals` is the patch ids ("3,7") the texture has laid over
+  // it, "" for none. The backend lays the patches after the denoise mix, so one file carries both.
+  let appliedDenoise = { path: "", tier: "draft", amount: 0, version: 0, removals: "" };
   // The amount of the mix on the GPU right now (0 = the plain preview), exposed as a data attribute so a
   // test can tell which source texture the render is built from. Reactive, unlike `appliedDenoise`.
   let shownDenoise = $state(0);
-  /** @param {{ path: string, tier: string, amount: number, version: number }} next */
+  let shownRemovals = $state("");
+  /** @param {{ path: string, tier: string, amount: number, version: number, removals: string }} next */
   function setAppliedDenoise(next) {
     appliedDenoise = next;
     shownDenoise = next.amount;
+    shownRemovals = next.removals;
+  }
+  /** The patch ids the source texture should carry now: none while Before / After shows the photo before any edit. */
+  function wantedRemovals() {
+    return versionId !== null && imageContentHash && !showOriginal ? removalPatchIds.join(",") : "";
   }
   let denoiseSeq = 0; // a newer request supersedes an older one still in flight
   let lateMixPending = false; // loadImage showed the plain preview and is still waiting for the mix (applyLateMix)
@@ -1311,14 +1323,15 @@
     return writeAdjustmentsAndRenderImpl(gpu, renderInputs);
   }
 
-  /** The preview source with the kept denoised copy mixed in at the current amount, or null when the plain
-   * preview applies (amount 0, no copy, not this picture, or the mix could not be built -- a failed mix
-   * must never stop the photo loading).
+  /** The preview source with the kept denoised copy mixed in at the current amount and the removal patches laid
+   * over it, or null when the plain preview applies (no amount and no patch, no copy, not this picture, or the
+   * file could not be built -- a failure here must never stop the photo loading).
    * @param {string} path @param {boolean} full */
   async function loadDenoised(path, full) {
-    if (showOriginal || !(aiDenoiseAmount > 0) || !imageContentHash) return null;
+    const removals = wantedRemovals();
+    if (showOriginal || !imageContentHash || (!(aiDenoiseAmount > 0) && removals === "")) return null;
     try {
-      return await getDenoisedDevelopPreview(path, imageContentHash, aiDenoiseAmount, full);
+      return await getDevelopSourcePreview(path, imageContentHash, aiDenoiseAmount, full, versionId, removals === "" ? [] : removalPatchIds);
     } catch {
       return null;
     }
@@ -1332,12 +1345,13 @@
     const tier = activeTier;
     // Before / After shows the photo as it was before any edit, so it needs the plain preview.
     const wanted = imageContentHash && !showOriginal ? aiDenoiseAmount : 0;
+    const removals = wantedRemovals();
     const a = appliedDenoise;
-    if (a.path === path && a.tier === tier && a.amount === wanted && (wanted === 0 || a.version === denoiseVersion)) return;
+    if (a.path === path && a.tier === tier && a.amount === wanted && a.removals === removals && (wanted === 0 || a.version === denoiseVersion)) return;
     const seq = ++denoiseSeq;
     const version = denoiseVersion;
     try {
-      const mixed = wanted > 0 ? await loadDenoised(path, tier === "full") : null;
+      const mixed = wanted > 0 || removals !== "" ? await loadDenoised(path, tier === "full") : null;
       const source = mixed ?? (tier === "full" ? await getDevelopFullPreview(path, imageContentHash) : await getDevelopPreview(path, imageContentHash));
       if (seq !== denoiseSeq || imagePath !== path || activeTier !== tier) return;
       const bitmap = await createImageBitmap(await (await fetch(convertFileSrc(source.path))).blob());
@@ -1348,7 +1362,7 @@
       } finally {
         uploadingFullTier = false;
       }
-      setAppliedDenoise({ path, tier, amount: mixed ? wanted : 0, version });
+      setAppliedDenoise({ path, tier, amount: mixed ? wanted : 0, version, removals });
       writeAdjustmentsAndRender();
     } catch {
       // Keep the texture that is on screen; the next change tries again.
@@ -1368,6 +1382,7 @@
     const seq = ++denoiseSeq;
     const version = denoiseVersion;
     const amount = aiDenoiseAmount;
+    const removals = wantedRemovals();
     lateMixPending = true;
     try {
       const mixed = await pending;
@@ -1375,7 +1390,7 @@
       const bitmap = await createImageBitmap(await (await fetch(convertFileSrc(mixed.path))).blob());
       if (seq !== denoiseSeq || imagePath !== path || activeTier !== "draft" || showOriginal) return;
       await applyBitmapToGpu(bitmap);
-      setAppliedDenoise({ path, tier: "draft", amount, version });
+      setAppliedDenoise({ path, tier: "draft", amount, version, removals });
       writeAdjustmentsAndRender();
     } catch {
       // The plain preview stays; the next amount change tries again.
@@ -1409,7 +1424,7 @@
     const response = await fetch(convertFileSrc((quick ?? preview).path));
     const bitmap = await createImageBitmap(await response.blob());
     await applyBitmapToGpu(bitmap);
-    setAppliedDenoise({ path, tier: "draft", amount: quick ? aiDenoiseAmount : 0, version: denoiseVersion });
+    setAppliedDenoise({ path, tier: "draft", amount: quick ? aiDenoiseAmount : 0, version: denoiseVersion, removals: wantedRemovals() });
     if (mixed === LATE) applyLateMix(path, pendingMix);
 
     status = "ready";
@@ -1481,7 +1496,7 @@
       }
       fullTierPath = path;
       activeTier = "full";
-      setAppliedDenoise({ path, tier: "full", amount: mixed ? aiDenoiseAmount : 0, version: denoiseVersion });
+      setAppliedDenoise({ path, tier: "full", amount: mixed ? aiDenoiseAmount : 0, version: denoiseVersion, removals: wantedRemovals() });
       // No re-centre needed: `onSourceDimensions` above flipped `fullTierReady`
       // together with the new backing-store size, so `natRatio` becomes 1
       // exactly as the backing store grows to native -- the canvas keeps its
@@ -1803,6 +1818,7 @@
   $effect(() => {
     void aiDenoiseAmount;
     void denoiseVersion;
+    void removalPatchIds.join(",");
     const toggled = showOriginal !== lastShowOriginalForDenoise;
     lastShowOriginalForDenoise = showOriginal;
     if (status !== "ready" || !imagePath) return;
@@ -1855,6 +1871,7 @@
     <canvas
       bind:this={canvasEl}
       data-denoise-source={shownDenoise}
+      data-removals-source={shownRemovals}
       class:zoomed={isZoomed}
       class:sized={!showCommittedCropPreview && canvasCss.w > 0}
       class:cropped={showCommittedCropPreview}

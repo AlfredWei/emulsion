@@ -356,6 +356,9 @@ pub fn ensure_graded_preview_for_hash(
     // the four apply_* calls below -- see effective_stack_for_render's own
     // doc comment.
     let stack = &effective;
+    // Object removal (RFC-0032 §12.1): after the denoise blend above, before everything else. The patches are in the
+    // stack (`removal::inline_patches`), so the file name above, which hashes the stack, already tells patches apart.
+    crate::removal::bake(&mut decoded, stack);
     crate::develop_engine::apply_lens_correction(&mut decoded, stack);
     crate::develop_engine::apply_perspective(&mut decoded, stack);
     crate::develop_engine::apply_edit_stack(&mut decoded, stack);

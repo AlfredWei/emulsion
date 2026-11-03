@@ -7,6 +7,7 @@ use crate::ai::inpaint_pipeline::{apply_patch, dilate, plan_window};
 use crate::ai::protocol::Region;
 use crate::catalog::StoredPatch;
 use image::{imageops::FilterType, GrayImage, Luma, RgbImage, RgbaImage};
+use base64::Engine;
 use serde::Deserialize;
 
 /// One thing the user marked to be removed, in coordinates normalised to the photograph (0..1 on both axes), so it
@@ -171,6 +172,60 @@ fn scaled(patch: &RgbaImage, sx: f64, sy: f64) -> RgbaImage {
         }
     }
     out
+}
+
+/// The ids of the patches the stack's `remove` op names, oldest first. An item that is not `{ patch: positive integer }`
+/// is dropped, as `getRemovals` does on the frontend.
+pub fn patch_ids(stack: &crate::catalog::EditStack) -> Vec<i64> {
+    let Some(items) = stack.ops.iter().find(|o| o.get("op").and_then(|v| v.as_str()) == Some("remove")).and_then(|o| o.get("items")).and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    items.iter().filter_map(|i| i.get("patch").and_then(|v| v.as_i64())).filter(|&id| id > 0).collect()
+}
+
+/// `stack` with the pixels of the patches its `remove` op names written into the items (`baked`: the position, the size of
+/// the decode it refers to, and the PNG as base64), for a render that has no catalog: the preview, the thumbnail, the
+/// export, the print raster and the upscale all work from a stack, and the stack names a patch by id only. **Only for
+/// handing to those; never written back to the catalog** (the stack on disk carries ids, never pixels, RFC-0032 §12.2).
+/// The file names the renders build from a stack hash it, so a different patch is a different file. A patch the catalog no
+/// longer has stays a bare item and is skipped at the render.
+pub fn inline_patches(catalog: &crate::catalog::Catalog, version_id: i64, stack: &crate::catalog::EditStack) -> crate::catalog::EditStack {
+    let mut out = stack.clone();
+    let ids = patch_ids(stack);
+    if ids.is_empty() {
+        return out;
+    }
+    let found = catalog.get_removal_patches(version_id, &ids).unwrap_or_default();
+    let Some(items) = out.ops.iter_mut().find(|o| o.get("op").and_then(|v| v.as_str()) == Some("remove")).and_then(|o| o.get_mut("items")).and_then(|v| v.as_array_mut()) else {
+        return out;
+    };
+    for item in items {
+        let Some(p) = item.get("patch").and_then(|v| v.as_i64()).and_then(|id| found.iter().find(|p| p.id == id)) else { continue };
+        item["baked"] = serde_json::json!({"x": p.x, "y": p.y, "w": p.w, "h": p.h, "src_w": p.src_w, "src_h": p.src_h, "engine": p.engine, "png": base64::engine::general_purpose::STANDARD.encode(&p.png)});
+    }
+    out
+}
+
+/// The patches `inline_patches` wrote into `stack`, in order; an item without them (or with damaged ones) is left out.
+pub fn inlined_patches(stack: &crate::catalog::EditStack) -> Vec<StoredPatch> {
+    let Some(items) = stack.ops.iter().find(|o| o.get("op").and_then(|v| v.as_str()) == Some("remove")).and_then(|o| o.get("items")).and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|i| {
+            let (id, b) = (i.get("patch")?.as_i64()?, i.get("baked")?);
+            let n = |k: &str| b.get(k).and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok());
+            let png = base64::engine::general_purpose::STANDARD.decode(b.get("png")?.as_str()?).ok()?;
+            Some(StoredPatch { id, x: n("x")?, y: n("y")?, w: n("w")?, h: n("h")?, src_w: n("src_w")?, src_h: n("src_h")?, engine: b.get("engine")?.as_str()?.to_string(), png })
+        })
+        .collect()
+}
+
+/// Lays the patches written into `stack` over `img` (the picture the render is working on, any decode size of the
+/// photograph). Returns how many were applied.
+pub fn bake(img: &mut RgbImage, stack: &crate::catalog::EditStack) -> usize {
+    apply_removals(img, &inlined_patches(stack))
 }
 
 /// Lays `patches`, in order, over `img`. Returns how many were applied; one whose PNG is damaged, or whose decode has
@@ -346,6 +401,68 @@ mod tests {
         crate::develop_engine::apply_edit_stack(&mut b, &with);
         assert_eq!(a, b);
         assert_ne!(a, RgbImage::from_pixel(8, 8, image::Rgb([90, 80, 70])), "the exposure did apply");
+    }
+
+    #[test]
+    fn the_stack_names_its_patches_and_a_render_gets_the_ones_the_catalog_has_with_their_pixels() {
+        use crate::catalog::{Catalog, EditStack};
+        let stack = |items: serde_json::Value| EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "exposure", "value": 1}), serde_json::json!({"op": "remove", "items": items})] };
+        assert!(patch_ids(&EditStack::empty()).is_empty());
+        let s = stack(serde_json::json!([{"patch": 5, "engine": "e"}, {"patch": "x"}, {"patch": 0}, {"patch": -3}, {"engine": "e"}, {"patch": 2, "engine": "e"}]));
+        assert_eq!(patch_ids(&s), vec![5, 2]);
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image = catalog.add_image("/a.jpg").unwrap();
+        let version = catalog.add_edit_stack(image, &EditStack::empty()).unwrap();
+        let (a, b) = (catalog.add_removal_patch(version, &square_patch(0, 0, 4, (40, 30), [1, 1, 1])).unwrap(), catalog.add_removal_patch(version, &square_patch(8, 8, 4, (40, 30), [2, 2, 2])).unwrap());
+        let plain = stack(serde_json::json!([{"patch": b, "engine": "e"}, {"patch": 9999, "engine": "e"}, {"patch": a, "engine": "e"}]));
+        let inlined = inline_patches(&catalog, version, &plain);
+        assert_eq!(patch_ids(&inlined), patch_ids(&plain), "the ids stay");
+        assert_eq!(inlined_patches(&inlined).iter().map(|p| p.id).collect::<Vec<_>>(), vec![b, a], "the stack's order; the unknown id has no pixels");
+        assert!(inlined_patches(&plain).is_empty(), "a stack straight from the catalog carries none");
+        assert_ne!(serde_json::to_string(&inlined).unwrap(), serde_json::to_string(&plain).unwrap(), "so a render file keyed on the stack differs");
+        assert_eq!(inline_patches(&catalog, version, &EditStack::empty()), EditStack::empty());
+
+        let mut img = RgbImage::from_pixel(40, 30, image::Rgb([10, 10, 10]));
+        assert_eq!(bake(&mut img, &inlined), 2);
+        assert_eq!(img.get_pixel(1, 1).0, [1, 1, 1]);
+        assert_eq!(img.get_pixel(9, 9).0, [2, 2, 2]);
+        let mut untouched = RgbImage::from_pixel(40, 30, image::Rgb([10, 10, 10]));
+        assert_eq!(bake(&mut untouched, &plain), 0);
+    }
+
+    #[test]
+    fn the_preview_the_thumbnail_and_the_export_all_show_the_removal_and_only_when_the_stack_carries_the_pixels() {
+        use crate::catalog::{Catalog, EditStack};
+        let dir = std::env::temp_dir().join(format!("emulsion-removal-render-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("photo.jpg");
+        RgbImage::from_pixel(200, 100, image::Rgb([200, 200, 200])).save(&source).unwrap();
+        let hash = blake3::hash(&std::fs::read(&source).unwrap()).to_hex().to_string();
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image = catalog.add_image("/a.jpg").unwrap();
+        let version = catalog.add_edit_stack(image, &EditStack::empty()).unwrap();
+        // Made on a 400 x 200 decode, so on this 200 x 100 photograph it is at (50, 40) and 20 px wide.
+        let id = catalog.add_removal_patch(version, &square_patch(100, 80, 40, (400, 200), [10, 10, 10])).unwrap();
+        let stored = EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "remove", "items": [{"patch": id, "engine": "t"}]})] };
+        let inlined = inline_patches(&catalog, version, &stored);
+        let looks = |img: &RgbImage| (img.get_pixel(60, 50).0[0], img.get_pixel(5, 5).0[0]);
+
+        let previews = dir.join("previews");
+        let graded = |s: &EditStack| crate::preview_cache::ensure_graded_preview_for_hash(&source, &hash, s, &previews, None).unwrap();
+        let (inside, outside) = looks(&image::open(graded(&inlined).path).unwrap().to_rgb8());
+        assert!(inside < 40, "the removal is in the graded preview, got {inside}");
+        assert!(outside > 150, "and only there, got {outside}");
+        let without = graded(&stored);
+        assert!(looks(&image::open(&without.path).unwrap().to_rgb8()).0 > 150, "a stack that still names ids has no pixels to lay");
+        assert_ne!(without.path, graded(&inlined).path, "so the two do not share a file");
+
+        let exported = crate::export::render_full_resolution(&source, &inlined, None).unwrap();
+        assert!(looks(&exported).0 < 40 && looks(&exported).1 > 150, "the export render has it too");
+        assert!(looks(&crate::export::render_full_resolution(&source, &stored, None).unwrap()).0 > 150);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

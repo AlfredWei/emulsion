@@ -7,10 +7,12 @@ use crate::ai::inpaint_pipeline::plan_window;
 use crate::ai::supervisor::AiHelper;
 use crate::catalog::StoredPatch;
 use crate::inpaint_models::{self, ENGINE};
+use crate::preview_cache::{self, DevelopPreviewInfo};
 use crate::removal::{mask_clusters, rasterise_mask, MaskShape};
+use crate::removal_preview;
 use crate::{resolve_cache_root, source_decode, AppState};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
@@ -175,9 +177,51 @@ pub async fn removal_cancel(helper: State<'_, Arc<AiHelper>>) -> Result<(), Stri
     tauri::async_runtime::spawn_blocking(move || helper.cancel(id).map_err(|e| e.to_string())).await.map_err(|e| e.to_string())?
 }
 
+/// The Develop canvas's source picture: the plain preview (`full` picks the 1:1 tier) with this photo's kept denoised
+/// copy mixed in at `amount` (0 = none) and the removal patches `patch_ids` laid over it, as a PNG the canvas loads in
+/// place of the plain preview (RFC-0032 §12.1, RFC-0027 §3.3). `null` means "use the plain preview": nothing to mix
+/// and nothing to lay (no amount or no copy kept, no patch of this picture). Never runs a model.
+#[tauri::command]
+pub async fn get_develop_source_preview(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    content_hash: String,
+    amount: u32,
+    full: bool,
+    version_id: Option<i64>,
+    patch_ids: Option<Vec<i64>>,
+) -> Result<Option<DevelopPreviewInfo>, String> {
+    let previews = crate::resolve_previews_dir(&app, &state.catalog)?;
+    let denoise_dir = crate::resolve_denoise_dir(&app, &state.catalog)?;
+    let catalog = state.catalog.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let patch_ids = patch_ids.unwrap_or_default();
+        let patches = match version_id {
+            Some(v) if !patch_ids.is_empty() => catalog.lock().map_err(|e| e.to_string())?.get_removal_patches(v, &patch_ids).map_err(|e| e.to_string())?,
+            _ => Vec::new(),
+        };
+        let mixes = amount > 0 && crate::denoise_cache::entry_path(&denoise_dir, &content_hash, crate::denoise_models::MODEL_ID).exists();
+        if !mixes && patches.is_empty() {
+            return Ok(None);
+        }
+        let source = Path::new(&path);
+        let base = if full {
+            preview_cache::ensure_develop_full_preview(source, &previews, Some(&content_hash))
+        } else {
+            preview_cache::ensure_develop_preview(source, &previews, Some(&content_hash))
+        }
+        .map_err(|e| e.user_message())?;
+        removal_preview::ensure_baked(&base, &content_hash, &denoise_dir, &previews, full, if mixes { amount } else { 0 }, &patches)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// Needs the real model and the built helper: `INPAINT_MODEL=<lama_fp32.onnx> INPAINT_IMAGE=<photo> EMULSION_AI_EXE=<target/release/emulsion-ai>
     /// cargo test --release --lib removal_commands -- --ignored --nocapture`. Marks a stroke and a lasso on the photograph,

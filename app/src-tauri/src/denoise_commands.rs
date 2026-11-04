@@ -9,8 +9,6 @@ use crate::ai::protocol::{DenoiseResult, Progress, Region, Request};
 use crate::ai::supervisor::AiHelper;
 use crate::denoise_cache;
 use crate::denoise_models::{self, ModelStatus, MODEL_ID};
-use crate::denoise_preview;
-use crate::preview_cache::{self, DevelopPreviewInfo};
 use crate::source_decode;
 use crate::{resolve_denoise_dir, AppState};
 use serde::Serialize;
@@ -249,37 +247,6 @@ pub fn write_png_fast(img: &image::RgbImage, path: &Path) -> Result<(), String> 
     PngEncoder::new_with_quality(std::io::BufWriter::new(file), CompressionType::Fast, FilterType::Sub)
         .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgb8)
         .map_err(|e| e.to_string())
-}
-
-/// The Develop canvas's source image with this photo's cached denoised copy mixed in at `amount` (1..100),
-/// as a PNG the canvas loads in place of the plain preview (`full` picks the 1:1 tier). `null` means "use the
-/// plain preview": amount 0, nothing cached, or the cached copy is not of this picture. Never runs the model.
-#[tauri::command]
-pub async fn get_denoised_develop_preview(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-    content_hash: String,
-    amount: u32,
-    full: bool,
-) -> Result<Option<DevelopPreviewInfo>, String> {
-    let previews = crate::resolve_previews_dir(&app, &state.catalog)?;
-    let cache = resolve_denoise_dir(&app, &state.catalog)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        if amount == 0 || !denoise_cache::entry_path(&cache, &content_hash, MODEL_ID).exists() {
-            return Ok(None);
-        }
-        let source = Path::new(&path);
-        let base = if full {
-            preview_cache::ensure_develop_full_preview(source, &previews, Some(&content_hash))
-        } else {
-            preview_cache::ensure_develop_preview(source, &previews, Some(&content_hash))
-        }
-        .map_err(|e| e.user_message())?;
-        denoise_preview::ensure_blended(&base, &content_hash, &cache, &previews, full, amount)
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 /// A photo an export would render without the effect the user asked for (RFC-0027 §3.6): its stack has an

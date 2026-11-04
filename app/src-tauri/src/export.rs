@@ -197,6 +197,9 @@ pub(crate) fn render_full_resolution(source_path: &Path, stack: &EditStack, deno
     // resampling, grading and a later exposure lift all work on the cleaned pixels. Reads a cached
     // result; never runs the model.
     apply_ai_denoise(&mut image, source_path, stack, denoise_dir);
+    // Object removal (M7, RFC-0032 §12.1): the patches go over the decode after the denoise blend (which would pull a removed
+    // thing back in) and before everything geometric (their coordinates are in this decode).
+    crate::removal::bake(&mut image, stack);
     // Lens Corrections (M3): runs FIRST, before grading -- the user is
     // grading/cropping the corrected image, not the raw lens-distorted
     // one, matching real Lightroom. See develop_engine.rs's own header

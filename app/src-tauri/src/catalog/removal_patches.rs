@@ -30,7 +30,6 @@ impl Catalog {
 
     /// The patches named by `ids` that belong to `version_id`, in the order of `ids`; an id that is unknown (or belongs
     /// to another photograph) is left out, which the caller shows as "needs regenerating".
-    #[allow(dead_code)] // read by the baked source of slice D2d
     pub fn get_removal_patches(&self, version_id: i64, ids: &[i64]) -> Result<Vec<StoredPatch>> {
         let mut stmt = self.conn.prepare("SELECT x, y, w, h, src_w, src_h, engine, png FROM removal_patches WHERE id = ?1 AND version_id = ?2")?;
         let mut out = Vec::new();

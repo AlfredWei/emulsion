@@ -35,6 +35,7 @@ mod preview_cache;
 #[allow(dead_code)] // the render path of slice D uses it next
 mod removal;
 mod removal_commands;
+mod removal_preview;
 mod ai;
 mod bundled_models;
 mod denoise_cache;
@@ -1259,6 +1260,8 @@ async fn get_graded_develop_preview(
             let catalog = catalog.lock().map_err(|e| e.to_string())?;
             let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
             let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
+            // The render has no catalog: the patches the stack names go in with it (RFC-0032 §12).
+            let stack = removal::inline_patches(&catalog, version_id, &stack);
             (source, stack)
         };
 
@@ -1299,6 +1302,8 @@ async fn get_soft_proof_preview(
             let catalog = catalog.lock().map_err(|e| e.to_string())?;
             let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
             let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
+            // The render has no catalog: the patches the stack names go in with it (RFC-0032 §12).
+            let stack = removal::inline_patches(&catalog, version_id, &stack);
             (source, stack)
         };
 
@@ -1462,7 +1467,8 @@ async fn preview_history_entry(
     tauri::async_runtime::spawn_blocking(move || {
         let stack = {
             let catalog = catalog.lock().map_err(|e| e.to_string())?;
-            catalog.peek_history_entry(version_id, history_id).map_err(|e| e.to_string())?
+            let stack = catalog.peek_history_entry(version_id, history_id).map_err(|e| e.to_string())?;
+            removal::inline_patches(&catalog, version_id, &stack)
         };
         preview_cache::ensure_graded_preview_for_hash(
             std::path::Path::new(&path),
@@ -1495,7 +1501,8 @@ async fn preview_snapshot(
     tauri::async_runtime::spawn_blocking(move || {
         let stack = {
             let catalog = catalog.lock().map_err(|e| e.to_string())?;
-            catalog.peek_snapshot(version_id, snapshot_id).map_err(|e| e.to_string())?
+            let stack = catalog.peek_snapshot(version_id, snapshot_id).map_err(|e| e.to_string())?;
+            removal::inline_patches(&catalog, version_id, &stack)
         };
         preview_cache::ensure_graded_preview_for_hash(
             std::path::Path::new(&path),
@@ -1524,11 +1531,22 @@ async fn preview_edit_stack(
     path: String,
     content_hash: Option<String>,
     stack: EditStack,
+    version_id: Option<i64>,
 ) -> Result<DevelopPreviewInfo, String> {
-    let previews_dir = resolve_previews_dir(&app, &state.catalog)?;
-    let denoise_dir = resolve_denoise_dir(&app, &state.catalog)?;
+    let catalog = state.catalog.clone();
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
+    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
+        // The stack came from the frontend, so only the patches need the catalog (RFC-0032 §12): without a version
+        // there is nothing to look them up for.
+        let stack = match version_id {
+            Some(v) => {
+                let catalog = catalog.lock().map_err(|e| e.to_string())?;
+                removal::inline_patches(&catalog, v, &stack)
+            }
+            None => stack,
+        };
         preview_cache::ensure_graded_preview_for_hash(
             std::path::Path::new(&path),
             content_hash.as_deref().unwrap_or(""),
@@ -1692,6 +1710,8 @@ async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, versio
             let catalog = catalog.lock().map_err(|e| e.to_string())?;
             let source = catalog.get_version_source(version_id).map_err(|e| e.to_string())?;
             let stack = catalog.get_edit_stack(version_id).map_err(|e| e.to_string())?;
+            // The render has no catalog: the patches the stack names go in with it (RFC-0032 §12).
+            let stack = removal::inline_patches(&catalog, version_id, &stack);
             (source, stack)
         };
 
@@ -1823,6 +1843,7 @@ async fn export_images(
                 .into_iter()
                 .map(|item| {
                     let stack = catalog.get_edit_stack(item.version_id).unwrap_or_else(|_| EditStack::empty());
+                    let stack = removal::inline_patches(&catalog, item.version_id, &stack);
                     // Only resolved when the user asked for metadata: skips
                     // the extra queries on the bare-JPEG path.
                     let metadata = if options.metadata.any() {
@@ -1889,6 +1910,7 @@ async fn get_print_ready_images(
                 match catalog.get_version_source(version_id) {
                     Ok(source) => {
                         let stack = catalog.get_edit_stack(version_id).unwrap_or_else(|_| EditStack::empty());
+                        let stack = removal::inline_patches(&catalog, version_id, &stack);
                         resolvable.push((
                             version_id,
                             std::path::PathBuf::from(source.path),
@@ -1941,6 +1963,7 @@ async fn export_print_pdf(app: AppHandle, state: State<'_, AppState>, request: P
             for version_id in &request.version_ids {
                 let source = catalog.get_version_source(*version_id).map_err(|e| e.to_string())?;
                 let stack = catalog.get_edit_stack(*version_id).unwrap_or_else(|_| EditStack::empty());
+                let stack = removal::inline_patches(&catalog, *version_id, &stack);
                 resolved.push((*version_id, std::path::PathBuf::from(source.path), source.content_hash.unwrap_or_default(), stack));
             }
             resolved
@@ -2272,7 +2295,7 @@ pub fn run() {
             denoise_commands::denoise_run,
             denoise_commands::denoise_cancel,
             denoise_commands::denoise_remove_cache,
-            denoise_commands::get_denoised_develop_preview,
+            removal_commands::get_develop_source_preview,
             denoise_commands::denoise_missing_for_export,
             upscale_commands::upscale_model_status,
             upscale_commands::upscale_download_model,

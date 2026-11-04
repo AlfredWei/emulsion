@@ -13,7 +13,7 @@
   import DevelopCanvas from "$lib/components/DevelopCanvas.svelte";
   import { developView } from "$lib/state/developView.svelte.js";
   import { masks } from "$lib/state/masks.svelte.js";
-  import { countModifiers, countBrushLayers, modifierBlockedReason } from "$lib/api/develop.js";
+  import { countModifiers, countBrushLayers, modifierBlockedReason, getRemovals } from "$lib/api/develop.js";
   import { handleMaskCreated, handleMaskUpdated, handleMaskSelected, handleAddShape, handleShapeCombineChanged, handleShapeRemoved, handleShapeSelected, handleColorRangeResampled, handleEyedropperSampled, handleGpuFallback, handleMaskDeleted, handleResampleColorToggle, isEyedropperActive, handleEyedropperToggle, handleCreateLuminanceRangeMask } from "$lib/actions/maskActions.js";
   import { softProof } from "$lib/state/softProof.svelte.js";
   import MaskEditorPanel from "$lib/components/MaskEditorPanel.svelte";
@@ -124,6 +124,8 @@
     imageContentHash={develop.imageContentHash}
     aiDenoiseAmount={denoise.hasResult ? developView.renderAiDenoise.amount : 0}
     denoiseVersion={denoise.cacheVersion}
+    versionId={develop.versionId}
+    removalPatchIds={getRemovals(develop.editStack).map((r) => r.patch)}
     exposure={developView.renderExposure}
     contrast={developView.renderContrast}
     saturation={developView.renderSaturation}

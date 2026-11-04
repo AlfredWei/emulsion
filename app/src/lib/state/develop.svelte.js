@@ -429,6 +429,7 @@ export class DevelopStore {
       const contentHash = this.imageContentHash;
       const active = this.gpuFallbackActive;
       const stack = this.editStack;
+      const versionId = this.versionId;
 
       if (this.#gpuFallbackTimer) clearTimeout(this.#gpuFallbackTimer);
 
@@ -438,7 +439,7 @@ export class DevelopStore {
       }
 
       this.#gpuFallbackTimer = setTimeout(() => {
-        previewEditStack(path, contentHash, stack)
+        previewEditStack(path, contentHash, stack, versionId)
           .then((preview) => {
             this.cpuFallbackPreviewUrl = convertFileSrc(preview.path);
           })

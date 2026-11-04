@@ -39,9 +39,27 @@ describe("Develop: the Remove tool without the model", function () {
   it("the tool is in the strip, arms, and says the model is missing; the layer takes no marks", async () => {
     expect(await exists('[data-testid="remove-tool"]')).toBe(true);
     expect(await exists('[data-testid="remove-layer"]')).toBe(false);
+    // Like every mask tool, Remove needs the GPU canvas (its marking layer lives in the canvas's mask overlay). CI runners
+    // have none, so the canvas is in its CPU-fallback view there: the button must be present but disabled, and say why.
+    await waitFor(
+      () => browser.execute(() => !!document.querySelector(".cpu-fallback-badge") || !(/** @type {HTMLButtonElement} */ (document.querySelector('[data-testid="remove-tool"]')).disabled)),
+      "the canvas to settle (CPU fallback, or a GPU canvas with the tool enabled)",
+      60000,
+    );
+    const gpuCanvas = !(await exists(".cpu-fallback-badge"));
+    if (!gpuCanvas) {
+      const btn = await browser.execute(() => {
+        const b = /** @type {HTMLButtonElement} */ (document.querySelector('[data-testid="remove-tool"]'));
+        return { disabled: b.disabled, title: b.title };
+      });
+      expect(btn.disabled).toBe(true);
+      expect(btn.title).toContain("unavailable without GPU");
+      expect(await exists('[data-testid="remove-layer"]')).toBe(false);
+      return;
+    }
     await browser.execute(() => /** @type {HTMLElement} */ (document.querySelector('[data-testid="remove-tool"]')).click());
-    await waitFor(() => exists('[data-testid="remove-layer"]'), "the marking layer");
     expect(await waitFor(async () => (await text('[data-testid="remove-unavailable"]')) || null, "the missing-model message")).toContain("not installed");
+    await waitFor(() => exists('[data-testid="remove-layer"]'), "the marking layer");
     // A drag on the layer draws nothing.
     await browser.execute(() => {
       const layer = /** @type {HTMLElement} */ (document.querySelector('[data-testid="remove-layer"]'));

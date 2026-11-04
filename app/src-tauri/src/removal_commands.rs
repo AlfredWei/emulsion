@@ -177,6 +177,14 @@ pub async fn removal_cancel(helper: State<'_, Arc<AiHelper>>) -> Result<(), Stri
     tauri::async_runtime::spawn_blocking(move || helper.cancel(id).map_err(|e| e.to_string())).await.map_err(|e| e.to_string())?
 }
 
+/// Whether the removal model is installed (the installer carries it; a build or install without it has no Remove, and
+/// the tool says so). Cheap: the check is a size and a hash of one file, done once per call.
+#[tauri::command]
+pub async fn removal_available(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    let models = resolve_cache_root(&app, &state.catalog)?.join("inpaint_models");
+    tauri::async_runtime::spawn_blocking(move || inpaint_models::ready_path(&models).is_some()).await.map_err(|e| e.to_string())
+}
+
 /// The Develop canvas's source picture: the plain preview (`full` picks the 1:1 tier) with this photo's kept denoised
 /// copy mixed in at `amount` (0 = none) and the removal patches `patch_ids` laid over it, as a PNG the canvas loads in
 /// place of the plain preview (RFC-0032 §12.1, RFC-0027 §3.3). `null` means "use the plain preview": nothing to mix

@@ -124,6 +124,24 @@ describe("Develop: a removal is in the canvas source, the graded preview and the
     await waitFor(async () => (await attr()) === String(patchId), "the removal back after the second press");
   });
 
+  it("zoomed to 100 % the 1:1 tier carries it too", async () => {
+    const attr = (/** @type {string} */ name) => browser.execute((n) => document.querySelector(".canvas-wrap canvas")?.getAttribute(n) ?? "", name);
+    const t0 = Date.now();
+    await browser.execute(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "1", metaKey: true, ctrlKey: true, bubbles: true, cancelable: true })));
+    await waitFor(async () => (await attr("data-source-tier")) === "full", "the 1:1 tier on the GPU", 120000);
+    console.log(`1:1 tier on the GPU ${((Date.now() - t0) / 1000).toFixed(1)} s after Cmd+1 (full decode and the bake)`);
+    expect(await attr("data-removals-source")).toBe(String(patchId));
+    const plain = await invoke("get_develop_full_preview", { path: FIXTURE_PATH, contentHash: hash });
+    const baked = await invoke("get_develop_source_preview", { path: FIXTURE_PATH, contentHash: hash, amount: 0, full: true, versionId, patchIds: [patchId] });
+    expect(baked).not.toBeNull();
+    expect([baked.width, baked.height]).toEqual([plain.width, plain.height]);
+    const d = await difference(plain.path, baked.path);
+    console.log(`1:1 source vs plain full preview: ${JSON.stringify(d)}`);
+    expect(d.inside).toBeGreaterThan(1);
+    expect(d.corner).toBe(0);
+    await browser.execute(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "0", metaKey: true, ctrlKey: true, bubbles: true, cancelable: true })));
+  });
+
   it("the graded preview and the thumbnail carry the removal", async () => {
     const plain = await invoke("get_develop_preview", { path: FIXTURE_PATH, contentHash: hash });
     const graded = await invoke("get_graded_develop_preview", { versionId });

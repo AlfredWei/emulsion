@@ -23,6 +23,8 @@ mod collections;
 mod cull_analysis;
 mod culling;
 mod edit_stack;
+#[cfg(test)]
+mod edit_history_check;
 mod export_plugins;
 mod faces;
 mod geo;

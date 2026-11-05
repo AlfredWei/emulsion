@@ -8,6 +8,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = process.env.INPAINT_IMAGE ?? path.resolve(__dirname, "../../../test_image/Szechenyi-Chain-Bridge-Budapest-night.jpg");
 const FIXTURE_NAME = path.basename(FIXTURE_PATH, path.extname(FIXTURE_PATH));
 const MODEL = process.env.INPAINT_MODEL ?? "";
+/** Folder with sam2_hiera_tiny.encoder.onnx and .decoder.onnx (optional): without it the click-select test is skipped. */
+const SEGMENT_DIR = process.env.SEGMENT_MODELS_DIR ?? "";
+/** Where the click-select test clicks, as "x,y" fractions of the photograph (the object to take out). */
+const SELECT_AT = (process.env.SELECT_AT ?? "0.5,0.5").split(",").map(Number);
 const IDENTIFIER = "dev.alfredwei.emulsion";
 
 /**
@@ -44,6 +48,7 @@ describe("Develop: the Remove tool, with the model", function () {
   const stackRemovals = async () => ((await invoke("get_edit_stack", { versionId })).ops.find((/** @type {any} */ o) => o.op === "remove")?.items ?? []).map((/** @type {any} */ i) => i.patch);
   const canvasRemovals = () => browser.execute(() => document.querySelector(".canvas-wrap canvas")?.getAttribute("data-removals-source") ?? "");
   let versionId = 0;
+  let haveSegment = false;
   const SHOTS = process.env.SHOTS_DIR ?? "";
   const shot = async (/** @type {string} */ name) => {
     if (SHOTS) await browser.saveScreenshot(path.join(SHOTS, `${name}.png`));
@@ -65,6 +70,12 @@ describe("Develop: the Remove tool, with the model", function () {
     const models = path.join(os.homedir(), "Library", "Application Support", IDENTIFIER, "inpaint_models");
     mkdirSync(models, { recursive: true });
     copyFileSync(MODEL, path.join(models, "lama_fp32.onnx"));
+    if (SEGMENT_DIR && existsSync(path.join(SEGMENT_DIR, "sam2_hiera_tiny.encoder.onnx"))) {
+      const seg = path.join(os.homedir(), "Library", "Application Support", IDENTIFIER, "segment_models");
+      mkdirSync(seg, { recursive: true });
+      for (const f of ["sam2_hiera_tiny.encoder.onnx", "sam2_hiera_tiny.decoder.onnx"]) copyFileSync(path.join(SEGMENT_DIR, f), path.join(seg, f));
+      haveSegment = true;
+    }
     await browser.setTimeout({ script: 300000 });
     await invoke("import_files", { paths: [FIXTURE_PATH] });
     const mine = (await invoke("list_images")).find((/** @type {any} */ i) => i.path === FIXTURE_PATH);
@@ -127,6 +138,33 @@ describe("Develop: the Remove tool, with the model", function () {
     await click('[data-testid="remove-undo"]');
     await waitFor(async () => (await stackRemovals()).length === 1, "one removal left in the stack");
     await waitFor(async () => (await canvasRemovals()).split(",").length === 1, "the canvas to follow");
+  });
+
+  it("Select: a click takes the object under it, shows it, and Remove takes it out", async function () {
+    if (!haveSegment) return this.skip();
+    await click('[data-testid="remove-mode-select"]');
+    await waitFor(async () => (await text('[data-testid="remove-status"]')) === "Click what to remove", "click-select to be ready", 120000);
+    const before = (await stackRemovals()).length;
+    await draw([SELECT_AT]);
+    await waitFor(async () => (await text('[data-testid="remove-status"]')) === "1 mark", "the clicked object", 120000);
+    expect(await browser.execute(() => document.querySelectorAll('[data-testid="remove-layer"] image').length)).toBe(1);
+    await shot("3-selected");
+    // Another guess (Tab) swaps the candidate when the model offered several.
+    if (await exists('[data-testid="remove-next-guess"]')) {
+      await click('[data-testid="remove-next-guess"]');
+      await new Promise((r) => setTimeout(r, 500));
+      await shot("3b-another-guess");
+      await click('[data-testid="remove-next-guess"]');
+      await click('[data-testid="remove-next-guess"]');
+    }
+    await click('[data-testid="remove-run"]');
+    await waitFor(async () => {
+      if (/large area/.test(await text('[data-testid="remove-status"]'))) await click('[data-testid="remove-options"] button', "Remove anyway").catch(() => {}); // gone once pressed
+      return (await stackRemovals()).length === before + 1;
+    }, "the selected object's patch in the stack", 240000);
+    await waitFor(async () => (await canvasRemovals()).split(",").length === before + 1, "the canvas to carry it");
+    expect(await browser.execute(() => document.querySelectorAll('[data-testid="remove-layer"] image').length)).toBe(0);
+    await shot("4-selected-removed");
   });
 
   it("leaving the tool takes the layer away", async () => {

@@ -8,6 +8,8 @@ import { removal, LARGE_MARK_FRACTION } from "$lib/state/removal.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
 import { removalAvailable, removeObject, removalCancel, isRemovalCancelled } from "$lib/api/removal.js";
+import { segmentModelStatus, segmentPrepare, segmentDecode, segmentRelease, isNotPrepared } from "$lib/api/segment.js";
+import { readCut } from "$lib/segmentCut.js";
 import { addRemovals, getEditStack, getRemovals, removeRemoval, setEditStack } from "$lib/api/develop.js";
 
 /** @param {unknown} e */
@@ -26,24 +28,162 @@ export async function handleRemoveToolToggle() {
   masks.activeTool = "remove";
   removal.error = "";
   removal.notice = "";
+  removal.selectNote = "";
   removal.clearMarks();
   try {
     removal.available = await removalAvailable();
   } catch {
     removal.available = false;
   }
+  if (removal.mode === "select" && removal.active) await startSelect();
+}
+
+/** Brush / Lasso / Select. The object being refined becomes an ordinary mark when the user changes mode.
+ * @param {"brush" | "lasso" | "select"} mode */
+export async function handleRemoveMode(mode) {
+  if (removal.phase === "running") return;
+  commitSelection();
+  removal.mode = mode;
+  if (mode === "select") await startSelect();
+}
+
+/** Keeps the object being refined as a mark of its own, so the next click starts another object. */
+function commitSelection() {
+  if (!removal.selection) return;
+  removal.shapes = [...removal.shapes, removal.selection.mark];
+  removal.selection = null;
+}
+
+/** Checks the click-select model and prepares the photograph for clicks. Without the model it says so (the model is
+ * installed from Select Subject, which owns the consent dialog) and Brush and Lasso keep working. */
+async function startSelect() {
+  removal.selectNote = "";
+  removal.selectPhase = "preparing";
+  try {
+    const status = await segmentModelStatus();
+    if (!removal.active) return;
+    if (status.state !== "ready") {
+      removal.selectPhase = "idle";
+      removal.selectNote = "Click-select needs its model: install it once from Select Subject, then come back.";
+      return;
+    }
+    await prepareSelect();
+  } catch (e) {
+    if (!removal.active) return;
+    removal.selectPhase = "idle";
+    removal.selectNote = message(e);
+  }
+}
+
+async function prepareSelect() {
+  const hash = develop.imageContentHash;
+  if (!develop.imagePath || !hash) {
+    removal.selectPhase = "idle";
+    removal.selectNote = "This photo has no preview to select from yet.";
+    return false;
+  }
+  removal.selectPhase = "preparing";
+  await segmentPrepare(develop.imagePath, hash);
+  if (!removal.active) {
+    // The tool was left while the encoder ran: let the helper go again.
+    void segmentRelease().catch(() => {});
+    return false;
+  }
+  removal.preparedHash = hash;
+  removal.selectPhase = "ready";
+  return true;
+}
+
+/** Frees the helper's embedding when the tool is left. Never starts the helper. */
+function releaseSelect() {
+  removal.selectPhase = "idle";
+  removal.selectNote = "";
+  if (removal.preparedHash !== null) {
+    removal.preparedHash = null;
+    void segmentRelease().catch(() => {});
+  }
+}
+
+/** A click in select mode. A click takes the object under it (or, with an object already taken, adds to it); Alt-click
+ * takes a part away; Shift-click starts another object. Refines from the candidate shown.
+ * @param {{ x: number, y: number, positive: boolean, another?: boolean }} click */
+export async function handleRemoveSelectClick(click) {
+  if (removal.phase === "running" || removal.mode !== "select") return;
+  if (removal.selectPhase === "idle") {
+    // A failed or missing-model start: a click tries again.
+    await startSelect();
+    if (/** @type {string} */ (removal.selectPhase) !== "ready") return;
+  }
+  if (/** @type {string} */ (removal.selectPhase) !== "ready") return;
+  if (click.another) commitSelection();
+  if (!click.positive && !removal.selection) return;
+  const gen = removal.generation;
+  const hash = develop.imageContentHash;
+  if (!hash) return;
+  const sel = removal.selection;
+  const prompts = [...(sel?.prompts ?? []), { x: click.x, y: click.y, positive: click.positive }];
+  const refine = sel ? sel.candidates[sel.index]?.logits_png ?? null : null;
+  removal.selectPhase = "deciding";
+  removal.selectNote = "";
+  removal.guarding = false;
+  removal.error = "";
+  removal.notice = "";
+  try {
+    /** @type {import('$lib/api/segment.js').SegmentCandidate[]} */
+    let candidates;
+    try {
+      if (removal.preparedHash !== hash && !(await prepareSelect())) return;
+      removal.selectPhase = "deciding";
+      candidates = await segmentDecode(hash, prompts, refine);
+    } catch (e) {
+      if (!isNotPrepared(e)) throw e;
+      // The helper restarted (idle exit) since the photograph was prepared: prepare again, decode once more.
+      if (gen !== removal.generation || !(await prepareSelect())) return;
+      removal.selectPhase = "deciding";
+      candidates = await segmentDecode(hash, prompts, refine);
+    }
+    if (gen !== removal.generation) return;
+    const first = candidates[0];
+    const cut = first ? await readCut(first.logits_png) : null;
+    if (gen !== removal.generation) return;
+    if (!first || !cut) {
+      // The click that found nothing is dropped; what was selected before stays.
+      removal.selectNote = "Nothing was selected there.";
+      return;
+    }
+    removal.selection = { prompts, candidates, index: 0, mark: { kind: "segment", logits: first.logits_png, bbox: cut.bbox, tint: cut.tint } };
+  } catch (e) {
+    if (gen !== removal.generation) return;
+    removal.selectNote = message(e);
+  } finally {
+    if (removal.selectPhase === "deciding") removal.selectPhase = "ready";
+  }
+}
+
+/** Shows the model's next guess for the clicks so far (Tab). */
+export async function handleRemoveNextGuess() {
+  const sel = removal.selection;
+  if (!sel || sel.candidates.length < 2 || removal.phase === "running" || removal.selectPhase !== "ready") return;
+  const gen = removal.generation;
+  const index = (sel.index + 1) % sel.candidates.length;
+  const cut = await readCut(sel.candidates[index].logits_png);
+  if (!cut || gen !== removal.generation || removal.selection !== sel) return;
+  removal.guarding = false;
+  removal.selection = { ...sel, index, mark: { kind: "segment", logits: sel.candidates[index].logits_png, bbox: cut.bbox, tint: cut.tint } };
 }
 
 /** Leaves the tool. Marks not yet removed are dropped; a running job is stopped. */
 export function leaveRemoveTool() {
   if (removal.phase === "running") void removalCancel();
   removal.clearMarks();
+  releaseSelect();
   if (masks.activeTool === "remove") masks.activeTool = null;
 }
 
 /** @param {import('$lib/api/removal.js').MaskShape} shape */
 export function handleRemoveMark(shape) {
   if (removal.phase === "running") return;
+  commitSelection();
   removal.shapes = [...removal.shapes, shape];
   removal.guarding = false;
   removal.error = "";
@@ -52,8 +192,9 @@ export function handleRemoveMark(shape) {
 
 /** Drops the last mark (Backspace / Undo while marks are pending). */
 export function handleRemoveUnmark() {
-  if (removal.phase === "running" || removal.shapes.length === 0) return;
-  removal.shapes = removal.shapes.slice(0, -1);
+  if (removal.phase === "running" || removal.count === 0) return;
+  if (removal.selection) removal.selection = null;
+  else removal.shapes = removal.shapes.slice(0, -1);
   removal.guarding = false;
 }
 
@@ -70,7 +211,7 @@ export function handleRemoveCancel() {
 /** Runs the removal on the marks. Large marks ask once first (`confirmLarge` is the second press). */
 export async function handleRemoveRun(confirmLarge = false) {
   const versionId = develop.versionId;
-  if (versionId === null || removal.phase === "running" || removal.shapes.length === 0) return;
+  if (versionId === null || removal.phase === "running" || removal.count === 0) return;
   const aspect = develop.imageNativeWidth && develop.imageNativeHeight ? develop.imageNativeWidth / develop.imageNativeHeight : 1;
   if (!confirmLarge && removal.extent(aspect) > LARGE_MARK_FRACTION) {
     removal.guarding = true;
@@ -81,7 +222,8 @@ export async function handleRemoveRun(confirmLarge = false) {
   removal.error = "";
   removal.notice = "";
   // A plain copy for the IPC call (the marks are reactive state).
-  const shapes = JSON.parse(JSON.stringify(removal.shapes));
+  // The job reads a selected object's cut; its box and tint are for the screen.
+  const shapes = removal.allShapes().map((m) => (m.kind === "segment" ? { kind: m.kind, logits: m.logits } : JSON.parse(JSON.stringify(m))));
   try {
     const results = await removeObject(versionId, shapes);
     const added = results.map((r) => ({ patch: r.patch_id, engine: r.engine }));

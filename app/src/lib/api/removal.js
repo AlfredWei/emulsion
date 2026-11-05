@@ -7,7 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
  * One mark, in coordinates normalised to the whole photograph (0..1 on both axes).
  * A lasso is the inside of the closed outline; a stroke is a round brush dragged along `points`, `radius` a fraction of
  * the photograph's longer side.
- * @typedef {{ kind: "polygon", points: [number, number][] } | { kind: "stroke", points: [number, number][], radius: number }} MaskShape
+ * A click-selected object is the model's 256 x 256 cut; `bbox` and `tint` are for the screen only (the job reads `logits`).
+ * @typedef {{ kind: "polygon", points: [number, number][] } | { kind: "stroke", points: [number, number][], radius: number } | { kind: "segment", logits: string, bbox: [number, number, number, number], tint: string }} MaskShape
  */
 
 /**

@@ -27,7 +27,7 @@ Preconditions: baseline from `README.md`; spec `develop-undo-first-edit.e2e.js`.
 
 ## Gotchas
 
-- Open finding (see skill `verify-edit-history`): in the Rust catalog, if an edit returns the photo to content an earlier History row already holds, then jumping to the first row and editing again leaves the abandoned rows in the list. Sequence: edit to A, edit back to the start, click `Original`, edit to A again; the list should be `Original, A` and the catalog gives `Original, A, (start), A`. Not yet reproduced through the UI; a journey for it will report failure until the code is fixed. Never weaken the journey to make it pass.
+- Fixed (stored cursor, #304; background in skill `verify-edit-history`): an edit that returns the photo to content an earlier History row holds, followed by a jump to `Original` and a new edit, used to leave the abandoned rows in the list. `drive.sh develop-history-revisit` is that journey (seed `contrast 7`, `exposure 0.5`; edit to 0.9, back to 0.5, click the `Original` `.entry` row, edit to 0.9; expect `Original, Exposure` in `get_history` and in the panel). It passed on the fix (1 passing, 62 s) and failed with `restore_history_entry` scratch-broken (history `Original, Exposure, Exposure, Exposure`). Never weaken it to make it pass. The click is done inside `browser.execute` (a returned DOM element comes back null here).
 - Edits are saved after a ~250 ms debounce. Wait for `get_edit_stack` to change, never a fixed sleep.
 - Keyboard focus is unreliable; shortcuts are dispatched as `KeyboardEvent` on `window`.
 - Seed a stack no earlier run left a history row for, or the first edit will not record `Original`.

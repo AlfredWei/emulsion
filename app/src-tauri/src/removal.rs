@@ -19,6 +19,9 @@ pub enum MaskShape {
     Polygon { points: Vec<[f32; 2]> },
     /// A brush stroke: a round brush dragged along `points`; `radius` is a fraction of the photograph's longer side.
     Stroke { points: Vec<[f32; 2]>, radius: f32 },
+    /// A click-selected object: the click-select model's 256 x 256 cut (a base64 gray PNG of quantised logits, the
+    /// `logits` of a `segment_mask`) stretched over the whole photograph; inside is where the logit is above zero.
+    Segment { logits: String },
 }
 
 /// The separate things a mask asks to remove, as boxes. Marks that touch are one thing; and so are marks that fall inside
@@ -131,6 +134,26 @@ pub fn rasterise_mask(w: u32, h: u32, shapes: &[MaskShape], grow_px: u32) -> Gra
                             if ex * ex + ey * ey <= r * r {
                                 mask.put_pixel(x, y, Luma([255]));
                             }
+                        }
+                    }
+                }
+            }
+            MaskShape::Segment { logits } => {
+                // An undecodable cut selects nothing rather than failing the whole job.
+                let Ok(cut) = crate::adaptive_regions::decode_logits(logits) else { continue };
+                let n = (cut.len() as f32).sqrt() as usize;
+                let at = |x: usize, y: usize| cut[y.min(n - 1) * n + x.min(n - 1)];
+                for y in 0..h {
+                    // Bilinear, pixel centres onto the cut's pixel centres.
+                    let sy = ((y as f32 + 0.5) / fh * n as f32 - 0.5).clamp(0.0, (n - 1) as f32);
+                    let (y0, ty) = (sy.floor() as usize, sy.fract());
+                    for x in 0..w {
+                        let sx = ((x as f32 + 0.5) / fw * n as f32 - 0.5).clamp(0.0, (n - 1) as f32);
+                        let (x0, tx) = (sx.floor() as usize, sx.fract());
+                        let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+                        let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+                        if top * (1.0 - ty) + bottom * ty > 0.0 {
+                            mask.put_pixel(x, y, Luma([255]));
                         }
                     }
                 }
@@ -260,6 +283,36 @@ mod tests {
 
     fn on(m: &GrayImage) -> u32 {
         m.pixels().filter(|p| p.0[0] == 255).count() as u32
+    }
+
+    /// A click-select cut: 256 x 256, white (selected) where `inside(x, y)` holds, black elsewhere.
+    fn cut(inside: impl Fn(u32, u32) -> bool) -> String {
+        let img = GrayImage::from_fn(256, 256, |x, y| Luma([if inside(x, y) { 255 } else { 0 }]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(png.into_inner())
+    }
+
+    #[test]
+    fn a_selected_object_is_stretched_over_the_whole_picture_and_a_bad_cut_selects_nothing() {
+        // The left third of the cut, on a picture of another size and shape.
+        let left = MaskShape::Segment { logits: cut(|x, _| x < 86) };
+        let m = rasterise_mask(300, 120, &[left], 0);
+        let on = |x: u32, y: u32| m.get_pixel(x, y)[0] == 255;
+        assert!(on(5, 5) && on(90, 60) && on(5, 115));
+        assert!(!on(115, 60) && !on(200, 5) && !on(299, 119));
+        let covered = m.pixels().filter(|p| p[0] == 255).count() as f32 / (300.0 * 120.0);
+        assert!((covered - 86.0 / 256.0).abs() < 0.01, "a third of the picture, got {covered}");
+        // Not a PNG, and a PNG of the wrong size: nothing, and the other marks still count.
+        let bad = MaskShape::Segment { logits: "not base64 !!".into() };
+        let wrong = MaskShape::Segment { logits: {
+            let img = GrayImage::from_pixel(8, 8, Luma([255]));
+            let mut png = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+            base64::engine::general_purpose::STANDARD.encode(png.into_inner())
+        } };
+        let m = rasterise_mask(50, 50, &[bad, wrong, MaskShape::Stroke { points: vec![[0.5, 0.5]], radius: 0.1 }], 0);
+        assert!(m.get_pixel(25, 25)[0] == 255 && m.pixels().filter(|p| p[0] == 255).count() < 400);
     }
 
     fn dab(x: f32, y: f32) -> MaskShape {

@@ -23,7 +23,7 @@
   import ModelDownloadDialog from "$lib/components/ModelDownloadDialog.svelte";
   import { segment } from "$lib/state/segment.svelte.js";
   import { removal } from "$lib/state/removal.svelte.js";
-  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast } from "$lib/actions/removalActions.js";
+  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast, handleRemoveMode, handleRemoveNextGuess } from "$lib/actions/removalActions.js";
   import AiDenoiseControls from "$lib/components/AiDenoiseControls.svelte";
   import { denoise } from "$lib/state/denoise.svelte.js";
   import { handleAiDenoiseAmountChange, handleDenoisePreviewCrop, handleDenoiseWhole, handleDenoiseCancel, handleDenoiseRemove, handleDenoiseDismissCrop, handleDenoiseDownload, handleDenoiseImport, handleDenoiseDialogCancel, handleDenoiseDialogRetry } from "$lib/actions/denoiseActions.js";
@@ -367,9 +367,10 @@
   onSegmentCandidate={handleSegmentCandidate}
   onSegmentAccept={handleSegmentAccept}
   onSegmentCancel={handleSegmentCancel}
-  removal={{ active: removal.active, available: removal.available, mode: removal.mode, brushRadius: removal.brushRadius, marks: removal.shapes.length, running: removal.phase === "running", guarding: removal.guarding, error: removal.error, notice: removal.notice, removals: getRemovals(develop.editStack).length }}
+  removal={{ active: removal.active, available: removal.available, mode: removal.mode, brushRadius: removal.brushRadius, marks: removal.count, canCycle: (removal.selection?.candidates.length ?? 0) > 1, selectPhase: removal.selectPhase, selectNote: removal.selectNote, running: removal.phase === "running", guarding: removal.guarding, error: removal.error, notice: removal.notice, removals: getRemovals(develop.editStack).length }}
   onRemoveToggle={handleRemoveToolToggle}
-  onRemoveMode={(m) => (removal.mode = m)}
+  onRemoveMode={handleRemoveMode}
+  onRemoveNextGuess={handleRemoveNextGuess}
   onRemoveRadius={(v) => (removal.brushRadius = v)}
   onRemoveRun={handleRemoveRun}
   onRemoveClear={handleRemoveClear}

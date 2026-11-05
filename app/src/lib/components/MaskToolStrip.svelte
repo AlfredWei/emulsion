@@ -39,9 +39,10 @@
    *   onSegmentCandidate?: (index: number) => void,
    *   onSegmentAccept?: () => void,
    *   onSegmentCancel?: () => void,
-   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso", brushRadius: number, marks: number, running: boolean, guarding: boolean, error: string, notice: string, removals: number },
+   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number },
    *   onRemoveToggle?: () => void,
-   *   onRemoveMode?: (mode: "brush" | "lasso") => void,
+   *   onRemoveMode?: (mode: "brush" | "lasso" | "select") => void,
+   *   onRemoveNextGuess?: () => void,
    *   onRemoveRadius?: (value: number) => void,
    *   onRemoveRun?: (confirmLarge?: boolean) => void,
    *   onRemoveClear?: () => void,
@@ -81,9 +82,10 @@
     onSegmentCandidate = () => {},
     onSegmentAccept = () => {},
     onSegmentCancel = () => {},
-    removal = { active: false, available: null, mode: "brush", brushRadius: 0.012, marks: 0, running: false, guarding: false, error: "", notice: "", removals: 0 },
+    removal = { active: false, available: null, mode: "brush", brushRadius: 0.012, marks: 0, canCycle: false, selectPhase: "idle", selectNote: "", running: false, guarding: false, error: "", notice: "", removals: 0 },
     onRemoveToggle = () => {},
     onRemoveMode = () => {},
+    onRemoveNextGuess = () => {},
     onRemoveRadius = () => {},
     onRemoveRun = () => {},
     onRemoveClear = () => {},
@@ -343,6 +345,7 @@
       {:else}
         <button class="tool small" class:active={removal.mode === "brush"} type="button" title="Paint over what to remove" onclick={() => onRemoveMode("brush")} disabled={removal.running}>Brush</button>
         <button class="tool small" class:active={removal.mode === "lasso"} type="button" title="Draw around what to remove" onclick={() => onRemoveMode("lasso")} disabled={removal.running}>Lasso</button>
+        <button class="tool small" class:active={removal.mode === "select"} type="button" data-testid="remove-mode-select" title="Click an object to select it (Alt-click takes a part away, Shift-click starts another object)" onclick={() => onRemoveMode("select")} disabled={removal.running}>Select</button>
         {#if removal.mode === "brush"}
           <label class="brush-option">
             <span>Size</span>
@@ -358,12 +361,19 @@
           <button class="tool small" type="button" onclick={onRemoveClear}>Clear</button>
         {:else if removal.marks > 0}
           <span class="seg-status" data-testid="remove-status">{removal.marks} {removal.marks === 1 ? "mark" : "marks"}</span>
+          {#if removal.canCycle}
+            <button class="tool small" type="button" data-testid="remove-next-guess" title="Show the model's next guess for what you clicked (Tab)" onclick={onRemoveNextGuess}>Another guess</button>
+          {/if}
           <button class="tool small active" type="button" data-testid="remove-run" title="Remove what is marked (Enter)" onclick={() => onRemoveRun(false)}>Remove</button>
           <button class="tool small" type="button" title="Drop the marks (Esc)" onclick={onRemoveClear}>Clear</button>
         {:else if removal.error}
           <span class="seg-status err" data-testid="remove-status">{removal.error}</span>
+        {:else if removal.mode === "select" && removal.selectPhase === "preparing"}
+          <span class="seg-status" data-testid="remove-status">Getting the photo ready to select from…</span>
+        {:else if removal.mode === "select" && removal.selectNote}
+          <span class="seg-status err" data-testid="remove-status">{removal.selectNote}</span>
         {:else}
-          <span class="seg-status" data-testid="remove-status">{removal.notice || "Mark what to remove"}</span>
+          <span class="seg-status" data-testid="remove-status">{removal.notice || (removal.mode === "select" ? "Click what to remove" : "Mark what to remove")}</span>
         {/if}
         {#if removal.removals > 0 && !removal.running}
           <button class="tool small" type="button" data-testid="remove-undo" title="Take the newest removal out again (History can bring it back)" onclick={onRemoveUndoLast}>Undo last</button>

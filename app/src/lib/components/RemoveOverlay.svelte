@@ -4,7 +4,7 @@
   // normalised to the whole photograph (api/removal.js), so they mean the same on any preview and on the full decode.
   // Holding Space lets the canvas pan underneath; Cmd/Ctrl + wheel still zooms it.
   import { removal } from "$lib/state/removal.svelte.js";
-  import { handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun } from "$lib/actions/removalActions.js";
+  import { handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveSelectClick, handleRemoveNextGuess } from "$lib/actions/removalActions.js";
 
   /** @type {HTMLElement | undefined} */
   let layer = $state();
@@ -14,6 +14,8 @@
   /** The mark being drawn: its points so far, null when none. */
   let drawing = $state(/** @type {[number, number][] | null} */ (null));
   let cursor = $state(/** @type {[number, number] | null} */ (null));
+  /** A press in select mode: where it began, so that a click (not a drag) is what selects. */
+  let pressed = /** @type {{ x: number, y: number } | null} */ (null);
 
   /** Nearest a new point may be to the last one, as a fraction of the longer side: a smooth stroke without a point per pixel. */
   const MIN_STEP = 0.0015;
@@ -38,6 +40,10 @@
     } catch {
       // A synthetic pointer has nothing to capture; drawing still works.
     }
+    if (removal.mode === "select") {
+      pressed = { x: e.clientX, y: e.clientY };
+      return;
+    }
     drawing = [norm(e)];
   }
 
@@ -53,6 +59,20 @@
 
   /** @param {PointerEvent} e */
   function up(e) {
+    if (pressed && layer) {
+      const moved = Math.hypot(e.clientX - pressed.x, e.clientY - pressed.y);
+      pressed = null;
+      try {
+        layer.releasePointerCapture(e.pointerId);
+      } catch {
+        // see down()
+      }
+      if (e.type === "pointerup" && moved < 6) {
+        const [x, y] = norm(e);
+        void handleRemoveSelectClick({ x, y, positive: !e.altKey, another: e.shiftKey });
+      }
+      return;
+    }
     if (!drawing || !layer) return;
     const points = drawing;
     drawing = null;
@@ -79,13 +99,16 @@
     const t = /** @type {HTMLElement | null} */ (e.target);
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
     if (e.code === "Space") spaceHeld = true;
-    else if (e.key === "Escape" && removal.shapes.length > 0) {
+    else if (e.key === "Tab" && removal.mode === "select" && removal.selection) {
+      e.preventDefault();
+      void handleRemoveNextGuess();
+    } else if (e.key === "Escape" && removal.count > 0) {
       e.preventDefault();
       handleRemoveClear();
-    } else if (e.key === "Backspace" && removal.shapes.length > 0) {
+    } else if (e.key === "Backspace" && removal.count > 0) {
       e.preventDefault();
       handleRemoveUnmark();
-    } else if (e.key === "Enter" && removal.shapes.length > 0 && !e.metaKey && !e.ctrlKey) {
+    } else if (e.key === "Enter" && removal.count > 0 && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       void handleRemoveRun(removal.guarding);
     }
@@ -105,6 +128,8 @@
   class:pass={spaceHeld}
   class:busy={removal.phase === "running"}
   class:off={removal.available === false}
+  class:select={removal.mode === "select"}
+  class:deciding={removal.selectPhase === "deciding" || removal.selectPhase === "preparing"}
   data-testid="remove-layer"
   bind:this={layer}
   bind:clientWidth={width}
@@ -117,8 +142,10 @@
   onwheel={wheel}
 >
   <svg {width} {height} aria-hidden="true">
-    {#each removal.shapes as shape, i (i)}
-      {#if shape.kind === "stroke"}
+    {#each removal.allShapes() as shape, i (i)}
+      {#if shape.kind === "segment"}
+        <image href={shape.tint} x="0" y="0" {width} {height} preserveAspectRatio="none" />
+      {:else if shape.kind === "stroke"}
         {#if shape.points.length === 1}
           <circle class="mark" cx={shape.points[0][0] * width} cy={shape.points[0][1] * height} r={shape.radius * long} />
         {:else}
@@ -155,6 +182,9 @@
   }
   .remove-layer.pass {
     pointer-events: none;
+  }
+  .remove-layer.deciding {
+    cursor: progress;
   }
   .remove-layer.busy {
     cursor: progress;

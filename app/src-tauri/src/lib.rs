@@ -2292,6 +2292,7 @@ pub fn run() {
             denoise_commands::denoise_cache_info,
             removal_commands::remove_object,
             removal_commands::removal_cancel,
+            removal_commands::removal_available,
             denoise_commands::denoise_run,
             denoise_commands::denoise_cancel,
             denoise_commands::denoise_remove_cache,

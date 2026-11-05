@@ -39,6 +39,14 @@
    *   onSegmentCandidate?: (index: number) => void,
    *   onSegmentAccept?: () => void,
    *   onSegmentCancel?: () => void,
+   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso", brushRadius: number, marks: number, running: boolean, guarding: boolean, error: string, notice: string, removals: number },
+   *   onRemoveToggle?: () => void,
+   *   onRemoveMode?: (mode: "brush" | "lasso") => void,
+   *   onRemoveRadius?: (value: number) => void,
+   *   onRemoveRun?: (confirmLarge?: boolean) => void,
+   *   onRemoveClear?: () => void,
+   *   onRemoveCancel?: () => void,
+   *   onRemoveUndoLast?: () => void,
    *   onNewBrush: () => void,
    *   onNewSpot: () => void,
    *   onToggleMaskOverlaysVisible: () => void,
@@ -73,6 +81,14 @@
     onSegmentCandidate = () => {},
     onSegmentAccept = () => {},
     onSegmentCancel = () => {},
+    removal = { active: false, available: null, mode: "brush", brushRadius: 0.012, marks: 0, running: false, guarding: false, error: "", notice: "", removals: 0 },
+    onRemoveToggle = () => {},
+    onRemoveMode = () => {},
+    onRemoveRadius = () => {},
+    onRemoveRun = () => {},
+    onRemoveClear = () => {},
+    onRemoveCancel = () => {},
+    onRemoveUndoLast = () => {},
     onNewBrush,
     onNewSpot,
     onToggleMaskOverlaysVisible,
@@ -275,6 +291,22 @@
       <circle cx="8" cy="8" r="2" fill="var(--label-red)" />
     </svg>
   </button>
+  <button
+    class="tool icon"
+    class:active={removal.active}
+    type="button"
+    disabled={gpuUnavailable}
+    title={gpuUnavailable ? "Remove -- unavailable without GPU acceleration" : "Remove -- paint over or outline something to take it out of the photo; the picture around it fills in"}
+    aria-label="Remove"
+    data-testid="remove-tool"
+    onclick={onRemoveToggle}
+  >
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+      <path d="M9.6 2.2 L14 6.6 L7.4 13.2 H3.6 L2 11.6 Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+      <line x1="5.4" y1="6.4" x2="9.8" y2="10.8" stroke="currentColor" stroke-width="1.2" />
+      <line x1="7.4" y1="13.2" x2="14.5" y2="13.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+    </svg>
+  </button>
 
   <div class="divider"></div>
   <!-- Always visible, not gated by activeTool -- toggling it is a review
@@ -302,6 +334,43 @@
       </svg>
     {/if}
   </button>
+
+  {#if removal.active}
+    <div class="divider"></div>
+    <div class="brush-options" data-testid="remove-options">
+      {#if removal.available === false}
+        <span class="seg-status err" data-testid="remove-unavailable">The removal model is not installed in this copy of Emulsion.</span>
+      {:else}
+        <button class="tool small" class:active={removal.mode === "brush"} type="button" title="Paint over what to remove" onclick={() => onRemoveMode("brush")} disabled={removal.running}>Brush</button>
+        <button class="tool small" class:active={removal.mode === "lasso"} type="button" title="Draw around what to remove" onclick={() => onRemoveMode("lasso")} disabled={removal.running}>Lasso</button>
+        {#if removal.mode === "brush"}
+          <label class="brush-option">
+            <span>Size</span>
+            <input type="range" min="0.003" max="0.06" step="0.001" value={removal.brushRadius} disabled={removal.running} aria-label="Remove brush size" oninput={(e) => onRemoveRadius(Number(e.currentTarget.value))} />
+          </label>
+        {/if}
+        {#if removal.running}
+          <span class="seg-status" data-testid="remove-status">Removing…</span>
+          <button class="tool small" type="button" onclick={onRemoveCancel}>Cancel</button>
+        {:else if removal.guarding}
+          <span class="seg-status err" data-testid="remove-status">That is a large area; the fill may look soft or repeat.</span>
+          <button class="tool small active" type="button" onclick={() => onRemoveRun(true)}>Remove anyway</button>
+          <button class="tool small" type="button" onclick={onRemoveClear}>Clear</button>
+        {:else if removal.marks > 0}
+          <span class="seg-status" data-testid="remove-status">{removal.marks} {removal.marks === 1 ? "mark" : "marks"}</span>
+          <button class="tool small active" type="button" data-testid="remove-run" title="Remove what is marked (Enter)" onclick={() => onRemoveRun(false)}>Remove</button>
+          <button class="tool small" type="button" title="Drop the marks (Esc)" onclick={onRemoveClear}>Clear</button>
+        {:else if removal.error}
+          <span class="seg-status err" data-testid="remove-status">{removal.error}</span>
+        {:else}
+          <span class="seg-status" data-testid="remove-status">{removal.notice || "Mark what to remove"}</span>
+        {/if}
+        {#if removal.removals > 0 && !removal.running}
+          <button class="tool small" type="button" data-testid="remove-undo" title="Take the newest removal out again (History can bring it back)" onclick={onRemoveUndoLast}>Undo last</button>
+        {/if}
+      {/if}
+    </div>
+  {/if}
 
   {#if activeTool === "crop"}
     <div class="divider"></div>

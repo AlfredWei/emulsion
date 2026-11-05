@@ -22,10 +22,20 @@
   import MaskToolStrip from "$lib/components/MaskToolStrip.svelte";
   import ModelDownloadDialog from "$lib/components/ModelDownloadDialog.svelte";
   import { segment } from "$lib/state/segment.svelte.js";
+  import { removal } from "$lib/state/removal.svelte.js";
+  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast } from "$lib/actions/removalActions.js";
   import AiDenoiseControls from "$lib/components/AiDenoiseControls.svelte";
   import { denoise } from "$lib/state/denoise.svelte.js";
   import { handleAiDenoiseAmountChange, handleDenoisePreviewCrop, handleDenoiseWhole, handleDenoiseCancel, handleDenoiseRemove, handleDenoiseDismissCrop, handleDenoiseDownload, handleDenoiseImport, handleDenoiseDialogCancel, handleDenoiseDialogRetry } from "$lib/actions/denoiseActions.js";
   import { handleSegmentToolToggle, handleAddSegmentShape, handleSegmentClick, handleSegmentCandidate, handleSegmentAccept, handleSegmentCancel, handleSegmentDownload, handleSegmentImport, handleSegmentDialogCancel, handleSegmentDialogRetry, handleSegmentRefine } from "$lib/actions/segmentActions.js";
+
+  // Marks belong to the photo they were drawn on.
+  $effect(() => {
+    void develop.versionId;
+    removal.clearMarks();
+    removal.error = "";
+    removal.notice = "";
+  });
 
   // The Adaptive section (RFC-0035 slice C): which presets this photo already carries masks from, and whether the user
   // changed one (a Re-apply then asks first).
@@ -357,6 +367,14 @@
   onSegmentCandidate={handleSegmentCandidate}
   onSegmentAccept={handleSegmentAccept}
   onSegmentCancel={handleSegmentCancel}
+  removal={{ active: removal.active, available: removal.available, mode: removal.mode, brushRadius: removal.brushRadius, marks: removal.shapes.length, running: removal.phase === "running", guarding: removal.guarding, error: removal.error, notice: removal.notice, removals: getRemovals(develop.editStack).length }}
+  onRemoveToggle={handleRemoveToolToggle}
+  onRemoveMode={(m) => (removal.mode = m)}
+  onRemoveRadius={(v) => (removal.brushRadius = v)}
+  onRemoveRun={handleRemoveRun}
+  onRemoveClear={handleRemoveClear}
+  onRemoveCancel={handleRemoveCancel}
+  onRemoveUndoLast={handleRemoveUndoLast}
   onMaskSelect={(id) => (masks.selectedMaskId = id)}
   onBrushSizeChange={(v) => (masks.brushSize = v)}
   onBrushHardnessChange={(v) => (masks.brushHardness = v)}

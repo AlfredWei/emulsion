@@ -9,6 +9,7 @@
   import { tick, flushSync, untrack } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getDevelopSourcePreview } from "$lib/api/denoise.js";
+  import RemoveOverlay from "$lib/components/RemoveOverlay.svelte";
   import { getDevelopPreview, getDevelopFullPreview, buildToneCurveLut, buildHslUniformData, buildSplitToningUniformData, buildVignetteUniformData, buildLensCorrectionUniformData, buildPerspectiveUniformData, buildGrainUniformData, buildSharpenUniformData, buildLumaNrUniformData, buildColorNrUniformData, isCropIdentity } from "$lib/api/develop.js";
   import { clamp01, cropMinFrac, moveCropRect, cropCornerPoints, resizeCropCorner, resizeCropEdge, cropHandlePos, trueElementBox, cropRectFitsRotatedBounds } from "$lib/cropMath.js";
   import { FIT, fitScale, effectiveScale, reduceZoom, contentOffset, visibleRegion, scrollForFocus, focusAtViewportPoint } from "$lib/zoomMath.js";
@@ -308,11 +309,13 @@
   // test can tell which source texture the render is built from. Reactive, unlike `appliedDenoise`.
   let shownDenoise = $state(0);
   let shownRemovals = $state("");
+  let shownTier = $state("draft");
   /** @param {{ path: string, tier: string, amount: number, version: number, removals: string }} next */
   function setAppliedDenoise(next) {
     appliedDenoise = next;
     shownDenoise = next.amount;
     shownRemovals = next.removals;
+    shownTier = next.tier;
   }
   /** The patch ids the source texture should carry now: none while Before / After shows the photo before any edit. */
   function wantedRemovals() {
@@ -1872,6 +1875,7 @@
       bind:this={canvasEl}
       data-denoise-source={shownDenoise}
       data-removals-source={shownRemovals}
+      data-source-tier={shownTier}
       class:zoomed={isZoomed}
       class:sized={!showCommittedCropPreview && canvasCss.w > 0}
       class:cropped={showCommittedCropPreview}
@@ -1919,6 +1923,11 @@
            the crop rect, dimming and handles below stay fixed, and no
            mask is edited while the Crop tool is the active tool, so no
            pointer math ever runs through the rotated space. -->
+      {#if activeTool === "remove"}
+        <!-- Object removal (RFC-0032 slice E): its own marking layer, over the whole photograph, with its own pointer
+             handling; the tools above route through this component's handlers, this one does not. -->
+        <RemoveOverlay />
+      {/if}
       <div class="mask-rotor" style={activeTool === "crop" && crop.angle ? `transform: rotate(${crop.angle}deg);` : ""}>
       {#if maskOverlaysVisible}
       {#each paintTargets as mask (mask.id)}

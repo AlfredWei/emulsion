@@ -23,7 +23,7 @@
   import ModelDownloadDialog from "$lib/components/ModelDownloadDialog.svelte";
   import { segment } from "$lib/state/segment.svelte.js";
   import { removal } from "$lib/state/removal.svelte.js";
-  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveMode, handleRemoveNextGuess } from "$lib/actions/removalActions.js";
+  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveMode, handleRemoveNextGuess } from "$lib/actions/removalActions.js";
   import AiDenoiseControls from "$lib/components/AiDenoiseControls.svelte";
   import { denoise } from "$lib/state/denoise.svelte.js";
   import { handleAiDenoiseAmountChange, handleDenoisePreviewCrop, handleDenoiseWhole, handleDenoiseCancel, handleDenoiseRemove, handleDenoiseDismissCrop, handleDenoiseDownload, handleDenoiseImport, handleDenoiseDialogCancel, handleDenoiseDialogRetry } from "$lib/actions/denoiseActions.js";
@@ -377,6 +377,7 @@
   onRemoveCancel={handleRemoveCancel}
   onRemoveUndoLast={handleRemoveUndoLast}
   onRemoveDelete={handleRemoveDelete}
+  onRemoveHeal={handleRemoveHealInstead}
   onMaskSelect={(id) => (masks.selectedMaskId = id)}
   onBrushSizeChange={(v) => (masks.brushSize = v)}
   onBrushHardnessChange={(v) => (masks.brushHardness = v)}

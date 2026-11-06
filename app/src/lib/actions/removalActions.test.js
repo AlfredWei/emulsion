@@ -11,7 +11,7 @@ vi.mock("$lib/segmentCut.js", () => cut);
 const regen = vi.hoisted(() => vi.fn());
 vi.mock("$lib/actions/importActions.js", () => ({ regenerateThumbnailFor: regen }));
 
-import { handleRemoveToolToggle, leaveRemoveTool, handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveCancel, handleRemoveUndoLast, handleRemoveMode, handleRemoveSelectClick, handleRemoveNextGuess } from "./removalActions.js";
+import { handleRemoveToolToggle, leaveRemoveTool, handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveMode, handleRemoveSelectClick, handleRemoveNextGuess } from "./removalActions.js";
 import { develop } from "$lib/state/develop.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
@@ -214,6 +214,27 @@ describe("undoing the newest removal", () => {
     expect(getRemovals(develop.editStack)).toEqual([]);
     await handleRemoveUndoLast();
     expect(develop.flushEditStack).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("deleting a listed removal", () => {
+  const three = () => ({ schema_version: 1, ops: [{ op: "remove", items: [{ patch: 1, engine: "e" }, { patch: 2, engine: "e" }, { patch: 3, engine: "e" }] }] });
+
+  it("takes a removal other than the newest out, keeps the others, under its own label", async () => {
+    develop.editStack = /** @type {any} */ (three());
+    await handleRemoveDelete(2);
+    expect(getRemovals(develop.editStack).map((i) => i.patch)).toEqual([1, 3]);
+    expect(develop.flushEditStack).toHaveBeenCalledWith("Delete removal");
+    expect(regen).toHaveBeenCalledWith(10);
+  });
+
+  it("does nothing for a patch the stack does not name, or while a removal is running", async () => {
+    develop.editStack = /** @type {any} */ (three());
+    await handleRemoveDelete(9);
+    removal.phase = "running";
+    await handleRemoveDelete(1);
+    expect(getRemovals(develop.editStack).map((i) => i.patch)).toEqual([1, 2, 3]);
+    expect(develop.flushEditStack).not.toHaveBeenCalled();
   });
 });
 

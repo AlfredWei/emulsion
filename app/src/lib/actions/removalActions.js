@@ -257,8 +257,20 @@ async function writeRemovals(versionId, added) {
 export async function handleRemoveUndoLast() {
   const items = getRemovals(develop.editStack);
   if (items.length === 0 || removal.phase === "running") return;
-  develop.editStack = removeRemoval(develop.editStack, items[items.length - 1].patch);
+  await takeRemovalOut(items[items.length - 1].patch, "Undo remove");
+}
+
+/** Takes one listed removal out of the stack, whichever it is (its patch stays stored, so History can bring it back).
+ * @param {number} patch */
+export async function handleRemoveDelete(patch) {
+  if (removal.phase === "running" || !getRemovals(develop.editStack).some((i) => i.patch === patch)) return;
+  await takeRemovalOut(patch, "Delete removal");
+}
+
+/** @param {number} patch @param {string} label */
+async function takeRemovalOut(patch, label) {
+  develop.editStack = removeRemoval(develop.editStack, patch);
   removal.notice = "";
-  await develop.flushEditStack("Undo remove");
+  await develop.flushEditStack(label);
   regenerateThumbnailFor(develop.versionId);
 }

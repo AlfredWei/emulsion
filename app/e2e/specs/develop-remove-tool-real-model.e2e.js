@@ -140,6 +140,24 @@ describe("Develop: the Remove tool, with the model", function () {
     await waitFor(async () => (await canvasRemovals()).split(",").length === 1, "the canvas to follow");
   });
 
+  it("a listed removal other than the newest can be deleted; the canvas follows", async () => {
+    // One removal is left after Undo last: add a second, then delete the FIRST one by its chip.
+    const [first] = await stackRemovals();
+    await draw([[0.7, 0.7], [0.74, 0.7], [0.74, 0.75], [0.7, 0.75], [0.7, 0.71]]);
+    await waitFor(async () => (await text('[data-testid="remove-status"]')) === "1 mark", "the lasso mark");
+    await click('[data-testid="remove-run"]');
+    await waitFor(async () => (await stackRemovals()).length === 2, "the second patch in the stack", 180000);
+    const [, second] = await stackRemovals();
+    await waitFor(async () => (await exists('[data-testid="remove-delete"]')), "the removal chips to show");
+    await shot("3a-chips");
+    await click(`[data-testid="remove-delete"][data-patch="${first}"]`);
+    await waitFor(async () => (await stackRemovals()).join() === String(second), "only the newer removal to be left in the stack");
+    await waitFor(async () => (await canvasRemovals()) === String(second), "the canvas to carry only the newer one");
+    const labels = (await invoke("get_history", { versionId })).map((/** @type {any} */ r) => r.label);
+    expect(labels[labels.length - 1]).toBe("Delete removal");
+    expect(await exists('[data-testid="remove-delete"]')).toBe(false); // one left: no chips
+  });
+
   it("Select: a click takes the object under it, shows it, and Remove takes it out", async function () {
     if (!haveSegment) return this.skip();
     await click('[data-testid="remove-mode-select"]');

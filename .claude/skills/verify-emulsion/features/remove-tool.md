@@ -22,7 +22,7 @@ Preconditions: baseline from `README.md`; spec `develop-remove-tool.e2e.js`; the
 - **CPU fallback branch.** Observable result: button disabled, title contains `unavailable without GPU`, no layer. The spec returns early; `remove-no-model` and `remove-no-marks` are then **not exercised**.
 - **GPU branch.** Clicks the tool, expects the `not installed` message and the layer, dispatches pointer events on the layer, expects no marks and no run button; second test toggles off.
 - **Second view.** `catalog-view.txt` shows no `edit_history` row for a `remove` op. Optionally `get_edit_stack` through the spec shows no `remove` op.
-- **With the model.** `develop-remove-tool-real-model.e2e.js` does the real removal; it needs the downloaded model and is local-only. Not mapped here until a run on a machine with the model has been recorded.
+- **With the model.** `INPAINT_MODEL=<path>/lama_fp32.onnx drive.sh develop-remove-tool-real-model` (macOS, GPU; the spec copies the model into the throwaway HOME). Recorded 2026-11-06: 7 passing in 72 s (Select is skipped without `SEGMENT_MODELS_DIR`). Journey: paint a stroke, Remove, lasso a second removal, large-area question and Clear, Undo last, add another and delete the *first* by its `remove-delete` chip (`data-patch`), leave the tool. Observable results are `get_edit_stack`'s `remove` items, the canvas's `data-removals-source`, and `get_history`'s last label.
 
 ## Gotchas
 

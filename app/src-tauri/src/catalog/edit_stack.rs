@@ -110,18 +110,18 @@ impl Catalog {
     /// 1. Reads the version's CURRENT `edit_stack_json` (before the
     ///    write).
     /// 2. If `label` is given AND the new stack differs from the current
-    ///    one: finds the most recent `edit_history` row (by id DESC)
-    ///    whose OWN `edit_stack_json` matches the CURRENT (pre-write)
-    ///    stack -- that row is "where the undo/redo cursor currently
-    ///    sits". This project deliberately does NOT persist a separate
-    ///    position column (see the module-level design note this
-    ///    function's own PR description covers): the cursor is always
-    ///    re-derivable from content alone, since every write that ever
-    ///    changes the live stack either (a) came from this same function,
-    ///    which always records a matching history row, or (b) came from
-    ///    `restore_history_entry`/`restore_snapshot`, which set the live
-    ///    stack to content that ALREADY has a matching row. If no match
-    ///    is found (the very first edit ever for this version), the
+    ///    one: finds "where the undo/redo cursor currently sits" -- the
+    ///    `edit_history` row stored in `image_versions.history_cursor`
+    ///    (set by this function to the row it inserts, and by
+    ///    `restore_history_entry` to the row jumped to). Content alone
+    ///    cannot say: once an edit returns to content an earlier row holds,
+    ///    two rows are equal and "the newest equal row" picks the wrong one
+    ///    after a jump back, leaving abandoned rows in the list. The stored
+    ///    cursor is trusted only while its row still holds exactly the live
+    ///    stack; otherwise (a catalog from before the column, or a stack
+    ///    written outside this path) the cursor is derived from content,
+    ///    the newest row with equal JSON (`history_cursor`). If no row is
+    ///    found (the very first edit ever for this version), the
     ///    cursor is treated as "before all history" -- nothing to delete,
     ///    and the pre-write stack is recorded first as an `ORIGINAL_LABEL`
     ///    row (the thing the first edit's undo goes back to).
@@ -173,6 +173,7 @@ impl Catalog {
         label: Option<&str>,
     ) -> Result<()> {
         let new_json = serde_json::to_string(stack).expect("EditStack is always serializable");
+        let mut new_cursor: Option<i64> = None;
 
         if let Some(label) = label {
             let current_json: String = tx.query_row(
@@ -181,13 +182,7 @@ impl Catalog {
                 |row| row.get(0),
             )?;
             if new_json != current_json {
-                let cursor_id: Option<i64> = tx
-                    .query_row(
-                        "SELECT id FROM edit_history WHERE version_id = ?1 AND edit_stack_json = ?2 ORDER BY id DESC LIMIT 1",
-                        params![version_id, current_json],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
+                let cursor_id = Self::history_cursor(tx, version_id, &current_json)?;
                 tx.execute(
                     "DELETE FROM edit_history WHERE version_id = ?1 AND id > ?2",
                     params![version_id, cursor_id.unwrap_or(0)],
@@ -205,6 +200,7 @@ impl Catalog {
                     "INSERT INTO edit_history (version_id, edit_stack_json, label) VALUES (?1, ?2, ?3)",
                     params![version_id, new_json, label],
                 )?;
+                new_cursor = Some(tx.last_insert_rowid());
                 tx.execute(
                     "DELETE FROM edit_history WHERE version_id = ?1 AND id NOT IN (
                         SELECT id FROM edit_history WHERE version_id = ?1 ORDER BY id DESC LIMIT ?2
@@ -214,11 +210,39 @@ impl Catalog {
             }
         }
 
+        // A recorded edit leaves the cursor on its own row. A write with no new row keeps the cursor
+        // where it was (it is checked against the live content when next read).
         tx.execute(
-            "UPDATE image_versions SET edit_stack_json = ?2, updated_at = datetime('now') WHERE id = ?1",
-            params![version_id, new_json],
+            "UPDATE image_versions SET edit_stack_json = ?2, history_cursor = COALESCE(?3, history_cursor),
+                 updated_at = datetime('now') WHERE id = ?1",
+            params![version_id, new_json, new_cursor],
         )?;
         Ok(())
+    }
+
+    /// The `edit_history` row the live stack (`current_json`) sits on, or `None` when it sits on none
+    /// (a version with no history yet). The stored cursor wins when its row still holds exactly the live
+    /// content; only otherwise (a catalog from before the cursor was stored, or a stack written outside
+    /// the history path) is it derived from content, the newest row with equal JSON. Content alone is
+    /// ambiguous once an edit returns to content an earlier row holds, which is why it is stored.
+    fn history_cursor(tx: &rusqlite::Transaction<'_>, version_id: i64, current_json: &str) -> Result<Option<i64>> {
+        let stored: Option<i64> = tx
+            .query_row(
+                "SELECT h.id FROM image_versions v JOIN edit_history h ON h.id = v.history_cursor
+                 WHERE v.id = ?1 AND h.version_id = ?1 AND h.edit_stack_json = ?2",
+                params![version_id, current_json],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if stored.is_some() {
+            return Ok(stored);
+        }
+        tx.query_row(
+            "SELECT id FROM edit_history WHERE version_id = ?1 AND edit_stack_json = ?2 ORDER BY id DESC LIMIT 1",
+            params![version_id, current_json],
+            |row| row.get(0),
+        )
+        .optional()
     }
 
     /// Auto Sync (RFC-0028 §3.5): writes the same op values into several versions in ONE transaction. For
@@ -284,9 +308,9 @@ impl Catalog {
     /// entry, decided by the caller) and click-to-jump-to-any-point in
     /// the History panel; they're the same operation. Deliberately does
     /// NOT insert a new history row for the restore itself (moving the
-    /// cursor isn't a new edit) -- see `record_edit_stack`'s own doc
-    /// comment for why a later genuine edit still truncates/re-anchors
-    /// correctly from here regardless.
+    /// cursor isn't a new edit) -- it does move the stored cursor to the
+    /// restored row, which is what lets a later genuine edit truncate the
+    /// right rows (see `record_edit_stack`).
     pub fn restore_history_entry(&self, version_id: i64, history_id: i64) -> Result<EditStack> {
         let json: String = self.conn.query_row(
             "SELECT edit_stack_json FROM edit_history WHERE id = ?1 AND version_id = ?2",
@@ -294,8 +318,8 @@ impl Catalog {
             |row| row.get(0),
         )?;
         self.conn.execute(
-            "UPDATE image_versions SET edit_stack_json = ?2, updated_at = datetime('now') WHERE id = ?1",
-            params![version_id, json],
+            "UPDATE image_versions SET edit_stack_json = ?2, history_cursor = ?3, updated_at = datetime('now') WHERE id = ?1",
+            params![version_id, json, history_id],
         )?;
         Ok(serde_json::from_str(&json).expect("stored edit stacks are always valid JSON"))
     }
@@ -481,6 +505,37 @@ mod tests {
         let history = catalog.record_edit_stack(version_id, &stack_with("contrast", 5.0), Some("Contrast")).unwrap();
 
         assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "Exposure 1", "Contrast"]);
+    }
+
+    #[test]
+    fn an_edit_that_returns_to_earlier_content_does_not_keep_the_rows_after_a_jump_back() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog.add_image("/a.CR3").unwrap();
+        let version_id = catalog.add_edit_stack(image_id, &EditStack::empty()).unwrap();
+
+        // Edit to A, edit back to the starting content, jump to Original, edit to A again.
+        catalog.record_edit_stack(version_id, &stack_with("exposure", 1.0), Some("A")).unwrap();
+        let history = catalog.record_edit_stack(version_id, &EditStack::empty(), Some("Back")).unwrap();
+        catalog.restore_history_entry(version_id, history[0].id).unwrap();
+        let history = catalog.record_edit_stack(version_id, &stack_with("exposure", 1.0), Some("A again")).unwrap();
+
+        assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "A again"]);
+    }
+
+    #[test]
+    fn a_catalog_with_no_stored_cursor_falls_back_to_the_content_match() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let image_id = catalog.add_image("/a.CR3").unwrap();
+        let version_id = catalog.add_edit_stack(image_id, &EditStack::empty()).unwrap();
+        catalog.record_edit_stack(version_id, &stack_with("exposure", 0.1), Some("One")).unwrap();
+        let history = catalog.record_edit_stack(version_id, &stack_with("exposure", 0.2), Some("Two")).unwrap();
+        catalog.restore_history_entry(version_id, history[1].id).unwrap();
+        // A catalog from before the cursor was stored.
+        catalog.conn.execute("UPDATE image_versions SET history_cursor = NULL WHERE id = ?1", params![version_id]).unwrap();
+
+        let history = catalog.record_edit_stack(version_id, &stack_with("contrast", 5.0), Some("Three")).unwrap();
+
+        assert_eq!(history.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(), vec![ORIGINAL_LABEL, "One", "Three"]);
     }
 
     #[test]

@@ -15,7 +15,7 @@ description: Bounded exhaustive check that Emulsion's Develop undo/redo history 
 
 Exhaustive enumeration of operation sequences against the **real** `Catalog` (in-memory SQLite), compared after every call with a 15-line reference model that keeps an explicit cursor. No TLA+/Kani/etc.: the logic is SQL inside one Rust function, no verifier runs on rusqlite-backed code, and the repo's own toolchain (`cargo`) is all that is needed. Nothing to install.
 
-The code under check keeps **no stored cursor**. `write_edit_stack` re-derives it by finding the *newest* history row whose JSON equals the live stack. That is correct only when no two rows hold equal content, which is exactly what the two checks separate.
+The cursor is stored (`image_versions.history_cursor`, set by `write_edit_stack` and `restore_history_entry`). It used to be re-derived by finding the *newest* history row whose JSON equals the live stack, which is correct only when no two rows hold equal content; that is what the two checks separate. The content match remains only as the fallback for a catalog with no stored cursor.
 
 ## Run it
 
@@ -23,14 +23,14 @@ The code under check keeps **no stored cursor**. `write_edit_stack` re-derives i
 .claude/skills/verify-edit-history/run.sh
 ```
 
-About 20 s (first build adds ~15 s). Exit 0 means both checks pass. The checks live in `app/src-tauri/src/catalog/edit_history_check.rs` (`#[cfg(test)]`, `#[ignore]`d so `make test` is untouched).
+About 2.5 min (first build adds ~15 s). Exit 0 means both checks pass. The checks live in `app/src-tauri/src/catalog/edit_history_check.rs` (`#[cfg(test)]`, `#[ignore]`d so `make test` stays fast; a depth-5 run of the revisiting check is not ignored and runs in `make test`).
 
 | Check | Alphabet | Bound | Result at sync commit |
 |---|---|---|---|
 | `history_is_linear_when_every_edit_is_new_content` | each `record_edit_stack` writes content never seen before; `restore_history_entry(k)` for any existing row `k` | every sequence of up to 8 calls (14,721 sequences) | **passes** |
-| `history_is_linear_when_edits_may_revisit_earlier_content` | `record_edit_stack` may write any of 3 contents, including ones an earlier row already holds | every sequence of up to 8 calls; stops at first (shortest) counterexample | **FAILS: open finding** |
+| `history_is_linear_when_edits_may_revisit_earlier_content` | `record_edit_stack` may write any of 3 contents, including ones an earlier row already holds | every sequence of up to 7 calls (108,903 sequences; an 8-call bound is hours); stops at first (shortest) counterexample | **passes** (failed before the cursor was stored) |
 
-## Finding (current code, not fixed; product code was not changed)
+## Finding (FIXED: the cursor is now stored; kept as the regression story)
 
 Shortest counterexample, in the code's words (content `0` = the photo's starting stack, `1` = e.g. Exposure +1):
 
@@ -48,7 +48,9 @@ Not verified: that the Svelte UI can reach step 3 then 4 with exactly this conte
 ## Able to fail (shown on broken variants of `write_edit_stack`, then reverted)
 
 - Delete the `DELETE FROM edit_history ... id > cursor` statement: **both** checks fail (`[Record(1), Restore(0), Record(3)]` leaves `[0,1,3]`).
-- Change the cursor lookup `ORDER BY id DESC LIMIT 1` to `ASC`: the revisiting check fails the other way (`[Record(1), Record(0), Record(1)]` leaves `[0,1]`: the cursor matched the oldest row, so the just-made edit was truncated away); the fresh-content check still passes.
+- (Before the cursor was stored.) Change the cursor lookup `ORDER BY id DESC LIMIT 1` to `ASC`: the revisiting check fails the other way (`[Record(1), Record(0), Record(1)]` leaves `[0,1]`: the cursor matched the oldest row, so the just-made edit was truncated away); the fresh-content check still passes.
+
+- After the fix: stop `restore_history_entry` from storing the cursor (scratch break): `an_edit_that_returns_to_earlier_content_does_not_keep_the_rows_after_a_jump_back` fails.
 
 ## Scope: what a pass covers and does not
 

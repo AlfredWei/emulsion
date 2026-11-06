@@ -151,6 +151,8 @@ fn check_up_to(max_depth: usize, record_alphabet: &dyn Fn(usize) -> Vec<usize>) 
 }
 
 const MAX_DEPTH: usize = 8;
+/// The 3-content alphabet branches far more than the fresh-content one (~8 choices per step), so its bound is lower.
+const REVISIT_DEPTH: usize = 7;
 
 /// Every edit writes content never seen before in this history. Expected to PASS: the cursor lookup
 /// by JSON is unambiguous when no two rows hold equal content.
@@ -166,13 +168,24 @@ fn history_is_linear_when_every_edit_is_new_content() {
 }
 
 /// Edits may return to content an earlier row already holds (slider moved and put back; undo then
-/// edit back). Currently FAILS: see the counterexample in the skill's Findings section.
-#[test]
-#[ignore = "run via .claude/skills/verify-edit-history/run.sh"]
-fn history_is_linear_when_edits_may_revisit_earlier_content() {
-    let (visited, hit) = check_up_to(MAX_DEPTH, &|_| vec![0, 1, 2]);
-    eprintln!("revisiting alphabet: {visited} sequences of up to {MAX_DEPTH} calls checked");
+/// edit back). Failed while the cursor was re-derived from content (see the skill's Findings section);
+/// passes now that it is stored.
+fn revisiting_content_is_linear(max_depth: usize) {
+    let (visited, hit) = check_up_to(max_depth, &|_| vec![0, 1, 2]);
+    eprintln!("revisiting alphabet: {visited} sequences of up to {max_depth} calls checked");
     if let Some((ops, why)) = hit {
         panic!("history is not linear.\n  sequence: {ops:?}\n  {why}");
     }
+}
+
+/// Depth 5 runs in `make test` (the old counterexample needs 4 calls); `REVISIT_DEPTH` is the exhaustive run below.
+#[test]
+fn history_is_linear_when_edits_may_revisit_earlier_content_shallow() {
+    revisiting_content_is_linear(5);
+}
+
+#[test]
+#[ignore = "run via .claude/skills/verify-edit-history/run.sh"]
+fn history_is_linear_when_edits_may_revisit_earlier_content() {
+    revisiting_content_is_linear(REVISIT_DEPTH);
 }

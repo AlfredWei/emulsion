@@ -57,6 +57,9 @@ impl Catalog {
                 color_label TEXT NOT NULL DEFAULT 'none'
                     CHECK (color_label IN ('none','red','yellow','green','blue','purple')),
                 caption TEXT,
+                -- The edit_history row the live stack sits on (the undo/redo cursor). NULL = not recorded: the
+                -- cursor is then derived from content (see `write_edit_stack`).
+                history_cursor INTEGER,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -433,6 +436,7 @@ impl Catalog {
             "ALTER TABLE images ADD COLUMN copyright TEXT",
             "ALTER TABLE images ADD COLUMN contact TEXT",
             "ALTER TABLE image_versions ADD COLUMN caption TEXT",
+            "ALTER TABLE image_versions ADD COLUMN history_cursor INTEGER",
             "ALTER TABLE images ADD COLUMN import_batch INTEGER",
             // M5 Slice 6 (face detection wiring): a real gap found while
             // implementing `reassign_face`'s "not a face" action

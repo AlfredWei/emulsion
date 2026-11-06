@@ -3,6 +3,10 @@
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
 
+## M7 object removal, slice E5 step 1: each patch keeps its hole (2026-11-07, `feature/removal-stored-mask`)
+
+`removal_patches` gains `mask_x / mask_y / mask_png`; `remove_object` stores the hole each patch filled (a 1-channel PNG of the separate thing's bounding box); new commands `regenerate_removal` (redo from the stored hole as a new patch, the old row stays for History) and `removals_with_mask` (RFC-0032 §17, the stored-mask proposal). **Verified:** `cargo test --lib`; **real model and helper: a redo from the stored hole is byte-identical to the first run** on this machine (two patches). **Not verified:** hole size on real removals, a redo on another provider or model version, the commands from the running app. **Next:** step 2, a *Try again* action on E3's chips (shown only for removals with a hole, and only meaningful after a model or provider change); step 3, *Heal instead* for a finished removal (the hole sampled into dabs, which also lets E4 take a selected object).
+
 ## M7 object removal, slice E4: Heal instead (2026-11-07, `feature/remove-heal-instead`)
 
 **Heal instead** beside **Remove** turns pending Brush / Lasso marks into one Spot Removal (heal) mask instead of running the model: dabs along a stroke, a dab grid plus outline for a lasso (at most 600), the source beside the area on the first side with room; the mask is selected and the tool left, History row "Heal instead" (RFC-0032 §16). A selected object is refused with a toast. **Verified:** vitest 1241, svelte-check; real app (`develop-remove-tool-real-model`, 8 passing; the first two attempts hit the macOS webview stall in `before all`, the third passed). **Not verified:** how the heal looks (black canvas in screenshots) or whether the automatic source is good on a real photograph, a real mouse, Windows. **Not yet:** healing a finished removal and "needs regenerating" (both need the mask stored in the item), Heal for a selected object.

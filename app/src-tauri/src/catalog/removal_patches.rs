@@ -18,14 +18,53 @@ pub struct StoredPatch {
     pub png: Vec<u8>,
 }
 
+/// The hole a patch filled: a 1-channel PNG of the separate thing's bounding box (255 = removed) whose top-left corner is
+/// (`x`, `y`) in the patch's full decode. What a redo needs; it is read only then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredMask {
+    pub x: u32,
+    pub y: u32,
+    pub png: Vec<u8>,
+}
+
 impl Catalog {
     /// Stores a patch for `version_id` and returns its id (the `id` of `patch` is ignored).
+    #[allow(dead_code)] // the job stores the hole with it (`add_removal_patch_with_mask`); kept for tests and callers without one
     pub fn add_removal_patch(&self, version_id: i64, patch: &StoredPatch) -> Result<i64> {
+        self.add_removal_patch_with_mask(version_id, patch, None)
+    }
+
+    /// `add_removal_patch`, with the hole the patch filled (None for a patch whose hole is not known).
+    pub fn add_removal_patch_with_mask(&self, version_id: i64, patch: &StoredPatch, mask: Option<&StoredMask>) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO removal_patches (version_id, x, y, w, h, src_w, src_h, engine, png) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![version_id, patch.x, patch.y, patch.w, patch.h, patch.src_w, patch.src_h, patch.engine, patch.png],
+            "INSERT INTO removal_patches (version_id, x, y, w, h, src_w, src_h, engine, png, mask_x, mask_y, mask_png) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![version_id, patch.x, patch.y, patch.w, patch.h, patch.src_w, patch.src_h, patch.engine, patch.png, mask.map(|m| m.x), mask.map(|m| m.y), mask.map(|m| m.png.as_slice())],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// The hole of patch `id` of `version_id`; None when the patch is unknown, belongs to another photograph, or was made
+    /// before the hole was kept.
+    pub fn get_removal_mask(&self, version_id: i64, id: i64) -> Result<Option<StoredMask>> {
+        self.conn
+            .query_row(
+                "SELECT mask_x, mask_y, mask_png FROM removal_patches WHERE id = ?1 AND version_id = ?2 AND mask_png IS NOT NULL",
+                params![id, version_id],
+                |r| Ok(StoredMask { x: r.get(0)?, y: r.get(1)?, png: r.get(2)? }),
+            )
+            .optional()
+    }
+
+    /// Which of `ids` (patches of `version_id`) have a stored hole: the ones that can be redone.
+    pub fn removals_with_mask(&self, version_id: i64, ids: &[i64]) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare("SELECT 1 FROM removal_patches WHERE id = ?1 AND version_id = ?2 AND mask_png IS NOT NULL")?;
+        let mut out = Vec::new();
+        for &id in ids {
+            if stmt.exists(params![id, version_id])? {
+                out.push(id);
+            }
+        }
+        Ok(out)
     }
 
     /// The patches named by `ids` that belong to `version_id`, in the order of `ids`; an id that is unknown (or belongs
@@ -104,6 +143,23 @@ mod tests {
         catalog.remove_images(&[image]).unwrap();
         let left: i64 = catalog.conn.query_row("SELECT count(*) FROM removal_patches", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 0, "the cascade took the rest");
+    }
+
+    #[test]
+    fn a_stored_hole_comes_back_with_its_patch_and_only_to_its_own_photograph() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let (i1, i2) = (catalog.add_image("/a.jpg").unwrap(), catalog.add_image("/b.jpg").unwrap());
+        let (v1, v2) = (catalog.add_edit_stack(i1, &EditStack::empty()).unwrap(), catalog.add_edit_stack(i2, &EditStack::empty()).unwrap());
+        let hole = StoredMask { x: 12, y: 34, png: vec![9; 7] };
+        let with = catalog.add_removal_patch_with_mask(v1, &patch(1), Some(&hole)).unwrap();
+        let without = catalog.add_removal_patch(v1, &patch(2)).unwrap();
+        assert_eq!(catalog.get_removal_mask(v1, with).unwrap(), Some(hole));
+        assert_eq!(catalog.get_removal_mask(v1, without).unwrap(), None, "made before the hole was kept");
+        assert_eq!(catalog.get_removal_mask(v2, with).unwrap(), None, "another photograph's");
+        assert_eq!(catalog.get_removal_mask(v1, 9999).unwrap(), None);
+        assert_eq!(catalog.removals_with_mask(v1, &[without, with, 9999]).unwrap(), vec![with]);
+        // The patch itself is unchanged by carrying a hole.
+        assert_eq!(catalog.get_removal_patches(v1, &[with]).unwrap()[0], StoredPatch { id: with, ..patch(1) });
     }
 
     #[test]

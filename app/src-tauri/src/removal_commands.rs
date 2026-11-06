@@ -5,7 +5,8 @@
 use crate::ai::protocol::{InpaintResult, Request};
 use crate::ai::inpaint_pipeline::plan_window;
 use crate::ai::supervisor::AiHelper;
-use crate::catalog::StoredPatch;
+use crate::ai::protocol::Region;
+use crate::catalog::{StoredMask, StoredPatch};
 use crate::inpaint_models::{self, ENGINE};
 use crate::preview_cache::{self, DevelopPreviewInfo};
 use crate::removal::{mask_clusters, rasterise_mask, MaskShape};
@@ -45,6 +46,8 @@ pub struct RemoveResult {
 #[derive(Debug)]
 pub struct Removed {
     pub patch: StoredPatch,
+    /// The hole this patch filled, kept with it so the removal can be redone.
+    pub hole: StoredMask,
     pub reduced: bool,
     pub ms: u64,
 }
@@ -86,35 +89,84 @@ pub fn run_removal(
         // The helper plans its own window from the picture it is given; giving it exactly the window makes that plan the
         // whole picture, and the 24 MP decode never has to be written out.
         let window = plan_window(bbox, src_w, src_h);
-        let crop = image::imageops::crop_imm(&image, window.x, window.y, window.w, window.h).to_image();
         let crop_mask = image::imageops::crop_imm(&mask, window.x, window.y, window.w, window.h).to_image();
-        let (image_path, mask_path, out_path) = (work.join(format!("removal-{id}-{n}-image.png")), work.join(format!("removal-{id}-{n}-mask.png")), work.join(format!("removal-{id}-{n}-patch.png")));
-        let result = (|| {
-            crop.save(&image_path).map_err(|e| format!("could not write {}: {e}", image_path.display()))?;
-            crop_mask.save(&mask_path).map_err(|e| format!("could not write {}: {e}", mask_path.display()))?;
-            let v = helper
-                .request_with_id(
-                    id,
-                    Request::InpaintRun { model: model.to_path_buf(), image_path: image_path.clone(), mask_path: mask_path.clone(), out_path: out_path.clone() },
-                    SILENCE_TIMEOUT,
-                    |_| {},
-                )
-                .map_err(|e| e.to_string())?;
-            let r: InpaintResult = serde_json::from_value(v).map_err(|e| e.to_string())?;
-            let png = std::fs::read(&out_path).map_err(|e| format!("could not read the patch: {e}"))?;
-            Ok::<_, String>(Removed {
-                // The helper saw the window as its whole picture, so its coordinates are relative to the window.
-                patch: StoredPatch { id: 0, x: window.x + r.x, y: window.y + r.y, w: r.width, h: r.height, src_w, src_h, engine: ENGINE.to_string(), png },
-                reduced: r.reduced,
-                ms: r.ms,
-            })
-        })();
-        for p in [&image_path, &mask_path, &out_path] {
-            let _ = std::fs::remove_file(p);
-        }
-        out.push(result?);
+        // The hole is kept as the thing's own bounding box: the window holds no other marked thing (`mask_clusters`
+        // merges any that fall inside each other's window), so the box is all a redo needs to rebuild the window's mask.
+        let hole = image::imageops::crop_imm(&mask, bbox.x, bbox.y, bbox.w, bbox.h).to_image();
+        out.push(fill_window(helper, id, model, &image, window, crop_mask, hole_png(&hole, bbox)?, n, work)?);
     }
     Ok(out)
+}
+
+/// The stored form of a hole: the bounding-box crop of the mask as a PNG, with the box's corner.
+fn hole_png(hole: &image::GrayImage, bbox: Region) -> Result<StoredMask, String> {
+    let mut png = Vec::new();
+    hole.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| format!("could not encode the hole: {e}"))?;
+    Ok(StoredMask { x: bbox.x, y: bbox.y, png })
+}
+
+/// Fills one window: `crop_mask` (255 = remove) over the same window of `image`, through the helper. `n` only names the
+/// work files, which are removed whatever happens.
+#[allow(clippy::too_many_arguments)]
+fn fill_window(
+    helper: &AiHelper,
+    id: u64,
+    model: &Path,
+    image: &image::RgbImage,
+    window: Region,
+    crop_mask: image::GrayImage,
+    hole: StoredMask,
+    n: usize,
+    work: &Path,
+) -> Result<Removed, String> {
+    let (src_w, src_h) = image.dimensions();
+    let crop = image::imageops::crop_imm(image, window.x, window.y, window.w, window.h).to_image();
+    let (image_path, mask_path, out_path) = (work.join(format!("removal-{id}-{n}-image.png")), work.join(format!("removal-{id}-{n}-mask.png")), work.join(format!("removal-{id}-{n}-patch.png")));
+    let result = (|| {
+        crop.save(&image_path).map_err(|e| format!("could not write {}: {e}", image_path.display()))?;
+        crop_mask.save(&mask_path).map_err(|e| format!("could not write {}: {e}", mask_path.display()))?;
+        let v = helper
+            .request_with_id(
+                id,
+                Request::InpaintRun { model: model.to_path_buf(), image_path: image_path.clone(), mask_path: mask_path.clone(), out_path: out_path.clone() },
+                SILENCE_TIMEOUT,
+                |_| {},
+            )
+            .map_err(|e| e.to_string())?;
+        let r: InpaintResult = serde_json::from_value(v).map_err(|e| e.to_string())?;
+        let png = std::fs::read(&out_path).map_err(|e| format!("could not read the patch: {e}"))?;
+        Ok::<_, String>(Removed {
+            // The helper saw the window as its whole picture, so its coordinates are relative to the window.
+            patch: StoredPatch { id: 0, x: window.x + r.x, y: window.y + r.y, w: r.width, h: r.height, src_w, src_h, engine: ENGINE.to_string(), png },
+            hole,
+            reduced: r.reduced,
+            ms: r.ms,
+        })
+    })();
+    for p in [&image_path, &mask_path, &out_path] {
+        let _ = std::fs::remove_file(p);
+    }
+    result
+}
+
+/// Runs a stored hole again on the photograph at `source`: the window the first run used (planned from the hole's box),
+/// the hole placed in it, one pass of the model. Fails when the photograph no longer has the size the hole was made on.
+pub fn redo_removal(helper: &AiHelper, id: u64, model: &Path, source: &Path, hole: &StoredMask, src_size: (u32, u32), work: &Path) -> Result<Removed, String> {
+    let stored = image::load_from_memory_with_format(&hole.png, image::ImageFormat::Png).map_err(|e| format!("the stored hole cannot be read: {e}"))?.to_luma8();
+    let decoded = source_decode::decode_preview(source).map_err(|e| e.to_string())?;
+    if (decoded.width, decoded.height) != src_size {
+        return Err(format!(
+            "the photograph is {}x{} now and the removal was made on {}x{}: it no longer fits",
+            decoded.width, decoded.height, src_size.0, src_size.1
+        ));
+    }
+    let image = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb).ok_or_else(|| "decoded image has the wrong size".to_string())?;
+    let bbox = Region { x: hole.x, y: hole.y, w: stored.width(), h: stored.height() };
+    let window = plan_window(bbox, decoded.width, decoded.height);
+    let mut crop_mask = image::GrayImage::new(window.w, window.h);
+    image::imageops::replace(&mut crop_mask, &stored, i64::from(hole.x) - i64::from(window.x), i64::from(hole.y) - i64::from(window.y));
+    std::fs::create_dir_all(work).map_err(|e| format!("could not create {}: {e}", work.display()))?;
+    fill_window(helper, id, model, &image, window, crop_mask, hole.clone(), 0, work)
 }
 
 /// Removes what `shapes` mark (normalised to the photograph) from the photograph of `version_id`: runs the model once
@@ -153,7 +205,7 @@ pub async fn remove_object(
         removed
             .into_iter()
             .map(|r| {
-                let patch_id = catalog.add_removal_patch(version_id, &r.patch).map_err(|e| e.to_string())?;
+                let patch_id = catalog.add_removal_patch_with_mask(version_id, &r.patch, Some(&r.hole)).map_err(|e| e.to_string())?;
                 let p = r.patch;
                 Ok(RemoveResult { patch_id, engine: ENGINE, x: p.x, y: p.y, w: p.w, h: p.h, src_w: p.src_w, src_h: p.src_h, reduced: r.reduced, ms: r.ms })
             })
@@ -162,6 +214,56 @@ pub async fn remove_object(
     .await;
     RUNNING_JOB.store(0, Ordering::SeqCst);
     result.map_err(|e| e.to_string())?
+}
+
+/// Runs removal `patch_id` of `version_id` again from the hole stored with it, and stores the result as a **new** patch
+/// (the old row stays: History can bring the old result back). The caller swaps the item in the `remove` op.
+///
+/// Fails with `a removal is already running`, `the removal model is not installed`, `this removal has no stored hole`
+/// (made before holes were kept), `... no longer fits` (the photograph changed size), `removal cancelled`, or the helper's
+/// own error.
+#[tauri::command]
+pub async fn regenerate_removal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    helper: State<'_, Arc<AiHelper>>,
+    version_id: i64,
+    patch_id: i64,
+) -> Result<RemoveResult, String> {
+    let root = resolve_cache_root(&app, &state.catalog)?;
+    let models = root.join("inpaint_models");
+    let work = root.join("removal_work");
+    let (source, hole, src_size) = {
+        let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+        let hole = catalog.get_removal_mask(version_id, patch_id).map_err(|e| e.to_string())?.ok_or_else(|| "this removal has no stored hole".to_string())?;
+        let old = catalog.get_removal_patches(version_id, &[patch_id]).map_err(|e| e.to_string())?.into_iter().next().ok_or_else(|| "this removal is unknown".to_string())?;
+        (catalog.get_version_source(version_id).map_err(|e| e.to_string())?.path, hole, (old.src_w, old.src_h))
+    };
+    let catalog = state.catalog.clone();
+    let helper = helper.inner().clone();
+    let id = helper.reserve_id();
+    if RUNNING_JOB.compare_exchange(0, id, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return Err("a removal is already running".to_string());
+    }
+    CANCELLED.store(false, Ordering::SeqCst);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::bundled_models::seed_from_app(&app, &models, &crate::bundled_models::INPAINT);
+        let model = inpaint_models::ready_path(&models).ok_or_else(|| "the removal model is not installed".to_string())?;
+        let r = redo_removal(&helper, id, &model, Path::new(&source), &hole, src_size, &work)?;
+        let catalog = catalog.lock().map_err(|e| e.to_string())?;
+        let patch_id = catalog.add_removal_patch_with_mask(version_id, &r.patch, Some(&r.hole)).map_err(|e| e.to_string())?;
+        let p = r.patch;
+        Ok(RemoveResult { patch_id, engine: ENGINE, x: p.x, y: p.y, w: p.w, h: p.h, src_w: p.src_w, src_h: p.src_h, reduced: r.reduced, ms: r.ms })
+    })
+    .await;
+    RUNNING_JOB.store(0, Ordering::SeqCst);
+    result.map_err(|e| e.to_string())?
+}
+
+/// Which of `patch_ids` (removals of `version_id`) can be redone, that is have a stored hole.
+#[tauri::command]
+pub async fn removals_with_mask(state: State<'_, AppState>, version_id: i64, patch_ids: Vec<i64>) -> Result<Vec<i64>, String> {
+    state.catalog.lock().map_err(|e| e.to_string())?.removals_with_mask(version_id, &patch_ids).map_err(|e| e.to_string())
 }
 
 /// Stops the running removal at its next step boundary (a single network pass cannot be interrupted, so the one running
@@ -254,6 +356,17 @@ mod tests {
         let decoded = source_decode::decode_preview(&photo).unwrap();
         let before = image::RgbImage::from_raw(decoded.width, decoded.height, decoded.rgb).unwrap();
         let mut after = before.clone();
+        // A redo from the stored hole is the same job: the same patch, byte for byte, on this machine (RFC-0032 §10 measured
+        // the engine; this is the path that reuses a stored hole).
+        let again = removed
+            .iter()
+            .map(|r| redo_removal(&helper, helper.reserve_id(), &model, &photo, &r.hole, (r.patch.src_w, r.patch.src_h), &work).unwrap())
+            .collect::<Vec<_>>();
+        for (first, second) in removed.iter().zip(&again) {
+            assert_eq!((first.patch.x, first.patch.y, first.patch.w, first.patch.h), (second.patch.x, second.patch.y, second.patch.w, second.patch.h), "same place");
+            assert_eq!(first.patch.png, second.patch.png, "the redo is the same picture");
+            assert_eq!(first.hole, second.hole);
+        }
         let patches: Vec<StoredPatch> = removed.into_iter().map(|r| r.patch).collect();
         assert_eq!(crate::removal::apply_removals(&mut after, &patches), 2);
         assert_ne!(before.as_raw(), after.as_raw());

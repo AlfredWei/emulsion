@@ -344,6 +344,12 @@ impl Catalog {
                 src_h INTEGER NOT NULL,
                 engine TEXT NOT NULL,
                 png BLOB NOT NULL,
+                -- The hole this patch filled (RFC-0032 appendix stored-mask.md): a 1-channel PNG of the separate thing's
+                -- bounding box, 255 = removed, whose top-left corner is (mask_x, mask_y) in the same full decode. NULL for
+                -- a patch made before it was kept: it cannot be redone.
+                mask_x INTEGER,
+                mask_y INTEGER,
+                mask_png BLOB,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_removal_patches_version ON removal_patches(version_id);
@@ -437,6 +443,9 @@ impl Catalog {
             "ALTER TABLE images ADD COLUMN contact TEXT",
             "ALTER TABLE image_versions ADD COLUMN caption TEXT",
             "ALTER TABLE image_versions ADD COLUMN history_cursor INTEGER",
+            "ALTER TABLE removal_patches ADD COLUMN mask_x INTEGER",
+            "ALTER TABLE removal_patches ADD COLUMN mask_y INTEGER",
+            "ALTER TABLE removal_patches ADD COLUMN mask_png BLOB",
             "ALTER TABLE images ADD COLUMN import_batch INTEGER",
             // M5 Slice 6 (face detection wiring): a real gap found while
             // implementing `reassign_face`'s "not a face" action

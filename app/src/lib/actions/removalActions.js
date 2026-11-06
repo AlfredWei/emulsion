@@ -10,7 +10,8 @@ import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
 import { removalAvailable, removeObject, removalCancel, isRemovalCancelled } from "$lib/api/removal.js";
 import { segmentModelStatus, segmentPrepare, segmentDecode, segmentRelease, isNotPrepared } from "$lib/api/segment.js";
 import { readCut } from "$lib/segmentCut.js";
-import { addRemovals, getEditStack, getRemovals, removeRemoval, setEditStack } from "$lib/api/develop.js";
+import { addRemovals, getEditStack, getRemovals, removeRemoval, setEditStack, addMask, createSpotMask, listMasks, countBrushLayers, MAX_MASKS } from "$lib/api/develop.js";
+import { planHeal } from "$lib/healFromMarks.js";
 
 /** @param {unknown} e */
 function message(e) {
@@ -206,6 +207,28 @@ export function handleRemoveClear() {
 /** Stops the running job; nothing is stored. */
 export function handleRemoveCancel() {
   if (removal.phase === "running") void removalCancel();
+}
+
+/** "Heal instead": the pending Brush / Lasso marks become a Spot Removal (heal) mask, the manual tool, instead of going to
+ * the model. The mask is selected for the user to adjust its source and softness; the marks are dropped and the tool is left. */
+export function handleRemoveHealInstead() {
+  if (develop.versionId === null || removal.phase === "running" || removal.count === 0) return;
+  const aspect = develop.imageNativeWidth && develop.imageNativeHeight ? develop.imageNativeWidth / develop.imageNativeHeight : 1;
+  const plan = planHeal(removal.allShapes(), aspect);
+  if ("reason" in plan) {
+    shell.notify(plan.reason);
+    return;
+  }
+  if (listMasks(develop.editStack).length >= MAX_MASKS || countBrushLayers(develop.editStack) >= MAX_MASKS) {
+    shell.notify(`Maximum ${MAX_MASKS} masks reached: delete one to heal this area`);
+    return;
+  }
+  const mask = { ...createSpotMask(plan.dabs[0]), dabs: plan.dabs, sourceOffset: plan.sourceOffset };
+  develop.editStack = addMask(develop.editStack, mask);
+  leaveRemoveTool();
+  masks.selectedMaskId = mask.id;
+  develop.scheduleFlush("Heal instead");
+  shell.notify("Healing with Spot Removal: adjust the source or the softness in the mask panel");
 }
 
 /** Runs the removal on the marks. Large marks ask once first (`confirmLarge` is the second press). */

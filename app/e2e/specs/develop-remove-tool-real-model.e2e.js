@@ -189,4 +189,29 @@ describe("Develop: the Remove tool, with the model", function () {
     await click('[data-testid="remove-tool"]');
     await waitFor(async () => !(await exists('[data-testid="remove-layer"]')), "the layer to go");
   });
+  it("Heal instead turns the marks into a selected Spot Removal (heal) mask, not a model removal", async () => {
+    const removalsBefore = await stackRemovals();
+    await click('[data-testid="remove-tool"]');
+    await waitFor(() => exists('[data-testid="remove-layer"]'), "the layer to come back");
+    await click('[data-testid="remove-options"] button', "Brush");
+    await draw([[0.3, 0.8], [0.34, 0.8], [0.38, 0.8]]);
+    await waitFor(async () => (await text('[data-testid="remove-status"]')) === "1 mark", "the stroke mark");
+    await click('[data-testid="remove-heal"]');
+    const spot = await waitFor(async () => {
+      const m = (await invoke("get_edit_stack", { versionId })).ops.find((/** @type {any} */ o) => o.op === "spot_mask");
+      return m ?? null;
+    }, "a spot mask in the stack");
+    expect(spot.mode).toBe("heal");
+    expect(spot.dabs.length).toBeGreaterThan(5);
+    expect(spot.dabs[0].x).toBeCloseTo(0.3, 1);
+    expect(spot.sourceOffset.dx).not.toBe(0);
+    expect(await stackRemovals()).toEqual(removalsBefore); // the model did not run
+    await waitFor(async () => !(await exists('[data-testid="remove-layer"]')), "the tool to be left");
+    const labels = await waitFor(async () => {
+      const l = (await invoke("get_history", { versionId })).map((/** @type {any} */ r) => r.label);
+      return l[l.length - 1] === "Heal instead" ? l : null;
+    }, "the Heal instead history row");
+    expect(labels).toContain("Heal instead");
+    await shot("5-heal-instead");
+  });
 });

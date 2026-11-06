@@ -49,6 +49,7 @@
    *   onRemoveCancel?: () => void,
    *   onRemoveUndoLast?: () => void,
    *   onRemoveDelete?: (patch: number) => void,
+   *   onRemoveHeal?: () => void,
    *   onNewBrush: () => void,
    *   onNewSpot: () => void,
    *   onToggleMaskOverlaysVisible: () => void,
@@ -93,6 +94,7 @@
     onRemoveCancel = () => {},
     onRemoveUndoLast = () => {},
     onRemoveDelete = () => {},
+    onRemoveHeal = () => {},
     onNewBrush,
     onNewSpot,
     onToggleMaskOverlaysVisible,
@@ -367,6 +369,7 @@
             <button class="tool small" type="button" data-testid="remove-next-guess" title="Show the model's next guess for what you clicked (Tab)" onclick={onRemoveNextGuess}>Another guess</button>
           {/if}
           <button class="tool small active" type="button" data-testid="remove-run" title="Remove what is marked (Enter)" onclick={() => onRemoveRun(false)}>Remove</button>
+          <button class="tool small" type="button" data-testid="remove-heal" title="Heal what is marked with Spot Removal instead of the model (Brush and Lasso marks)" onclick={onRemoveHeal}>Heal instead</button>
           <button class="tool small" type="button" title="Drop the marks (Esc)" onclick={onRemoveClear}>Clear</button>
         {:else if removal.error}
           <span class="seg-status err" data-testid="remove-status">{removal.error}</span>

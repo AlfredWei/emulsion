@@ -3,6 +3,10 @@
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
 
+## M7 object removal, slice E4: Heal instead (2026-11-07, `feature/remove-heal-instead`)
+
+**Heal instead** beside **Remove** turns pending Brush / Lasso marks into one Spot Removal (heal) mask instead of running the model: dabs along a stroke, a dab grid plus outline for a lasso (at most 600), the source beside the area on the first side with room; the mask is selected and the tool left, History row "Heal instead" (RFC-0032 §16). A selected object is refused with a toast. **Verified:** vitest 1241, svelte-check; real app (`develop-remove-tool-real-model`, 8 passing; the first two attempts hit the macOS webview stall in `before all`, the third passed). **Not verified:** how the heal looks (black canvas in screenshots) or whether the automatic source is good on a real photograph, a real mouse, Windows. **Not yet:** healing a finished removal and "needs regenerating" (both need the mask stored in the item), Heal for a selected object.
+
 ## M7 object removal, slice E3: delete a listed removal (2026-11-06, `feature/remove-delete-listed`)
 
 With two or more removals the Remove strip lists chips ("1 ×", "2 ×"); a chip takes that removal out of the edit, not only the newest (`handleRemoveDelete`, History row "Delete removal", thumbnail regenerated, canvas follows). The patch stays stored, so History can bring it back (RFC-0032 §15). **Verified:** vitest (`removalActions.test.js`), svelte-check; **real LaMa through the tool's controls** (local `develop-remove-tool-real-model`, 7 passing in 72 s): add a second removal, delete the first by its chip, stack and canvas keep only the second. **Not verified:** a real mouse click, many chips in a narrow strip, Windows, the Select step of that spec (no `SEGMENT_MODELS_DIR`). **Not yet:** *Use Heal instead*, "needs regenerating" (needs the mask stored in the item), telling which removal a chip is on the photograph.

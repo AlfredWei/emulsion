@@ -39,7 +39,7 @@
    *   onSegmentCandidate?: (index: number) => void,
    *   onSegmentAccept?: () => void,
    *   onSegmentCancel?: () => void,
-   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number },
+   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number, removalPatches?: number[] },
    *   onRemoveToggle?: () => void,
    *   onRemoveMode?: (mode: "brush" | "lasso" | "select") => void,
    *   onRemoveNextGuess?: () => void,
@@ -48,6 +48,7 @@
    *   onRemoveClear?: () => void,
    *   onRemoveCancel?: () => void,
    *   onRemoveUndoLast?: () => void,
+   *   onRemoveDelete?: (patch: number) => void,
    *   onNewBrush: () => void,
    *   onNewSpot: () => void,
    *   onToggleMaskOverlaysVisible: () => void,
@@ -91,6 +92,7 @@
     onRemoveClear = () => {},
     onRemoveCancel = () => {},
     onRemoveUndoLast = () => {},
+    onRemoveDelete = () => {},
     onNewBrush,
     onNewSpot,
     onToggleMaskOverlaysVisible,
@@ -377,6 +379,11 @@
         {/if}
         {#if removal.removals > 0 && !removal.running}
           <button class="tool small" type="button" data-testid="remove-undo" title="Take the newest removal out again (History can bring it back)" onclick={onRemoveUndoLast}>Undo last</button>
+          {#if (removal.removalPatches?.length ?? 0) > 1}
+            {#each removal.removalPatches ?? [] as patch, index (patch)}
+              <button class="tool small" type="button" data-testid="remove-delete" data-patch={patch} title="Take removal {index + 1} out (History can bring it back)" aria-label="Delete removal {index + 1}" onclick={() => onRemoveDelete(patch)}>{index + 1} ×</button>
+            {/each}
+          {/if}
         {/if}
       {/if}
     </div>

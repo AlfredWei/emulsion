@@ -39,7 +39,7 @@
    *   onSegmentCandidate?: (index: number) => void,
    *   onSegmentAccept?: () => void,
    *   onSegmentCancel?: () => void,
-   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number, removalPatches?: number[], healable?: number[] },
+   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number, removalPatches?: number[], healable?: number[], retryable?: number[] },
    *   onRemoveToggle?: () => void,
    *   onRemoveMode?: (mode: "brush" | "lasso" | "select") => void,
    *   onRemoveNextGuess?: () => void,
@@ -51,6 +51,7 @@
    *   onRemoveDelete?: (patch: number) => void,
    *   onRemoveHeal?: () => void,
    *   onRemoveHealRemoval?: (patch: number) => void,
+   *   onRemoveRedo?: (patch: number) => void,
    *   onNewBrush: () => void,
    *   onNewSpot: () => void,
    *   onToggleMaskOverlaysVisible: () => void,
@@ -97,6 +98,7 @@
     onRemoveDelete = () => {},
     onRemoveHeal = () => {},
     onRemoveHealRemoval = () => {},
+    onRemoveRedo = () => {},
     onNewBrush,
     onNewSpot,
     onToggleMaskOverlaysVisible,
@@ -392,6 +394,9 @@
           {#each (removal.removalPatches ?? []).filter((p) => removal.healable?.includes(p)) as patch (patch)}
             {@const index = (removal.removalPatches ?? []).indexOf(patch)}
             <button class="tool small" type="button" data-testid="remove-heal-removal" data-patch={patch} title="Heal where removal {index + 1} was with Spot Removal instead of the model's fill (History can bring the removal back)" aria-label="Heal removal {index + 1} instead" onclick={() => onRemoveHealRemoval(patch)}>Heal {(removal.removalPatches?.length ?? 0) > 1 ? index + 1 : "it"}</button>
+            {#if removal.retryable?.includes(patch)}
+              <button class="tool small" type="button" data-testid="remove-redo" data-patch={patch} title="Removal {index + 1} was made with an older model: fill it again with the current one (the result may differ; History can bring the old one back)" aria-label="Try removal {index + 1} again" onclick={() => onRemoveRedo(patch)}>Try {(removal.removalPatches?.length ?? 0) > 1 ? `${index + 1} ` : ""}again</button>
+            {/if}
           {/each}
         {/if}
       {/if}

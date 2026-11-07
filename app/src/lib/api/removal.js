@@ -64,3 +64,18 @@ export function removalsWithMask(versionId, patchIds) {
 export function removalHole(versionId, patchId) {
   return invoke("removal_hole", { versionId, patchId });
 }
+
+/** The id of the installed removal engine: a removal made with another one can be tried again with this one.
+ * @returns {Promise<string>} */
+export function removalEngine() {
+  return invoke("removal_engine");
+}
+
+/** Runs removal `patchId` of `versionId` again from its stored hole and stores the result as a NEW patch (the old one stays,
+ * so History can bring it back). The caller swaps the item in the `remove` op. Fails with the reason as a string
+ * (`this removal has no stored hole`, `... no longer fits`, `removal cancelled`...).
+ * @param {number} versionId @param {number} patchId
+ * @returns {Promise<RemoveResult>} */
+export function regenerateRemoval(versionId, patchId) {
+  return invoke("regenerate_removal", { versionId, patchId });
+}

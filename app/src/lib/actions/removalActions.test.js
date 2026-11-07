@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const api = vi.hoisted(() => ({ removalAvailable: vi.fn(), removeObject: vi.fn(), removalCancel: vi.fn(), removalHole: vi.fn(), removalsWithMask: vi.fn(), isRemovalCancelled: (/** @type {unknown} */ e) => String(e).includes("removal cancelled") }));
+const api = vi.hoisted(() => ({ removalAvailable: vi.fn(), removeObject: vi.fn(), removalCancel: vi.fn(), removalHole: vi.fn(), removalsWithMask: vi.fn(), removalEngine: vi.fn(), regenerateRemoval: vi.fn(), isRemovalCancelled: (/** @type {unknown} */ e) => String(e).includes("removal cancelled") }));
 vi.mock("$lib/api/removal.js", () => api);
 const dev = vi.hoisted(() => ({ getEditStack: vi.fn(), setEditStack: vi.fn() }));
 vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), getEditStack: dev.getEditStack, setEditStack: dev.setEditStack }));
@@ -13,7 +13,7 @@ vi.mock("$lib/maskRaster.js", () => raster);
 const regen = vi.hoisted(() => vi.fn());
 vi.mock("$lib/actions/importActions.js", () => ({ regenerateThumbnailFor: regen }));
 
-import { handleRemoveToolToggle, leaveRemoveTool, handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveHealRemoval, refreshHealable, handleRemoveMode, handleRemoveSelectClick, handleRemoveNextGuess } from "./removalActions.js";
+import { handleRemoveToolToggle, leaveRemoveTool, handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveHealRemoval, handleRemoveRedo, refreshHealable, handleRemoveMode, handleRemoveSelectClick, handleRemoveNextGuess } from "./removalActions.js";
 import { develop } from "$lib/state/develop.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
@@ -39,6 +39,8 @@ beforeEach(() => {
   removal.available = null;
   api.removalAvailable.mockResolvedValue(true);
   api.removalCancel.mockResolvedValue(undefined);
+  api.removalEngine.mockResolvedValue("lama-512-places2");
+  removal.engine = "";
   removal.mode = "brush";
   removal.selectPhase = "idle";
   removal.selectNote = "";
@@ -513,5 +515,75 @@ describe("refreshHealable", () => {
     removal.healable = [6];
     await refreshHealable(10, [6]);
     expect(removal.healable).toEqual([]);
+  });
+});
+
+describe("arming reads the installed engine", () => {
+  it("keeps its id, and an empty one when it cannot be read", async () => {
+    await handleRemoveToolToggle();
+    expect(removal.engine).toBe("lama-512-places2");
+    leaveRemoveTool();
+    api.removalEngine.mockRejectedValue(new Error("x"));
+    await handleRemoveToolToggle();
+    expect(removal.engine).toBe("");
+  });
+});
+
+describe("Try again on a finished removal", () => {
+  beforeEach(() => {
+    develop.editStack = addRemovals(develop.editStack, [{ patch: 5, engine: "lama-old" }, { patch: 6, engine: "lama-old" }]);
+    api.regenerateRemoval.mockResolvedValue(done(9));
+  });
+
+  it("puts the new patch where the old one was, with the installed engine, in one edit", async () => {
+    const flush = vi.spyOn(develop, "flushEditStack").mockImplementation(async () => {});
+    await handleRemoveRedo(5);
+    expect(api.regenerateRemoval).toHaveBeenCalledWith(10, 5);
+    expect(getRemovals(develop.editStack)).toEqual([{ patch: 9, engine: "lama-512-places2" }, { patch: 6, engine: "lama-old" }]);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledWith("Redo removal");
+    expect(regen).toHaveBeenCalledWith(10);
+    expect(removal.notice).toBe("Tried again");
+    expect(removal.phase).toBe("idle");
+  });
+
+  it("shows the failure and leaves the stack alone", async () => {
+    const flush = vi.spyOn(develop, "flushEditStack").mockImplementation(async () => {});
+    api.regenerateRemoval.mockRejectedValue("Error: the photograph is 10x10 now and the removal was made on 20x20: it no longer fits");
+    await handleRemoveRedo(5);
+    expect(removal.error).toMatch(/no longer fits/);
+    expect(getRemovals(develop.editStack).map((i) => i.patch)).toEqual([5, 6]);
+    expect(flush).not.toHaveBeenCalled();
+    expect(removal.phase).toBe("idle");
+  });
+
+  it("says Cancelled when the user cancels", async () => {
+    api.regenerateRemoval.mockRejectedValue("removal cancelled");
+    await handleRemoveRedo(5);
+    expect(removal.notice).toBe("Cancelled");
+    expect(removal.error).toBe("");
+  });
+
+  it("writes straight to the catalog when the user moved to another photo meanwhile", async () => {
+    vi.spyOn(develop, "flushEditStack").mockImplementation(async () => {});
+    vi.spyOn(shell, "notify").mockImplementation(() => {});
+    dev.getEditStack.mockResolvedValue(develop.editStack);
+    dev.setEditStack.mockResolvedValue(undefined);
+    api.regenerateRemoval.mockImplementation(async () => {
+      develop.versionId = 11;
+      return done(9);
+    });
+    await handleRemoveRedo(5);
+    expect(dev.setEditStack).toHaveBeenCalledTimes(1);
+    expect(dev.setEditStack.mock.calls[0][0]).toBe(10);
+    expect(getRemovals(dev.setEditStack.mock.calls[0][1]).map((i) => i.patch)).toEqual([9, 6]);
+    expect(dev.setEditStack.mock.calls[0][2]).toBe("Redo removal");
+  });
+
+  it("ignores a removal that is not in the stack, and anything while a removal runs", async () => {
+    await handleRemoveRedo(99);
+    removal.phase = "running";
+    await handleRemoveRedo(5);
+    expect(api.regenerateRemoval).not.toHaveBeenCalled();
   });
 });

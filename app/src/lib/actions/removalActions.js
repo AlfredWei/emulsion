@@ -7,10 +7,10 @@ import { masks } from "$lib/state/masks.svelte.js";
 import { removal, LARGE_MARK_FRACTION } from "$lib/state/removal.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
-import { removalAvailable, removeObject, removalCancel, isRemovalCancelled, removalHole, removalsWithMask } from "$lib/api/removal.js";
+import { removalAvailable, removeObject, removalCancel, isRemovalCancelled, removalHole, removalsWithMask, removalEngine, regenerateRemoval } from "$lib/api/removal.js";
 import { segmentModelStatus, segmentPrepare, segmentDecode, segmentRelease, isNotPrepared } from "$lib/api/segment.js";
 import { readCut } from "$lib/segmentCut.js";
-import { addRemovals, getEditStack, getRemovals, removeRemoval, setEditStack, addMask, createSpotMask, listMasks, countBrushLayers, MAX_MASKS } from "$lib/api/develop.js";
+import { addRemovals, getEditStack, getRemovals, removeRemoval, replaceRemoval, setEditStack, addMask, createSpotMask, listMasks, countBrushLayers, MAX_MASKS } from "$lib/api/develop.js";
 import { planHeal } from "$lib/healFromMarks.js";
 import { readMaskPng } from "$lib/maskRaster.js";
 
@@ -36,6 +36,11 @@ export async function handleRemoveToolToggle() {
     removal.available = await removalAvailable();
   } catch {
     removal.available = false;
+  }
+  try {
+    removal.engine = await removalEngine();
+  } catch {
+    removal.engine = "";
   }
   if (removal.mode === "select" && removal.active) await startSelect();
 }
@@ -291,6 +296,35 @@ export async function handleRemoveHealRemoval(patch) {
   await develop.flushEditStack("Heal instead");
   regenerateThumbnailFor(versionId);
   shell.notify("Healing with Spot Removal: adjust the source or the softness in the mask panel");
+}
+
+/** "Try again" on a finished removal: runs it again from its stored hole with the installed engine and puts the new patch
+ * where the old one was, in one edit "Redo removal" (the old patch stays stored, so History brings the old result back).
+ * @param {number} patch */
+export async function handleRemoveRedo(patch) {
+  const versionId = develop.versionId;
+  if (versionId === null || removal.phase === "running" || !getRemovals(develop.editStack).some((i) => i.patch === patch)) return;
+  removal.phase = "running";
+  removal.error = "";
+  removal.notice = "";
+  try {
+    const r = await regenerateRemoval(versionId, patch);
+    const to = { patch: r.patch_id, engine: r.engine };
+    if (develop.versionId === versionId) {
+      develop.editStack = replaceRemoval(develop.editStack, patch, to);
+      await develop.flushEditStack("Redo removal");
+    } else {
+      await setEditStack(versionId, replaceRemoval(await getEditStack(versionId), patch, to), "Redo removal");
+      shell.notify("Redone on the photo you had open");
+    }
+    regenerateThumbnailFor(versionId);
+    removal.notice = r.reduced ? "Tried again (a large area: the fill may look soft)" : "Tried again";
+  } catch (e) {
+    if (isRemovalCancelled(e)) removal.notice = "Cancelled";
+    else removal.error = message(e);
+  } finally {
+    removal.phase = "idle";
+  }
 }
 
 /** Reads which of the open photograph's removals have a stored hole into `removal.healable`. Call when the list changes.

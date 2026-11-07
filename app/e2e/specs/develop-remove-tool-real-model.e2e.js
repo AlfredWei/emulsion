@@ -214,4 +214,34 @@ describe("Develop: the Remove tool, with the model", function () {
     expect(labels).toContain("Heal instead");
     await shot("5-heal-instead");
   });
+
+  it("Heal on a finished removal swaps it for a heal mask over its hole, in one edit", async () => {
+    const [patch] = await stackRemovals();
+    expect(patch).toBeTruthy();
+    const spotsBefore = (await invoke("get_edit_stack", { versionId })).ops.filter((/** @type {any} */ o) => o.op === "spot_mask").length;
+    await click('[data-testid="remove-tool"]');
+    await waitFor(() => exists(`[data-testid="remove-heal-removal"][data-patch="${patch}"]`), "the Heal chip for the removal (it has a stored hole)");
+    await click(`[data-testid="remove-heal-removal"][data-patch="${patch}"]`);
+    await waitFor(async () => (await stackRemovals()).length === 0, "the removal to leave the stack");
+    const stack = await invoke("get_edit_stack", { versionId });
+    const spots = stack.ops.filter((/** @type {any} */ o) => o.op === "spot_mask");
+    expect(spots.length).toBe(spotsBefore + 1);
+    const spot = spots[spots.length - 1];
+    expect(spot.mode).toBe("heal");
+    // The second removal was the lasso around (0.70..0.74, 0.70..0.75): the dabs sit on it, a little over for the grown hole.
+    expect(spot.dabs.length).toBeGreaterThan(2);
+    for (const d of spot.dabs) {
+      expect(d.x).toBeGreaterThan(0.66);
+      expect(d.x).toBeLessThan(0.78);
+      expect(d.y).toBeGreaterThan(0.66);
+      expect(d.y).toBeLessThan(0.79);
+    }
+    const labels = await waitFor(async () => {
+      const l = (await invoke("get_history", { versionId })).map((/** @type {any} */ r) => r.label);
+      return l[l.length - 1] === "Heal instead" ? l : null;
+    }, "the Heal instead history row");
+    expect(labels.filter((/** @type {string} */ l) => l === "Heal instead").length).toBeGreaterThanOrEqual(2);
+    await waitFor(async () => (await canvasRemovals()) === "", "the canvas to drop the removal");
+    await shot("6-heal-finished-removal");
+  });
 });

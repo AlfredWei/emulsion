@@ -11,10 +11,10 @@ const ok = (/** @type {any} */ plan) => {
 const why = (/** @type {import('./healFromMarks.js').HealPlan} */ plan) => /** @type {{ reason: string }} */ (plan).reason;
 
 describe("planHeal", () => {
-  it("refuses no marks and a selected object, saying why", () => {
+  it("refuses no marks and a selected object whose cut did not come, saying why", () => {
     expect(why(planHeal([]))).toMatch(/Nothing/);
-    expect(why(planHeal([/** @type {any} */ ({ kind: "segment", logits: "L", bbox: [0, 0, 1, 1], tint: "T" })]))).toMatch(/Brush and Lasso/);
-    expect(why(planHeal([stroke([[0.5, 0.5]]), /** @type {any} */ ({ kind: "segment", logits: "L", bbox: [0, 0, 1, 1], tint: "T" })]))).toMatch(/Brush and Lasso/);
+    expect(why(planHeal([/** @type {any} */ ({ kind: "segment", logits: "L", bbox: [0, 0, 1, 1], tint: "T" })]))).toMatch(/cut is missing/);
+    expect(why(planHeal([stroke([[0.5, 0.5]]), /** @type {any} */ ({ kind: "segment", logits: "L", bbox: [0, 0, 1, 1], tint: "T" })]))).toMatch(/cut is missing/);
   });
 
   it("a one-point stroke is one dab with the stroke's radius, as a fraction of the width", () => {
@@ -67,5 +67,55 @@ describe("planHeal", () => {
   it("when no side has room for a whole copy it still points to the roomiest side", () => {
     const wide = ok(planHeal([polygon([[0.02, 0.02], [0.98, 0.02], [0.98, 0.98], [0.02, 0.98]])]));
     expect(Math.abs(wide.sourceOffset.dx) + Math.abs(wide.sourceOffset.dy)).toBeGreaterThan(0);
+  });
+});
+
+/** A w x h mask with `inside(x, y)` marking the pixels inside. @returns {import('./healFromMarks.js').MaskGrid} */
+const grid = (/** @type {[number, number, number, number]} */ box, /** @type {number} */ w, /** @type {number} */ h, /** @type {(x: number, y: number) => boolean} */ inside) => {
+  const data = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data[y * w + x] = inside(x, y) ? 255 : 0;
+  return { box, w, h, data };
+};
+
+describe("planHeal from a raster mask", () => {
+  it("an empty mask is too small to heal", () => {
+    expect(why(planHeal([], 1.5, [grid([0, 0, 1, 1], 8, 8, () => false)]))).toMatch(/too small/);
+  });
+
+  it("covers the whole of a hole and puts nothing far outside it", () => {
+    // A 60 x 40 pixel hole at (100, 50) of a 400 x 300 photograph: the stored-hole case.
+    const box = /** @type {[number, number, number, number]} */ ([100 / 400, 50 / 300, 160 / 400, 90 / 300]);
+    const { dabs } = ok(planHeal([], 400 / 300, [grid(box, 60, 40, () => true)]));
+    expect(dabs.length).toBeGreaterThan(8);
+    for (const d of dabs) {
+      expect(d.x).toBeGreaterThan(box[0]);
+      expect(d.x).toBeLessThan(box[2]);
+      expect(d.y).toBeGreaterThan(box[1]);
+      expect(d.y).toBeLessThan(box[3]);
+    }
+    // Every pixel of the hole is under some dab (radius is a fraction of the width, so y distances scale by the aspect).
+    for (const [px, py] of [[100, 50], [159, 50], [100, 89], [159, 89], [130, 70]]) {
+      const x = (px + 0.5) / 400, y = (py + 0.5) / 300;
+      expect(dabs.some((d) => Math.hypot(x - d.x, ((y - d.y) * 300) / 400) <= d.radius)).toBe(true);
+    }
+  });
+
+  it("leaves a gap in a ring where the ring is not, and covers the ring", () => {
+    const ring = grid([0, 0, 1, 1], 100, 100, (x, y) => Math.hypot(x - 50, y - 50) < 40 && Math.hypot(x - 50, y - 50) > 30);
+    const { dabs } = ok(planHeal([], 1, [ring]));
+    expect(dabs.some((d) => Math.hypot(d.x - 0.5, d.y - 0.5) < 0.1)).toBe(false); // the middle is outside
+    expect(dabs.some((d) => d.x < 0.2 && Math.abs(d.y - 0.5) < 0.1)).toBe(true); // the left of the ring
+  });
+
+  it("a click-selected object is healed from its cut, together with other marks", () => {
+    const cut = grid([0, 0, 1, 1], 256, 256, (x, y) => x > 100 && x < 140 && y > 60 && y < 100);
+    const segment = /** @type {any} */ ({ kind: "segment", logits: "L", bbox: [0, 0, 1, 1], tint: "T" });
+    const { dabs } = ok(planHeal([segment, stroke([[0.8, 0.8]], 0.01)], 1, [cut]));
+    expect(dabs.some((d) => Math.abs(d.x - 120 / 256) < 0.05 && Math.abs(d.y - 80 / 256) < 0.05)).toBe(true);
+    expect(dabs.some((d) => d.x === 0.8 && d.y === 0.8)).toBe(true);
+  });
+
+  it("never returns more dabs than the cap, however big the hole", () => {
+    expect(ok(planHeal([], 1, [grid([0, 0, 1, 1], 300, 300, () => true)])).dabs.length).toBeLessThanOrEqual(MAX_HEAL_DABS);
   });
 });

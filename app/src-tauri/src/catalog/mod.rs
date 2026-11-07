@@ -44,7 +44,7 @@ pub use export_plugins::ExportPlugin;
 pub use images::ImageSummary;
 pub use faces::{FaceRow, PersonRow};
 #[allow(unused_imports)] // used by the removal job and the render path of slice D
-pub use removal_patches::StoredPatch;
+pub use removal_patches::{StoredMask, StoredPatch};
 pub use keywords::{KeywordRef, KeywordNode, ImageKeywordAssignment};
 pub use collections::CollectionSummary;
 pub use backup::{BackupOutcome, BackupSettings};

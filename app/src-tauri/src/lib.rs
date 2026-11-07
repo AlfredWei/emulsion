@@ -2291,6 +2291,8 @@ pub fn run() {
             denoise_commands::denoise_import_model,
             denoise_commands::denoise_cache_info,
             removal_commands::remove_object,
+            removal_commands::regenerate_removal,
+            removal_commands::removals_with_mask,
             removal_commands::removal_cancel,
             removal_commands::removal_available,
             denoise_commands::denoise_run,

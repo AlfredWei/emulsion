@@ -183,6 +183,32 @@ describe("Develop: the Remove tool, with the model", function () {
     await waitFor(async () => (await canvasRemovals()).split(",").length === before + 1, "the canvas to carry it");
     expect(await browser.execute(() => document.querySelectorAll('[data-testid="remove-layer"] image').length)).toBe(0);
     await shot("4-selected-removed");
+    // Put the stack back as it was, so the steps that follow see the same state with or without the click-select models.
+    await click('[data-testid="remove-undo"]');
+    await waitFor(async () => (await stackRemovals()).length === before, "the selected object's removal to be taken out again");
+    await waitFor(async () => (await canvasRemovals()).split(",").filter(Boolean).length === before, "the canvas to follow");
+  });
+
+  it("Select: Heal instead heals the selected object from its cut, not the model", async function () {
+    if (!haveSegment) return this.skip();
+    const removalsBefore = await stackRemovals();
+    const spotsBefore = (await invoke("get_edit_stack", { versionId })).ops.filter((/** @type {any} */ o) => o.op === "spot_mask").length;
+    await draw([SELECT_AT]);
+    await waitFor(async () => (await text('[data-testid="remove-status"]')) === "1 mark", "the clicked object", 120000);
+    await click('[data-testid="remove-heal"]');
+    const spot = await waitFor(async () => {
+      const spots = (await invoke("get_edit_stack", { versionId })).ops.filter((/** @type {any} */ o) => o.op === "spot_mask");
+      return spots.length === spotsBefore + 1 ? spots[spots.length - 1] : null;
+    }, "a heal mask from the selected object");
+    expect(spot.mode).toBe("heal");
+    expect(spot.dabs.length).toBeGreaterThan(2);
+    // The dabs sit on the object that was clicked: some dab is near the click.
+    expect(spot.dabs.some((/** @type {any} */ d) => Math.hypot(d.x - SELECT_AT[0], d.y - SELECT_AT[1]) < 0.15)).toBe(true);
+    expect(await stackRemovals()).toEqual(removalsBefore); // the model did not run
+    await waitFor(async () => !(await exists('[data-testid="remove-layer"]')), "the tool to be left");
+    await click('[data-testid="remove-tool"]'); // arm it again for the steps that follow
+    await waitFor(() => exists('[data-testid="remove-layer"]'), "the layer to come back");
+    await shot("4b-selected-healed");
   });
 
   it("leaving the tool takes the layer away", async () => {
@@ -191,6 +217,7 @@ describe("Develop: the Remove tool, with the model", function () {
   });
   it("Heal instead turns the marks into a selected Spot Removal (heal) mask, not a model removal", async () => {
     const removalsBefore = await stackRemovals();
+    const spotsBefore = (await invoke("get_edit_stack", { versionId })).ops.filter((/** @type {any} */ o) => o.op === "spot_mask").length;
     await click('[data-testid="remove-tool"]');
     await waitFor(() => exists('[data-testid="remove-layer"]'), "the layer to come back");
     await click('[data-testid="remove-options"] button', "Brush");
@@ -198,9 +225,9 @@ describe("Develop: the Remove tool, with the model", function () {
     await waitFor(async () => (await text('[data-testid="remove-status"]')) === "1 mark", "the stroke mark");
     await click('[data-testid="remove-heal"]');
     const spot = await waitFor(async () => {
-      const m = (await invoke("get_edit_stack", { versionId })).ops.find((/** @type {any} */ o) => o.op === "spot_mask");
-      return m ?? null;
-    }, "a spot mask in the stack");
+      const spots = (await invoke("get_edit_stack", { versionId })).ops.filter((/** @type {any} */ o) => o.op === "spot_mask");
+      return spots.length === spotsBefore + 1 ? spots[spots.length - 1] : null;
+    }, "a new spot mask in the stack");
     expect(spot.mode).toBe("heal");
     expect(spot.dabs.length).toBeGreaterThan(5);
     expect(spot.dabs[0].x).toBeCloseTo(0.3, 1);
@@ -218,6 +245,8 @@ describe("Develop: the Remove tool, with the model", function () {
   it("Heal on a finished removal swaps it for a heal mask over its hole, in one edit", async () => {
     const [patch] = await stackRemovals();
     expect(patch).toBeTruthy();
+    const stored = await invoke("removal_hole", { versionId, patchId: patch });
+    console.log(`[measure] stored hole: ${Math.floor((stored.png.length * 3) / 4)} bytes of PNG, box origin (${stored.x}, ${stored.y}) in a ${stored.src_w}x${stored.src_h} decode`);
     const spotsBefore = (await invoke("get_edit_stack", { versionId })).ops.filter((/** @type {any} */ o) => o.op === "spot_mask").length;
     await click('[data-testid="remove-tool"]');
     await waitFor(() => exists(`[data-testid="remove-heal-removal"][data-patch="${patch}"]`), "the Heal chip for the removal (it has a stored hole)");

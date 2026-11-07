@@ -48,11 +48,16 @@ export function isRemovalCancelled(e) {
   return String(e).includes("removal cancelled");
 }
 
-/** Which of `patchIds` (removals of `versionId`) have a stored hole, so can be healed or redone from it.
+/**
+ * What is known of a removal without reading its pictures: the decode it was made on and whether it has a stored hole.
+ * @typedef {{ patch_id: number, src_w: number, src_h: number, has_hole: boolean }} RemovalInfo
+ */
+
+/** What the catalog knows of each of `patchIds` (removals of `versionId`); a removal with no row is left out.
  * @param {number} versionId @param {number[]} patchIds
- * @returns {Promise<number[]>} */
-export function removalsWithMask(versionId, patchIds) {
-  return invoke("removals_with_mask", { versionId, patchIds });
+ * @returns {Promise<RemovalInfo[]>} */
+export function removalInfo(versionId, patchIds) {
+  return invoke("removal_info", { versionId, patchIds });
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const api = vi.hoisted(() => ({ removalAvailable: vi.fn(), removeObject: vi.fn(), removalCancel: vi.fn(), removalHole: vi.fn(), removalsWithMask: vi.fn(), removalEngine: vi.fn(), regenerateRemoval: vi.fn(), isRemovalCancelled: (/** @type {unknown} */ e) => String(e).includes("removal cancelled") }));
+const api = vi.hoisted(() => ({ removalAvailable: vi.fn(), removeObject: vi.fn(), removalCancel: vi.fn(), removalHole: vi.fn(), removalInfo: vi.fn(), removalEngine: vi.fn(), regenerateRemoval: vi.fn(), isRemovalCancelled: (/** @type {unknown} */ e) => String(e).includes("removal cancelled") }));
 vi.mock("$lib/api/removal.js", () => api);
 const dev = vi.hoisted(() => ({ getEditStack: vi.fn(), setEditStack: vi.fn() }));
 vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), getEditStack: dev.getEditStack, setEditStack: dev.setEditStack }));
@@ -13,7 +13,7 @@ vi.mock("$lib/maskRaster.js", () => raster);
 const regen = vi.hoisted(() => vi.fn());
 vi.mock("$lib/actions/importActions.js", () => ({ regenerateThumbnailFor: regen }));
 
-import { handleRemoveToolToggle, leaveRemoveTool, handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveHealRemoval, handleRemoveRedo, refreshHealable, handleRemoveMode, handleRemoveSelectClick, handleRemoveNextGuess } from "./removalActions.js";
+import { handleRemoveToolToggle, leaveRemoveTool, handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveHealRemoval, handleRemoveRedo, refreshRemovalRows, handleRemoveMode, handleRemoveSelectClick, handleRemoveNextGuess } from "./removalActions.js";
 import { develop } from "$lib/state/develop.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
@@ -500,21 +500,31 @@ describe("Heal instead for a finished removal", () => {
   });
 });
 
-describe("refreshHealable", () => {
-  it("keeps the patches the catalog says have a hole, and none for no removals", async () => {
-    api.removalsWithMask.mockResolvedValue([6]);
-    await refreshHealable(10, [5, 6]);
-    expect(api.removalsWithMask).toHaveBeenCalledWith(10, [5, 6]);
-    expect(removal.healable).toEqual([6]);
-    await refreshHealable(10, []);
-    expect(removal.healable).toEqual([]);
+describe("refreshRemovalRows", () => {
+  it("keeps what the catalog says of each removal, null for one with no row, and nothing for no removals", async () => {
+    api.removalInfo.mockResolvedValue([{ patch_id: 6, src_w: 400, src_h: 300, has_hole: true }, { patch_id: 7, src_w: 400, src_h: 300, has_hole: false }]);
+    await refreshRemovalRows(10, [5, 6, 7]);
+    expect(api.removalInfo).toHaveBeenCalledWith(10, [5, 6, 7]);
+    expect(removal.rows).toEqual({ 5: null, 6: { w: 400, h: 300, hole: true }, 7: { w: 400, h: 300, hole: false } });
+    await refreshRemovalRows(10, []);
+    expect(removal.rows).toEqual({});
   });
 
-  it("offers none when the catalog cannot answer", async () => {
-    api.removalsWithMask.mockRejectedValue(new Error("x"));
-    removal.healable = [6];
-    await refreshHealable(10, [6]);
-    expect(removal.healable).toEqual([]);
+  it("knows nothing when the catalog cannot answer", async () => {
+    api.removalInfo.mockRejectedValue(new Error("x"));
+    removal.rows = { 6: { w: 1, h: 1, hole: true } };
+    await refreshRemovalRows(10, [6]);
+    expect(removal.rows).toEqual({});
+  });
+
+  it("drops an answer for a photograph that is no longer open", async () => {
+    api.removalInfo.mockImplementation(async () => {
+      develop.versionId = 11;
+      return [{ patch_id: 6, src_w: 4, src_h: 3, has_hole: true }];
+    });
+    removal.rows = {};
+    await refreshRemovalRows(10, [6]);
+    expect(removal.rows).toEqual({});
   });
 });
 

@@ -23,7 +23,8 @@
   import ModelDownloadDialog from "$lib/components/ModelDownloadDialog.svelte";
   import { segment } from "$lib/state/segment.svelte.js";
   import { removal } from "$lib/state/removal.svelte.js";
-  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveHealRemoval, handleRemoveRedo, refreshHealable, handleRemoveMode, handleRemoveNextGuess } from "$lib/actions/removalActions.js";
+  import { removalProblem } from "$lib/removalFit.js";
+  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveHealRemoval, handleRemoveRedo, refreshRemovalRows, handleRemoveMode, handleRemoveNextGuess } from "$lib/actions/removalActions.js";
   import AiDenoiseControls from "$lib/components/AiDenoiseControls.svelte";
   import { denoise } from "$lib/state/denoise.svelte.js";
   import { handleAiDenoiseAmountChange, handleDenoisePreviewCrop, handleDenoiseWhole, handleDenoiseCancel, handleDenoiseRemove, handleDenoiseDismissCrop, handleDenoiseDownload, handleDenoiseImport, handleDenoiseDialogCancel, handleDenoiseDialogRetry } from "$lib/actions/denoiseActions.js";
@@ -37,9 +38,23 @@
     removal.notice = "";
   });
 
-  // Which of this photo's removals have a stored hole (so offer Heal): read again when the list changes.
+  // What the catalog knows of this photo's removals (a stored hole to offer Heal and Try again from; the decode each was made
+  // on, to say when it no longer fits): read again when the list changes.
   $effect(() => {
-    void refreshHealable(develop.versionId, getRemovals(develop.editStack).map((r) => r.patch));
+    void refreshRemovalRows(develop.versionId, getRemovals(develop.editStack).map((r) => r.patch));
+  });
+
+  const removalIds = $derived(getRemovals(develop.editStack).map((r) => r.patch));
+  /** What is wrong with each removal on the open photo (patch id -> "missing" | "no longer fits"). */
+  const problems = $derived.by(() => {
+    const aspect = develop.imageNativeWidth && develop.imageNativeHeight ? develop.imageNativeWidth / develop.imageNativeHeight : 0;
+    /** @type {Record<number, string>} */
+    const out = {};
+    for (const id of removalIds) {
+      const p = removalProblem(removal.rows[id], aspect);
+      if (p) out[id] = p;
+    }
+    return out;
   });
 
   // The Adaptive section (RFC-0035 slice C): which presets this photo already carries masks from, and whether the user
@@ -372,7 +387,7 @@
   onSegmentCandidate={handleSegmentCandidate}
   onSegmentAccept={handleSegmentAccept}
   onSegmentCancel={handleSegmentCancel}
-  removal={{ active: removal.active, available: removal.available, mode: removal.mode, brushRadius: removal.brushRadius, marks: removal.count, canCycle: (removal.selection?.candidates.length ?? 0) > 1, selectPhase: removal.selectPhase, selectNote: removal.selectNote, running: removal.phase === "running", guarding: removal.guarding, error: removal.error, notice: removal.notice, removals: getRemovals(develop.editStack).length, removalPatches: getRemovals(develop.editStack).map((i) => i.patch), healable: removal.healable, retryable: getRemovals(develop.editStack).filter((i) => removal.healable.includes(i.patch) && removal.engine !== "" && i.engine !== removal.engine).map((i) => i.patch) }}
+  removal={{ active: removal.active, available: removal.available, mode: removal.mode, brushRadius: removal.brushRadius, marks: removal.count, canCycle: (removal.selection?.candidates.length ?? 0) > 1, selectPhase: removal.selectPhase, selectNote: removal.selectNote, running: removal.phase === "running", guarding: removal.guarding, error: removal.error, notice: removal.notice, removals: getRemovals(develop.editStack).length, removalPatches: getRemovals(develop.editStack).map((i) => i.patch), healable: removalIds.filter((p) => removal.rows[p]?.hole && !problems[p]), retryable: getRemovals(develop.editStack).filter((i) => removal.rows[i.patch]?.hole && !problems[i.patch] && removal.engine !== "" && i.engine !== removal.engine).map((i) => i.patch), problems: removalIds.filter((p) => problems[p]).map((p) => ({ patch: p, text: problems[p] })) }}
   onRemoveToggle={handleRemoveToolToggle}
   onRemoveMode={handleRemoveMode}
   onRemoveNextGuess={handleRemoveNextGuess}

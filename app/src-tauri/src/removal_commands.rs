@@ -266,6 +266,29 @@ pub async fn removals_with_mask(state: State<'_, AppState>, version_id: i64, pat
     state.catalog.lock().map_err(|e| e.to_string())?.removals_with_mask(version_id, &patch_ids).map_err(|e| e.to_string())
 }
 
+/// A stored hole as the frontend needs it to plan a Heal: its place in the photograph's full decode (`src_w` x `src_h`)
+/// and the hole itself, a gray PNG of just its box (255 inside).
+#[derive(Debug, Serialize, PartialEq)]
+pub struct RemovalHole {
+    pub x: u32,
+    pub y: u32,
+    pub src_w: u32,
+    pub src_h: u32,
+    pub png: String,
+}
+
+/// The hole stored with removal `patch_id` of `version_id`; None when it has none (made before holes were kept).
+#[tauri::command]
+pub async fn removal_hole(state: State<'_, AppState>, version_id: i64, patch_id: i64) -> Result<Option<RemovalHole>, String> {
+    use base64::Engine;
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    let Some(hole) = catalog.get_removal_mask(version_id, patch_id).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let patch = catalog.get_removal_patches(version_id, &[patch_id]).map_err(|e| e.to_string())?.into_iter().next().ok_or_else(|| "this removal is unknown".to_string())?;
+    Ok(Some(RemovalHole { x: hole.x, y: hole.y, src_w: patch.src_w, src_h: patch.src_h, png: base64::engine::general_purpose::STANDARD.encode(&hole.png) }))
+}
+
 /// Stops the running removal at its next step boundary (a single network pass cannot be interrupted, so the one running
 /// finishes or stops at the helper's next checkpoint, and the rest are not started); nothing is stored.
 #[tauri::command]

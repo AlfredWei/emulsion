@@ -1,11 +1,18 @@
-// "Heal instead" (RFC-0032 §16): the Remove tool's pending marks, turned into the dabs of a Spot Removal (heal) mask.
-// Pure geometry, no state. A brush stroke becomes dabs along its path, a lasso outline becomes dabs covering its inside
-// and its edge. A click-selected object (a model cut, not geometry) is not converted.
+// "Heal instead" (RFC-0032 §16, §18): the Remove tool's marks, or a finished removal's stored hole, turned into the dabs of
+// a Spot Removal (heal) mask. Pure geometry, no state. A brush stroke becomes dabs along its path, a lasso outline becomes
+// dabs covering its inside and its edge, and a raster (a click-selected object's cut, a removal's stored hole) becomes one
+// dab for each grid cell it touches.
 
 /** Most dabs one heal mask gets; the spacing grows to stay under it. */
 export const MAX_HEAL_DABS = 600;
 
+/** Gray value from which a mask pixel is inside (the cut and the stored hole both use 128 and up). */
+const INSIDE_FROM = 128;
+
 /**
+ * A raster mask placed on the photograph: `box` is where it sits (x0, y0, x1, y1, normalised to the photograph), `data` one
+ * byte per pixel, row by row, `w` x `h` of them; a byte of 128 or more is inside.
+ * @typedef {{ box: [number, number, number, number], w: number, h: number, data: ArrayLike<number> }} MaskGrid
  * @typedef {{ x: number, y: number, radius: number }} HealDab - normalised centre; `radius` is a fraction of the photograph's WIDTH (a Spot dab's convention)
  * @typedef {{ dabs: HealDab[], sourceOffset: { dx: number, dy: number } } | { reason: string }} HealPlan
  */
@@ -22,16 +29,18 @@ function inside(poly, x, y) {
 }
 
 /**
- * The dabs and the source offset that heal `shapes`, or why they cannot be.
+ * The dabs and the source offset that heal `shapes` and the raster `grids`, or why they cannot be.
  * Lengths are measured in units of the photograph's longer side (a brush radius is); `aspect` is width / height.
- * @param {import('$lib/api/removal.js').MaskShape[]} shapes @param {number} [aspect]
+ * A `segment` shape (a click-selected object) has no geometry: its cut must come in `grids`, one for each such shape.
+ * @param {import('$lib/api/removal.js').MaskShape[]} shapes @param {number} [aspect] @param {MaskGrid[]} [grids]
  * @returns {HealPlan}
  */
-export function planHeal(shapes, aspect = 1) {
-  if (shapes.length === 0) return { reason: "Nothing is marked" };
-  if (shapes.some((s) => s.kind === "segment")) return { reason: "Heal works on Brush and Lasso marks, not on a selected object" };
+export function planHeal(shapes, aspect = 1, grids = []) {
+  if (shapes.length === 0 && grids.length === 0) return { reason: "Nothing is marked" };
+  if (shapes.filter((s) => s.kind === "segment").length > grids.length) return { reason: "The selected object's cut is missing" };
   const wl = aspect >= 1 ? 1 : aspect; // the photograph's width, in longer-side units
   const hl = aspect >= 1 ? 1 / aspect : 1; // its height
+  const preparedGrids = grids.map((g) => prepareGrid(g, wl, hl));
 
   /** @type {HealDab[]} */
   let dabs = [];
@@ -42,11 +51,51 @@ export function planHeal(shapes, aspect = 1) {
       if (s.kind === "stroke") dabs.push(...strokeDabs(s.points, s.radius * scale, wl, hl));
       else if (s.kind === "polygon") dabs.push(...polygonDabs(s.points, scale, wl, hl));
     }
+    for (const g of preparedGrids) dabs.push(...gridDabs(g, scale, wl));
     if (dabs.length <= MAX_HEAL_DABS) break;
   }
   if (dabs.length === 0) return { reason: "The marks are too small to heal" };
 
   return { dabs, sourceOffset: sourceFor(dabs, wl, hl) };
+}
+
+/** What `gridDabs` needs of a grid, found once: the pixels inside, their extent, and a pixel's size in longer-side units.
+ * @param {MaskGrid} g @param {number} wl @param {number} hl */
+function prepareGrid(g, wl, hl) {
+  const pu = ((g.box[2] - g.box[0]) * wl) / g.w;
+  const pv = ((g.box[3] - g.box[1]) * hl) / g.h;
+  let minx = Infinity, miny = Infinity, maxx = -1, maxy = -1;
+  /** @type {number[]} */
+  const inside = [];
+  for (let i = 0; i < g.w * g.h; i++) {
+    if (g.data[i] < INSIDE_FROM) continue;
+    const x = i % g.w, y = (i - x) / g.w;
+    if (x < minx) minx = x;
+    if (x > maxx) maxx = x;
+    if (y < miny) miny = y;
+    if (y > maxy) maxy = y;
+    inside.push(x, y);
+  }
+  return { g, pu, pv, minx, miny, maxx, maxy, inside, extent: inside.length === 0 ? 0 : Math.max((maxx - minx + 1) * pu, (maxy - miny + 1) * pv) };
+}
+
+/** One dab for each grid cell (about a tenth of the hole's longer side) the hole touches, big enough to cover the cell.
+ * @param {ReturnType<typeof prepareGrid>} p @param {number} scale @param {number} wl */
+function gridDabs(p, scale, wl) {
+  if (p.inside.length === 0) return [];
+  const spacing = Math.max(p.extent / 10, 0.004) * scale; // longer-side units
+  const cw = spacing / p.pu, ch = spacing / p.pv; // a cell, in mask pixels
+  const radius = (spacing * 0.8) / wl;
+  /** @type {Set<number>} */
+  const cells = new Set();
+  for (let i = 0; i < p.inside.length; i += 2) cells.add(Math.floor((p.inside[i] - p.minx) / cw) + Math.floor((p.inside[i + 1] - p.miny) / ch) * 65536);
+  const { box, w, h } = p.g;
+  return [...cells].map((c) => {
+    const cx = c % 65536, cy = (c - cx) / 65536;
+    const px = Math.min(p.minx + (cx + 0.5) * cw, p.maxx + 1);
+    const py = Math.min(p.miny + (cy + 0.5) * ch, p.maxy + 1);
+    return { x: box[0] + (px / w) * (box[2] - box[0]), y: box[1] + (py / h) * (box[3] - box[1]), radius };
+  });
 }
 
 /** @param {[number, number][]} points @param {number} r radius in longer-side units @param {number} wl @param {number} hl */

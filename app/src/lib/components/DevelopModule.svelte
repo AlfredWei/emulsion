@@ -23,7 +23,7 @@
   import ModelDownloadDialog from "$lib/components/ModelDownloadDialog.svelte";
   import { segment } from "$lib/state/segment.svelte.js";
   import { removal } from "$lib/state/removal.svelte.js";
-  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveMode, handleRemoveNextGuess } from "$lib/actions/removalActions.js";
+  import { handleRemoveToolToggle, handleRemoveRun, handleRemoveClear, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveHealRemoval, refreshHealable, handleRemoveMode, handleRemoveNextGuess } from "$lib/actions/removalActions.js";
   import AiDenoiseControls from "$lib/components/AiDenoiseControls.svelte";
   import { denoise } from "$lib/state/denoise.svelte.js";
   import { handleAiDenoiseAmountChange, handleDenoisePreviewCrop, handleDenoiseWhole, handleDenoiseCancel, handleDenoiseRemove, handleDenoiseDismissCrop, handleDenoiseDownload, handleDenoiseImport, handleDenoiseDialogCancel, handleDenoiseDialogRetry } from "$lib/actions/denoiseActions.js";
@@ -35,6 +35,11 @@
     removal.clearMarks();
     removal.error = "";
     removal.notice = "";
+  });
+
+  // Which of this photo's removals have a stored hole (so offer Heal): read again when the list changes.
+  $effect(() => {
+    void refreshHealable(develop.versionId, getRemovals(develop.editStack).map((r) => r.patch));
   });
 
   // The Adaptive section (RFC-0035 slice C): which presets this photo already carries masks from, and whether the user
@@ -367,7 +372,7 @@
   onSegmentCandidate={handleSegmentCandidate}
   onSegmentAccept={handleSegmentAccept}
   onSegmentCancel={handleSegmentCancel}
-  removal={{ active: removal.active, available: removal.available, mode: removal.mode, brushRadius: removal.brushRadius, marks: removal.count, canCycle: (removal.selection?.candidates.length ?? 0) > 1, selectPhase: removal.selectPhase, selectNote: removal.selectNote, running: removal.phase === "running", guarding: removal.guarding, error: removal.error, notice: removal.notice, removals: getRemovals(develop.editStack).length, removalPatches: getRemovals(develop.editStack).map((i) => i.patch) }}
+  removal={{ active: removal.active, available: removal.available, mode: removal.mode, brushRadius: removal.brushRadius, marks: removal.count, canCycle: (removal.selection?.candidates.length ?? 0) > 1, selectPhase: removal.selectPhase, selectNote: removal.selectNote, running: removal.phase === "running", guarding: removal.guarding, error: removal.error, notice: removal.notice, removals: getRemovals(develop.editStack).length, removalPatches: getRemovals(develop.editStack).map((i) => i.patch), healable: removal.healable }}
   onRemoveToggle={handleRemoveToolToggle}
   onRemoveMode={handleRemoveMode}
   onRemoveNextGuess={handleRemoveNextGuess}
@@ -378,6 +383,7 @@
   onRemoveUndoLast={handleRemoveUndoLast}
   onRemoveDelete={handleRemoveDelete}
   onRemoveHeal={handleRemoveHealInstead}
+  onRemoveHealRemoval={handleRemoveHealRemoval}
   onMaskSelect={(id) => (masks.selectedMaskId = id)}
   onBrushSizeChange={(v) => (masks.brushSize = v)}
   onBrushHardnessChange={(v) => (masks.brushHardness = v)}

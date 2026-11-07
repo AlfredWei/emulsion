@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const api = vi.hoisted(() => ({ removalAvailable: vi.fn(), removeObject: vi.fn(), removalCancel: vi.fn(), isRemovalCancelled: (/** @type {unknown} */ e) => String(e).includes("removal cancelled") }));
+const api = vi.hoisted(() => ({ removalAvailable: vi.fn(), removeObject: vi.fn(), removalCancel: vi.fn(), removalHole: vi.fn(), removalsWithMask: vi.fn(), isRemovalCancelled: (/** @type {unknown} */ e) => String(e).includes("removal cancelled") }));
 vi.mock("$lib/api/removal.js", () => api);
 const dev = vi.hoisted(() => ({ getEditStack: vi.fn(), setEditStack: vi.fn() }));
 vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), getEditStack: dev.getEditStack, setEditStack: dev.setEditStack }));
@@ -8,16 +8,18 @@ const seg = vi.hoisted(() => ({ segmentModelStatus: vi.fn(), segmentPrepare: vi.
 vi.mock("$lib/api/segment.js", () => seg);
 const cut = vi.hoisted(() => ({ readCut: vi.fn() }));
 vi.mock("$lib/segmentCut.js", () => cut);
+const raster = vi.hoisted(() => ({ readMaskPng: vi.fn() }));
+vi.mock("$lib/maskRaster.js", () => raster);
 const regen = vi.hoisted(() => vi.fn());
 vi.mock("$lib/actions/importActions.js", () => ({ regenerateThumbnailFor: regen }));
 
-import { handleRemoveToolToggle, leaveRemoveTool, handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveMode, handleRemoveSelectClick, handleRemoveNextGuess } from "./removalActions.js";
+import { handleRemoveToolToggle, leaveRemoveTool, handleRemoveMark, handleRemoveUnmark, handleRemoveClear, handleRemoveRun, handleRemoveCancel, handleRemoveUndoLast, handleRemoveDelete, handleRemoveHealInstead, handleRemoveHealRemoval, refreshHealable, handleRemoveMode, handleRemoveSelectClick, handleRemoveNextGuess } from "./removalActions.js";
 import { develop } from "$lib/state/develop.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
 import { removal } from "$lib/state/removal.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
-import { getRemovals, listMasks, MAX_MASKS } from "$lib/api/develop.js";
+import { getRemovals, listMasks, MAX_MASKS, addRemovals } from "$lib/api/develop.js";
 
 const dab = (/** @type {number} */ x = 0.5, /** @type {number} */ r = 0.01) => /** @type {import('$lib/api/removal.js').MaskShape} */ ({ kind: "stroke", points: [[x, 0.5]], radius: r });
 const done = (/** @type {number} */ id, reduced = false) => ({ patch_id: id, engine: "lama-512-places2", x: 0, y: 0, w: 8, h: 8, src_w: 100, src_h: 100, reduced, ms: 5 });
@@ -48,6 +50,7 @@ beforeEach(() => {
   seg.segmentRelease.mockResolvedValue(undefined);
   seg.segmentDecode.mockImplementation(async () => [{ index: 0, iou: 0.9, logits_png: "L0" }, { index: 1, iou: 0.8, logits_png: "L1" }]);
   cut.readCut.mockImplementation(async (/** @type {string} */ l) => ({ bbox: [0.2, 0.2, 0.4, 0.5], tint: `tint-${l}`, coverage: 0.05 }));
+  raster.readMaskPng.mockResolvedValue({ w: 40, h: 30, data: new Uint8Array(40 * 30).fill(255) });
   shell.notify("");
 });
 afterEach(() => vi.restoreAllMocks());
@@ -246,7 +249,7 @@ describe("Heal instead", () => {
     const notify = vi.spyOn(shell, "notify").mockImplementation(() => {});
     await handleRemoveToolToggle();
     handleRemoveMark({ kind: "stroke", points: [[0.2, 0.5], [0.3, 0.5]], radius: 0.01 });
-    handleRemoveHealInstead();
+    await handleRemoveHealInstead();
     const spots = listMasks(develop.editStack).filter((m) => m.op === "spot_mask");
     expect(spots.length).toBe(1);
     const spot = /** @type {any} */ (spots[0]);
@@ -261,13 +264,28 @@ describe("Heal instead", () => {
     expect(notify).toHaveBeenCalled();
   });
 
-  it("refuses a selected object, saying so, and keeps the marks and the tool", async () => {
+  it("heals a selected object from its cut, together with a brush mark", async () => {
+    const flush = sched();
+    await handleRemoveToolToggle();
+    removal.selection = /** @type {any} */ ({ prompts: [], candidates: [], index: 0, mark: { kind: "segment", logits: "L", bbox: [0.1, 0.1, 0.2, 0.2], tint: "T" } });
+    raster.readMaskPng.mockResolvedValue({ w: 10, h: 10, data: Uint8Array.from({ length: 100 }, (_, i) => ((i % 10) >= 2 && (i % 10) < 5 && Math.floor(i / 10) >= 2 && Math.floor(i / 10) < 5 ? 255 : 0)) });
+    await handleRemoveHealInstead();
+    expect(raster.readMaskPng).toHaveBeenCalledWith("L");
+    const spot = /** @type {any} */ (listMasks(develop.editStack).find((m) => m.op === "spot_mask"));
+    expect(spot.dabs.length).toBeGreaterThan(0);
+    for (const d of spot.dabs) expect(Math.abs(d.x - 0.35)).toBeLessThan(0.2);
+    expect(flush).toHaveBeenCalledWith("Heal instead");
+    expect(removal.active).toBe(false);
+  });
+
+  it("says so when a selected object's cut cannot be read, and keeps the marks and the tool", async () => {
     const flush = sched();
     const notify = vi.spyOn(shell, "notify").mockImplementation(() => {});
     await handleRemoveToolToggle();
     removal.selection = /** @type {any} */ ({ prompts: [], candidates: [], index: 0, mark: { kind: "segment", logits: "L", bbox: [0.1, 0.1, 0.2, 0.2], tint: "T" } });
-    handleRemoveHealInstead();
-    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/Brush and Lasso/));
+    raster.readMaskPng.mockResolvedValue(null);
+    await handleRemoveHealInstead();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/could not be read/));
     expect(listMasks(develop.editStack)).toEqual([]);
     expect(flush).not.toHaveBeenCalled();
     expect(removal.count).toBe(1);
@@ -280,7 +298,7 @@ describe("Heal instead", () => {
     develop.editStack = /** @type {any} */ ({ schema_version: 1, ops: Array.from({ length: MAX_MASKS }, (_, i) => ({ op: "radial_gradient_mask", id: `m${i}` })) });
     await handleRemoveToolToggle();
     handleRemoveMark({ kind: "stroke", points: [[0.5, 0.5]], radius: 0.01 });
-    handleRemoveHealInstead();
+    await handleRemoveHealInstead();
     expect(notify).toHaveBeenCalledWith(expect.stringMatching(/Maximum/));
     expect(listMasks(develop.editStack).length).toBe(MAX_MASKS);
     expect(removal.count).toBe(1);
@@ -289,10 +307,10 @@ describe("Heal instead", () => {
   it("does nothing with no marks or while a removal runs", async () => {
     const flush = sched();
     await handleRemoveToolToggle();
-    handleRemoveHealInstead();
+    await handleRemoveHealInstead();
     handleRemoveMark({ kind: "stroke", points: [[0.5, 0.5]], radius: 0.01 });
     removal.phase = "running";
-    handleRemoveHealInstead();
+    await handleRemoveHealInstead();
     expect(flush).not.toHaveBeenCalled();
     expect(listMasks(develop.editStack)).toEqual([]);
   });
@@ -412,5 +430,88 @@ describe("click-select", () => {
     leaveRemoveTool();
     expect(seg.segmentRelease).toHaveBeenCalledTimes(1);
     expect(removal.selectPhase).toBe("idle");
+  });
+});
+
+describe("Heal instead for a finished removal", () => {
+  const hole = { x: 100, y: 50, src_w: 400, src_h: 300, png: "H" };
+  beforeEach(() => {
+    develop.editStack = addRemovals(develop.editStack, [{ patch: 5, engine: "lama-512-places2" }, { patch: 6, engine: "lama-512-places2" }]);
+    api.removalHole.mockResolvedValue(hole);
+  });
+
+  it("swaps the removal for a selected heal mask over its hole, in one edit", async () => {
+    const flush = vi.spyOn(develop, "flushEditStack").mockImplementation(async () => {});
+    vi.spyOn(shell, "notify").mockImplementation(() => {});
+    await handleRemoveHealRemoval(5);
+    expect(api.removalHole).toHaveBeenCalledWith(10, 5);
+    expect(getRemovals(develop.editStack).map((i) => i.patch)).toEqual([6]);
+    const spot = /** @type {any} */ (listMasks(develop.editStack).find((m) => m.op === "spot_mask"));
+    expect(spot.mode).toBe("heal");
+    // The 40 x 30 hole at (100, 50) of a 400 x 300 photograph: every dab lies inside its box.
+    for (const d of spot.dabs) {
+      expect(d.x).toBeGreaterThan(0.25 - 1e-9);
+      expect(d.x).toBeLessThan(0.35 + 1e-9);
+      expect(d.y).toBeGreaterThan(50 / 300 - 1e-9);
+      expect(d.y).toBeLessThan(80 / 300 + 1e-9);
+    }
+    expect(masks.selectedMaskId).toBe(spot.id);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledWith("Heal instead");
+    expect(regen).toHaveBeenCalledWith(10);
+  });
+
+  it("takes the last removal out of the op altogether", async () => {
+    vi.spyOn(shell, "notify").mockImplementation(() => {});
+    develop.editStack = addRemovals({ schema_version: 1, ops: [] }, [{ patch: 5, engine: "lama-512-places2" }]);
+    await handleRemoveHealRemoval(5);
+    expect(develop.editStack.ops.some((o) => o.op === "remove")).toBe(false);
+  });
+
+  it("changes nothing for a removal with no stored hole, saying so", async () => {
+    const flush = vi.spyOn(develop, "flushEditStack").mockImplementation(async () => {});
+    const notify = vi.spyOn(shell, "notify").mockImplementation(() => {});
+    api.removalHole.mockResolvedValue(null);
+    await handleRemoveHealRemoval(5);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/no stored hole/));
+    expect(getRemovals(develop.editStack).length).toBe(2);
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  it("changes nothing at the mask limit, saying so", async () => {
+    const flush = vi.spyOn(develop, "flushEditStack").mockImplementation(async () => {});
+    const notify = vi.spyOn(shell, "notify").mockImplementation(() => {});
+    develop.editStack = { ...develop.editStack, ops: [...develop.editStack.ops, ...Array.from({ length: MAX_MASKS }, (_, i) => /** @type {any} */ ({ op: "radial_gradient_mask", id: `m${i}` }))] };
+    await handleRemoveHealRemoval(5);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/Maximum/));
+    expect(getRemovals(develop.editStack).length).toBe(2);
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  it("ignores a removal that is not in the stack, and anything while a removal runs", async () => {
+    const flush = vi.spyOn(develop, "flushEditStack").mockImplementation(async () => {});
+    await handleRemoveHealRemoval(99);
+    removal.phase = "running";
+    await handleRemoveHealRemoval(5);
+    expect(api.removalHole).not.toHaveBeenCalled();
+    expect(flush).not.toHaveBeenCalled();
+  });
+});
+
+describe("refreshHealable", () => {
+  it("keeps the patches the catalog says have a hole, and none for no removals", async () => {
+    api.removalsWithMask.mockResolvedValue([6]);
+    await refreshHealable(10, [5, 6]);
+    expect(api.removalsWithMask).toHaveBeenCalledWith(10, [5, 6]);
+    expect(removal.healable).toEqual([6]);
+    await refreshHealable(10, []);
+    expect(removal.healable).toEqual([]);
+  });
+
+  it("offers none when the catalog cannot answer", async () => {
+    api.removalsWithMask.mockRejectedValue(new Error("x"));
+    removal.healable = [6];
+    await refreshHealable(10, [6]);
+    expect(removal.healable).toEqual([]);
   });
 });

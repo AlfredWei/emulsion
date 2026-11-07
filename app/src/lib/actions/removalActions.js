@@ -7,11 +7,12 @@ import { masks } from "$lib/state/masks.svelte.js";
 import { removal, LARGE_MARK_FRACTION } from "$lib/state/removal.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
-import { removalAvailable, removeObject, removalCancel, isRemovalCancelled } from "$lib/api/removal.js";
+import { removalAvailable, removeObject, removalCancel, isRemovalCancelled, removalHole, removalsWithMask } from "$lib/api/removal.js";
 import { segmentModelStatus, segmentPrepare, segmentDecode, segmentRelease, isNotPrepared } from "$lib/api/segment.js";
 import { readCut } from "$lib/segmentCut.js";
 import { addRemovals, getEditStack, getRemovals, removeRemoval, setEditStack, addMask, createSpotMask, listMasks, countBrushLayers, MAX_MASKS } from "$lib/api/develop.js";
 import { planHeal } from "$lib/healFromMarks.js";
+import { readMaskPng } from "$lib/maskRaster.js";
 
 /** @param {unknown} e */
 function message(e) {
@@ -209,21 +210,46 @@ export function handleRemoveCancel() {
   if (removal.phase === "running") void removalCancel();
 }
 
-/** "Heal instead": the pending Brush / Lasso marks become a Spot Removal (heal) mask, the manual tool, instead of going to
- * the model. The mask is selected for the user to adjust its source and softness; the marks are dropped and the tool is left. */
-export function handleRemoveHealInstead() {
+/** The photograph's width / height as the canvas knows it (1 until it is known). */
+function photoAspect() {
+  return develop.imageNativeWidth && develop.imageNativeHeight ? develop.imageNativeWidth / develop.imageNativeHeight : 1;
+}
+
+/** The Spot Removal (heal) mask for `plan`, or null (after saying why) when the stack has no room for another mask. */
+function healMask(/** @type {{ dabs: import('$lib/healFromMarks.js').HealDab[], sourceOffset: { dx: number, dy: number } }} */ plan) {
+  if (listMasks(develop.editStack).length >= MAX_MASKS || countBrushLayers(develop.editStack) >= MAX_MASKS) {
+    shell.notify(`Maximum ${MAX_MASKS} masks reached: delete one to heal this area`);
+    return null;
+  }
+  return { ...createSpotMask(plan.dabs[0]), dabs: plan.dabs, sourceOffset: plan.sourceOffset };
+}
+
+/** "Heal instead": the pending marks become a Spot Removal (heal) mask, the manual tool, instead of going to the model. A
+ * Brush or Lasso mark becomes dabs from its geometry, a selected object from its cut. The mask is selected for the user to
+ * adjust its source and softness; the marks are dropped and the tool is left. */
+export async function handleRemoveHealInstead() {
   if (develop.versionId === null || removal.phase === "running" || removal.count === 0) return;
-  const aspect = develop.imageNativeWidth && develop.imageNativeHeight ? develop.imageNativeWidth / develop.imageNativeHeight : 1;
-  const plan = planHeal(removal.allShapes(), aspect);
+  const shapes = removal.allShapes();
+  const gen = removal.generation;
+  /** @type {import('$lib/healFromMarks.js').MaskGrid[]} */
+  const grids = [];
+  for (const s of shapes) {
+    if (s.kind !== "segment") continue;
+    const cut = await readMaskPng(s.logits);
+    if (gen !== removal.generation) return; // the marks were cleared meanwhile
+    if (!cut) {
+      shell.notify("The selected object could not be read");
+      return;
+    }
+    grids.push({ box: [0, 0, 1, 1], ...cut });
+  }
+  const plan = planHeal(shapes, photoAspect(), grids);
   if ("reason" in plan) {
     shell.notify(plan.reason);
     return;
   }
-  if (listMasks(develop.editStack).length >= MAX_MASKS || countBrushLayers(develop.editStack) >= MAX_MASKS) {
-    shell.notify(`Maximum ${MAX_MASKS} masks reached: delete one to heal this area`);
-    return;
-  }
-  const mask = { ...createSpotMask(plan.dabs[0]), dabs: plan.dabs, sourceOffset: plan.sourceOffset };
+  const mask = healMask(plan);
+  if (!mask) return;
   develop.editStack = addMask(develop.editStack, mask);
   leaveRemoveTool();
   masks.selectedMaskId = mask.id;
@@ -231,11 +257,62 @@ export function handleRemoveHealInstead() {
   shell.notify("Healing with Spot Removal: adjust the source or the softness in the mask panel");
 }
 
+/** "Heal instead" for a removal that is already in the picture: its stored hole becomes a Spot Removal (heal) mask and the
+ * removal comes out of the stack, in one edit (History brings the removal back). The removal stays stored.
+ * @param {number} patch */
+export async function handleRemoveHealRemoval(patch) {
+  const versionId = develop.versionId;
+  if (versionId === null || removal.phase === "running" || !getRemovals(develop.editStack).some((i) => i.patch === patch)) return;
+  let hole;
+  try {
+    hole = await removalHole(versionId, patch);
+  } catch (e) {
+    shell.notify(message(e));
+    return;
+  }
+  if (develop.versionId !== versionId) return;
+  const cut = hole ? await readMaskPng(hole.png) : null;
+  if (!hole || !cut) {
+    shell.notify(hole ? "The stored hole could not be read" : "This removal has no stored hole to heal from");
+    return;
+  }
+  if (develop.versionId !== versionId || !getRemovals(develop.editStack).some((i) => i.patch === patch)) return;
+  const box = /** @type {[number, number, number, number]} */ ([hole.x / hole.src_w, hole.y / hole.src_h, (hole.x + cut.w) / hole.src_w, (hole.y + cut.h) / hole.src_h]);
+  const plan = planHeal([], hole.src_w / hole.src_h, [{ box, ...cut }]);
+  if ("reason" in plan) {
+    shell.notify(plan.reason);
+    return;
+  }
+  const mask = healMask(plan);
+  if (!mask) return;
+  develop.editStack = addMask(removeRemoval(develop.editStack, patch), mask);
+  removal.notice = "";
+  masks.selectedMaskId = mask.id;
+  await develop.flushEditStack("Heal instead");
+  regenerateThumbnailFor(versionId);
+  shell.notify("Healing with Spot Removal: adjust the source or the softness in the mask panel");
+}
+
+/** Reads which of the open photograph's removals have a stored hole into `removal.healable`. Call when the list changes.
+ * @param {number | null} versionId @param {number[]} patchIds */
+export async function refreshHealable(versionId, patchIds) {
+  if (versionId === null || patchIds.length === 0) {
+    removal.healable = [];
+    return;
+  }
+  try {
+    const ids = await removalsWithMask(versionId, patchIds);
+    if (develop.versionId === versionId) removal.healable = ids;
+  } catch {
+    if (develop.versionId === versionId) removal.healable = [];
+  }
+}
+
 /** Runs the removal on the marks. Large marks ask once first (`confirmLarge` is the second press). */
 export async function handleRemoveRun(confirmLarge = false) {
   const versionId = develop.versionId;
   if (versionId === null || removal.phase === "running" || removal.count === 0) return;
-  const aspect = develop.imageNativeWidth && develop.imageNativeHeight ? develop.imageNativeWidth / develop.imageNativeHeight : 1;
+  const aspect = photoAspect();
   if (!confirmLarge && removal.extent(aspect) > LARGE_MARK_FRACTION) {
     removal.guarding = true;
     return;

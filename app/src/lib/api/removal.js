@@ -47,3 +47,20 @@ export function removalCancel() {
 export function isRemovalCancelled(e) {
   return String(e).includes("removal cancelled");
 }
+
+/** Which of `patchIds` (removals of `versionId`) have a stored hole, so can be healed or redone from it.
+ * @param {number} versionId @param {number[]} patchIds
+ * @returns {Promise<number[]>} */
+export function removalsWithMask(versionId, patchIds) {
+  return invoke("removals_with_mask", { versionId, patchIds });
+}
+
+/**
+ * The hole stored with a finished removal: where it sits in the photograph's full decode (`src_w` x `src_h`) and a gray
+ * PNG (base64) of just its box, 255 inside. Null for a removal made before holes were kept.
+ * @typedef {{ x: number, y: number, src_w: number, src_h: number, png: string }} RemovalHole
+ * @param {number} versionId @param {number} patchId
+ * @returns {Promise<RemovalHole | null>} */
+export function removalHole(versionId, patchId) {
+  return invoke("removal_hole", { versionId, patchId });
+}

@@ -39,7 +39,7 @@
    *   onSegmentCandidate?: (index: number) => void,
    *   onSegmentAccept?: () => void,
    *   onSegmentCancel?: () => void,
-   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number, removalPatches?: number[] },
+   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number, removalPatches?: number[], healable?: number[] },
    *   onRemoveToggle?: () => void,
    *   onRemoveMode?: (mode: "brush" | "lasso" | "select") => void,
    *   onRemoveNextGuess?: () => void,
@@ -50,6 +50,7 @@
    *   onRemoveUndoLast?: () => void,
    *   onRemoveDelete?: (patch: number) => void,
    *   onRemoveHeal?: () => void,
+   *   onRemoveHealRemoval?: (patch: number) => void,
    *   onNewBrush: () => void,
    *   onNewSpot: () => void,
    *   onToggleMaskOverlaysVisible: () => void,
@@ -95,6 +96,7 @@
     onRemoveUndoLast = () => {},
     onRemoveDelete = () => {},
     onRemoveHeal = () => {},
+    onRemoveHealRemoval = () => {},
     onNewBrush,
     onNewSpot,
     onToggleMaskOverlaysVisible,
@@ -387,6 +389,10 @@
               <button class="tool small" type="button" data-testid="remove-delete" data-patch={patch} title="Take removal {index + 1} out (History can bring it back)" aria-label="Delete removal {index + 1}" onclick={() => onRemoveDelete(patch)}>{index + 1} ×</button>
             {/each}
           {/if}
+          {#each (removal.removalPatches ?? []).filter((p) => removal.healable?.includes(p)) as patch (patch)}
+            {@const index = (removal.removalPatches ?? []).indexOf(patch)}
+            <button class="tool small" type="button" data-testid="remove-heal-removal" data-patch={patch} title="Heal where removal {index + 1} was with Spot Removal instead of the model's fill (History can bring the removal back)" aria-label="Heal removal {index + 1} instead" onclick={() => onRemoveHealRemoval(patch)}>Heal {(removal.removalPatches?.length ?? 0) > 1 ? index + 1 : "it"}</button>
+          {/each}
         {/if}
       {/if}
     </div>

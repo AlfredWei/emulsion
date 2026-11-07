@@ -260,10 +260,20 @@ pub async fn regenerate_removal(
     result.map_err(|e| e.to_string())?
 }
 
-/// Which of `patch_ids` (removals of `version_id`) can be redone, that is have a stored hole.
+/// One removal as the strip needs to judge it: the decode it was made on and whether it has a stored hole.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct RemovalInfo {
+    pub patch_id: i64,
+    pub src_w: u32,
+    pub src_h: u32,
+    pub has_hole: bool,
+}
+
+/// What is known of each of `patch_ids` (removals of `version_id`); an id with no row is left out (the removal is missing).
 #[tauri::command]
-pub async fn removals_with_mask(state: State<'_, AppState>, version_id: i64, patch_ids: Vec<i64>) -> Result<Vec<i64>, String> {
-    state.catalog.lock().map_err(|e| e.to_string())?.removals_with_mask(version_id, &patch_ids).map_err(|e| e.to_string())
+pub async fn removal_info(state: State<'_, AppState>, version_id: i64, patch_ids: Vec<i64>) -> Result<Vec<RemovalInfo>, String> {
+    let rows = state.catalog.lock().map_err(|e| e.to_string())?.removals_info(version_id, &patch_ids).map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(|r| RemovalInfo { patch_id: r.id, src_w: r.src_w, src_h: r.src_h, has_hole: r.has_hole }).collect())
 }
 
 /// A stored hole as the frontend needs it to plan a Heal: its place in the photograph's full decode (`src_w` x `src_h`)

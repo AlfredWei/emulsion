@@ -276,11 +276,31 @@ describe("Develop: the Remove tool, with the model", function () {
     expect(after.length).toBe(1);
     expect(after[0].engine).toBe("lama-512-places2");
     expect(after[0].patch).not.toBe(old);
-    expect(await invoke("removals_with_mask", { versionId, patchIds: [old, after[0].patch] })).toEqual([old, after[0].patch]); // both rows stay, with their holes
+    const rows = await invoke("removal_info", { versionId, patchIds: [old, after[0].patch] });
+    expect(rows.map((/** @type {any} */ r) => [r.patch_id, r.has_hole])).toEqual([[old, true], [after[0].patch, true]]); // both rows stay, with their holes
     const labels = (await invoke("get_history", { versionId })).map((/** @type {any} */ r) => r.label);
     expect(labels[labels.length - 1]).toBe("Redo removal");
     await waitFor(async () => (await canvasRemovals()) === String(after[0].patch), "the canvas to carry the new patch");
     expect(await exists('[data-testid="remove-redo"]')).toBe(false); // the engine matches now
     await shot("7-try-again");
+  });
+
+  it("a removal whose stored fill is missing is called out, and Undo last takes it out", async () => {
+    const [real] = await stackRemovals();
+    const stack = await invoke("get_edit_stack", { versionId });
+    stack.ops.find((/** @type {any} */ o) => o.op === "remove").items.push({ patch: 999999, engine: "lama-512-places2" });
+    await invoke("set_edit_stack", { versionId, stack, label: "Pretend a missing patch" });
+    await browser.refresh();
+    await openDevelopFor(FIXTURE_NAME);
+    await (await $("#exposure")).waitForExist({ timeout: 30000 });
+    await click('[data-testid="remove-tool"]');
+    await waitFor(() => exists('[data-testid="remove-problem"][data-patch="999999"]'), "the missing removal to be called out");
+    expect(await text('[data-testid="remove-problem"][data-patch="999999"]')).toMatch(/Removal 2 is missing/);
+    expect(await exists(`[data-testid="remove-problem"][data-patch="${real}"]`)).toBe(false); // the real one is fine
+    await shot("8-missing-patch");
+    await click('[data-testid="remove-undo"]'); // the newest is the missing one
+    await waitFor(async () => (await stackRemovals()).join() === String(real), "only the real removal to be left");
+    await waitFor(async () => !(await exists('[data-testid="remove-problem"]')), "the call-out to go");
+    await click('[data-testid="remove-tool"]');
   });
 });

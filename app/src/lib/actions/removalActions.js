@@ -7,7 +7,7 @@ import { masks } from "$lib/state/masks.svelte.js";
 import { removal, LARGE_MARK_FRACTION } from "$lib/state/removal.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
-import { removalAvailable, removeObject, removalCancel, isRemovalCancelled, removalHole, removalsWithMask, removalEngine, regenerateRemoval } from "$lib/api/removal.js";
+import { removalAvailable, removeObject, removalCancel, isRemovalCancelled, removalHole, removalInfo, removalEngine, regenerateRemoval } from "$lib/api/removal.js";
 import { segmentModelStatus, segmentPrepare, segmentDecode, segmentRelease, isNotPrepared } from "$lib/api/segment.js";
 import { readCut } from "$lib/segmentCut.js";
 import { addRemovals, getEditStack, getRemovals, removeRemoval, replaceRemoval, setEditStack, addMask, createSpotMask, listMasks, countBrushLayers, MAX_MASKS } from "$lib/api/develop.js";
@@ -327,18 +327,24 @@ export async function handleRemoveRedo(patch) {
   }
 }
 
-/** Reads which of the open photograph's removals have a stored hole into `removal.healable`. Call when the list changes.
+/** Reads what the catalog knows of the open photograph's removals into `removal.rows` (a stored hole to heal or redo from,
+ * the decode it was made on, or no row at all). Call when the list changes.
  * @param {number | null} versionId @param {number[]} patchIds */
-export async function refreshHealable(versionId, patchIds) {
+export async function refreshRemovalRows(versionId, patchIds) {
   if (versionId === null || patchIds.length === 0) {
-    removal.healable = [];
+    removal.rows = {};
     return;
   }
   try {
-    const ids = await removalsWithMask(versionId, patchIds);
-    if (develop.versionId === versionId) removal.healable = ids;
+    const info = await removalInfo(versionId, patchIds);
+    if (develop.versionId !== versionId) return;
+    /** @type {Record<number, import('$lib/removalFit.js').RemovalRow>} */
+    const rows = {};
+    for (const id of patchIds) rows[id] = null;
+    for (const r of info) rows[r.patch_id] = { w: r.src_w, h: r.src_h, hole: r.has_hole };
+    removal.rows = rows;
   } catch {
-    if (develop.versionId === versionId) removal.healable = [];
+    if (develop.versionId === versionId) removal.rows = {};
   }
 }
 

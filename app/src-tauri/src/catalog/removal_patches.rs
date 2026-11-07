@@ -27,6 +27,16 @@ pub struct StoredMask {
     pub png: Vec<u8>,
 }
 
+/// What the catalog knows of a patch without reading its pictures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatchInfo {
+    pub id: i64,
+    /// The decode the patch was made on.
+    pub src_w: u32,
+    pub src_h: u32,
+    pub has_hole: bool,
+}
+
 impl Catalog {
     /// Stores a patch for `version_id` and returns its id (the `id` of `patch` is ignored).
     #[allow(dead_code)] // the job stores the hole with it (`add_removal_patch_with_mask`); kept for tests and callers without one
@@ -55,13 +65,14 @@ impl Catalog {
             .optional()
     }
 
-    /// Which of `ids` (patches of `version_id`) have a stored hole: the ones that can be redone.
-    pub fn removals_with_mask(&self, version_id: i64, ids: &[i64]) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare("SELECT 1 FROM removal_patches WHERE id = ?1 AND version_id = ?2 AND mask_png IS NOT NULL")?;
+    /// What is known of each of `ids` (patches of `version_id`) without reading the pictures: the decode size it was made
+    /// on and whether it has a stored hole. An id that is unknown, or belongs to another photograph, is left out.
+    pub fn removals_info(&self, version_id: i64, ids: &[i64]) -> Result<Vec<PatchInfo>> {
+        let mut stmt = self.conn.prepare("SELECT src_w, src_h, mask_png IS NOT NULL FROM removal_patches WHERE id = ?1 AND version_id = ?2")?;
         let mut out = Vec::new();
         for &id in ids {
-            if stmt.exists(params![id, version_id])? {
-                out.push(id);
+            if let Some((src_w, src_h, has_hole)) = stmt.query_row(params![id, version_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()? {
+                out.push(PatchInfo { id, src_w, src_h, has_hole });
             }
         }
         Ok(out)
@@ -157,7 +168,9 @@ mod tests {
         assert_eq!(catalog.get_removal_mask(v1, without).unwrap(), None, "made before the hole was kept");
         assert_eq!(catalog.get_removal_mask(v2, with).unwrap(), None, "another photograph's");
         assert_eq!(catalog.get_removal_mask(v1, 9999).unwrap(), None);
-        assert_eq!(catalog.removals_with_mask(v1, &[without, with, 9999]).unwrap(), vec![with]);
+        let info = catalog.removals_info(v1, &[without, with, 9999]).unwrap();
+        assert_eq!(info, vec![PatchInfo { id: without, src_w: patch(2).src_w, src_h: patch(2).src_h, has_hole: false }, PatchInfo { id: with, src_w: patch(1).src_w, src_h: patch(1).src_h, has_hole: true }], "an unknown id is left out");
+        assert!(catalog.removals_info(v2, &[with]).unwrap().is_empty(), "another photograph's");
         // The patch itself is unchanged by carrying a hole.
         assert_eq!(catalog.get_removal_patches(v1, &[with]).unwrap()[0], StoredPatch { id: with, ..patch(1) });
     }

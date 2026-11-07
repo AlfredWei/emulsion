@@ -21,8 +21,10 @@ export class RemovalStore {
   brushRadius = $state(0.012);
   /** The installed removal engine's id; "" until asked. A removal made with another one can be tried again. */
   engine = $state("");
-  /** Which of the photograph's finished removals have a stored hole (so can be healed instead), by patch id. */
-  healable = $state(/** @type {number[]} */ ([]));
+  /** What the catalog knows of the photograph's finished removals, by patch id: its decode and whether it has a stored hole;
+   * null for a removal with no row. A removal not asked about yet has no entry.
+   * @type {Record<number, import('$lib/removalFit.js').RemovalRow>} */
+  rows = $state({});
   /** The marks drawn and not yet removed, in the order drawn. */
   shapes = $state(/** @type {import('$lib/api/removal.js').MaskShape[]} */ ([]));
   /** "idle" | "running". */

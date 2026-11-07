@@ -3,6 +3,10 @@
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
 
+## M7 object removal, slice F1: a first test of detail transfer (2026-11-08, `docs/removal-detail-transfer-f1`)
+
+Docs only ([RFC-0032 §21](docs/rfc/RFC-0032-ai-object-removal.md)). Adding band-passed noise to LaMa's soft fills on the 60 bake-off cases raises the median `detail` from 0.29 to 0.69 (medium 0.29 → 0.49, large 0.10 → 0.55) for about 0.2 dB of PSNR, but by eye it helps only where the real area is textured and speckles clean skies, plain walls and bokeh. **Not a default**; the next candidate is texture taken from the ring itself, gated, judged on the user's own photographs. Nothing in the app changed. **Not verified:** a real texture source, the gate, the user's photographs, a native-size tiled second pass, Windows.
+
 ## M7 object removal: backlog verified in the real app (2026-11-07, `chore/removal-verification-backlog`)
 
 With the click-select models (`SEGMENT_MODELS_DIR`) the real-model spec runs **13 passing** (4 min 8 s): the **Select** step (click an object, Remove takes it out) passes, and a new step shows **Heal instead heals a selected object** from its cut (a heal `spot_mask` with a dab near the click, no new removal). The spec puts the stack back after Select so the later steps see the same state with or without those models. **Measured:** a stored hole is **249 bytes** of PNG for a small lasso removal (box at (890, 494) of a 1280 x 715 decode): one data point, small. **Still not verified:** how a heal looks (black WebKit canvas in screenshots), hole size on a large removal, "no longer fits" on a really replaced file, a real mouse click, Windows (CI runs the unit and E2E jobs, not this local-only spec).

@@ -1491,6 +1491,12 @@ export function addRemovals(/** @type {EditStack} */ stack, /** @type {RemovalIt
   return setRemovals(stack, [...have, ...added.filter((a) => !have.some((h) => h.patch === a.patch))]);
 }
 
+/** `stack` with the removal that used patch `from` using `to` instead, in the same place (the rest of the list is untouched).
+ * @returns {EditStack} */
+export function replaceRemoval(/** @type {EditStack} */ stack, /** @type {number} */ from, /** @type {RemovalItem} */ to) {
+  return setRemovals(stack, getRemovals(stack).map((i) => (i.patch === from ? { patch: to.patch, engine: to.engine } : i)));
+}
+
 /** `stack` without the removal that used `patch` (the patch itself stays in the catalog: undo can bring the item back).
  * @returns {EditStack} */
 export function removeRemoval(/** @type {EditStack} */ stack, /** @type {number} */ patch) {

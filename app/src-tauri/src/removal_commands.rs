@@ -310,6 +310,12 @@ pub async fn removal_available(app: AppHandle, state: State<'_, AppState>) -> Re
     tauri::async_runtime::spawn_blocking(move || inpaint_models::ready_path(&models).is_some()).await.map_err(|e| e.to_string())
 }
 
+/// The id of the installed removal engine (a removal made with another one can be tried again with this one).
+#[tauri::command]
+pub async fn removal_engine() -> &'static str {
+    ENGINE
+}
+
 /// The Develop canvas's source picture: the plain preview (`full` picks the 1:1 tier) with this photo's kept denoised
 /// copy mixed in at `amount` (0 = none) and the removal patches `patch_ids` laid over it, as a PNG the canvas loads in
 /// place of the plain preview (RFC-0032 §12.1, RFC-0027 §3.3). `null` means "use the plain preview": nothing to mix

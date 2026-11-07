@@ -19,6 +19,8 @@ export class RemovalStore {
   mode = $state(/** @type {"brush" | "lasso" | "select"} */ ("brush"));
   /** Brush radius as a fraction of the photograph's longer side. */
   brushRadius = $state(0.012);
+  /** The installed removal engine's id; "" until asked. A removal made with another one can be tried again. */
+  engine = $state("");
   /** Which of the photograph's finished removals have a stored hole (so can be healed instead), by patch id. */
   healable = $state(/** @type {number[]} */ ([]));
   /** The marks drawn and not yet removed, in the order drawn. */

@@ -243,5 +243,44 @@ describe("Develop: the Remove tool, with the model", function () {
     expect(labels.filter((/** @type {string} */ l) => l === "Heal instead").length).toBeGreaterThanOrEqual(2);
     await waitFor(async () => (await canvasRemovals()) === "", "the canvas to drop the removal");
     await shot("6-heal-finished-removal");
+    await click('[data-testid="remove-tool"]'); // the tool stays armed after a Heal on a chip: leave it
+    await waitFor(async () => !(await exists('[data-testid="remove-layer"]')), "the tool to be left");
+  });
+
+  it("Try again redoes a removal made with an older engine from its stored hole, in place, in one edit", async () => {
+    // A removal with the installed engine has no Try again (the result would be identical): make one, then say it came from an older model.
+    await click('[data-testid="remove-tool"]');
+    await waitFor(() => exists('[data-testid="remove-layer"]'), "the layer");
+    await click('[data-testid="remove-options"] button', "Lasso");
+    await draw([[0.15, 0.15], [0.2, 0.15], [0.2, 0.2], [0.15, 0.2], [0.15, 0.16]]);
+    await waitFor(async () => (await text('[data-testid="remove-status"]')) === "1 mark", "the lasso mark");
+    await click('[data-testid="remove-run"]');
+    await waitFor(async () => (await stackRemovals()).length === 1, "the removal in the stack", 180000);
+    expect(await exists('[data-testid="remove-redo"]')).toBe(false);
+    const [old] = await stackRemovals();
+    const stack = await invoke("get_edit_stack", { versionId });
+    const op = stack.ops.find((/** @type {any} */ o) => o.op === "remove");
+    op.items[0].engine = "lama-old";
+    await invoke("set_edit_stack", { versionId, stack, label: "Pretend an older engine" });
+    await browser.refresh();
+    await openDevelopFor(FIXTURE_NAME);
+    await (await $("#exposure")).waitForExist({ timeout: 30000 });
+    await click('[data-testid="remove-tool"]');
+    await waitFor(() => exists(`[data-testid="remove-redo"][data-patch="${old}"]`), "the Try again chip");
+    await click(`[data-testid="remove-redo"][data-patch="${old}"]`);
+    await waitFor(async () => {
+      const [now] = await stackRemovals();
+      return now !== undefined && now !== old;
+    }, "the removal to be redone", 180000);
+    const after = (await invoke("get_edit_stack", { versionId })).ops.find((/** @type {any} */ o) => o.op === "remove").items;
+    expect(after.length).toBe(1);
+    expect(after[0].engine).toBe("lama-512-places2");
+    expect(after[0].patch).not.toBe(old);
+    expect(await invoke("removals_with_mask", { versionId, patchIds: [old, after[0].patch] })).toEqual([old, after[0].patch]); // both rows stay, with their holes
+    const labels = (await invoke("get_history", { versionId })).map((/** @type {any} */ r) => r.label);
+    expect(labels[labels.length - 1]).toBe("Redo removal");
+    await waitFor(async () => (await canvasRemovals()) === String(after[0].patch), "the canvas to carry the new patch");
+    expect(await exists('[data-testid="remove-redo"]')).toBe(false); // the engine matches now
+    await shot("7-try-again");
   });
 });

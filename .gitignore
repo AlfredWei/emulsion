@@ -29,3 +29,6 @@ app/src-tauri/bundled-models/
 
 # The AI helper copied for a release build (app/scripts/prepare-ai-helper.mjs)
 app/src-tauri/binaries/
+
+# The 208 MB removal model, copied here for `make dev` (see models/INPAINT_MODEL.md); never committed
+models/lama_fp32.onnx

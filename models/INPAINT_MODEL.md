@@ -10,3 +10,7 @@ The app ships one inpainting file for the Remove tool, **bundled in the installe
 - **Licence**: Apache-2.0 for the code and the weights, per the model card of this repository and of the original `big-lama` card. **The upstream `LICENSE` text was not retrieved when this was written (RFC-0032 §9.4), so it is not reproduced here**; adding it with the other bundled models' notices is open.
 - **Training data**: Places2. **Its terms were not read** (the page was unreachable during the bake-off). The product owner accepted shipping a model trained on it on 2026-11-02 (ADR-0010 §2), knowing that.
 - **Measured** (RFC-0032 §9): closest to the original in 46 of 60 hole cases against MI-GAN and a PatchMatch baseline; 2.3 s per removal on an M1 Pro CPU at its native window; bit-identical between runs on one machine and provider, texture-level differences between CPU and CoreML (§10).
+
+## In a development build (`make dev`)
+
+The 208 MB file is not committed. Copy it to `models/lama_fp32.onnx` (it is git-ignored; the SHA-256 above must match, or `node app/scripts/fetch-bundled-models.mjs --from <dir>` fetches or copies it). A debug build seeds the app's model cache from the checkout's `models/` at startup and when the Remove tool checks availability, **after** any `target/debug/models` a bundled build left behind (before 2026-11-08 that folder hid this one). Restart the app after adding the file.

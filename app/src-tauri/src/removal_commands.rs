@@ -317,7 +317,13 @@ pub async fn removal_cancel(helper: State<'_, Arc<AiHelper>>) -> Result<(), Stri
 #[tauri::command]
 pub async fn removal_available(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     let models = resolve_cache_root(&app, &state.catalog)?.join("inpaint_models");
-    tauri::async_runtime::spawn_blocking(move || inpaint_models::ready_path(&models).is_some()).await.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        // Seeds first (and waits for the startup pass), like the other families' status checks.
+        crate::bundled_models::seed_from_app(&app, &models, &crate::bundled_models::INPAINT);
+        inpaint_models::ready_path(&models).is_some()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// The id of the installed removal engine (a removal made with another one can be tried again with this one).

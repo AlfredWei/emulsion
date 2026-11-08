@@ -40,14 +40,20 @@ pub const UPSCALE: [Shipped; 1] = [Shipped { name: crate::upscale_models::FILENA
 /// check that arrives mid-copy waits for it rather than reporting "missing" and opening the download dialog.
 static SEED_LOCK: Mutex<()> = Mutex::new(());
 
-/// The `models/` folder of the app's resources, if this build carries one.
-pub fn bundled_dir(app: &AppHandle) -> Option<PathBuf> {
-    let shipped = app.path().resource_dir().ok().map(|d| d.join("models")).filter(|d| d.is_dir());
-    // A development build (`tauri dev`) has no resources, but a source checkout has the small committed models
-    // (`models/*.onnx`), so the feature works there without an import. Release builds never look here.
+/// The folders that may carry this build's models, best first: the `models/` folder of the app's resources, and in a
+/// development build also the source checkout's `models/`. A development build used to take the first one only, so a
+/// stale `target/debug/models` left by an earlier bundled build hid the checkout's files (the large removal model is
+/// copied into the checkout's `models/` by hand, never committed). Release builds never look in the checkout.
+pub fn bundled_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = app.path().resource_dir().ok().map(|d| d.join("models")).into_iter().filter(|d| d.is_dir()).collect();
     #[cfg(debug_assertions)]
-    let shipped = shipped.or_else(|| Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models")).filter(|d| d.is_dir()));
-    shipped
+    {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models");
+        if source.is_dir() {
+            dirs.push(source);
+        }
+    }
+    dirs
 }
 
 fn valid(path: &Path, f: &Shipped) -> bool {
@@ -84,9 +90,10 @@ pub fn seed(dest_dir: &Path, bundled: &Path, wanted: &[Shipped]) -> Result<usize
 /// Seeds one family from this build's bundle, if it has one. Failures are logged, not raised: the download path
 /// still works, and a status check must never fail because a bundled copy could not be installed.
 pub fn seed_from_app(app: &AppHandle, dest_dir: &Path, wanted: &[Shipped]) {
-    let Some(bundled) = bundled_dir(app) else { return };
-    if let Err(e) = seed(dest_dir, &bundled, wanted) {
-        eprintln!("bundled model seeding: {e}");
+    for bundled in bundled_dirs(app) {
+        if let Err(e) = seed(dest_dir, &bundled, wanted) {
+            eprintln!("bundled model seeding: {e}");
+        }
     }
 }
 

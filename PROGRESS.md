@@ -5,6 +5,10 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## Develop: capture settings under the histogram (2026-11-09, `feature/develop-shot-info`)
+
+The Develop histogram now carries a caption row with the open photo's **ISO, focal length, aperture and shutter** ("ISO 200  50 mm  f/8.0  1/250s", Lightroom's order; a setting the file did not record is left out). Filename and pixel size were already in the Develop info bar and the zoom % in the zoom HUD, so this was the missing part of what the Library loupe's top-left overlay shows. Pure wording in `lib/shotInfo.js` (`formatShutter` moved there from the Library info panel); `Histogram` takes an optional `shotInfo` list that the Library histogram does not pass. **Verified:** vitest (1269), svelte-check. **Not verified:** how it looks in the real window (not driven), a narrow panel wrapping onto two lines.
+
 ## M7 object removal: "no longer fits" checked in the real window (2026-11-09, `test/removal-no-longer-fits-e2e`)
 
 New local spec `develop-removal-no-longer-fits` ([RFC-0032 §23](docs/rfc/RFC-0032-ai-object-removal.md)): a real removal, then the patch row's recorded decode size is rewritten to another shape with `sqlite3` and the photo reopened: the strip says **"Removal 1 no longer fits this photo: take it out"** and Undo last clears it. **2 passing, 2 min 16 s.** **Finding:** overwriting the source file on disk is not noticed by Develop at all (size and content hash are recorded at import only, the preview cache keys on that hash, there is no relink), so the call-out is reachable only through mismatched stored data, not a replaced file; whether to re-read changed files is a product decision for the user. **Not verified:** the render's skip against the strip on a real differently shaped decode, a real mouse, Windows.

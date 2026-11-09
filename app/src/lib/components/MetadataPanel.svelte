@@ -1,5 +1,6 @@
 <script>
   import { onMount } from "svelte";
+  import { formatShutter } from "$lib/shotInfo.js";
   import {
     assignKeywordPath,
     removeKeywordFromImage,
@@ -95,12 +96,6 @@
     image ? [image.camera_make, image.camera_model].filter(Boolean).join(" ") || "—" : "—",
   );
   let lensLine = $derived(image?.lens_model || "—");
-
-  function formatShutter(/** @type {number} */ seconds) {
-    if (seconds >= 1) return `${seconds}s`;
-    const denominator = Math.round(1 / seconds);
-    return `1/${denominator}s`;
-  }
 
   let exposureLine = $derived.by(() => {
     if (!image) return "—";

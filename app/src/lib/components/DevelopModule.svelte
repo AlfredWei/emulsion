@@ -18,6 +18,8 @@
   import { softProof } from "$lib/state/softProof.svelte.js";
   import MaskEditorPanel from "$lib/components/MaskEditorPanel.svelte";
   import DevelopPanel from "$lib/components/DevelopPanel.svelte";
+  import { library } from "$lib/state/library.svelte.js";
+  import { shotInfoParts } from "$lib/shotInfo.js";
   import { handleChooseCustomProfile } from "$lib/actions/softProofActions.js";
   import MaskToolStrip from "$lib/components/MaskToolStrip.svelte";
   import ModelDownloadDialog from "$lib/components/ModelDownloadDialog.svelte";
@@ -43,6 +45,9 @@
   $effect(() => {
     void refreshRemovalRows(develop.versionId, getRemovals(develop.editStack).map((r) => r.patch));
   });
+
+  // The open photo's capture settings (ISO, focal length, aperture, shutter), as the catalog lists them.
+  const shotInfo = $derived(shotInfoParts(library.images.find((img) => img.version_id === develop.versionId)));
 
   const removalIds = $derived(getRemovals(develop.editStack).map((r) => r.patch));
   /** What is wrong with each removal on the open photo (patch id -> "missing" | "no longer fits"). */
@@ -259,6 +264,7 @@
     showClippingOverlay={develop.showClippingOverlay}
     onToggleClippingOverlay={handleToggleClippingOverlay}
     hoverPixel={develop.hoverPixel}
+    {shotInfo}
     exposure={developView.exposure}
     contrast={developView.contrast}
     saturation={developView.saturation}

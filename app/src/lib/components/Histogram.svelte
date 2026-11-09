@@ -29,9 +29,10 @@
    *   showClippingOverlay?: boolean,
    *   onToggleClippingOverlay?: () => void,
    *   hoverPixel?: {r: number, g: number, b: number} | null,
+   *   shotInfo?: string[],
    * }}
    */
-  let { data, showClippingOverlay = false, onToggleClippingOverlay, hoverPixel = null } = $props();
+  let { data, showClippingOverlay = false, onToggleClippingOverlay, hoverPixel = null, shotInfo = [] } = $props();
 
   const BUCKETS = 256;
   const VIEW_W = 256;
@@ -167,6 +168,12 @@
       {/if}
     </div>
   {/if}
+  {#if shotInfo.length > 0}
+    <!-- Capture settings under the histogram, as Lightroom shows them: ISO, focal length, aperture, shutter. -->
+    <div class="shot-info" data-testid="histogram-shot-info">
+      {#each shotInfo as part (part)}<span>{part}</span>{/each}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -275,6 +282,18 @@
     margin-top: 4px;
     padding: 0 2px;
     font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  }
+  .shot-info {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 10px;
+    margin-top: 4px;
+    padding: 0 2px;
+    font-size: 11px;
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     color: var(--text-secondary, rgba(255, 255, 255, 0.6));
   }

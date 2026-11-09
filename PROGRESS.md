@@ -3,6 +3,11 @@
 Running log of where this project stands. Update this whenever a milestone step lands or the plan changes — this is the first thing to read after a session restart or a day away, before re-deriving context from scratch.
 
 
+
+## M7 culling E: two licence questions read from the sources (2026-11-09, `docs/culling-e-licences`)
+
+Docs only ([RFC-0031 §8.9](docs/rfc/RFC-0031-intelligent-culling.md)). **BlinkCNN:** the repository's data page lists seven training corpora and states **no licence for any of them** (each has its own, requested from its authors, no re-hosting), so commercial use of the weights stays an open question for the user. **MediaPipe:** Face Mesh V2 and Blendshape V2 model cards both say Apache-2.0 (read via a mirror of the card PDFs). **Left / right:** Google's guide says `eyeBlinkLeft` is the subject's left, i.e. the image right, as the tool assumes. **Not verified:** the official card copies and the bundle's licence file, the corpora's actual terms, any accuracy (still needs the user's photographs).
+
 ## M7 object removal, slice F1: a first test of detail transfer (2026-11-08, `docs/removal-detail-transfer-f1`)
 
 Docs only ([RFC-0032 §21](docs/rfc/RFC-0032-ai-object-removal.md)). Adding band-passed noise to LaMa's soft fills on the 60 bake-off cases raises the median `detail` from 0.29 to 0.69 (medium 0.29 → 0.49, large 0.10 → 0.55) for about 0.2 dB of PSNR, but by eye it helps only where the real area is textured and speckles clean skies, plain walls and bokeh. **Not a default**; the next candidate is texture taken from the ring itself, gated, judged on the user's own photographs. Nothing in the app changed. **Not verified:** a real texture source, the gate, the user's photographs, a native-size tiled second pass, Windows.

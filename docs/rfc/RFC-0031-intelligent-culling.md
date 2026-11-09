@@ -199,3 +199,27 @@ Together about **26 MB** (BlinkCNN alone 20 MB; the mesh and blendshapes 6 MB), 
 **Not verified:** everything about accuracy (the models were run on random input only, to see them load, take the stated shapes and time a call); upstream Google terms for the MediaPipe graphs; the training-corpus licences; the crop estimate for BlinkCNN; Windows and CoreML.
 
 **Needs from the user (unchanged from §8.6 except the download, now done):** photographs with people for the measurement (about 150 faces, each marked open, closed or half by the user, across three face sizes), and a decision on the BlinkCNN training-data question if (a) wins.
+
+### 8.8 The measurement tool, run once on public photographs without labels (2026-11-09)
+
+[blink_measure.py](RFC-0031-appendix/blink_measure.py) is the §8.5 step-3 tool, ready for the user's photographs. For every face YuNet finds (the app's own detector, run at the 1600 px reference as the face scan does) it scores both candidates: **(a)** BlinkCNN on an upright square eye crop (side = `CROP_K` x the inter-ocular distance, default 1.0, i.e. 2.0 x an estimated eye span of 0.5 x that distance), **(b)** the MediaPipe Face Mesh on the card's ROI (rotated by the eye line, 1.5 x the face box, 256 px) then the Blendshapes' `eyeBlinkLeft` / `eyeBlinkRight`. It writes one record per face (size, both scores, the mesh's face-presence, times), numbered contact sheets (face crop, both eye crops, scores) and a `labels.csv` template (`o` open, `c` closed, `h` half, `x` cannot tell) to fill in.
+
+**One run: 557 faces from 37 public photographs** (40 Commons headshots and group pictures of the earlier people studies; **no labels, so nothing below is an accuracy**).
+
+| Face width (source px) | Faces | BlinkCNN calls "closed" (p > 0.53, either eye) | Blendshape > 0.5 (either eye) | Agree | Mesh face-presence under 0.5 |
+|---|---|---|---|---|---|
+| under 24 | 149 | 82 % | 53 % | 60 % | 56 % |
+| 24 to 48 | 270 | 42 % | 29 % | 63 % | 17 % |
+| 48 to 96 | 116 | 31 % | 12 % | 76 % | 13 % |
+| 96 and over | 22 | 41 % | 18 % | 68 % | 32 % |
+
+What it shows, and what it does not:
+- **Most faces in a crowd are small** (median 37 px) **and both models speak confidently about them anyway**: BlinkCNN calls 82 % of faces under 24 px closed, which is not a blink rate, it is noise. The mesh's own face-presence score falls below 0.5 for 56 % of them, so **presence is a ready-made "cannot tell" signal** to test against labels; BlinkCNN offers none.
+- **The two agree only 60 to 76 %**; the flag rates of the two differ at every size, so at least one is wrong often. Which, and at what sizes, needs labels.
+- **BlinkCNN's output is a logit**, not a probability (the first run read it as one and was wrong); the 0.53 operating threshold is on the probability. Fixed in the tool.
+- **YuNet's eye points can be wrong**: on old, blurry or hazy photographs the eye crops landed on the nose or mouth (seen on three of twelve large faces), so any verdict inherits the detector's error; only a mesh with presence would notice. On clear, frontal portraits both the crops and the open-eye scores look right (blendshape 0.02 to 0.45 on open eyes, BlinkCNN's logit about -2 to -4).
+- **Assumptions not checked:** that ARKit's "Left" is the subject's own left (so `eyeBlinkLeft` is the eye on the image right; no wink photograph was run); the crop multiple `CROP_K` (not tuned; the card's "2.0 x corner-to-corner span" can only be approximated from eye centres).
+- Times (CPU, one face, this Mac, unoptimised Python and OpenCV): BlinkCNN about 17 ms for both eyes including the crops, mesh plus blendshapes about 7 ms; the figures in §8.7 were per model call.
+
+**Not verified:** every accuracy figure; the left / right mapping; `CROP_K`; the user's photographs (the tool is ready: `python blink_measure.py <folder>`, then fill in `labels.csv`, then a scorer that reads it, which is not written yet); Windows. **Needs from the user:** a folder of photographs with people, and about an hour to mark about 150 faces (the sheets are numbered to match the CSV).
+

@@ -177,3 +177,25 @@ Per §5 and RFC-0023's method (size, licence, accuracy, hardware, **before any b
 - The training-data licences of the BlinkCNN corpora are to be read from the repository's `docs/data.md` (not reachable in this survey); if any is research-only, candidate (a) falls under the same question as the sky model's training data (`mask_training/README.md`).
 
 **Not verified in this section:** everything about accuracy (no model run), every file size marked "not stated", the training-data licences, upstream terms behind the community ONNX conversions, the eye-width estimate, Windows.
+
+### 8.7 The two candidate sets downloaded and loaded (2026-11-09)
+
+The user gave the go-ahead (2026-11-09); the files are in `mask_training/blink/models/` (outside the repo, nothing bundled) with their model cards in `cards/`. **Sizes and SHA-256 match what the Hugging Face API lists** (the LFS object ids).
+
+| File | Repository | Bytes | SHA-256 (first 16) | Input | Output | CPU, one call |
+|---|---|---|---|---|---|---|
+| `blinkcnn.onnx` (+ `.json`) | `fodorad/blink_detection` | 20,073,974 | `6ae7083ad1883c5a` | `crops` `[batch, time, 3, 64, 64]` RGB in 0..1 (ImageNet normalisation is **inside** the graph; applying it again silently degrades) | `sequence` `[batch, time, 1]`, a closed-eye probability; the sidecar gives an operating point **threshold 0.53** | 4.6 ms |
+| `face_landmarks.onnx` | `fernandotonon/QtMeshEditor-facemesh-onnx` | 4,920,979 | `d16e5a55e6a48028` | `[N, 256, 256, 3]` RGB 0..1, a **rotated, cropped face** | 478 landmarks x (x, y, z) in 256-crop pixels (1434 values) and a face-presence logit | 3.6 ms |
+| `face_blendshapes.onnx` | `fernandotonon/QtMeshEditor-faceblendshapes-onnx` | 1,094,706 | `37cf54d3ccf671f8` | `[1, 146, 2]` the 146-landmark subset in pixels | 52 ARKit blendshape scores in 0..1, including `eyeBlinkLeft` / `eyeBlinkRight` | 0.7 ms |
+
+Together about **26 MB** (BlinkCNN alone 20 MB; the mesh and blendshapes 6 MB), against the survey's "about 100 MB" for the blink install (that figure was the Python package, not the weights). Timings are one call with random input, ONNX Runtime CPU on this Mac, not a measurement of accuracy.
+
+**Read from the cards, and what it changes.**
+- **Licences.** BlinkLinMulT code and weights: **MIT** (the LICENSE text was retrieved). The two MediaPipe graphs: **Apache-2.0** per the mirrors' cards, which describe them as direct conversions of Google's MediaPipe models; the **upstream Google terms are still to be read** before shipping. **The BlinkCNN training corpora (TalkingFace, RN15, RN30, CEW, MRL-Eye, HUST-LEBW, MPEblink 2.0) are not redistributed and the repository states no licence for any of them: "each corpus has its own licence and access procedure. Request access from the original authors."** So candidate (a) stays open on training-data terms, as §8.6 expected (this is the same kind of question as the sky model's CC BY data and the removal model's Places2, which the user accepted on 2026-11-02; it is the user's call, not made here).
+- **Crop geometry (a risk for (a)).** The card says v2 "was trained on a square 2.0 x the eye's **corner-to-corner span**; a different crop convention degrades accuracy". YuNet gives eye **centres**, not corners, so (a) needs an estimate of the span from the inter-ocular distance, and the estimate's error is part of what the measurement must show. (b) needs a **rotated face crop** at 256 px, which the face pipeline does not produce today either (YuNet's box and the eye centres give the rotation).
+- **Training data skew** (card): "frontal, indoor webcam footage; expect degradation on strong profile views, heavy occlusion, or infrared"; this is a wedding-and-event use, so the measurement matters.
+- The card reports an average precision of 0.79 for blink *events* on video, and **no accuracy for eye state on a still**, as the survey found.
+
+**Not verified:** everything about accuracy (the models were run on random input only, to see them load, take the stated shapes and time a call); upstream Google terms for the MediaPipe graphs; the training-corpus licences; the crop estimate for BlinkCNN; Windows and CoreML.
+
+**Needs from the user (unchanged from §8.6 except the download, now done):** photographs with people for the measurement (about 150 faces, each marked open, closed or half by the user, across three face sizes), and a decision on the BlinkCNN training-data question if (a) wins.

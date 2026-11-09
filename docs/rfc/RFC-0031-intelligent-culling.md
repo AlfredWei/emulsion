@@ -223,3 +223,11 @@ What it shows, and what it does not:
 
 **Not verified:** every accuracy figure; the left / right mapping; `CROP_K`; the user's photographs (the tool is ready: `python blink_measure.py <folder>`, then fill in `labels.csv`, then a scorer that reads it, which is not written yet); Windows. **Needs from the user:** a folder of photographs with people, and about an hour to mark about 150 faces (the sheets are numbered to match the CSV).
 
+
+### 8.9 Two licence questions read from the sources (2026-11-09)
+
+- **BlinkCNN training data: still unresolved, now from the source itself.** The repository's data page ([`docs/data.md`](https://github.com/fodorad/BlinkLinMulT/blob/main/docs/data.md)) lists seven corpora (TalkingFace, RN15 and RN30, CEW, MRL-Eye, HUST-LEBW, MPEblink 2.0; its text says "six") and says each has its own licence and access procedure, to be requested from the original authors, and that the licences forbid re-hosting. **It states no licence for any corpus**, so whether commercial use of weights trained on them is allowed is not answered by the page. Resolving it means asking each corpus's authors or reading their release pages; until then candidate (a) carries the same open question as the sky model's training data.
+- **MediaPipe: Apache-2.0 confirmed on Google's own model cards.** Both the Face Mesh V2 and Blendshape V2 cards list Apache-2.0 (read through a third-party mirror of the card PDFs, which cite the official `storage.googleapis.com/mediapipe-assets/` files; the official copies were not fetched). The cards also say the blendshape model is not for life-critical decisions and does not identify people or store a face representation. The community ONNX conversions are mirrors of these, so the licence follows the upstream cards. Still unread: the bundle's own licence file.
+- **Left / right settled.** Google's Face Landmarker guide says the `*Left` / `*Right` blendshapes refer to the subject's own face, not the viewer's, and invert on a mirrored image. So `eyeBlinkLeft` is the eye on the image right in an unmirrored photograph, which is what `blink_measure.py` assumes. This is from the documentation, not from a wink photograph.
+
+Consequence: on licence alone the mesh route is clean and BlinkCNN is not yet; which wins on accuracy still waits for the labelled faces.

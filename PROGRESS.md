@@ -4,6 +4,11 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+
+## M7 object removal: "no longer fits" checked in the real window (2026-11-09, `test/removal-no-longer-fits-e2e`)
+
+New local spec `develop-removal-no-longer-fits` ([RFC-0032 §23](docs/rfc/RFC-0032-ai-object-removal.md)): a real removal, then the patch row's recorded decode size is rewritten to another shape with `sqlite3` and the photo reopened: the strip says **"Removal 1 no longer fits this photo: take it out"** and Undo last clears it. **2 passing, 2 min 16 s.** **Finding:** overwriting the source file on disk is not noticed by Develop at all (size and content hash are recorded at import only, the preview cache keys on that hash, there is no relink), so the call-out is reachable only through mismatched stored data, not a replaced file; whether to re-read changed files is a product decision for the user. **Not verified:** the render's skip against the strip on a real differently shaped decode, a real mouse, Windows.
+
 ## M7 culling E: two licence questions read from the sources (2026-11-09, `docs/culling-e-licences`)
 
 Docs only ([RFC-0031 §8.9](docs/rfc/RFC-0031-intelligent-culling.md)). **BlinkCNN:** the repository's data page lists seven training corpora and states **no licence for any of them** (each has its own, requested from its authors, no re-hosting), so commercial use of the weights stays an open question for the user. **MediaPipe:** Face Mesh V2 and Blendshape V2 model cards both say Apache-2.0 (read via a mirror of the card PDFs). **Left / right:** Google's guide says `eyeBlinkLeft` is the subject's left, i.e. the image right, as the tool assumes. **Not verified:** the official card copies and the bundle's licence file, the corpora's actual terms, any accuracy (still needs the user's photographs).

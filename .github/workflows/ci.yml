@@ -186,3 +186,9 @@ jobs:
       # capability/config (see tauri.e2e.conf.json, Cargo.toml's
       # wdio-webdriver feature) and runs the WebdriverIO suite against it.
       - run: npm run test:e2e
+
+      # The app's own `[diag +ms]` trace (src-tauri/src/diag.rs) from the e2e build, captured to a file by the wdio
+      # config on CI: printed even when a spec failed, to see where a first `import_files` stalls on this runner.
+      - name: Backend trace from the e2e run
+        if: always()
+        run: grep -h "\[diag" logs/wdio-*.log | sed -E 's/^[^ ]+ INFO tauri-service:service: //' | tail -4000 || true

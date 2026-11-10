@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDevelopFor } from "../helpers.js";
+import { importFixture, openDevelopFor } from "../helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(__dirname, "../../../test_image/Smiling-woman-pink-shirt-portrait.jpg");
@@ -41,7 +41,7 @@ describe("Develop: History stays linear when an edit revisits earlier content", 
 
   before(async () => {
     await browser.setTimeout({ script: 90000 });
-    await invoke("import_files", { paths: [FIXTURE_PATH] });
+    await importFixture(FIXTURE_PATH);
     const images = await invoke("list_images", {});
     versionId = images.find((/** @type {any} */ i) => i.path === FIXTURE_PATH).version_id;
     await invoke("set_edit_stack", { versionId, stack: BASELINE, label: null });

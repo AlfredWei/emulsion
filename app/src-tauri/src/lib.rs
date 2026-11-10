@@ -5,6 +5,7 @@ mod cull;
 mod cull_groups;
 #[cfg(test)]
 mod cull_probe;
+mod diag;
 mod develop_engine;
 mod export;
 mod export_plugin;
@@ -194,33 +195,39 @@ async fn import_files(
     state: State<'_, AppState>,
     paths: Vec<String>,
 ) -> Result<ImportSummary, String> {
+    diag::log(format!("import_files: entered with {} path(s)", paths.len()));
     let catalog = state.catalog.clone();
     let thumbnail_dir = resolve_thumbnail_dir(&app, &catalog)?;
     let thumbnail_dir_for_large = thumbnail_dir.clone();
+    diag::log("import_files: thumbnail dir resolved");
 
     let summary = {
         let catalog = catalog.clone();
         let progress_app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            diag::log("import_files: import thread running");
             let paths: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
             // Locked per step inside the import, with a thumbnail pool: see import_folder.
             let mut ready = ReadyEmitter::new(progress_app.clone());
-            let summary = import::import_paths_streaming(
-                &paths,
-                &catalog,
-                &thumbnail_dir,
-                None,
-                |current, total| {
-                    let _ = progress_app.emit("import-progress", ImportProgress { current, total });
-                },
-                |image_id, path| ready.push(image_id, path),
-            );
+            let summary = diag::timed("import_files: import_paths_streaming", || {
+                import::import_paths_streaming(
+                    &paths,
+                    &catalog,
+                    &thumbnail_dir,
+                    None,
+                    |current, total| {
+                        let _ = progress_app.emit("import-progress", ImportProgress { current, total });
+                    },
+                    |image_id, path| ready.push(image_id, path),
+                )
+            });
             ready.finish();
             Ok::<_, String>(summary)
         })
         .await
         .map_err(|e| e.to_string())?
     }?;
+    diag::log("import_files: returning to the webview");
     // The grid thumbnails are all made; the 1024 px ones follow quietly in the background (RFC-0030 slice E).
     spawn_large_thumbnail_pass(app.clone(), catalog.clone(), thumbnail_dir_for_large, Some(summary.import_batch));
 
@@ -2230,19 +2237,25 @@ pub fn run() {
             let catalog_for_thumbs = catalog.clone();
             // Warm the lens database first (RFC-0024): it is the one-time
             // cost that otherwise lands on the first Develop open.
-            tauri::async_runtime::spawn_blocking(lens_profile::warm_lens_db);
+            diag::log("startup: background passes spawned");
+            diag::watch_catalog_lock(catalog.clone());
+            tauri::async_runtime::spawn_blocking(|| diag::timed("startup: warm lens db", lens_profile::warm_lens_db));
             tauri::async_runtime::spawn_blocking(move || {
-                preview_cache::pregenerate_missing(&catalog_for_previews, &previews_dir);
+                diag::timed("startup: previews pregenerate_missing", || {
+                    preview_cache::pregenerate_missing(&catalog_for_previews, &previews_dir)
+                });
             });
             let handle_for_thumbs = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
                 let mut ready = ReadyEmitter::new(handle_for_thumbs);
                 // Small ones for everything that has none first (the grid), then the large ones.
                 for tier in [import::ThumbTier::Small, import::ThumbTier::Large] {
-                    import::generate_missing_thumbnails_streaming(&catalog_for_thumbs, &thumbnail_dir, None, tier, |_, _| {}, |id, path| ready.push(id, path));
+                    diag::timed(&format!("startup: thumbnails {tier:?}"), || {
+                        import::generate_missing_thumbnails_streaming(&catalog_for_thumbs, &thumbnail_dir, None, tier, |_, _| {}, |id, path| ready.push(id, path))
+                    });
                 }
                 ready.finish();
-                cull::analyse_missing(&catalog_for_thumbs, &thumbnail_dir, |_, _| {});
+                diag::timed("startup: cull analyse_missing", || cull::analyse_missing(&catalog_for_thumbs, &thumbnail_dir, |_, _| {}));
             });
 
             // Models shipped in the installer (release builds only) are copied into the model folders once, in the

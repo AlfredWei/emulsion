@@ -231,3 +231,9 @@ What it shows, and what it does not:
 - **Left / right settled.** Google's Face Landmarker guide says the `*Left` / `*Right` blendshapes refer to the subject's own face, not the viewer's, and invert on a mirrored image. So `eyeBlinkLeft` is the eye on the image right in an unmirrored photograph, which is what `blink_measure.py` assumes. This is from the documentation, not from a wink photograph.
 
 Consequence: on licence alone the mesh route is clean and BlinkCNN is not yet; which wins on accuracy still waits for the labelled faces.
+
+### 8.10 The scorer (2026-11-10)
+
+`docs/rfc/RFC-0031-appendix/blink_score.py` reads `faces.json` and the filled-in `labels.csv` from `blink_measure.py` and prints, per face-width bin (<24, 24-48, 48-96, >=96 px) and overall, for BlinkCNN (threshold 0.53, never abstains), the mesh blendshape (0.5, abstaining where the mesh's own face-presence is below 0.5) and the blendshape answering everywhere: eyes scored, **speaks** (share answered), **accuracy** where it speaks, closed-eye **recall** and **precision**, the share of **half-closed** eyes called closed (not scored right or wrong), and the share of **cannot-tell** eyes it still answers. It warns under ten closed eyes.
+
+**Checked only for running**, on 400 labels made up from the models' own output with random noise: the code path works and the table prints; **those numbers say nothing about the models** and are not recorded. **Not verified:** everything about accuracy (no real labels exist yet), whether the bins and thresholds are the right ones (they are the §8.5 starting points), Windows. **Needs from the user:** the photographs and the marks, as in §8.8.

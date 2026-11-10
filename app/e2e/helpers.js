@@ -86,3 +86,21 @@ export async function openDevelopFor(/** @type {string} */ fixtureName) {
   await developButton.waitForExist({ timeout: 10000 });
   await clickEl(developButton);
 }
+
+/**
+ * Imports one fixture through the same backend command the Import button calls, logging how long it took. The three
+ * specs that fail on the macOS runner (develop-history-revisit, develop-step-nudge, develop-undo-first-edit) do it
+ * as the very first command of their `before` hook, and the call is where a 90 s hang shows. Its start and its
+ * duration go to the log (20 s or more is marked SLOW), to line up with the app's own `[diag +ms]` lines.
+ * @param {string} fixturePath
+ */
+export async function importFixture(fixturePath) {
+  const started = Date.now();
+  console.log(`[diag] importFixture: begin ${fixturePath.split("/").pop()}`);
+  try {
+    return await browser.execute(async (p) => window.__TAURI__.core.invoke("import_files", { paths: [p] }), fixturePath);
+  } finally {
+    const took = Date.now() - started;
+    console.log(`[diag] importFixture: ${took} ms${took >= 20000 ? " (SLOW)" : ""}`);
+  }
+}

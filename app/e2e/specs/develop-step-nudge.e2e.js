@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDevelopFor } from "../helpers.js";
+import { importFixture, openDevelopFor } from "../helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // A third, distinct fixture from golden-path's and panel-resize's own, for
@@ -22,10 +22,7 @@ const FIXTURE_NAME = "Red-eye-flash";
 describe("Develop slider step-nudge buttons", () => {
   before(async () => {
     await browser.setTimeout({ script: 90000 });
-    await browser.execute(
-      async (fixturePath) => window.__TAURI__.core.invoke("import_files", { paths: [fixturePath] }),
-      FIXTURE_PATH,
-    );
+    await importFixture(FIXTURE_PATH);
     await browser.refresh();
     await openDevelopFor(FIXTURE_NAME);
     const exposureInput = await $("#exposure");

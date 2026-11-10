@@ -23,6 +23,9 @@ export const config = {
         appBinaryPath,
         driverProvider: "embedded",
         startTimeout: 60000,
+        // CI only: the app's own `[diag +ms]` trace lines (src-tauri/src/diag.rs, compiled into this build only) go
+        // into app/logs/wdio-*.log (the service writes captured lines to a file; ci.yml prints the `[diag` ones), to find where the first `import_files` of a spec stalls on the macOS runner.
+        ...(process.env.CI ? { captureBackendLogs: true, backendLogLevel: "info" } : {}),
       },
     ],
   ],

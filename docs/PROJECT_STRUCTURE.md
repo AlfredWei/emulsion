@@ -189,6 +189,7 @@ src/
 │   ├── libraryFilters.js    Pure Library scope + filter-bar logic (base image set, filters, camera/lens options)
 │   ├── upscaleLinks.js      Pure wording of the AI-enlargement cues (the x-N chip, the Connected photos lines)
 │   ├── resolution.js        Pure wording of a photo's pixel size ("6000×4000 · 24 MP"): Library grid cell and Develop info bar
+│   ├── shotInfo.js          Pure wording of capture settings ("ISO 200", "50 mm", "f/8.0", "1/250s"): the Develop histogram's caption and the Library info panel's shutter
 │   ├── enlarge.js           Pure side of the Enlarge (AI) dialog: the target the form describes, the plan in words, the very-large warning, the default name
 │   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering, viewport filter (M5.5)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`

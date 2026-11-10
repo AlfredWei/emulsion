@@ -17,6 +17,7 @@
    *   showClippingOverlay?: boolean,
    *   onToggleClippingOverlay?: () => void,
    *   hoverPixel?: {r: number, g: number, b: number} | null,
+   *   shotInfo?: string[],
    *   exposure: number,
    *   contrast: number,
    *   saturation: number,
@@ -110,6 +111,7 @@
     showClippingOverlay = false,
     onToggleClippingOverlay,
     hoverPixel = null,
+    shotInfo = [],
     exposure,
     contrast,
     saturation,
@@ -403,7 +405,7 @@
     <span class="panel-title">Edit</span>
     <button class="reset-btn" type="button" disabled={!hasEdits} onclick={onResetRequest}>Reset</button>
   </div>
-  <Histogram data={histogramData} {showClippingOverlay} {onToggleClippingOverlay} {hoverPixel} />
+  <Histogram data={histogramData} {showClippingOverlay} {onToggleClippingOverlay} {hoverPixel} {shotInfo} />
   <details class="section" class:panel-hidden={isPanelHidden("basic")} open>
     <summary data-ctx-panel="basic" data-ctx-title="Basic">{@render panelHeader("Basic", "basic")}</summary>
     <div class="sub-body">

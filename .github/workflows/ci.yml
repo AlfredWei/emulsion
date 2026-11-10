@@ -191,4 +191,5 @@ jobs:
       # config on CI: printed even when a spec failed, to see where a first `import_files` stalls on this runner.
       - name: Backend trace from the e2e run
         if: always()
-        run: grep -h "\[diag" logs/wdio-*.log | sed -E 's/^[^ ]+ INFO tauri-service:service: //' | tail -4000 || true
+        run: |
+          grep -h "\[diag" logs/wdio-*.log | sed -E 's/^[^ ]+ INFO tauri-service:service: //' | tail -4000 || true

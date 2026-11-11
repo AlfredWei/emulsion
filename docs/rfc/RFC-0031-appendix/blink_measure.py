@@ -3,12 +3,13 @@
  (b) MediaPipe Face Mesh V2 -> Blendshapes (eyeBlinkLeft / eyeBlinkRight, 0..1),
 and write out/faces.json (one record per face: size, scores, time), out/sheet_NN.png (face crop + the two eye crops + scores,
 numbered) and out/labels.csv (a template: id, left, right with o / c / h / x blank for a person to fill in).
-Usage: blink_measure.py <photo_or_dir> [...]   (env: YUNET=<path>, CROP_K=<eye crop side as a multiple of the inter-ocular distance>)"""
+Usage: blink_measure.py <photo_or_dir> [...]   (env: OUT_DIR=<folder for the results>, BLIND=1 hides model scores on the sheets, ONLY=<json list of face ids to put on the sheets>, YUNET=<path>, CROP_K=<eye crop side as a multiple of the inter-ocular distance>)"""
 import os, sys, json, math, time, glob, csv
 import numpy as np, cv2, onnxruntime as ort
 from PIL import Image, ImageDraw
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = os.environ.get("OUT_DIR") or os.path.join(HERE, "out")   # where faces.json, labels.csv, sheets and assets go
 YUNET = os.environ.get("YUNET") or glob.glob(os.path.expanduser("~/Library/Application Support/dev.alfredwei.emulsion/face_models/face_detection_yunet_2023mar.onnx"))[0]
 CROP_K = float(os.environ.get("CROP_K", "1.0"))      # BlinkCNN crop side = 2.0 x eye span; span estimated as 0.5 x inter-ocular distance
 REF_LONG = 1600                                        # YuNet runs on the photograph scaled to this long edge, as the app's face scan does
@@ -51,28 +52,41 @@ def score_face(full, r):
     c, s = math.cos(ang), math.sin(ang); dx, dy = (pts[:, 0] - 0.5) * box_side, (pts[:, 1] - 0.5) * box_side
     px = np.stack([cx + dx * c - dy * s, cy + dx * s + dy * c], 1).astype(np.float32)
     bs = bsh.run(None, {bsh.get_inputs()[0].name: px[SUBSET][None]})[0].reshape(-1)
+    def ear(ix):   # eye aspect ratio from six mesh points: corner, two upper lid, corner, two lower lid
+        p = px[ix].astype(np.float64); return float((np.linalg.norm(p[1] - p[5]) + np.linalg.norm(p[2] - p[4])) / (2 * np.linalg.norm(p[0] - p[3]) + 1e-9))
+    out.update(ear_image_left=ear([33, 160, 158, 133, 153, 144]), ear_image_right=ear([362, 385, 387, 263, 373, 380]))   # indices: MediaPipe's usual EAR set; the subject's right eye is on the image left
     out.update(mesh_presence=pres, blink_image_left=float(bs[BLINK_R]), blink_image_right=float(bs[BLINK_L]), ms_cnn=(t1 - t0) * 1000, ms_mesh=(time.time() - t1) * 1000)
     return out, crops, face, px
 
 if __name__ == "__main__":
     files = []
     for a in sys.argv[1:]: files += sorted(glob.glob(os.path.join(a, "*.jp*g")) + glob.glob(os.path.join(a, "*.JPG"))) if os.path.isdir(a) else [a]
-    os.makedirs(os.path.join(HERE, "out"), exist_ok=True); recs, tiles = [], []
+    os.makedirs(OUT_DIR, exist_ok=True); recs, tiles = [], []
+    keep = set(json.load(open(os.environ["ONLY"]))) if os.environ.get("ONLY") else None
+    assets = os.path.join(OUT_DIR, "assets"); os.makedirs(assets, exist_ok=True)
     for f in files:
         full, fs = faces_in(f)
         for k, r in enumerate(fs):
             rec, crops, face, px = score_face(full, r); rec.update(id=len(recs) + 1, photo=os.path.basename(f), n=k); recs.append(rec)
+            if keep is None or rec["id"] in keep:   # per-face pictures for the labelling page (make_labeler.py)
+                Image.fromarray(face).save(os.path.join(assets, f"{rec['id']:03d}_face.jpg"), quality=92)
+                for side in ("image_left", "image_right"): Image.fromarray(crops[side]).save(os.path.join(assets, f"{rec['id']:03d}_{side}.png"))
             tile = Image.new("RGB", (256 + 2 * 64 + 8, 256), (24, 22, 20)); tile.paste(Image.fromarray(face), (0, 0))
             tile.paste(Image.fromarray(crops["image_left"]).resize((128, 128), Image.NEAREST), (260, 0)); tile.paste(Image.fromarray(crops["image_right"]).resize((128, 128), Image.NEAREST), (260, 130))
             d = ImageDraw.Draw(tile); d.text((4, 4), f"#{rec['id']}  {rec['face_w_px']:.0f}px", fill=(255, 220, 120))
-            d.text((262, 112), f"L cnn {rec['cnn_closed_image_left']:.2f} bs {rec['blink_image_left']:.2f}", fill=(255, 255, 255)); d.text((262, 242), f"R cnn {rec['cnn_closed_image_right']:.2f} bs {rec['blink_image_right']:.2f}", fill=(255, 255, 255))
+            if os.environ.get("BLIND"):   # labelling sheets must not show the models' answers
+                d.text((262, 112), "image left", fill=(255, 255, 255)); d.text((262, 242), "image right", fill=(255, 255, 255))
+            else:
+                d.text((262, 112), f"L cnn {rec['cnn_closed_image_left']:.2f} bs {rec['blink_image_left']:.2f}", fill=(255, 255, 255)); d.text((262, 242), f"R cnn {rec['cnn_closed_image_right']:.2f} bs {rec['blink_image_right']:.2f}", fill=(255, 255, 255))
             tiles.append(tile)
-    json.dump(recs, open(os.path.join(HERE, "out", "faces.json"), "w"), indent=1)
-    with open(os.path.join(HERE, "out", "labels.csv"), "w", newline="") as fh:
+    json.dump(recs, open(os.path.join(OUT_DIR, "faces.json"), "w"), indent=1)
+    only = os.environ.get("ONLY")   # a JSON list of face ids: only these go on the sheets and into labels.csv (all are still scored in faces.json)
+    if only: keep = set(json.load(open(only))); tiles = [t for t, r in zip(tiles, recs) if r["id"] in keep]; recs = [r for r in recs if r["id"] in keep]
+    with open(os.path.join(OUT_DIR, "labels.csv"), "w", newline="") as fh:
         w = csv.writer(fh); w.writerow(["id", "photo", "face_w_px", "image_left", "image_right"]); [w.writerow([r["id"], r["photo"], round(r["face_w_px"]), "", ""]) for r in recs]
     per = 12; cols = 3
     for i in range(0, len(tiles), per):
         chunk = tiles[i:i + per]; rows = math.ceil(len(chunk) / cols); sheet = Image.new("RGB", (cols * 392, rows * 260), (24, 22, 20))
         for j, t in enumerate(chunk): sheet.paste(t, ((j % cols) * 392, (j // cols) * 260))
-        sheet.save(os.path.join(HERE, "out", f"sheet_{i // per + 1:02d}.png"))
+        sheet.save(os.path.join(OUT_DIR, f"sheet_{i // per + 1:02d}.png"))
     print(len(recs), "faces from", len(files), "photographs")

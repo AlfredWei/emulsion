@@ -36,6 +36,12 @@
       "size": 4866388,
       "sha256": "a337283437fd0fc12e6882a4f4cc0467cf2f275782e8290f487d755f806137fb",
       "path": "realesr_general_x4v3.onnx"
+    },
+    {
+      "name": "face_landmarks.onnx",
+      "size": 4920979,
+      "sha256": "d16e5a55e6a480284d468ee32469692464049518c311662ab3956681de31e3e9",
+      "path": "face_landmarks.onnx"
     }
   ]
 }

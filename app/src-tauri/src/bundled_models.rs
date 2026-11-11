@@ -34,6 +34,9 @@ pub const DETECT: [Shipped; 1] = [Shipped { name: crate::detect_models::FILENAME
 /// The object-removal model (RFC-0032, ADR-0010), installed into its own folder.
 pub const INPAINT: [Shipped; 1] = [Shipped { name: crate::inpaint_models::FILENAME, size: crate::inpaint_models::SIZE, sha256: crate::inpaint_models::SHA256 }];
 
+/// The face-mesh model for blink evidence (RFC-0031 §8.15), installed into its own folder.
+pub const BLINK: [Shipped; 1] = [Shipped { name: crate::blink_models::FILENAME, size: crate::blink_models::SIZE, sha256: crate::blink_models::SHA256 }];
+
 pub const UPSCALE: [Shipped; 1] = [Shipped { name: crate::upscale_models::FILENAME, size: crate::upscale_models::SIZE, sha256: crate::upscale_models::SHA256 }];
 
 /// One seeding at a time: the startup pass and a status check must not both write a `.part` file, and a status
@@ -154,7 +157,7 @@ mod tests {
             .iter()
             .map(|f| (f["name"].as_str().unwrap().into(), f["size"].as_u64().unwrap(), f["sha256"].as_str().unwrap().into(), f["url"].as_str().unwrap_or("").to_string(), f["path"].as_str().map(String::from)))
             .collect();
-        let known: Vec<&Shipped> = DENOISE.iter().chain(SEGMENT.iter()).chain(DETECT.iter()).chain(UPSCALE.iter()).chain(INPAINT.iter()).collect();
+        let known: Vec<&Shipped> = DENOISE.iter().chain(SEGMENT.iter()).chain(DETECT.iter()).chain(UPSCALE.iter()).chain(INPAINT.iter()).chain(BLINK.iter()).collect();
         assert_eq!(listed.len(), known.len());
         for (name, size, sha, url, path) in &listed {
             let k = known.iter().find(|k| k.name == name).unwrap_or_else(|| panic!("{name} is not a model the app verifies"));

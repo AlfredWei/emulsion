@@ -1,13 +1,17 @@
 """Writes out/labeler.html: a page for marking each sampled face's two eyes (o open / c closed / h half / x cannot tell),
 keyboard first, autosaving in the browser, exporting labels.csv in the format blink_score.py reads.
-Needs out/faces.json, out/assets/ (blink_measure.py with ONLY=only.json) and only.json. It shows no model output.
-Usage: python make_labeler.py [only.json]; then open out/labeler.html (double-click; nothing is uploaded anywhere)."""
-import json, os, sys
+Needs out/faces.json, out/assets/ (embedded into the page) (blink_measure.py with ONLY=only.json) and only.json. It shows no model output.
+Usage: python make_labeler.py [only.json]; then open out/labeler.html (one self-contained file; nothing is uploaded anywhere)."""
+import base64, json, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 only = json.load(open(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "only.json")))
 by_id = {r["id"]: r for r in json.load(open(os.path.join(HERE, "out", "faces.json")))}
-faces = [dict(id=i, photo=by_id[i]["photo"], w=round(by_id[i]["face_w_px"])) for i in only if i in by_id and os.path.exists(os.path.join(HERE, "out", "assets", f"{i:03d}_face.jpg"))]
+def uri(name, mime):   # the pictures are embedded, so the page works wherever it is opened or copied to
+    return f"data:{mime};base64," + base64.b64encode(open(os.path.join(HERE, "out", "assets", name), "rb").read()).decode()
+faces = [dict(id=i, photo=by_id[i]["photo"], w=round(by_id[i]["face_w_px"]), f=uri(f"{i:03d}_face.jpg", "image/jpeg"),
+              l=uri(f"{i:03d}_image_left.png", "image/png"), r=uri(f"{i:03d}_image_right.png", "image/png"))
+         for i in only if i in by_id and os.path.exists(os.path.join(HERE, "out", "assets", f"{i:03d}_face.jpg"))]
 html = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Blink labels</title>
 <style>
@@ -56,8 +60,7 @@ function done(i){return get(i,"L")&&get(i,"R")}
 function firstOpen(){const k=FACES.findIndex((_,i)=>!done(i));return k<0?0:k}
 for(const b of document.querySelectorAll(".btns"))for(const v of "ochx"){const x=document.createElement("button");x.dataset.v=v;x.textContent=v.toUpperCase();x.onclick=()=>{eye=b.dataset.eye;mark(v)};b.appendChild(x)}
 function render(){
-  const f=FACES[cur];$("#face").src="assets/"+String(f.id).padStart(3,"0")+"_face.jpg";
-  $("#iL").src="assets/"+String(f.id).padStart(3,"0")+"_image_left.png";$("#iR").src="assets/"+String(f.id).padStart(3,"0")+"_image_right.png";
+  const f=FACES[cur];$("#face").src=f.f;$("#iL").src=f.l;$("#iR").src=f.r;
   $("#meta").textContent="Face "+(cur+1)+" of "+FACES.length+"  ·  "+f.w+" px wide  ·  "+f.photo;
   for(const s of ["L","R"]){$("#e"+s).classList.toggle("on",eye===s);for(const b of $("#e"+s+" .btns").children)b.classList.toggle("sel",b.dataset.v===get(cur,s))}
   const n=FACES.filter((_,i)=>done(i)).length;$("#count").textContent=n+" / "+FACES.length+" faces";$("#fill").style.width=(100*n/FACES.length)+"%";

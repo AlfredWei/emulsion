@@ -17,6 +17,10 @@ mod face_cluster;
 // detection/embedding pipeline itself.
 #[allow(dead_code)] // wired into the cull pass by the next blink slice (RFC-0031 §8.15)
 mod blink_mesh;
+#[allow(dead_code)] // same: nothing asks for the model until the pass exists
+mod blink_models;
+#[allow(dead_code)] // same
+mod blink_verdict;
 mod face_detect;
 mod face_models;
 // Orchestrates face_detect + face_cluster against the catalog (detect ->
@@ -2272,6 +2276,7 @@ pub fn run() {
                     bundled_models::seed_from_app(&handle, &root.join("segment_models"), &bundled_models::DETECT);
                     bundled_models::seed_from_app(&handle, &root.join("upscale_models"), &bundled_models::UPSCALE);
                     bundled_models::seed_from_app(&handle, &root.join("inpaint_models"), &bundled_models::INPAINT);
+                    bundled_models::seed_from_app(&handle, &root.join(blink_models::DIR), &bundled_models::BLINK);
                 });
             }
 

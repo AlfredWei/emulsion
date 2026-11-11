@@ -2,8 +2,10 @@
 as <=2000 px JPEG renditions, into ./commons, with attribution.csv. Local research use; CC BY / BY-SA need credit if ever shown."""
 import csv, json, os, re, sys, time, urllib.parse, urllib.request
 UA = "emulsion-research/0.1 (personal photo-app research)"
-HERE = os.path.dirname(os.path.abspath(__file__)); OUT = os.path.join(HERE, "commons")
-CATS = ["Closed eyes", "People with closed eyes", "Sleeping people", "Squinting", "Blinking", "Yawning"]
+HERE = os.path.dirname(os.path.abspath(__file__)); OUT = os.environ.get("OUT") or os.path.join(HERE, "commons")
+CATS = (os.environ.get("CATS") or "Closed eyes|People with closed eyes|Sleeping people|Squinting|Blinking|Yawning").split("|")
+MINW = int(os.environ.get("MINW", "1200"))
+SEEN = set(l.split(",")[-1].strip() for f in (os.environ.get("EXCLUDE") or "").split("|") if f and os.path.exists(f) for l in open(f))
 OK = re.compile(r"^(cc0|public domain|pd|cc[- ]by(-sa)?[- ]\d|cc[- ]by(-sa)?$)", re.I)
 def get(url, timeout=60):
     for wait in (5, 15, 40, 90, 0):
@@ -30,12 +32,12 @@ for c in CATS:
 titles = list(dict.fromkeys(titles)); print(len(titles), "jpeg files in the categories")
 rows = []
 for i in range(0, len(titles), 20):
-    d = api(action="query", titles="|".join(titles[i:i + 20]), prop="imageinfo", iiprop="url|size|extmetadata", iiurlwidth=2000)
+    d = api(action="query", titles="|".join(titles[i:i + 20]), prop="imageinfo", iiprop="url|size|extmetadata", iiurlwidth=1920)
     for pg in d["query"]["pages"].values():
         ii = (pg.get("imageinfo") or [None])[0]
         if not ii: continue
         md = ii.get("extmetadata", {}); lic = md.get("LicenseShortName", {}).get("value", "")
-        if not OK.match(lic.strip()) or ii["width"] < 1200 or "nonfree" in md.get("Copyrighted", {}).get("value", "").lower(): continue
+        if ii.get("descriptionurl") in SEEN or not OK.match(lic.strip()) or ii["width"] < MINW or "nonfree" in md.get("Copyrighted", {}).get("value", "").lower(): continue
         rows.append(dict(title=pg["title"], url=ii.get("thumburl") or ii["url"], w=ii["width"], h=ii["height"], licence=lic,
                          author=re.sub("<[^>]+>", "", md.get("Artist", {}).get("value", "")).strip()[:80], page=ii["descriptionurl"]))
 print(len(rows), "with an accepted licence and >= 1200 px")
@@ -48,5 +50,5 @@ with open(os.path.join(OUT, "attribution.csv"), "w", newline="") as fh:
             data = get(r["url"], 90)
         except Exception as e:
             print("fail", r["title"], e); time.sleep(2); continue
-        open(os.path.join(OUT, name), "wb").write(data); w.writerow([name, r["licence"], r["author"], r["page"]]); n += 1; time.sleep(2.0)
+        open(os.path.join(OUT, name), "wb").write(data); w.writerow([name, r["licence"], r["author"], r["page"]]); n += 1; time.sleep(3.0)
 print("downloaded", n)

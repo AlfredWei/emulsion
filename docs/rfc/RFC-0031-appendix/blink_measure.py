@@ -3,12 +3,13 @@
  (b) MediaPipe Face Mesh V2 -> Blendshapes (eyeBlinkLeft / eyeBlinkRight, 0..1),
 and write out/faces.json (one record per face: size, scores, time), out/sheet_NN.png (face crop + the two eye crops + scores,
 numbered) and out/labels.csv (a template: id, left, right with o / c / h / x blank for a person to fill in).
-Usage: blink_measure.py <photo_or_dir> [...]   (env: BLIND=1 hides model scores on the sheets, ONLY=<json list of face ids to put on the sheets>, YUNET=<path>, CROP_K=<eye crop side as a multiple of the inter-ocular distance>)"""
+Usage: blink_measure.py <photo_or_dir> [...]   (env: OUT_DIR=<folder for the results>, BLIND=1 hides model scores on the sheets, ONLY=<json list of face ids to put on the sheets>, YUNET=<path>, CROP_K=<eye crop side as a multiple of the inter-ocular distance>)"""
 import os, sys, json, math, time, glob, csv
 import numpy as np, cv2, onnxruntime as ort
 from PIL import Image, ImageDraw
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = os.environ.get("OUT_DIR") or os.path.join(HERE, "out")   # where faces.json, labels.csv, sheets and assets go
 YUNET = os.environ.get("YUNET") or glob.glob(os.path.expanduser("~/Library/Application Support/dev.alfredwei.emulsion/face_models/face_detection_yunet_2023mar.onnx"))[0]
 CROP_K = float(os.environ.get("CROP_K", "1.0"))      # BlinkCNN crop side = 2.0 x eye span; span estimated as 0.5 x inter-ocular distance
 REF_LONG = 1600                                        # YuNet runs on the photograph scaled to this long edge, as the app's face scan does
@@ -57,9 +58,9 @@ def score_face(full, r):
 if __name__ == "__main__":
     files = []
     for a in sys.argv[1:]: files += sorted(glob.glob(os.path.join(a, "*.jp*g")) + glob.glob(os.path.join(a, "*.JPG"))) if os.path.isdir(a) else [a]
-    os.makedirs(os.path.join(HERE, "out"), exist_ok=True); recs, tiles = [], []
+    os.makedirs(OUT_DIR, exist_ok=True); recs, tiles = [], []
     keep = set(json.load(open(os.environ["ONLY"]))) if os.environ.get("ONLY") else None
-    assets = os.path.join(HERE, "out", "assets"); os.makedirs(assets, exist_ok=True)
+    assets = os.path.join(OUT_DIR, "assets"); os.makedirs(assets, exist_ok=True)
     for f in files:
         full, fs = faces_in(f)
         for k, r in enumerate(fs):
@@ -75,14 +76,14 @@ if __name__ == "__main__":
             else:
                 d.text((262, 112), f"L cnn {rec['cnn_closed_image_left']:.2f} bs {rec['blink_image_left']:.2f}", fill=(255, 255, 255)); d.text((262, 242), f"R cnn {rec['cnn_closed_image_right']:.2f} bs {rec['blink_image_right']:.2f}", fill=(255, 255, 255))
             tiles.append(tile)
-    json.dump(recs, open(os.path.join(HERE, "out", "faces.json"), "w"), indent=1)
+    json.dump(recs, open(os.path.join(OUT_DIR, "faces.json"), "w"), indent=1)
     only = os.environ.get("ONLY")   # a JSON list of face ids: only these go on the sheets and into labels.csv (all are still scored in faces.json)
     if only: keep = set(json.load(open(only))); tiles = [t for t, r in zip(tiles, recs) if r["id"] in keep]; recs = [r for r in recs if r["id"] in keep]
-    with open(os.path.join(HERE, "out", "labels.csv"), "w", newline="") as fh:
+    with open(os.path.join(OUT_DIR, "labels.csv"), "w", newline="") as fh:
         w = csv.writer(fh); w.writerow(["id", "photo", "face_w_px", "image_left", "image_right"]); [w.writerow([r["id"], r["photo"], round(r["face_w_px"]), "", ""]) for r in recs]
     per = 12; cols = 3
     for i in range(0, len(tiles), per):
         chunk = tiles[i:i + per]; rows = math.ceil(len(chunk) / cols); sheet = Image.new("RGB", (cols * 392, rows * 260), (24, 22, 20))
         for j, t in enumerate(chunk): sheet.paste(t, ((j % cols) * 392, (j // cols) * 260))
-        sheet.save(os.path.join(HERE, "out", f"sheet_{i // per + 1:02d}.png"))
+        sheet.save(os.path.join(OUT_DIR, f"sheet_{i // per + 1:02d}.png"))
     print(len(recs), "faces from", len(files), "photographs")

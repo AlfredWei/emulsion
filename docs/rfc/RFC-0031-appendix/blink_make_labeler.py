@@ -5,13 +5,15 @@ Usage: python make_labeler.py [only.json]; then open out/labeler.html (one self-
 import base64, json, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = os.environ.get("OUT_DIR") or os.path.join(HERE, "out")
+BATCH = os.environ.get("BATCH", "1")   # names the browser storage and the exported file, so two batches never mix
 only = json.load(open(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "only.json")))
-by_id = {r["id"]: r for r in json.load(open(os.path.join(HERE, "out", "faces.json")))}
+by_id = {r["id"]: r for r in json.load(open(os.path.join(OUT_DIR, "faces.json")))}
 def uri(name, mime):   # the pictures are embedded, so the page works wherever it is opened or copied to
-    return f"data:{mime};base64," + base64.b64encode(open(os.path.join(HERE, "out", "assets", name), "rb").read()).decode()
+    return f"data:{mime};base64," + base64.b64encode(open(os.path.join(OUT_DIR, "assets", name), "rb").read()).decode()
 faces = [dict(id=i, photo=by_id[i]["photo"], w=round(by_id[i]["face_w_px"]), f=uri(f"{i:03d}_face.jpg", "image/jpeg"),
               l=uri(f"{i:03d}_image_left.png", "image/png"), r=uri(f"{i:03d}_image_right.png", "image/png"))
-         for i in only if i in by_id and os.path.exists(os.path.join(HERE, "out", "assets", f"{i:03d}_face.jpg"))]
+         for i in only if i in by_id and os.path.exists(os.path.join(OUT_DIR, "assets", f"{i:03d}_face.jpg"))]
 html = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Blink labels</title>
 <style>
@@ -50,7 +52,7 @@ main{display:flex;gap:20px;justify-content:center;align-items:flex-start;padding
 <div id="grid"></div>
 <script>
 const FACES=__FACES__;
-const KEY="blink-labels-v1";let L={},cur=0,eye="L";
+const BATCH=__BATCH__;const KEY="blink-labels-v1-"+BATCH;let L={},cur=0,eye="L";
 try{L=JSON.parse(localStorage.getItem(KEY)||"{}")}catch(e){}
 const $=s=>document.querySelector(s);
 function save(){try{localStorage.setItem(KEY,JSON.stringify(L))}catch(e){}}
@@ -91,7 +93,7 @@ function toCsv(){const rows=["id,photo,face_w_px,image_left,image_right"];
 $("#exp").onclick=()=>{
   const n=FACES.filter((_,i)=>done(i)).length;
   if(n<FACES.length&&!confirm(n+" of "+FACES.length+" faces are fully marked. Export anyway? (unmarked eyes stay empty)"))return;
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([toCsv()],{type:"text/csv"}));a.download="labels.csv";a.click()};
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([toCsv()],{type:"text/csv"}));a.download=BATCH==="1"?"labels.csv":"labels_"+BATCH+".csv";a.click()};
 $("#imp").onclick=()=>$("#file").click();
 $("#file").onchange=async e=>{const t=await e.target.files[0].text();const lines=t.trim().split(/\r?\n/).slice(1);
   for(const ln of lines){const m=ln.match(/^(\d+),(?:"(?:[^"]|"")*"|[^,]*),[^,]*,([ochx]?),([ochx]?)\s*$/);if(m){L[m[1]]={...(m[2]?{L:m[2]}:{}),...(m[3]?{R:m[3]}:{})}}}
@@ -99,6 +101,6 @@ $("#file").onchange=async e=>{const t=await e.target.files[0].text();const lines
 $("#rst").onclick=()=>{if(confirm("Clear all marks in this browser?")){L={};save();cur=0;eye="L";render()}};
 cur=firstOpen();render();
 </script></body></html>"""
-html = html.replace("__FACES__", json.dumps(faces))
-open(os.path.join(HERE, "out", "labeler.html"), "w").write(html)
-print(len(faces), "faces ->", os.path.join(HERE, "out", "labeler.html"))
+html = html.replace("__FACES__", json.dumps(faces)).replace("__BATCH__", json.dumps(BATCH))
+open(os.path.join(OUT_DIR, "labeler.html"), "w").write(html)
+print(len(faces), "faces ->", os.path.join(OUT_DIR, "labeler.html"))

@@ -16,6 +16,11 @@ The Develop histogram now carries a caption row with the open photo's **ISO, foc
 
 
 
+
+## M7 culling E: a second labelling batch of group photographs (2026-11-11, `docs/culling-e-scorer`)
+
+[RFC-0031 §8.13](docs/rfc/RFC-0031-intelligent-culling.md). 130 licence-filtered Commons group photographs (weddings, classes, graduations, parties; local only, credits kept), **2,737 faces**, a **137-face sample stratified by size and by "either model says closed"** (so closed eyes at 24-96 px are present; strata kept so rates can be re-weighted). Page: `mask_training/blink/out2/labeler.html` (batch 2, exports `labels_2.csv`). Waiting on the user's marks. **Not verified:** how many closed eyes the sample holds, any accuracy.
+
 ## M7 culling E: first blink accuracy, from the user's marks on 141 public faces (2026-11-11, `docs/culling-e-scorer`)
 
 [RFC-0031 §8.12](docs/rfc/RFC-0031-intelligent-culling.md). 282 eyes marked (87 open, 32 closed, 35 half, **128 cannot tell**). **BlinkCNN finds 26 of 32 closed eyes (81 %), 92 % right on eyes marked open or closed, and 94 % right with 22 of 23 closed found at face width 96 px or more; the mesh blendshape finds 14 of 24 (58 %).** BlinkCNN answers every eye including all 128 "cannot tell"; a 48 px floor leaves 55 of them, floor plus the mesh's face check leaves 16 (but loses 7 closed eyes). So the open design problem is a "cannot tell" gate, not the score. **Not established:** real event photographs (posed public photos, closed share inflated by design), full-resolution labels, the eye-crop geometry, BlinkCNN's training-data licences, eyelid geometry from the mesh, time cost, Windows. Needs the user: the licence call and whether to go on.

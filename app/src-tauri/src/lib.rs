@@ -15,6 +15,8 @@ mod geocode;
 mod face_cluster;
 // Model fetch/cache (YuNet + SFace, models/FACE_MODELS.md) and the
 // detection/embedding pipeline itself.
+#[allow(dead_code)] // wired into the cull pass by the next blink slice (RFC-0031 §8.15)
+mod blink_mesh;
 mod face_detect;
 mod face_models;
 // Orchestrates face_detect + face_cluster against the catalog (detect ->

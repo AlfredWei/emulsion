@@ -15,6 +15,11 @@ The Develop histogram now carries a caption row with the open photo's **ISO, foc
 
 
 
+
+## M7 culling E: first blink accuracy, from the user's marks on 141 public faces (2026-11-11, `docs/culling-e-scorer`)
+
+[RFC-0031 §8.12](docs/rfc/RFC-0031-intelligent-culling.md). 282 eyes marked (87 open, 32 closed, 35 half, **128 cannot tell**). **BlinkCNN finds 26 of 32 closed eyes (81 %), 92 % right on eyes marked open or closed, and 94 % right with 22 of 23 closed found at face width 96 px or more; the mesh blendshape finds 14 of 24 (58 %).** BlinkCNN answers every eye including all 128 "cannot tell"; a 48 px floor leaves 55 of them, floor plus the mesh's face check leaves 16 (but loses 7 closed eyes). So the open design problem is a "cannot tell" gate, not the score. **Not established:** real event photographs (posed public photos, closed share inflated by design), full-resolution labels, the eye-crop geometry, BlinkCNN's training-data licences, eyelid geometry from the mesh, time cost, Windows. Needs the user: the licence call and whether to go on.
+
 ## M7 culling E: a labelling set prepared from public photographs (2026-11-11, `docs/culling-e-scorer`)
 
 [RFC-0031 §8.11](docs/rfc/RFC-0031-intelligent-culling.md). At the user's request (no folder of their own given): 74 Commons photographs of closed / squinting / sleeping eyes (CC0, public domain, CC BY, CC BY-SA; local only, `attribution.csv` kept) plus the earlier 37; **141 faces sampled by size only** (17 / 35 / 39 / 50 at under 24 / 24-48 / 48-96 / 96+ px), 12 sheets with **no model scores shown**. Marks go in `mask_training/blink/out/labels.csv` (o / c / h / x per eye, `image_left` / `image_right`), then `blink_score.py`. The closed-eye photographs are large faces only and enriched for closed eyes by category. **Not verified:** any accuracy (no marks yet), how many sampled eyes are really closed.

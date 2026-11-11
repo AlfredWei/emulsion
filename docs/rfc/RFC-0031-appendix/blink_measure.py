@@ -58,10 +58,15 @@ if __name__ == "__main__":
     files = []
     for a in sys.argv[1:]: files += sorted(glob.glob(os.path.join(a, "*.jp*g")) + glob.glob(os.path.join(a, "*.JPG"))) if os.path.isdir(a) else [a]
     os.makedirs(os.path.join(HERE, "out"), exist_ok=True); recs, tiles = [], []
+    keep = set(json.load(open(os.environ["ONLY"]))) if os.environ.get("ONLY") else None
+    assets = os.path.join(HERE, "out", "assets"); os.makedirs(assets, exist_ok=True)
     for f in files:
         full, fs = faces_in(f)
         for k, r in enumerate(fs):
             rec, crops, face, px = score_face(full, r); rec.update(id=len(recs) + 1, photo=os.path.basename(f), n=k); recs.append(rec)
+            if keep is None or rec["id"] in keep:   # per-face pictures for the labelling page (make_labeler.py)
+                Image.fromarray(face).save(os.path.join(assets, f"{rec['id']:03d}_face.jpg"), quality=92)
+                for side in ("image_left", "image_right"): Image.fromarray(crops[side]).save(os.path.join(assets, f"{rec['id']:03d}_{side}.png"))
             tile = Image.new("RGB", (256 + 2 * 64 + 8, 256), (24, 22, 20)); tile.paste(Image.fromarray(face), (0, 0))
             tile.paste(Image.fromarray(crops["image_left"]).resize((128, 128), Image.NEAREST), (260, 0)); tile.paste(Image.fromarray(crops["image_right"]).resize((128, 128), Image.NEAREST), (260, 130))
             d = ImageDraw.Draw(tile); d.text((4, 4), f"#{rec['id']}  {rec['face_w_px']:.0f}px", fill=(255, 220, 120))

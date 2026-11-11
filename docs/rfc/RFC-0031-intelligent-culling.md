@@ -274,3 +274,24 @@ By face width, BlinkCNN: 24-48 px **18 open eyes, all right, no closed eye to te
 **The sample (137 faces) is stratified, not random**, so closed eyes are not left to chance: per size band, half the faces are drawn from those where either model gave a closed score of 0.3 or more on an eye ("flagged"), half from the rest ("unflagged"), at most 3 per photograph per band. 7 under 24 px (unflagged only: nearly every face that small is flagged by noise), 40 at 24-48, 60 at 48-96, 30 at 96 or more. The strata and pool sizes are kept (`strata2.json`, `pool2.json`) so that recall and precision can be **re-weighted to the real population** when the marks come back; reading raw rates off this sample would overstate the closed share. The page is the same as §8.11's, as batch 2 (its own browser storage, exports `labels_2.csv`).
 
 **Not verified:** that the sample holds enough closed eyes (the marks will say), the flag threshold of 0.3 (a choice, loose on purpose), any accuracy figure, Windows. **Needs from the user:** the marks, as before.
+
+### 8.14 The licence question looked at again, and a clean route that nearly matches BlinkCNN (2026-11-11)
+
+**Licences, from search results (the pages themselves could not be fetched from here: the fetch tool refused those hosts).**
+- **BlinkCNN's training data is worse than "unstated".** The paper's list of image corpora as reported in search results is **CEW, ZJU, MRL and RT-BENE** (still images; five video sets besides). CEW's own host page is quoted as **research use only, not for commercial use**; RT-BENE's Zenodo record is **CC BY-NC-SA 4.0 (non-commercial)**; no licence was found for MRL Eye, TalkingFace, Researcher's Night or HUST-LEBW. Weights trained on non-commercial data are not a clean base for a product: treat **candidate (a) as out unless the corpus owners say otherwise**.
+- **Other eye-state models found.** Intel's Open Model Zoo `open-closed-eye-0001` (Apache-2.0 repository; trained on MRL Eye, whose licence was not found; 95.84 % on its own test); a `dima806` ViT (Apache-2.0, dataset not named on the pages seen, 99 % on its own test, a full ViT-base, so large); the `MichalMlodawski` classifiers are **CC BY-NC-ND (out)**. **None has a clean data story.**
+- **More recent data:** no 2024-2025 closed-eye dataset with a commercial-use licence was found; CLERA (2023, 30k images) and HUST-LEBW have no licence in what was read.
+
+**The route that needs none of that: eyelid geometry from the Apache-2.0 mesh.** `blink_measure.py` now also records the **eye aspect ratio (EAR)** from six mesh points per eye (corners, two upper and two lower lid points). The left / right mapping was checked from the data (EAR on the image-left eye correlates -0.82 with that side's blendshape, -0.57 with the other side). On the user's 282 marks (§8.12), with **EAR < 0.18** (the best cut on this very data, so **optimistic**):
+
+| Rule, face >= 96 px and mesh sure of a face | accuracy | closed eyes found | "closed" calls right | cannot-tell eyes still answered |
+|---|---|---|---|---|
+| EAR < 0.18 | 94 % | 85 % | 100 % | 5 % |
+| EAR < 0.18 **or** blendshape >= 0.5 | **94 %** | **90 %** | **95 %** | **5 %** |
+| BlinkCNN >= 0.53 (for reference) | 94 % | 95 % | 90 % | 5 % |
+
+So on large faces the **mesh-only route (clean licence, no trained eye classifier) is about as good as BlinkCNN**; the gap is at 48-96 px, where EAR-or-blendshape finds 88 % at 48 px + mesh sure but with 75 % of its calls right (BlinkCNN: 79 % and 86 %). The gate (face >= 96 px and mesh sure) lets through **39 % of the open / closed eyes** in this set, whose images are at most 2,000 px wide: **at a real 24-megapixel file faces are about three times larger in pixels, so the same floor covers far more**, but that is to be measured, not assumed. Half-closed eyes are called closed 60 to 73 % of the time by the mesh rules (BlinkCNN 45-60 %), which is fine for a badge a person confirms.
+
+**Rules frozen before batch 2** (`blink_gate.py`): EAR 0.18, blendshape 0.5, mesh presence 0.5, face floors 48 / 64 / 96 px. Batch 2 (§8.13) is then a **hold-out**, scored with its strata weights so the rates describe the population, not the enriched sample. If the floor and thresholds hold out, the next step is a build slice (E1) on the mesh route; a small logistic fit on EAR, blendshape and face size from our own labelled sets is possible and would stay licence-clean (own labels, CC photographs), but is not needed yet.
+
+**Not verified:** EAR 0.18 out of sample, anything about real event photographs, the 24 MP claim, the cost of running the mesh on a full import, Windows, the corpora's actual terms (search snippets only).

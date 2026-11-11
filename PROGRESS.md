@@ -17,6 +17,11 @@ The Develop histogram now carries a caption row with the open photo's **ISO, foc
 
 
 
+
+## M7 culling E: licence re-read, and a clean mesh-only blink route that nearly matches BlinkCNN (2026-11-11, `docs/culling-e-scorer`)
+
+[RFC-0031 §8.14](docs/rfc/RFC-0031-intelligent-culling.md). **BlinkCNN's training data includes CEW (research-only) and RT-BENE (CC BY-NC-SA)** per the paper's corpus list, so it is out as a product base unless the owners say otherwise; other eye-state models found are no cleaner. **New:** eyelid-geometry EAR from the Apache-2.0 mesh. On the user's marks at face >= 96 px with the mesh sure of a face, **EAR < 0.18 or blendshape >= 0.5 gives 94 % accuracy, finds 90 % of closed eyes, 95 % of its "closed" calls are right, answers 5 % of "cannot tell" eyes** (BlinkCNN: 94 / 95 / 90 / 5), but the EAR cut was fitted on this same data. Rules frozen in `blink_gate.py`; batch 2 is the hold-out. **Not verified:** the cut out of sample, real event photos, 24 MP coverage, run cost, Windows. Needs the user: the batch 2 marks.
+
 ## M7 culling E: a second labelling batch of group photographs (2026-11-11, `docs/culling-e-scorer`)
 
 [RFC-0031 §8.13](docs/rfc/RFC-0031-intelligent-culling.md). 130 licence-filtered Commons group photographs (weddings, classes, graduations, parties; local only, credits kept), **2,737 faces**, a **137-face sample stratified by size and by "either model says closed"** (so closed eyes at 24-96 px are present; strata kept so rates can be re-weighted). Page: `mask_training/blink/out2/labeler.html` (batch 2, exports `labels_2.csv`). Waiting on the user's marks. **Not verified:** how many closed eyes the sample holds, any accuracy.

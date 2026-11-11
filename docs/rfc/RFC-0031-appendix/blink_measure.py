@@ -52,6 +52,9 @@ def score_face(full, r):
     c, s = math.cos(ang), math.sin(ang); dx, dy = (pts[:, 0] - 0.5) * box_side, (pts[:, 1] - 0.5) * box_side
     px = np.stack([cx + dx * c - dy * s, cy + dx * s + dy * c], 1).astype(np.float32)
     bs = bsh.run(None, {bsh.get_inputs()[0].name: px[SUBSET][None]})[0].reshape(-1)
+    def ear(ix):   # eye aspect ratio from six mesh points: corner, two upper lid, corner, two lower lid
+        p = px[ix].astype(np.float64); return float((np.linalg.norm(p[1] - p[5]) + np.linalg.norm(p[2] - p[4])) / (2 * np.linalg.norm(p[0] - p[3]) + 1e-9))
+    out.update(ear_image_left=ear([33, 160, 158, 133, 153, 144]), ear_image_right=ear([362, 385, 387, 263, 373, 380]))   # indices: MediaPipe's usual EAR set; the subject's right eye is on the image left
     out.update(mesh_presence=pres, blink_image_left=float(bs[BLINK_R]), blink_image_right=float(bs[BLINK_L]), ms_cnn=(t1 - t0) * 1000, ms_mesh=(time.time() - t1) * 1000)
     return out, crops, face, px
 

@@ -18,6 +18,31 @@ Of the last 40 CI runs 9 failed; every macOS failure was one of three specs (`de
 
 The Develop histogram now carries a caption row with the open photo's **ISO, focal length, aperture and shutter** ("ISO 200  50 mm  f/8.0  1/250s", Lightroom's order; a setting the file did not record is left out). Filename and pixel size were already in the Develop info bar and the zoom % in the zoom HUD, so this was the missing part of what the Library loupe's top-left overlay shows. Pure wording in `lib/shotInfo.js` (`formatShutter` moved there from the Library info panel); `Histogram` takes an optional `shotInfo` list that the Library histogram does not pass. **Verified:** vitest (1269), svelte-check; **real app (`develop-shot-info`, 1 passing in 51 s, `test/develop-shot-info-e2e`):** a JPEG written with known EXIF (`test_image/exif-shot-info.jpg`: ISO 200, 50 mm, f/8, 1/250 s; no other fixture carries any) opens in Develop and the caption reads ISO 200 / 50 mm / f/8.0 / 1/250s in that order. **Not verified:** how it looks (text only, not a screenshot), a narrow panel wrapping onto two lines, Windows.
 
+
+
+
+
+
+## M7 culling E: licence re-read, and a clean mesh-only blink route that nearly matches BlinkCNN (2026-11-11, `docs/culling-e-scorer`)
+
+[RFC-0031 §8.14](docs/rfc/RFC-0031-intelligent-culling.md). **BlinkCNN's training data includes CEW (research-only) and RT-BENE (CC BY-NC-SA)** per the paper's corpus list, so it is out as a product base unless the owners say otherwise; other eye-state models found are no cleaner. **New:** eyelid-geometry EAR from the Apache-2.0 mesh. On the user's marks at face >= 96 px with the mesh sure of a face, **EAR < 0.18 or blendshape >= 0.5 gives 94 % accuracy, finds 90 % of closed eyes, 95 % of its "closed" calls are right, answers 5 % of "cannot tell" eyes** (BlinkCNN: 94 / 95 / 90 / 5), but the EAR cut was fitted on this same data. Rules frozen in `blink_gate.py`; batch 2 is the hold-out. **Not verified:** the cut out of sample, real event photos, 24 MP coverage, run cost, Windows. Needs the user: the batch 2 marks.
+
+## M7 culling E: a second labelling batch of group photographs (2026-11-11, `docs/culling-e-scorer`)
+
+[RFC-0031 §8.13](docs/rfc/RFC-0031-intelligent-culling.md). 130 licence-filtered Commons group photographs (weddings, classes, graduations, parties; local only, credits kept), **2,737 faces**, a **137-face sample stratified by size and by "either model says closed"** (so closed eyes at 24-96 px are present; strata kept so rates can be re-weighted). Page: `mask_training/blink/out2/labeler.html` (batch 2, exports `labels_2.csv`). Waiting on the user's marks. **Not verified:** how many closed eyes the sample holds, any accuracy.
+
+## M7 culling E: first blink accuracy, from the user's marks on 141 public faces (2026-11-11, `docs/culling-e-scorer`)
+
+[RFC-0031 §8.12](docs/rfc/RFC-0031-intelligent-culling.md). 282 eyes marked (87 open, 32 closed, 35 half, **128 cannot tell**). **BlinkCNN finds 26 of 32 closed eyes (81 %), 92 % right on eyes marked open or closed, and 94 % right with 22 of 23 closed found at face width 96 px or more; the mesh blendshape finds 14 of 24 (58 %).** BlinkCNN answers every eye including all 128 "cannot tell"; a 48 px floor leaves 55 of them, floor plus the mesh's face check leaves 16 (but loses 7 closed eyes). So the open design problem is a "cannot tell" gate, not the score. **Not established:** real event photographs (posed public photos, closed share inflated by design), full-resolution labels, the eye-crop geometry, BlinkCNN's training-data licences, eyelid geometry from the mesh, time cost, Windows. Needs the user: the licence call and whether to go on.
+
+## M7 culling E: a labelling set prepared from public photographs (2026-11-11, `docs/culling-e-scorer`)
+
+[RFC-0031 §8.11](docs/rfc/RFC-0031-intelligent-culling.md). At the user's request (no folder of their own given): 74 Commons photographs of closed / squinting / sleeping eyes (CC0, public domain, CC BY, CC BY-SA; local only, `attribution.csv` kept) plus the earlier 37; **141 faces sampled by size only** (17 / 35 / 39 / 50 at under 24 / 24-48 / 48-96 / 96+ px), 12 sheets with **no model scores shown**. Marks go in `mask_training/blink/out/labels.csv` (o / c / h / x per eye, `image_left` / `image_right`), then `blink_score.py`. The closed-eye photographs are large faces only and enriched for closed eyes by category. **Not verified:** any accuracy (no marks yet), how many sampled eyes are really closed.
+
+## M7 culling E: the blink scorer (2026-11-10, `docs/culling-e-scorer`)
+
+`docs/rfc/RFC-0031-appendix/blink_score.py` ([§8.10](docs/rfc/RFC-0031-intelligent-culling.md)): reads the tool's `faces.json` and the user's filled-in `labels.csv` (o / c / h / x per eye) and prints per face-size bin the speaks rate, accuracy, closed recall and precision, half-closed handling and cannot-tell leakage for BlinkCNN, the mesh blendshape with abstain, and the blendshape without. **Run only on made-up labels to prove the code path; no accuracy exists.** Waiting on the user's photographs and marks.
+
 ## M7 object removal: "no longer fits" checked in the real window (2026-11-09, `test/removal-no-longer-fits-e2e`)
 
 New local spec `develop-removal-no-longer-fits` ([RFC-0032 §23](docs/rfc/RFC-0032-ai-object-removal.md)): a real removal, then the patch row's recorded decode size is rewritten to another shape with `sqlite3` and the photo reopened: the strip says **"Removal 1 no longer fits this photo: take it out"** and Undo last clears it. **2 passing, 2 min 16 s.** **Finding:** overwriting the source file on disk is not noticed by Develop at all (size and content hash are recorded at import only, the preview cache keys on that hash, there is no relink), so the call-out is reachable only through mismatched stored data, not a replaced file; whether to re-read changed files is a product decision for the user. **Not verified:** the render's skip against the strip on a real differently shaped decode, a real mouse, Windows.

@@ -8,7 +8,7 @@ import { selection } from "$lib/state/selection.svelte.js";
 import { similar } from "$lib/state/similar.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { patchLocal, refresh } from "$lib/actions/libraryActions.js";
-import { rejectOthersTargets } from "$lib/similar.js";
+import { rejectOthersTargets, suggestedFrame } from "$lib/similar.js";
 
 const POLL_MS = 2000;
 const SLIDER_DEBOUNCE_MS = 150;
@@ -117,6 +117,7 @@ export async function loadBlink(/** @type {number[]} */ imageIds) {
     similar.blink = Object.fromEntries(result.photos.map((p) => [p.image_id, p]));
     similar.blinkReason = result.reason;
     similar.blinkState = result.available ? "ready" : "unavailable";
+    moveSelectionToSuggestion();
   } catch (e) {
     if (seq !== blinkSeq) return;
     console.error("eye check failed", e);
@@ -126,13 +127,25 @@ export async function loadBlink(/** @type {number[]} */ imageIds) {
   }
 }
 
+/** When the eyes change which frame is suggested, the selection follows, but only while it is still the frame selected for the user
+ * on opening: a frame the user picked is never taken away from them. */
+function moveSelectionToSuggestion() {
+  const group = similar.openGroup;
+  if (!group || similar.autoPickVersionId === null || selection.selectedId !== similar.autoPickVersionId) return;
+  const { frame } = suggestedFrame(group.frames, similar.blink);
+  if (!frame || frame.image.version_id === similar.autoPickVersionId) return;
+  similar.autoPickVersionId = frame.image.version_id;
+  selectOnly(frame.image.version_id);
+}
+
 /** Opens a group in the side-by-side view with its suggested frame (or the first) selected. */
 export function openSimilarGroup(/** @type {number} */ key) {
   const group = similar.groupViews.find((g) => g.key === key);
   if (!group) return;
   similar.openKey = key;
   similar.blink = {};
-  selectOnly((group.best ?? group.frames[0]).image.version_id);
+  similar.autoPickVersionId = (group.best ?? group.frames[0]).image.version_id;
+  selectOnly(similar.autoPickVersionId);
   loadBlink(group.frames.map((f) => f.image.image_id));
 }
 
@@ -140,6 +153,7 @@ export function closeSimilarGroup() {
   blinkSeq++;
   similar.blink = {};
   similar.blinkState = "idle";
+  similar.autoPickVersionId = null;
   similar.openKey = null;
   similar.pendingReject = null;
 }

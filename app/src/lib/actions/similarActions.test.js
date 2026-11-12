@@ -5,7 +5,7 @@ const catalog = vi.hoisted(() => ({ setFlag: vi.fn(), listImages: vi.fn() }));
 vi.mock("$lib/api/cull.js", () => cullApi);
 vi.mock("$lib/api/catalog.js", () => catalog);
 
-import { refreshSimilar, showSimilar, leaveSimilar, setSimilarity, openSimilarGroup, closeSimilarGroup, askRejectOthers, cancelRejectOthers, confirmRejectOthers, toggleSoftChips, resumeSoftChips } from "./similarActions.js";
+import { refreshSimilar, showSimilar, leaveSimilar, setSimilarity, openSimilarGroup, closeSimilarGroup, selectOnly, askRejectOthers, cancelRejectOthers, confirmRejectOthers, toggleSoftChips, resumeSoftChips } from "./similarActions.js";
 import { selectAllPhotos } from "./libraryActions.js";
 import { library } from "$lib/state/library.svelte.js";
 import { selection } from "$lib/state/selection.svelte.js";
@@ -315,4 +315,33 @@ describe("the eye check of an open group (RFC-0031 §8.15)", () => {
     expect(similar.blink).toEqual({});
     expect(similar.blinkState).toBe("idle");
   });
+
+  it("moves the selection to the new suggestion while it is still the frame selected on opening", async () => {
+    cullApi.blinkForImages.mockResolvedValue({ available: true, reason: "", photos: [photo(1, { closed: 1 })] });
+    await refreshSimilar();
+    openSimilarGroup(similar.groupViews[0].key);
+    expect(selection.selectedId).toBe(10); // the sharpest frame (image 1) is selected on opening, before the answer can arrive
+    await vi.runAllTimersAsync();
+    expect(selection.selectedId).toBe(30); // image 1 has closed eyes: frame 3 is as sharp and has none
+    expect(selection.selectedIds).toEqual(new Set([30]));
+  });
+
+  it("never takes away a frame the user picked meanwhile", async () => {
+    /** @type {(v: any) => void} */
+    let answer = () => {};
+    cullApi.blinkForImages.mockImplementation(() => new Promise((r) => (answer = r)));
+    await openFirstGroup();
+    selectOnly(20);
+    answer({ available: true, reason: "", photos: [photo(1, { closed: 1 })] });
+    await vi.runAllTimersAsync();
+    expect(selection.selectedId).toBe(20);
+  });
+
+  it("leaves the selection alone when the eyes change nothing", async () => {
+    cullApi.blinkForImages.mockResolvedValue({ available: true, reason: "", photos: [photo(3, { closed: 1 })] });
+    await openFirstGroup();
+    await vi.runAllTimersAsync();
+    expect(selection.selectedId).toBe(10);
+  });
 });
+

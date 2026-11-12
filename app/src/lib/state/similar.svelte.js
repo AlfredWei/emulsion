@@ -53,6 +53,8 @@ export class SimilarStore {
   /** "idle" before a group is opened, "loading" while the check runs, "ready", or "unavailable" (a model it needs is missing). */
   blinkState = $state(/** @type {"idle" | "loading" | "ready" | "unavailable"} */ ("idle"));
   blinkReason = $state("");
+  /** The frame selected for the user when the open group opened: a later change of the suggestion moves the selection only while it is still this one. */
+  autoPickVersionId = $state(/** @type {number | null} */ (null));
   /** A "Reject the others" waiting for its confirmation. */
   pendingReject = $state(/** @type {{ keepVersionId: number, versionIds: number[] } | null} */ (null));
 
@@ -67,6 +69,7 @@ export class SimilarStore {
     this.pendingReject = null;
     this.blink = {};
     this.blinkState = "idle";
+    this.autoPickVersionId = null;
   }
 
   saveSoftChips() {

@@ -13,7 +13,7 @@
    *   onRatingChange: (versionId: number, rating: number) => void,
    *   onFlagChange: (versionId: number, flag: string) => void,
    *   onColorLabelChange: (versionId: number, colorLabel: string) => void,
-   *   culling?: Map<number, { best: boolean, soft: boolean, relative: number, eyes?: { text: string, title: string } | null }> | null,
+   *   culling?: Map<number, { best: boolean, soft: boolean, relative: number, eyes?: { text: string, title: string } | null, bestTitle?: string }> | null,
    *   showDeselect?: boolean,
    * }}
    *
@@ -93,7 +93,7 @@
             onkeydown={(e) => e.stopPropagation()}
           >
             <span class="cell-filename truncate" title={image.path}>{filename}</span>
-            {#if culling?.get(image.version_id)?.best}<span class="cull-badge best">Suggested</span>{/if}
+            {#if culling?.get(image.version_id)?.best}<span class="cull-badge best" title={culling.get(image.version_id)?.bestTitle ?? "The sharpest frame of this group"}>Suggested</span>{/if}
             {#if culling?.get(image.version_id)?.soft}<span class="cull-badge soft" title="Under half as sharp as the sharpest frame of this group">Soft</span>{/if}
             {#if culling?.get(image.version_id)?.eyes}
               {@const eyes = culling.get(image.version_id)?.eyes}

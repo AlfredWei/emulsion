@@ -80,3 +80,30 @@ export function eyesBadge(blink) {
   if (blink.one_closed > 0) return { text: blink.one_closed > 1 ? `One eye closed ×${blink.one_closed}` : "One eye closed", title: `One eye closed in ${blink.one_closed} ${of}: a wink, a squint or a half blink` };
   return null;
 }
+
+/** A frame must be at least this share of the group's best sharpness to be suggested over a sharper frame with closed eyes. */
+export const EYES_TIEBREAK_MIN_RELATIVE = 0.8;
+
+/**
+ * Which frame to suggest once the eye check has spoken (RFC-0031 §8.5, §8.17). Sharpness decides first: the frame the backend
+ * suggested stays suggested unless it has a face with both eyes closed. Then the eyes break the tie, and only inside a margin:
+ * the suggestion moves to the sharpest frame that is not soft, is at least `EYES_TIEBREAK_MIN_RELATIVE` of the group's best and
+ * has no closed-eyes face. When the backend suggested nothing (no frame clearly sharper), the same frame is suggested if some other
+ * frame has closed eyes, because then the eyes are information the sharpness lacked. A frame the check could not judge is not
+ * held against it, and a wink or squint (`one_closed`) never moves anything. Nothing is hidden or rejected by this.
+ * @param {SimilarFrame[]} frames
+ * @param {Record<number, { closed: number }> | null | undefined} blink - by image id
+ * @returns {{ frame: SimilarFrame | null, change: "none" | "moved" | "added" }}
+ */
+export function suggestedFrame(frames, blink) {
+  const base = frames.find((f) => f.best) ?? null;
+  const closed = (/** @type {SimilarFrame} */ f) => (blink?.[f.image.image_id]?.closed ?? 0) > 0;
+  if (!blink || !frames.some(closed) || (base && !closed(base))) return { frame: base, change: "none" };
+  let pick = null;
+  for (const f of frames) {
+    if (f.soft || closed(f) || f.relative < EYES_TIEBREAK_MIN_RELATIVE) continue;
+    if (pick === null || f.relative > pick.relative) pick = f;
+  }
+  if (!pick) return { frame: base, change: "none" };
+  return { frame: pick, change: base ? "moved" : "added" };
+}

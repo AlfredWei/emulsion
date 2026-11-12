@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { eyesBadge, buildGroupViews, rejectOthersTargets, similarityLabel, rejectOthersMessage } from "./similar.js";
+import { eyesBadge, suggestedFrame, EYES_TIEBREAK_MIN_RELATIVE, buildGroupViews, rejectOthersTargets, similarityLabel, rejectOthersMessage } from "./similar.js";
 
 const img = (/** @type {number} */ id, /** @type {object} */ over = {}) =>
   /** @type {any} */ ({ image_id: id, version_id: id * 10, path: `/p/${id}.jpg`, flag: "none", rating: 0, color_label: "none", ...over });
@@ -102,5 +102,48 @@ describe("eyesBadge", () => {
     expect(eyesBadge(b({ closed: 1, one_closed: 2 }))?.text).toBe("Eyes closed");
     expect(eyesBadge(b({ one_closed: 1 }))?.text).toBe("One eye closed");
     expect(eyesBadge(b({ judged: 1, one_closed: 1 }))?.title).toContain("1 of 1 face checked");
+  });
+});
+
+describe("suggestedFrame (the eyes as a tiebreak)", () => {
+  const frame = (/** @type {number} */ id, /** @type {object} */ over = {}) => ({ image: img(id), relative: 1, soft: false, best: false, ...over });
+  const eyes = (/** @type {Record<number, number>} */ closedByImage) => Object.fromEntries(Object.entries(closedByImage).map(([id, closed]) => [id, { closed }]));
+
+  it("changes nothing without an eye check, or when nobody has closed eyes", () => {
+    const frames = [frame(1, { best: true }), frame(2, { relative: 0.9 })];
+    expect(suggestedFrame(frames, null)).toEqual({ frame: frames[0], change: "none" });
+    expect(suggestedFrame(frames, eyes({ 1: 0, 2: 0 }))).toEqual({ frame: frames[0], change: "none" });
+  });
+
+  it("keeps the sharpest frame when its own eyes are fine, whatever the others show", () => {
+    const frames = [frame(1, { best: true }), frame(2, { relative: 0.95 })];
+    expect(suggestedFrame(frames, eyes({ 2: 1 })).frame).toBe(frames[0]);
+  });
+
+  it("moves the suggestion off a closed-eyes frame to the sharpest frame inside the margin with open eyes", () => {
+    const frames = [frame(1, { best: true }), frame(2, { relative: 0.85 }), frame(3, { relative: 0.95 })];
+    const r = suggestedFrame(frames, eyes({ 1: 1 }));
+    expect(r).toEqual({ frame: frames[2], change: "moved" });
+  });
+
+  it("does not move it to a frame outside the margin or a soft one, and then keeps the suggestion", () => {
+    const frames = [frame(1, { best: true }), frame(2, { relative: EYES_TIEBREAK_MIN_RELATIVE - 0.01 }), frame(3, { relative: 0.9, soft: true })];
+    expect(suggestedFrame(frames, eyes({ 1: 1 }))).toEqual({ frame: frames[0], change: "none" });
+  });
+
+  it("does not move it to another closed-eyes frame", () => {
+    const frames = [frame(1, { best: true }), frame(2, { relative: 0.9 })];
+    expect(suggestedFrame(frames, eyes({ 1: 1, 2: 2 }))).toEqual({ frame: frames[0], change: "none" });
+  });
+
+  it("a frame the check could not judge is not held against it", () => {
+    const frames = [frame(1, { best: true }), frame(2, { relative: 0.9 })];
+    expect(suggestedFrame(frames, { 1: { closed: 1 } }).frame).toBe(frames[1]);
+  });
+
+  it("suggests a frame when there was none, only because another frame has closed eyes", () => {
+    const frames = [frame(1), frame(2, { relative: 0.9 }), frame(3, { relative: 0.5 })];
+    expect(suggestedFrame(frames, eyes({ 1: 1 }))).toEqual({ frame: frames[1], change: "added" });
+    expect(suggestedFrame(frames, eyes({ 1: 0, 2: 0 })).frame).toBeNull();
   });
 });

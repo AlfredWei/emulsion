@@ -251,11 +251,11 @@ describe("hover preview", () => {
 
   const info = (/** @type {string} */ path) => /** @type {any} */ ({ path });
 
-  it("fetches after a 120 ms debounce and exposes the result as an asset URL", async () => {
+  it("fetches after a 60 ms debounce and exposes the result as an asset URL", async () => {
     const { develop } = setup();
     const fetch = vi.fn().mockResolvedValue(info("/cache/a.jpg"));
     develop.schedulePreview(fetch);
-    await vi.advanceTimersByTimeAsync(119);
+    await vi.advanceTimersByTimeAsync(59);
     expect(fetch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -267,7 +267,7 @@ describe("hover preview", () => {
     const a = vi.fn().mockResolvedValue(info("/a.jpg"));
     const b = vi.fn().mockResolvedValue(info("/b.jpg"));
     develop.schedulePreview(a);
-    await vi.advanceTimersByTimeAsync(60);
+    await vi.advanceTimersByTimeAsync(30);
     develop.schedulePreview(b);
     await vi.advanceTimersByTimeAsync(200);
     expect(a).not.toHaveBeenCalled();

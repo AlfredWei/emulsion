@@ -15,11 +15,10 @@ mod geocode;
 mod face_cluster;
 // Model fetch/cache (YuNet + SFace, models/FACE_MODELS.md) and the
 // detection/embedding pipeline itself.
-#[allow(dead_code)] // wired into the cull pass by the next blink slice (RFC-0031 §8.15)
+mod blink_commands;
 mod blink_mesh;
-#[allow(dead_code)] // same: nothing asks for the model until the pass exists
 mod blink_models;
-#[allow(dead_code)] // same
+mod blink_pass;
 mod blink_verdict;
 mod face_detect;
 mod face_models;
@@ -2348,6 +2347,7 @@ pub fn run() {
             removal_commands::removal_engine,
             removal_commands::removal_cancel,
             removal_commands::removal_available,
+            blink_commands::blink_for_images,
             denoise_commands::denoise_run,
             denoise_commands::denoise_cancel,
             denoise_commands::denoise_remove_cache,

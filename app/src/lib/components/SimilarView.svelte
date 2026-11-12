@@ -7,7 +7,7 @@
   import { setSimilarity, openSimilarGroup, closeSimilarGroup, selectOnly, askRejectOthers, cancelRejectOthers, confirmRejectOthers } from "$lib/actions/similarActions.js";
   import { handleRatingChange, handleFlagChange, handleColorLabelChange } from "$lib/actions/metadataActions.js";
   import { openDevelop } from "$lib/actions/navigation.js";
-  import { similarityLabel, rejectOthersMessage } from "$lib/similar.js";
+  import { similarityLabel, rejectOthersMessage, eyesBadge } from "$lib/similar.js";
 
   /**
    * The Similar view (RFC-0031 §3.4): frames of one moment as groups, each opening into the side-by-side Survey view
@@ -17,8 +17,19 @@
 
   let group = $derived(similar.openGroup);
   let photoCount = $derived(similar.groupViews.reduce((n, g) => n + g.frames.length, 0));
-  /** @type {Map<number, { best: boolean, soft: boolean, relative: number }>} */
-  let culling = $derived(new Map((group?.frames ?? []).map((f) => [f.image.version_id, { best: f.best, soft: f.soft, relative: f.relative }])));
+  /** @type {Map<number, { best: boolean, soft: boolean, relative: number, eyes: { text: string, title: string } | null }>} */
+  let culling = $derived(
+    new Map((group?.frames ?? []).map((f) => [f.image.version_id, { best: f.best, soft: f.soft, relative: f.relative, eyes: eyesBadge(similar.blink[f.image.image_id]) }])),
+  );
+  let eyesHint = $derived(
+    similar.blinkState === "loading"
+      ? "Checking eyes…"
+      : similar.blinkState === "unavailable"
+        ? similar.blinkReason === "face_models"
+          ? "Eye check needs the face detector: a face scan fetches it once."
+          : "Eye check is not available."
+        : "",
+  );
   let keepVersionId = $derived(selection.selectedId !== null && group?.frames.some((f) => f.image.version_id === selection.selectedId) ? selection.selectedId : null);
 
   // A group that vanished from under the open view (its photos were removed) returns to the list.
@@ -37,6 +48,7 @@
       <button type="button" class="btn" onclick={closeSimilarGroup}>‹ Similar</button>
       <span class="title">Group of {group.frames.length}</span>
       <span class="hint">{group.best ? "The sharpest frame is suggested; nothing changes until you choose." : "No frame is clearly sharper than the rest."} P pick · X reject</span>
+      {#if eyesHint}<span class="hint" role="status">{eyesHint}</span>{/if}
       <span class="spacer"></span>
       <button
         type="button"

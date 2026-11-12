@@ -66,3 +66,17 @@ export function similarityLabel(similarity) {
 export function rejectOthersMessage(count) {
   return `The selected photo stays. The ${count === 1 ? "other photo gets" : `${count} others get`} the Reject flag; no file is changed or deleted. To undo, show Rejected photos (Reject filter) and change the flag.`;
 }
+
+/**
+ * The badge a frame gets from the eye check, or null when there is nothing to say. Only what the check could tell counts: a photograph
+ * whose faces were all too small or too uncertain gets no badge, never a guess (RFC-0031 §8.14).
+ * @param {{ faces: number, judged: number, closed: number, one_closed: number } | null | undefined} blink
+ * @returns {{ text: string, title: string } | null}
+ */
+export function eyesBadge(blink) {
+  if (!blink || blink.judged === 0) return null;
+  const of = `of ${blink.judged} face${blink.judged === 1 ? "" : "s"} checked (${blink.faces} found)`;
+  if (blink.closed > 0) return { text: blink.closed > 1 ? `Eyes closed ×${blink.closed}` : "Eyes closed", title: `Both eyes closed in ${blink.closed} ${of}` };
+  if (blink.one_closed > 0) return { text: blink.one_closed > 1 ? `One eye closed ×${blink.one_closed}` : "One eye closed", title: `One eye closed in ${blink.one_closed} ${of}: a wink, a squint or a half blink` };
+  return null;
+}

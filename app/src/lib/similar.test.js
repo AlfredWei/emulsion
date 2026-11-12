@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildGroupViews, rejectOthersTargets, similarityLabel, rejectOthersMessage } from "./similar.js";
+import { eyesBadge, buildGroupViews, rejectOthersTargets, similarityLabel, rejectOthersMessage } from "./similar.js";
 
 const img = (/** @type {number} */ id, /** @type {object} */ over = {}) =>
   /** @type {any} */ ({ image_id: id, version_id: id * 10, path: `/p/${id}.jpg`, flag: "none", rating: 0, color_label: "none", ...over });
@@ -76,5 +76,31 @@ describe("labels", () => {
     expect(rejectOthersMessage(3)).toContain("3 others get the Reject flag");
     expect(rejectOthersMessage(1)).toContain("The other photo gets the Reject flag");
     expect(rejectOthersMessage(3)).toContain("no file is changed");
+  });
+});
+
+describe("eyesBadge", () => {
+  const b = (/** @type {object} */ o) => ({ faces: 5, judged: 3, closed: 0, one_closed: 0, ...o });
+
+  it("says nothing without an answer, or when no face could be judged", () => {
+    expect(eyesBadge(undefined)).toBeNull();
+    expect(eyesBadge(null)).toBeNull();
+    expect(eyesBadge(b({ judged: 0, closed: 0 }))).toBeNull();
+  });
+
+  it("says nothing when every judged face has its eyes open", () => {
+    expect(eyesBadge(b({}))).toBeNull();
+  });
+
+  it("names a closed-eyes face, with a count only for several", () => {
+    expect(eyesBadge(b({ closed: 1 }))?.text).toBe("Eyes closed");
+    expect(eyesBadge(b({ closed: 2 }))?.text).toBe("Eyes closed ×2");
+    expect(eyesBadge(b({ closed: 1 }))?.title).toBe("Both eyes closed in 1 of 3 faces checked (5 found)");
+  });
+
+  it("puts closed before one-closed, and still names a wink when that is all there is", () => {
+    expect(eyesBadge(b({ closed: 1, one_closed: 2 }))?.text).toBe("Eyes closed");
+    expect(eyesBadge(b({ one_closed: 1 }))?.text).toBe("One eye closed");
+    expect(eyesBadge(b({ judged: 1, one_closed: 1 }))?.title).toContain("1 of 1 face checked");
   });
 });

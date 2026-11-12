@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const cullApi = vi.hoisted(() => ({ listSimilarGroups: vi.fn(), cullAnalysisStatus: vi.fn() }));
+const cullApi = vi.hoisted(() => ({ listSimilarGroups: vi.fn(), cullAnalysisStatus: vi.fn(), blinkForImages: vi.fn() }));
 const catalog = vi.hoisted(() => ({ setFlag: vi.fn(), listImages: vi.fn() }));
 vi.mock("$lib/api/cull.js", () => cullApi);
 vi.mock("$lib/api/catalog.js", () => catalog);
@@ -22,6 +22,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   cullApi.listSimilarGroups.mockResolvedValue(GROUPS);
   cullApi.cullAnalysisStatus.mockResolvedValue({ analysed: 3, total: 3 });
+  cullApi.blinkForImages.mockResolvedValue({ available: true, reason: "", photos: [] });
   catalog.setFlag.mockResolvedValue(undefined);
   library.images = [1, 2, 3, 4].map((i) => img(i));
   similar.leave();
@@ -262,5 +263,56 @@ describe("Soft chips on the grid", () => {
     toggleSoftChips();
     expect(stored.get("emulsion_soft_chips_v1")).toBe("0");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("the eye check of an open group (RFC-0031 §8.15)", () => {
+  const photo = (/** @type {number} */ id, /** @type {object} */ over = {}) => ({ image_id: id, faces: 3, judged: 2, closed: 1, one_closed: 0, ...over });
+
+  async function openFirstGroup() {
+    await refreshSimilar();
+    openSimilarGroup(similar.groupViews[0].key);
+  }
+
+  it("asks for exactly the group's photographs when it opens, and keeps the answers by image id", async () => {
+    cullApi.blinkForImages.mockResolvedValue({ available: true, reason: "", photos: [photo(2)] });
+    await refreshSimilar();
+    openSimilarGroup(similar.groupViews[0].key);
+    expect(similar.blinkState).toBe("loading"); // checked before the answer can arrive
+    expect(cullApi.blinkForImages).toHaveBeenCalledWith([1, 2, 3]);
+    await vi.runAllTimersAsync();
+    expect(similar.blinkState).toBe("ready");
+    expect(similar.blink[2]).toEqual(photo(2));
+    expect(similar.blink[1]).toBeUndefined();
+  });
+
+  it("says why when the check is not available, and shows no badges", async () => {
+    cullApi.blinkForImages.mockResolvedValue({ available: false, reason: "face_models", photos: [] });
+    await openFirstGroup();
+    await vi.runAllTimersAsync();
+    expect(similar.blinkState).toBe("unavailable");
+    expect(similar.blinkReason).toBe("face_models");
+    expect(similar.blink).toEqual({});
+  });
+
+  it("a failing check leaves the view as it is", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    cullApi.blinkForImages.mockRejectedValue(new Error("boom"));
+    await openFirstGroup();
+    await vi.runAllTimersAsync();
+    expect(similar.blinkState).toBe("unavailable");
+    expect(similar.openKey).not.toBeNull();
+  });
+
+  it("an answer that arrives after the group was closed is dropped", async () => {
+    /** @type {(v: any) => void} */
+    let answer = () => {};
+    cullApi.blinkForImages.mockImplementation(() => new Promise((r) => (answer = r)));
+    await openFirstGroup();
+    closeSimilarGroup();
+    answer({ available: true, reason: "", photos: [photo(1)] });
+    await vi.runAllTimersAsync();
+    expect(similar.blink).toEqual({});
+    expect(similar.blinkState).toBe("idle");
   });
 });

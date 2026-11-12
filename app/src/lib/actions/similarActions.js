@@ -1,7 +1,7 @@
 // Similar view workflows (RFC-0031 slice C): entering and leaving the view, fetching groups (on entry, on a slider
 // change, and while the background analysis is still measuring photos), opening a group, and "Reject the others".
 
-import { listSimilarGroups, cullAnalysisStatus } from "$lib/api/cull.js";
+import { listSimilarGroups, cullAnalysisStatus, blinkForImages } from "$lib/api/cull.js";
 import { setFlag } from "$lib/api/catalog.js";
 import { library } from "$lib/state/library.svelte.js";
 import { selection } from "$lib/state/selection.svelte.js";
@@ -102,15 +102,44 @@ export function setSimilarity(/** @type {number} */ value) {
   }, SLIDER_DEBOUNCE_MS);
 }
 
+/** Bumped by every eye check so the answer for a group that was closed or changed meanwhile is dropped. */
+let blinkSeq = 0;
+
+/** Asks for the eye check of the open group's photographs. It measures what is not stored yet, so it takes a moment: the badges
+ * appear when it answers, and nothing in the view waits for it. A failure leaves the view as it is, without badges. */
+export async function loadBlink(/** @type {number[]} */ imageIds) {
+  const seq = ++blinkSeq;
+  similar.blinkState = "loading";
+  similar.blinkReason = "";
+  try {
+    const result = await blinkForImages(imageIds);
+    if (seq !== blinkSeq) return;
+    similar.blink = Object.fromEntries(result.photos.map((p) => [p.image_id, p]));
+    similar.blinkReason = result.reason;
+    similar.blinkState = result.available ? "ready" : "unavailable";
+  } catch (e) {
+    if (seq !== blinkSeq) return;
+    console.error("eye check failed", e);
+    similar.blink = {};
+    similar.blinkState = "unavailable";
+    similar.blinkReason = "failed";
+  }
+}
+
 /** Opens a group in the side-by-side view with its suggested frame (or the first) selected. */
 export function openSimilarGroup(/** @type {number} */ key) {
   const group = similar.groupViews.find((g) => g.key === key);
   if (!group) return;
   similar.openKey = key;
+  similar.blink = {};
   selectOnly((group.best ?? group.frames[0]).image.version_id);
+  loadBlink(group.frames.map((f) => f.image.image_id));
 }
 
 export function closeSimilarGroup() {
+  blinkSeq++;
+  similar.blink = {};
+  similar.blinkState = "idle";
   similar.openKey = null;
   similar.pendingReject = null;
 }

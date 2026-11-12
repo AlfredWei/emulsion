@@ -29,3 +29,21 @@ export function listSimilarGroups(/** @type {number} */ similarity) {
 export function cullAnalysisStatus() {
   return invoke("cull_analysis_status");
 }
+
+/**
+ * What the eye check says of one photograph (RFC-0031 §8.15). Faces too small or too uncertain to judge are counted in `faces` but
+ * not in `judged`: the check says "cannot tell" rather than guess.
+ * @typedef {Object} BlinkPhoto
+ * @property {number} image_id
+ * @property {number} faces - faces found
+ * @property {number} judged - faces whose eyes could be told apart
+ * @property {number} closed - judged faces with both eyes closed
+ * @property {number} one_closed - judged faces with one eye closed (a wink, a squint, a half blink)
+ */
+
+/** The eye check for these photographs: stored answers as they are, the rest measured now (a second or so each).
+ * `available` is false when a model it needs is missing: `reason` is "mesh_model" or "face_models".
+ * @returns {Promise<{ available: boolean, reason: string, photos: BlinkPhoto[] }>} */
+export function blinkForImages(/** @type {number[]} */ imageIds) {
+  return invoke("blink_for_images", { imageIds });
+}

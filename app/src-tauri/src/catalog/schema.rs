@@ -328,6 +328,20 @@ impl Catalog {
                 analysed_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- Blink evidence (M7, RFC-0031 §8.15): per photo, what the eye check said of each face, measured on demand for
+            -- the members of similar groups. `detail_json` is a list of {x, y, w, h, eyes} in fractions of the photograph;
+            -- the counts are the same list summed, kept for the badge. `algo` is the version of the rules.
+            CREATE TABLE IF NOT EXISTS cull_blink (
+                image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                faces INTEGER NOT NULL,
+                judged INTEGER NOT NULL,
+                closed INTEGER NOT NULL,
+                one_closed INTEGER NOT NULL,
+                detail_json TEXT NOT NULL,
+                algo INTEGER NOT NULL,
+                analysed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- Object removal (M7, RFC-0032 §12, ADR-0010 §4): the stored result of one removal, an RGBA PNG that is
             -- opaque on the removed object and fades just beyond it. It lives in the catalog, not in a folder, so every
             -- backup and catalog copy carries it. `x`, `y`, `w`, `h` place it in the photograph's full decode of

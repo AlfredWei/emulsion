@@ -33,5 +33,6 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Develop edit and History](./develop-edit-history.md): change a slider, see it stored, undo and redo through History. Carries an open finding.
 - [Export](./export.md): export the open Develop photo to a JPEG file.
 - [Remove tool](./remove-tool.md): the object-removal tool's controls, in its no-model and no-GPU states.
+- [Similar view: the eye check](./similar-eyes-check.md): the Eyes closed / One eye closed badges on the frames of an opened group.
 
 Existing specs not yet mapped (each has a header comment saying what it proves): `develop-auto-sync`, `develop-multiselect`, `develop-mask-shapes`, `develop-select-subject`, `develop-adaptive-presets`, `library-adaptive-batch`, `hdr-merge`, `storage-settings`, `panel-resize`, `context-menu`, `develop-module-roundtrip`, `develop-cpu-gpu-parity`, `develop-performance`.

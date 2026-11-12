@@ -44,6 +44,9 @@ import {
   handleMergeHdrBracket,
   handleMergePanorama,
   regenerateThumbnailFor,
+  scheduleSettledThumbnail,
+  installSettledThumbnails,
+  SETTLED_THUMBNAIL_MS,
   pollUntilThumbnailsReadyOnStartup,
 } from "./importActions.js";
 import { handleBatchThumbnailsComplete } from "./libraryActions.js";
@@ -52,6 +55,7 @@ import { faces } from "$lib/state/faces.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
 import { selection } from "$lib/state/selection.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
+import { develop } from "$lib/state/develop.svelte.js";
 
 const summary = (/** @type {object} */ over = {}) => ({ imported: 3, skipped_duplicates: 1, failed: 0, import_batch: 7, ...over });
 const photo = (/** @type {number} */ id, /** @type {string | null} */ thumb = "/t.jpg", /** @type {number} */ vid = id * 10) =>
@@ -260,6 +264,33 @@ describe("regenerateThumbnailFor", () => {
     expect(queue.queueThumbnailRegeneration).not.toHaveBeenCalled();
     regenerateThumbnailFor(30);
     expect(queue.queueThumbnailRegeneration).toHaveBeenCalledWith(30, handleBatchThumbnailsComplete);
+  });
+});
+
+describe("settled thumbnails (the filmstrip follows the Develop canvas once edits pause)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("rebuilds the thumbnail only after edits have paused, and a later edit restarts the wait", async () => {
+    scheduleSettledThumbnail(30);
+    await vi.advanceTimersByTimeAsync(SETTLED_THUMBNAIL_MS - 100);
+    scheduleSettledThumbnail(30);
+    await vi.advanceTimersByTimeAsync(SETTLED_THUMBNAIL_MS - 100);
+    expect(queue.queueThumbnailRegeneration).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(queue.queueThumbnailRegeneration).toHaveBeenCalledExactlyOnceWith(30, handleBatchThumbnailsComplete);
+  });
+
+  it("an immediate rebuild (leaving the photo, a preset) cancels the pending one", async () => {
+    scheduleSettledThumbnail(30);
+    regenerateThumbnailFor(30);
+    await vi.advanceTimersByTimeAsync(SETTLED_THUMBNAIL_MS * 2);
+    expect(queue.queueThumbnailRegeneration).toHaveBeenCalledTimes(1);
+  });
+
+  it("is connected to the Develop store's edit-written event", () => {
+    installSettledThumbnails();
+    expect(develop.editSettledHook).toBe(scheduleSettledThumbnail);
   });
 });
 

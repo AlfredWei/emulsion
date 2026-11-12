@@ -5,6 +5,7 @@
 
 import { importFlow } from "$lib/state/importFlow.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
+import { develop } from "$lib/state/develop.svelte.js";
 import { refresh, prioritizeThumbnail, handleBatchThumbnailsComplete, stopRefreshingWhileImporting } from "$lib/actions/libraryActions.js";
 import {
   backfillMissingThumbnails,
@@ -204,7 +205,38 @@ export async function handleMergePanorama() {
 // components see thumbnails refresh together.
 export function regenerateThumbnailFor(/** @type {number | null} */ versionId) {
   if (versionId === null) return;
+  const settling = settledTimers.get(versionId);
+  if (settling !== undefined) {
+    clearTimeout(settling);
+    settledTimers.delete(versionId);
+  }
   queueThumbnailRegeneration(versionId, handleBatchThumbnailsComplete);
+}
+
+/** How long edits must pause before the open photo's thumbnail is rebuilt. Rebuilding grades the 2048 px draft on the
+ * CPU (~1.4 s), so it waits for a pause, not every slider commit. */
+export const SETTLED_THUMBNAIL_MS = 2000;
+
+/** @type {Map<number, ReturnType<typeof setTimeout>>} */
+const settledTimers = new Map();
+
+/** Rebuilds a photo's thumbnail once its edits have paused for `SETTLED_THUMBNAIL_MS`, so the filmstrip and grid match
+ * the Develop canvas without leaving the photo. Leaving / a preset / History already rebuild at once and cancel this. */
+export function scheduleSettledThumbnail(/** @type {number} */ versionId) {
+  const previous = settledTimers.get(versionId);
+  if (previous !== undefined) clearTimeout(previous);
+  settledTimers.set(
+    versionId,
+    setTimeout(() => {
+      settledTimers.delete(versionId);
+      regenerateThumbnailFor(versionId);
+    }, SETTLED_THUMBNAIL_MS),
+  );
+}
+
+/** Connects the Develop store's "edit written" event to `scheduleSettledThumbnail`. Called once at startup. */
+export function installSettledThumbnails() {
+  develop.editSettledHook = scheduleSettledThumbnail;
 }
 
 export async function pollUntilThumbnailsReadyOnStartup() {

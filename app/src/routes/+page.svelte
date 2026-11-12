@@ -66,6 +66,7 @@
     handleImportFiles,
     handleMergeHdrBracket,
     handleMergePanorama,
+    installSettledThumbnails,
   } from "$lib/actions/importActions.js";
   import { handleRatingChange, handleFlagChange, handleColorLabelChange } from "$lib/actions/metadataActions.js";
   import { handleToggleClippingOverlay } from "$lib/actions/developActions.js";
@@ -115,6 +116,7 @@
   segment.install();
   denoise.install();
   installAutoSync();
+  installSettledThumbnails();
   // Auto Sync switches itself off with the selection (fewer than two photos) and when Develop is left.
   $effect(() => {
     void shell.activeModule;

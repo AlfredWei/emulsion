@@ -306,7 +306,10 @@ export class DevelopStore {
       this.#pendingSave = (previous ? previous.then(write) : write())
         .then((freshHistory) => {
           this.history = freshHistory;
-          if (effectiveLabel) this.historyIndex = freshHistory.length - 1;
+          if (effectiveLabel) {
+            this.historyIndex = freshHistory.length - 1;
+            this.editSettledHook?.(versionId);
+          }
         })
         .then(async () => {
           // The sync is part of the awaited flush, so switching photos waits for it (the hook reports its own failures).
@@ -318,6 +321,11 @@ export class DevelopStore {
     }
     return this.#pendingSave ?? Promise.resolve();
   };
+
+  /** Called with the photo's version id after a labelled edit has been written, i.e. a real edit (slider, Auto WB,
+   * mask...), not a no-op flush. Installed at startup to refresh the filmstrip / grid thumbnail once edits pause.
+   * @type {((versionId: number) => void) | null} */
+  editSettledHook = null;
 
   /** Installed by the Auto Sync actions; null = Auto Sync does not exist as far as persistence is concerned.
    * `targets(versionId)` lists the photos an edit of `versionId` goes to right now (empty or null when Auto Sync is

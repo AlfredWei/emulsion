@@ -1475,7 +1475,6 @@ async fn preview_history_entry(
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
-    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let stack = {
@@ -1483,12 +1482,11 @@ async fn preview_history_entry(
             let stack = catalog.peek_history_entry(version_id, history_id).map_err(|e| e.to_string())?;
             removal::inline_patches(&catalog, version_id, &stack)
         };
-        preview_cache::ensure_graded_preview_for_hash(
+        preview_cache::ensure_hover_preview_for_hash(
             std::path::Path::new(&path),
             content_hash.as_deref().unwrap_or(""),
             &stack,
             &previews_dir,
-            Some(&denoise_dir),
         )
         .map_err(|e| e.user_message())
     })
@@ -1509,7 +1507,6 @@ async fn preview_snapshot(
 ) -> Result<DevelopPreviewInfo, String> {
     let catalog = state.catalog.clone();
     let previews_dir = resolve_previews_dir(&app, &catalog)?;
-    let denoise_dir = resolve_denoise_dir(&app, &catalog)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let stack = {
@@ -1517,12 +1514,11 @@ async fn preview_snapshot(
             let stack = catalog.peek_snapshot(version_id, snapshot_id).map_err(|e| e.to_string())?;
             removal::inline_patches(&catalog, version_id, &stack)
         };
-        preview_cache::ensure_graded_preview_for_hash(
+        preview_cache::ensure_hover_preview_for_hash(
             std::path::Path::new(&path),
             content_hash.as_deref().unwrap_or(""),
             &stack,
             &previews_dir,
-            Some(&denoise_dir),
         )
         .map_err(|e| e.user_message())
     })
@@ -1566,6 +1562,41 @@ async fn preview_edit_stack(
             &stack,
             &previews_dir,
             Some(&denoise_dir),
+        )
+        .map_err(|e| e.user_message())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Hover-size twin of `preview_edit_stack`: the Preset peek renders the look at `HOVER_PREVIEW_MAX_DIMENSION`
+/// (see `preview_cache::ensure_hover_preview_for_hash`). `preview_edit_stack` itself stays full size because the
+/// GPU-fallback canvas shows its result as the main picture.
+#[tauri::command]
+async fn preview_edit_stack_hover(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    content_hash: Option<String>,
+    stack: EditStack,
+    version_id: Option<i64>,
+) -> Result<DevelopPreviewInfo, String> {
+    let catalog = state.catalog.clone();
+    let previews_dir = resolve_previews_dir(&app, &catalog)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stack = match version_id {
+            Some(v) => {
+                let catalog = catalog.lock().map_err(|e| e.to_string())?;
+                removal::inline_patches(&catalog, v, &stack)
+            }
+            None => stack,
+        };
+        preview_cache::ensure_hover_preview_for_hash(
+            std::path::Path::new(&path),
+            content_hash.as_deref().unwrap_or(""),
+            &stack,
+            &previews_dir,
         )
         .map_err(|e| e.user_message())
     })
@@ -2392,6 +2423,7 @@ pub fn run() {
             restore_snapshot,
             preview_snapshot,
             preview_edit_stack,
+            preview_edit_stack_hover,
             delete_snapshot,
             create_preset,
             list_presets,

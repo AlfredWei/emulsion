@@ -6,6 +6,14 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## Develop: the left-rail hover preview is ~10x faster (2026-11-12, `feature/hover-preview-perf`)
+
+Hovering a History row, a Snapshot or a Preset used to run the whole grading pipeline on the 2048 px draft (measured, M-series, release, 7-op stack: **1.37 s** to grade, 1.6 s cold), to fill a ~200 px box. Now: **`preview_cache::ensure_hover_preview_for_hash`** grades a 640 px base (**0.11 s**; the 2048 px draft is opened and shrunk once per photo and kept in memory while the pointer moves down the list) and writes a small JPEG (`{hash}_{stack8}_hover.jpg`, ~40 KB instead of ~2.7 MB PNG). `preview_history_entry` and `preview_snapshot` use it; Presets get **`preview_edit_stack_hover`** (`preview_edit_stack` stays full size, the GPU-fallback canvas shows its result as the main picture). The 120 ms hover debounce is now 60 ms. **Warm-up:** opening the History or Presets tab renders the newest 8 history rows, the snapshots, or every preset's look on the open photo in the background, one at a time (stops when the photo changes), so the first hover is a cache hit.
+
+- **Deliberate differences from the full render**: the AI-denoised copy is not blended (invisible at this size), and pixel-radius ops (Clarity, Sharpening) run on a smaller picture so their local-contrast look is an approximation. The hover preview is a look-up aid; nothing saved or exported uses it.
+- **Tests**: Rust `hover_preview_reflects_the_edit_is_small_and_cached`; Vitest for the hover API use, both warm-ups (order, stop on photo change) and the 60 ms debounce. 1271 Vitest pass, svelte-check 0 errors.
+- **Not verified**: the real window (feel of a first hover, tab-open warm-up under a large preset list); a debug build is several times slower than the numbers above.
+
 ## M7 culling E1a: the mesh runs in the app, blendshapes dropped (2026-11-11, `feature/blink-mesh-tract-spike`)
 
 [RFC-0031 §8.15](docs/rfc/RFC-0031-intelligent-culling.md). New `blink_mesh.rs`: face crop to eyelid aspect ratio per eye plus mesh presence, over `tract`; matches the Python tool on two real faces (presence 0.02, ratio 0.01), 3 tests passing. **`tract` cannot load the Blendshapes model** (ReduceMean node), so the app path uses the ratio alone: on the user's marks at >= 96 px it found 19 of 23 closed eyes against 21 of 23 for ratio-or-blendshape, with no false "closed" calls. **Also in this PR:** the 4.9 MB mesh file bundled like the upscale model (pinned, committed in `models/`, seeded into `blink_models/`; the parity test now runs in CI) and `blink_verdict.rs` (ratio < 0.18, face >= 96 px, presence >= 0.5, else "cannot tell"; open / closed / one closed / cannot tell), 4 tests. **Open licence item:** the Apache-2.0 text for the installer. **Not built:** the pass over similar-group faces, storage, the badge. **Not verified:** all of that, the ratio cut out of sample (batch 2), Windows.

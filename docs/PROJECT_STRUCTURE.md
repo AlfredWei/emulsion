@@ -93,7 +93,7 @@ src-tauri/
 │   ├── metadata.rs             EXIF-ish metadata extraction at import
 │   ├── metadata_writer.rs       EXIF/IPTC writing into exported JPEGs (per-export toggles)
 │   ├── geocode.rs               Forward geocoding: OpenStreetMap (Nominatim) default, optional Google
-│   ├── preview_cache.rs         Develop preview cache (graded previews by content + stack hash)
+│   ├── preview_cache.rs         Develop preview cache (graded previews by content + stack hash; 640 px hover tier for the History / Preset peek)
 │   ├── export.rs / export_plugin.rs   Export pipeline / the v0 export-plugin hook
 │   ├── hdr_merge.rs / panorama_merge.rs   HDR bracket merge / feature-based panorama stitch
 │   ├── face_detect.rs, face_cluster.rs, face_models.rs, face_pipeline.rs   Face detection, clustering, model cache, orchestration

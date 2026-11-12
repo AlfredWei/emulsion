@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   setEditStack: vi.fn(),
   regenerateThumbnail: vi.fn(),
   previewEditStack: vi.fn(),
+  previewEditStackHover: vi.fn(),
 }));
 vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), ...api }));
 const dialog = vi.hoisted(() => ({ open: vi.fn(), save: vi.fn() }));
@@ -383,8 +384,8 @@ describe("handlePeekPreset", () => {
 
   it("previews the open stack with the preset merged in, keyed by path and content hash", () => {
     A.handlePeekPreset(1);
-    expect(api.previewEditStack).toHaveBeenCalledTimes(1);
-    const [path, hash, merged] = api.previewEditStack.mock.calls[0];
+    expect(api.previewEditStackHover).toHaveBeenCalledTimes(1);
+    const [path, hash, merged] = api.previewEditStackHover.mock.calls[0];
     expect([path, hash]).toEqual(["/p/a.raw", "hash"]);
     expect(exposureOf(merged)).toBe(2);
     expect(exposureOf(develop.editStack)).toBe(1); // the live stack is untouched
@@ -392,7 +393,18 @@ describe("handlePeekPreset", () => {
 
   it("ignores unknown presets", () => {
     A.handlePeekPreset(99);
-    expect(api.previewEditStack).not.toHaveBeenCalled();
+    expect(api.previewEditStackHover).not.toHaveBeenCalled();
+  });
+
+  it("warms every preset's look, one after another, and stops when the photo changes", async () => {
+    presets.list = [preset(1, "A", stack(2)), preset(2, "B", stack(3)), preset(3, "C", stack(4))];
+    api.previewEditStackHover.mockImplementation(async () => {
+      if (api.previewEditStackHover.mock.calls.length === 2) develop.versionId = 99; // the user moved on mid-way
+      return { path: "/x.jpg", width: 1, height: 1, is_smart_preview: false };
+    });
+    await A.warmPresetPreviews();
+    expect(api.previewEditStackHover).toHaveBeenCalledTimes(2);
+    expect(exposureOf(api.previewEditStackHover.mock.calls[0][2])).toBe(2);
   });
 });
 

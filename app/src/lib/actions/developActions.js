@@ -402,6 +402,31 @@ export function handlePeekSnapshot(/** @type {number} */ snapshotId) {
   develop.schedulePreview(() => previewSnapshot(versionId, snapshotId, path, contentHash));
 }
 
+let historyWarmRun = 0;
+const HISTORY_WARM_ROWS = 8;
+
+/** Renders the newest History rows and the Snapshots in the background, one at a time, so hovering them is a cache
+ * hit. Stops when the photo changes or a newer warm-up starts. */
+export async function warmHistoryPreviews() {
+  const run = ++historyWarmRun;
+  const versionId = develop.versionId;
+  const path = develop.imagePath;
+  if (versionId === null || path === null) return;
+  const contentHash = develop.imageContentHash;
+  const jobs = [
+    ...develop.history.slice(-HISTORY_WARM_ROWS).reverse().map((e) => () => previewHistoryEntry(versionId, e.id, path, contentHash)),
+    ...develop.snapshots.map((snap) => () => previewSnapshot(versionId, snap.id, path, contentHash)),
+  ];
+  for (const job of jobs) {
+    if (run !== historyWarmRun || develop.versionId !== versionId) return;
+    try {
+      await job();
+    } catch {
+      // rendered (and failing quietly) on hover, as before
+    }
+  }
+}
+
 /** Creates a named save point from whatever's CURRENTLY on screen --
  * flushes any pending debounced edit first so the snapshot never misses
  * the last slider tick. */

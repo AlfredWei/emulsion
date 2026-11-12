@@ -83,6 +83,11 @@ src-tauri/
 │   │                        perspective; tests/ = per-area tests + shared support
 │   ├── import.rs            Import pipeline: scan a folder, hash, dedupe, thumbnail (per-step catalog lock, thumbnail pool during import, streaming events, tier-0 EXIF thumbnail: RFC-0030)
 │   ├── cull.rs              Culling analysis (RFC-0031): sharpness score + 256-bit dHash per photo, `analyse_missing` background pass (reads the plain 1024 px thumbnail, source as fallback)
+│   ├── blink_mesh.rs        Eye-state evidence (RFC-0031 §8.15): a 256 px face crop through Face Mesh V2 over `tract`, the eyelid aspect ratio per eye and the mesh's face-presence score
+│   ├── blink_models.rs      The bundled mesh model file (pinned size and SHA-256, installed into `blink_models/` on first use; no download path)
+│   ├── blink_verdict.rs     The rules: ratio < 0.18 closed, and the "cannot tell" gate (face >= 96 px, mesh presence >= 0.5); open / closed / one closed / cannot tell per face
+│   ├── blink_pass.rs        One photograph's eye check: detector faces, rotated crops from the full decode, verdicts; the counts a badge needs
+│   ├── blink_commands.rs    `blink_for_images`: stored answers served, missing ones measured on the full-resolution decode and stored (`cull_blink` table)
 │   ├── cull_groups.rs       Similar-photo groups (RFC-0031): pure grouping by camera + capture time + hash distance, suggested-best and Soft rules, the Similarity slider's mapping
 │   ├── inpaint_patchmatch.rs  Non-model content-aware fill (RFC-0032): multi-scale PatchMatch inpainting; the bake-off's baseline, not wired into the app
 │   ├── inpaint_probe.rs     Test-only, ignored: runs it on the bake-off cases (`INPAINT_CASES`)

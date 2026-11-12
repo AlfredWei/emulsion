@@ -48,6 +48,13 @@ export class SimilarStore {
   softVersionIds = $derived(new Set(this.groups.flatMap((g) => g.members.filter((m) => m.soft).map((m) => m.version_id))));
   /** The open group, by its key (first member's image id); null shows the list of groups. */
   openKey = $state(/** @type {number | null} */ (null));
+  /** The eye check of the open group's photographs (RFC-0031 §8.15), by image id; filled when a group is opened. */
+  blink = $state(/** @type {Record<number, import('$lib/api/cull.js').BlinkPhoto>} */ ({}));
+  /** "idle" before a group is opened, "loading" while the check runs, "ready", or "unavailable" (a model it needs is missing). */
+  blinkState = $state(/** @type {"idle" | "loading" | "ready" | "unavailable"} */ ("idle"));
+  blinkReason = $state("");
+  /** The frame selected for the user when the open group opened: a later change of the suggestion moves the selection only while it is still this one. */
+  autoPickVersionId = $state(/** @type {number | null} */ (null));
   /** A "Reject the others" waiting for its confirmation. */
   pendingReject = $state(/** @type {{ keepVersionId: number, versionIds: number[] } | null} */ (null));
 
@@ -60,6 +67,9 @@ export class SimilarStore {
     this.active = false;
     this.openKey = null;
     this.pendingReject = null;
+    this.blink = {};
+    this.blinkState = "idle";
+    this.autoPickVersionId = null;
   }
 
   saveSoftChips() {

@@ -4,7 +4,7 @@
 // them, and the preset hover preview. They combine `presets`, `develop`, `selection` and `library`.
 
 import { presets } from "$lib/state/presets.svelte.js";
-import { listPresets, createPreset, presetEligibleOps, applyPresetOps, exportPresetFile, importPresetFile, deletePreset, getEditStack, setEditStack, regenerateThumbnail, copySettingsOps, previewEditStack, resetEditStack } from "$lib/api/develop.js";
+import { listPresets, createPreset, presetEligibleOps, applyPresetOps, exportPresetFile, importPresetFile, deletePreset, getEditStack, setEditStack, regenerateThumbnail, copySettingsOps, previewEditStackHover, resetEditStack } from "$lib/api/develop.js";
 import { handleCreateSnapshot } from "$lib/actions/developActions.js";
 import { develop } from "$lib/state/develop.svelte.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
@@ -294,5 +294,24 @@ export function handlePeekPreset(/** @type {number} */ presetId) {
   const path = develop.imagePath;
   const contentHash = develop.imageContentHash;
   const versionId = develop.versionId;
-  develop.schedulePreview(() => previewEditStack(path, contentHash, mergedStack, versionId));
+  develop.schedulePreview(() => previewEditStackHover(path, contentHash, mergedStack, versionId));
+}
+
+let presetWarmRun = 0;
+
+/** Renders every preset's look on the open photo in the background, one at a time, so the first hover over each row
+ * is already a cache hit. Stops when the photo changes or a newer warm-up starts. */
+export async function warmPresetPreviews() {
+  const run = ++presetWarmRun;
+  const versionId = develop.versionId;
+  if (develop.imagePath === null) return;
+  for (const preset of [...presets.list]) {
+    const path = develop.imagePath;
+    if (run !== presetWarmRun || path === null || develop.versionId !== versionId) return;
+    try {
+      await previewEditStackHover(path, develop.imageContentHash, applyPresetOps(develop.editStack, preset.edit_stack), versionId);
+    } catch {
+      // a look that cannot render is simply rendered (and fails quietly) on hover, as before
+    }
+  }
 }

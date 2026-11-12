@@ -405,6 +405,19 @@ export function previewEditStack(
   return invoke("preview_edit_stack", { path, contentHash, stack, versionId });
 }
 
+/** Hover-size twin of `previewEditStack`: the Preset peek only needs the look in a ~200 px box, so Rust renders it at
+ * hover size (~0.1 s) instead of the 2048 px draft (~1.5 s). Keep `previewEditStack` for anything shown as the main
+ * picture (the GPU-fallback canvas).
+ * @returns {Promise<DevelopPreviewInfo>} */
+export function previewEditStackHover(
+  /** @type {string} */ path,
+  /** @type {string | null} */ contentHash,
+  /** @type {EditStack} */ stack,
+  /** @type {number | null} */ versionId = null,
+) {
+  return invoke("preview_edit_stack_hover", { path, contentHash, stack, versionId });
+}
+
 /** @returns {Promise<void>} */
 export function deleteSnapshot(/** @type {number} */ versionId, /** @type {number} */ snapshotId) {
   return invoke("delete_snapshot", { versionId, snapshotId });

@@ -42,6 +42,11 @@ use std::sync::{Arc, Mutex};
 /// so this resize is what actually bounds the preview's size.
 pub const DEVELOP_PREVIEW_MAX_DIMENSION: u32 = 2048;
 
+/// Long edge of the hover-preview render (History / Snapshots / Presets). The preview box in the rail is ~200
+/// CSS px wide, so 640 px still covers a 3x display; grading cost falls with the pixel count (measured, release
+/// build, 7-op stack: 1.37 s at 2048, 0.34 s at 1024, 0.11 s at 640), which is what makes a hover feel instant.
+pub const HOVER_PREVIEW_MAX_DIMENSION: u32 = 640;
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DevelopPreviewInfo {
     pub path: String,
@@ -375,6 +380,72 @@ pub fn ensure_graded_preview_for_hash(
     })
 }
 
+/// The decoded, shrunk base of the last image a hover preview was made for. Moving the pointer down a list of
+/// History rows or Presets renders many looks of the SAME photograph, so the 2048 px draft is opened and shrunk once,
+/// not once per row.
+static HOVER_BASE: Mutex<Option<(String, Arc<image::RgbImage>)>> = Mutex::new(None);
+
+fn hover_base(source_path: &Path, content_hash: &str, previews_dir: &Path) -> Result<Arc<image::RgbImage>, PreviewCacheError> {
+    if let Ok(guard) = HOVER_BASE.lock() {
+        if let Some((hash, base)) = guard.as_ref() {
+            if hash == content_hash {
+                return Ok(base.clone());
+            }
+        }
+    }
+    let draft = ensure_develop_preview_for_hash(source_path, content_hash, previews_dir)?;
+    let full = image::open(&draft.path)?.into_rgb8();
+    let (w, h) = capped_dimensions(full.width(), full.height(), HOVER_PREVIEW_MAX_DIMENSION);
+    let base = Arc::new(if (w, h) == (full.width(), full.height()) {
+        full
+    } else {
+        image::imageops::resize(&full, w, h, image::imageops::FilterType::Triangle)
+    });
+    if let Ok(mut guard) = HOVER_BASE.lock() {
+        *guard = Some((content_hash.to_string(), base.clone()));
+    }
+    Ok(base)
+}
+
+/// The look of `stack` on this photograph at hover-preview size (`HOVER_PREVIEW_MAX_DIMENSION`), for the History /
+/// Snapshot / Preset peek in Develop's left rail. Same pipeline and order as `ensure_graded_preview_for_hash`, run on
+/// a small base, written as a small JPEG, so an uncached hover costs ~0.1 s instead of ~1.5 s. Two deliberate
+/// differences: (1) the AI-denoised copy is not blended (a model-sized copy; the effect is invisible at this size),
+/// and (2) pixel-radius operations (Clarity, Sharpening) act on a smaller picture, so their local-contrast look is
+/// an approximation of the full render, which is fine for a look-up preview and is not used for anything saved.
+/// Cached by content hash + stack hash like every other tier here.
+pub fn ensure_hover_preview_for_hash(
+    source_path: &Path,
+    content_hash: &str,
+    stack: &EditStack,
+    previews_dir: &Path,
+) -> Result<DevelopPreviewInfo, PreviewCacheError> {
+    let effective = crate::develop_engine::effective_stack_for_render(stack);
+    let stack_json = serde_json::to_string(&effective).unwrap_or_default();
+    let stack_hash = blake3::hash(stack_json.as_bytes()).to_hex().to_string();
+    let out_path = previews_dir.join(format!("{content_hash}_{}_hover.jpg", &stack_hash[..8]));
+
+    if out_path.exists() {
+        let (width, height) = image::image_dimensions(&out_path)?;
+        return Ok(DevelopPreviewInfo { path: out_path.to_string_lossy().to_string(), width, height, is_smart_preview: false });
+    }
+
+    let mut decoded = (*hover_base(source_path, content_hash, previews_dir)?).clone();
+    crate::removal::bake(&mut decoded, &effective);
+    crate::develop_engine::apply_lens_correction(&mut decoded, &effective);
+    crate::develop_engine::apply_perspective(&mut decoded, &effective);
+    crate::develop_engine::apply_edit_stack(&mut decoded, &effective);
+    crate::develop_engine::apply_crop(&mut decoded, &effective);
+
+    std::fs::create_dir_all(previews_dir)?;
+    // Written next to its final name and renamed in, so a second hover on the same look never opens a half-written file.
+    let tmp = previews_dir.join(format!("{content_hash}_{}_hover.tmp.jpg", &stack_hash[..8]));
+    decoded.save(&tmp)?;
+    std::fs::rename(&tmp, &out_path)?;
+
+    Ok(DevelopPreviewInfo { path: out_path.to_string_lossy().to_string(), width: decoded.width(), height: decoded.height(), is_smart_preview: false })
+}
+
 /// Soft-proof simulation of the CURRENT edit-graded look on a target ICC
 /// profile (M4 Soft Proofing) — reuses the graded tier's own cached decode
 /// as its source, since soft proofing simulates what the user's ACTUAL
@@ -464,6 +535,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The hover preview reflects the edit, lands at a stable content-addressed name (a second call is a cache hit
+    /// on the same file), is at most the hover size, and an unedited stack differs from an edited one.
+    #[test]
+    fn hover_preview_reflects_the_edit_is_small_and_cached() {
+        let previews_dir = temp_previews_dir("hover");
+        let source = previews_dir.join("photo.jpg");
+        image::RgbImage::from_pixel(1600, 1000, image::Rgb([100, 100, 100])).save(&source).unwrap();
+        let hash = blake3::hash(&std::fs::read(&source).unwrap()).to_hex().to_string();
+        let plain = EditStack { schema_version: 1, ops: vec![] };
+        let bright = EditStack { schema_version: 1, ops: vec![serde_json::json!({"op": "exposure", "value": 1.0})] };
+
+        let a = ensure_hover_preview_for_hash(&source, &hash, &plain, &previews_dir).unwrap();
+        let b = ensure_hover_preview_for_hash(&source, &hash, &bright, &previews_dir).unwrap();
+        assert_ne!(a.path, b.path);
+        assert_eq!((a.width, a.height), (HOVER_PREVIEW_MAX_DIMENSION, 400));
+        let (pa, pb) = (image::open(&a.path).unwrap().into_rgb8(), image::open(&b.path).unwrap().into_rgb8());
+        assert!(pb.get_pixel(5, 5).0[0] > pa.get_pixel(5, 5).0[0] + 20, "exposure +1 must brighten the preview");
+
+        let mtime = std::fs::metadata(&b.path).unwrap().modified().unwrap();
+        let again = ensure_hover_preview_for_hash(&source, &hash, &bright, &previews_dir).unwrap();
+        assert_eq!(again.path, b.path);
+        assert_eq!(std::fs::metadata(&again.path).unwrap().modified().unwrap(), mtime, "a repeat is a cache hit, not a rewrite");
+        assert!(!previews_dir.join(format!("{hash}_hover.tmp.jpg")).exists());
+
+        let _ = std::fs::remove_dir_all(&previews_dir);
     }
 
     /// The interactive path and `import.rs`'s import-time hashing must

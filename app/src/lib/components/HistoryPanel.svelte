@@ -42,6 +42,7 @@
    *   onPeekSnapshot: (id: number) => void,
    *   onPeekPreset: (id: number) => void,
    *   onPeekEnd: () => void,
+   *   onWarmTab?: (tab: "history" | "presets") => void,
    *   previewUrl: string | null,
    *   width?: number,
    *   adaptive?: Omit<import('svelte').ComponentProps<typeof AdaptivePresetsSection>, never> | null,
@@ -65,12 +66,25 @@
     onPeekSnapshot,
     onPeekPreset,
     onPeekEnd,
+    onWarmTab = () => {},
     previewUrl,
     width = 200,
     adaptive = null,
   } = $props();
 
   let activeTab = $state(/** @type {"history" | "presets"} */ ("history"));
+
+  // Render the looks this tab can show in the background, so the first hover over a row is already cached. Re-runs when
+  // the tab, the rows, or the preset list change; the short wait keeps a slider drag from starting one per commit.
+  $effect(() => {
+    const tab = activeTab;
+    void history;
+    void history.length;
+    void snapshots.length;
+    void presets.length;
+    const timer = setTimeout(() => onWarmTab(tab), 300);
+    return () => clearTimeout(timer);
+  });
 
   // SQLite's datetime('now') is UTC with no timezone suffix -- appending
   // "Z" is what tells JS's Date parser that, rather than silently

@@ -450,6 +450,26 @@ describe("hover previews", () => {
     expect(api.previewHistoryEntry).not.toHaveBeenCalled();
   });
 
+  it("warm-up: renders the newest rows then the snapshots, newest first, and stops when the photo changes", async () => {
+    develop.history = [100, 101, 102].map((id) => /** @type {any} */ ({ id }));
+    develop.snapshots = [/** @type {any} */ ({ id: 7 })];
+    api.previewHistoryEntry.mockResolvedValue({ path: "/x.jpg", width: 1, height: 1, is_smart_preview: false });
+    api.previewSnapshot.mockResolvedValue({ path: "/x.jpg", width: 1, height: 1, is_smart_preview: false });
+    await A.warmHistoryPreviews();
+    expect(api.previewHistoryEntry.mock.calls.map((c) => c[1])).toEqual([102, 101, 100]);
+    expect(api.previewSnapshot).toHaveBeenCalledWith(10, 7, "/p/a.raw", "hash");
+
+    api.previewHistoryEntry.mockClear();
+    api.previewSnapshot.mockClear();
+    api.previewHistoryEntry.mockImplementation(async () => {
+      develop.versionId = 99;
+      return { path: "/x.jpg", width: 1, height: 1, is_smart_preview: false };
+    });
+    await A.warmHistoryPreviews();
+    expect(api.previewHistoryEntry).toHaveBeenCalledTimes(1);
+    expect(api.previewSnapshot).not.toHaveBeenCalled();
+  });
+
   it("snapshot: asks for the snapshot's preview; does nothing with no open image", () => {
     A.handlePeekSnapshot(7);
     expect(api.previewSnapshot).toHaveBeenCalledWith(10, 7, "/p/a.raw", "hash");

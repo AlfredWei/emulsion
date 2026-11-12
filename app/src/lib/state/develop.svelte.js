@@ -16,6 +16,10 @@ import { library } from "./library.svelte.js";
 import { getEditStack, setEditStack, previewEditStack } from "$lib/api/develop.js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
+/** How long the pointer rests on a History / Snapshot / Preset row before its look is requested: long enough to skip
+ * rows swept past, short because the hover render is small and usually already cached (see the warm-up actions). */
+const PEEK_DEBOUNCE_MS = 60;
+
 export class DevelopStore {
   /** @param {import('./library.svelte.js').LibraryStore} library */
   constructor(library) {
@@ -413,7 +417,7 @@ export class DevelopStore {
           if (token === this.#previewToken) this.previewUrl = convertFileSrc(info.path);
         })
         .catch(() => {});
-    }, 120);
+    }, PEEK_DEBOUNCE_MS);
   };
 
   /** @type {ReturnType<typeof setTimeout> | null} */

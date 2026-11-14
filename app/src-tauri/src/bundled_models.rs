@@ -114,6 +114,22 @@ mod tests {
     // SHA-256("abc"), the standard test vector.
     const ABC: Shipped = Shipped { name: "abc.onnx", size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" };
 
+    /// Every model file the installer ships must be named in THIRD_PARTY_NOTICES.md (which the installer also ships),
+    /// so a newly bundled model cannot go out without its licence being stated for recipients.
+    #[test]
+    fn every_bundled_model_has_an_entry_in_the_third_party_notices() {
+        let notices = include_str!("../../../THIRD_PARTY_NOTICES.md");
+        let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../models/bundled-models.json")).unwrap();
+        let files = manifest["files"].as_array().unwrap();
+        assert!(!files.is_empty());
+        for f in files {
+            let name = f["name"].as_str().unwrap();
+            // SAM 2's two files are one entry, named by their shared stem.
+            let stem = name.strip_suffix(".encoder.onnx").or_else(|| name.strip_suffix(".decoder.onnx")).map_or_else(|| name.to_string(), |s| format!("{s}.*.onnx"));
+            assert!(notices.contains(&stem), "THIRD_PARTY_NOTICES.md has no entry for {name} (looked for `{stem}`)");
+        }
+    }
+
     #[test]
     fn a_missing_file_is_copied_verified_and_a_valid_one_is_left_alone() {
         let (bundled, dest) = (dir("a-bundled"), dir("a-dest").join("models"));

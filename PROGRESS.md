@@ -7,6 +7,10 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## Upstream licence files for LaMa and MediaPipe read (2026-11-14, `feature/notices-upstream-licences`)
+
+Read the upstream `LICENSE` of `advimman/lama` (Apache-2.0, appendix names Samsung Research 2021) and `google-ai-edge/mediapipe` (Apache-2.0, no single holder). `THIRD_PARTY_NOTICES.md` and the two model notes updated. Still open: the ONNX conversion repositories' own licence files and the Face Mesh V2 bundle's own file.
+
 ## In-app link to the third-party notices (2026-11-14, `feature/about-notices-link`)
 
 The notices file shipped with the installer but nothing in the app pointed at it. Settings gains an **About** tab with an "Open third-party notices" button. New Rust command `third_party_notices_path` (`bundled_models::notices_path`) looks for `THIRD_PARTY_NOTICES.md` in the app's resources, and in a development build also the checkout, then the frontend opens it with the OS's default viewer via `openThirdPartyNotices()` in `api/system.js` (`allow-open-path` was already granted). Unit test covers the lookup order; the button itself needs a look in the installed app (backlog: "not verified" until milestone end).

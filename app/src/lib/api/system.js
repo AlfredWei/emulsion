@@ -7,6 +7,7 @@
 // (Finder on macOS, Explorer on Windows, the default file manager on
 // Linux) is used directly.
 
+import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir, openPath, openUrl } from "@tauri-apps/plugin-opener";
 
 /** Opens the OS file manager with `path` selected. @returns {Promise<void>} */
@@ -34,4 +35,13 @@ export async function openExternalUrl(/** @type {string} */ url) {
   } catch {
     window.open(url, "_blank", "noopener");
   }
+}
+
+/** Opens the bundled THIRD_PARTY_NOTICES.md (the licences of the AI models that ship with the app) in the OS's
+ * default viewer. The Rust side finds the file -- next to the app in an installed build, the checkout's copy in a
+ * development build -- and `allow-open-path` (capabilities/default.json) lets the opener plugin open it.
+ * @returns {Promise<void>} */
+export async function openThirdPartyNotices() {
+  const path = await invoke("third_party_notices_path");
+  return openPath(path);
 }

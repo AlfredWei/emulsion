@@ -2042,6 +2042,15 @@ fn update_backup_settings(state: State<'_, AppState>, settings: BackupSettings) 
         .map_err(|e| e.to_string())
 }
 
+/// Settings > About: the path of the bundled `THIRD_PARTY_NOTICES.md`, which the frontend opens with the OS's
+/// default app for Markdown (or text) files.
+#[tauri::command]
+fn third_party_notices_path(app: AppHandle) -> Result<String, String> {
+    bundled_models::notices_path(&app)
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| "THIRD_PARTY_NOTICES.md was not found next to the app".to_string())
+}
+
 /// Settings > Storage: reports where thumbnails + the Develop preview
 /// cache currently live (the user's override if one is set, else the
 /// default) and how much disk space each is using -- the two facts the
@@ -2445,6 +2454,7 @@ pub fn run() {
             get_backup_settings,
             update_backup_settings,
             get_storage_info,
+            third_party_notices_path,
             set_cache_dir,
             perform_catalog_backup,
         ])

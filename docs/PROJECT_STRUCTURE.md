@@ -100,6 +100,7 @@ src-tauri/
 │   ├── metadata.rs             EXIF-ish metadata extraction at import
 │   ├── metadata_writer.rs       EXIF/IPTC writing into exported JPEGs (per-export toggles)
 │   ├── geocode.rs               Forward geocoding: OpenStreetMap (Nominatim) default, optional Google
+│   ├── map_endpoints.rs         Validation of the map tile address, its credit text and the Nominatim server address (settings; OpenStreetMap defaults)
 │   ├── preview_cache.rs         Develop preview cache (graded previews by content + stack hash; 640 px hover tier for the History / Preset peek)
 │   ├── export.rs / export_plugin.rs   Export pipeline / the v0 export-plugin hook
 │   ├── hdr_merge.rs / panorama_merge.rs   HDR bracket merge / feature-based panorama stitch
@@ -200,6 +201,7 @@ src/
 │   ├── shotInfo.js          Pure wording of capture settings ("ISO 200", "50 mm", "f/8.0", "1/250s"): the Develop histogram's caption and the Library info panel's shutter
 │   ├── enlarge.js           Pure side of the Enlarge (AI) dialog: the target the form describes, the plan in words, the very-large warning, the default name
 │   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering, viewport filter (M5.5)
+│   ├── mapTiles.js          The map's tile address and credit line from the saved settings (OpenStreetMap by default; custom credit is escaped text)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)
 │   ├── appEvents.js         `installAppEvents({ handleMenuAction })`: startup refreshes, window-close flush + backup prompt,

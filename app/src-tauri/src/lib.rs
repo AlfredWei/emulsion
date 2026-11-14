@@ -10,6 +10,7 @@ mod develop_engine;
 mod export;
 mod export_plugin;
 mod geocode;
+mod map_endpoints;
 // M5 Slice 6 (face detection, RFC-0005): the clustering half of the
 // pipeline, hand-rolled and unit-tested against synthetic vectors.
 mod face_cluster;
@@ -1787,20 +1788,24 @@ async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, versio
 /// whether a Google key exists (`get_map_settings`), never the key itself.
 #[tauri::command]
 async fn geocode_search(state: State<'_, AppState>, query: String) -> Result<Vec<geocode::GeocodeCandidate>, String> {
-    let (provider, api_key) = {
+    let (provider, api_key, endpoints) = {
         let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
         let provider = geocode::Provider::from_setting(
             catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref(),
         );
-        (provider, catalog.get_maps_api_key().map_err(|e| e.to_string())?)
+        (provider, catalog.get_maps_api_key().map_err(|e| e.to_string())?, catalog.get_map_endpoint_settings().map_err(|e| e.to_string())?)
     };
-    geocode::search(provider, &query, api_key.as_deref()).await.map_err(|e| e.to_string())
+    geocode::search(provider, &query, api_key.as_deref(), endpoints.nominatim_url.as_deref()).await.map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
 struct MapSettings {
     provider: geocode::Provider,
     has_google_key: bool,
+    /// The saved endpoint overrides that still pass validation; `None` means "use the default" (OpenStreetMap).
+    tile_url: Option<String>,
+    attribution: Option<String>,
+    nominatim_url: Option<String>,
 }
 
 /// Reverse geocoding (RFC-0007 §3.4, slice 3b): looks up a place name for coordinates the caller
@@ -1809,14 +1814,14 @@ struct MapSettings {
 #[tauri::command]
 async fn reverse_geocode(state: State<'_, AppState>, latitude: f64, longitude: f64) -> Result<Option<String>, String> {
     geocode::validate_coordinates(latitude, longitude)?;
-    let (provider, api_key) = {
+    let (provider, api_key, endpoints) = {
         let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
         let provider = geocode::Provider::from_setting(
             catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref(),
         );
-        (provider, catalog.get_maps_api_key().map_err(|e| e.to_string())?)
+        (provider, catalog.get_maps_api_key().map_err(|e| e.to_string())?, catalog.get_map_endpoint_settings().map_err(|e| e.to_string())?)
     };
-    geocode::reverse(provider, latitude, longitude, api_key.as_deref()).await.map_err(|e| e.to_string())
+    geocode::reverse(provider, latitude, longitude, api_key.as_deref(), endpoints.nominatim_url.as_deref()).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1836,10 +1841,40 @@ fn set_geo_location_batch(
 #[tauri::command]
 fn get_map_settings(state: State<'_, AppState>) -> Result<MapSettings, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    let endpoints = catalog.get_map_endpoint_settings().map_err(|e| e.to_string())?;
     Ok(MapSettings {
         provider: geocode::Provider::from_setting(catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref()),
         has_google_key: catalog.get_maps_api_key().map_err(|e| e.to_string())?.is_some(),
+        tile_url: endpoints.tile_url.filter(|u| map_endpoints::clean_tile_url(u).is_ok()),
+        attribution: endpoints.attribution.filter(|a| map_endpoints::clean_attribution(a).is_ok()),
+        nominatim_url: endpoints.nominatim_url.filter(|u| map_endpoints::clean_nominatim_base(u).is_ok()),
     })
+}
+
+/// Saves the map tile address, its attribution text and the Nominatim server address (RFC-0038 B5.12). Each value
+/// is validated first (`map_endpoints`); a blank or `None` removes that setting, which restores the OpenStreetMap
+/// default. The error names the field so the Settings dialog can show it.
+#[tauri::command]
+fn set_map_endpoints(
+    state: State<'_, AppState>,
+    tile_url: Option<String>,
+    attribution: Option<String>,
+    nominatim_url: Option<String>,
+) -> Result<(), String> {
+    fn blank_to_none(v: Option<String>) -> Option<String> {
+        v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    }
+    let (tile_url, attribution, nominatim_url) = (blank_to_none(tile_url), blank_to_none(attribution), blank_to_none(nominatim_url));
+    let tile_url = tile_url.map(|u| map_endpoints::clean_tile_url(&u).map_err(|e| format!("Tile address: {e}"))).transpose()?;
+    let attribution = attribution.map(|a| map_endpoints::clean_attribution(&a).map_err(|e| format!("Credit text: {e}"))).transpose()?;
+    let nominatim_url = nominatim_url.map(|u| map_endpoints::clean_nominatim_base(&u).map_err(|e| format!("Search server: {e}"))).transpose()?;
+    if tile_url.is_some() && attribution.is_none() {
+        return Err("Credit text: a custom tile provider needs its credit text, which is shown on the map".to_string());
+    }
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog
+        .set_map_endpoint_settings(tile_url.as_deref(), attribution.as_deref(), nominatim_url.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2451,6 +2486,7 @@ pub fn run() {
             get_map_settings,
             set_geocode_provider,
             set_maps_api_key,
+            set_map_endpoints,
             get_backup_settings,
             update_backup_settings,
             get_storage_info,

@@ -15,12 +15,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const GOOGLE_ENDPOINT: &str = "https://maps.googleapis.com/maps/api/geocode/json";
-const NOMINATIM_ENDPOINT: &str = "https://nominatim.openstreetmap.org/search";
-const NOMINATIM_REVERSE_ENDPOINT: &str = "https://nominatim.openstreetmap.org/reverse";
 const MAX_CANDIDATES: usize = 5;
 // Nominatim's usage policy: an identifying User-Agent and at most one
 // request per second.
-const USER_AGENT: &str = "Emulsion/0.1 (+https://github.com/AlfredWei/emulsion)";
+const USER_AGENT: &str = concat!("Emulsion/", env!("CARGO_PKG_VERSION"), " (+https://github.com/AlfredWei/emulsion)");
 const NOMINATIM_MIN_INTERVAL: Duration = Duration::from_millis(1100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -208,10 +206,12 @@ async fn throttle_nominatim() {
     }
 }
 
+/// `nominatim_base` is the stored Nominatim server address (`map_endpoints`), `None` for the public OpenStreetMap one.
 pub async fn search(
     provider: Provider,
     query: &str,
     google_api_key: Option<&str>,
+    nominatim_base: Option<&str>,
 ) -> Result<Vec<GeocodeCandidate>, GeocodeError> {
     let query = query.trim();
     if query.is_empty() {
@@ -225,7 +225,8 @@ pub async fn search(
         }
         Provider::Osm => {
             throttle_nominatim().await;
-            let body = fetch(client()?.get(NOMINATIM_ENDPOINT).query(&[
+            let (search_url, _) = crate::map_endpoints::nominatim_urls(nominatim_base);
+            let body = fetch(client()?.get(search_url).query(&[
                 ("q", query),
                 ("format", "jsonv2"),
                 ("limit", "5"),
@@ -245,6 +246,7 @@ pub async fn reverse(
     latitude: f64,
     longitude: f64,
     google_api_key: Option<&str>,
+    nominatim_base: Option<&str>,
 ) -> Result<Option<String>, GeocodeError> {
     match provider {
         Provider::Google => {
@@ -257,7 +259,8 @@ pub async fn reverse(
         }
         Provider::Osm => {
             throttle_nominatim().await;
-            let body = fetch(client()?.get(NOMINATIM_REVERSE_ENDPOINT).query(&[
+            let (_, reverse_url) = crate::map_endpoints::nominatim_urls(nominatim_base);
+            let body = fetch(client()?.get(reverse_url).query(&[
                 ("lat", latitude.to_string()),
                 ("lon", longitude.to_string()),
                 ("format", "jsonv2".to_string()),
@@ -341,10 +344,10 @@ mod tests {
 
     #[tokio::test]
     async fn search_rejects_blank_queries_and_missing_keys_before_any_network_call() {
-        assert!(matches!(search(Provider::Osm, "   ", None).await, Err(GeocodeError::EmptyQuery)));
-        assert!(matches!(search(Provider::Google, "   ", Some("k")).await, Err(GeocodeError::EmptyQuery)));
-        assert!(matches!(search(Provider::Google, "Taipei", None).await, Err(GeocodeError::NoApiKey)));
-        assert!(matches!(search(Provider::Google, "Taipei", Some("")).await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(search(Provider::Osm, "   ", None, None).await, Err(GeocodeError::EmptyQuery)));
+        assert!(matches!(search(Provider::Google, "   ", Some("k"), None).await, Err(GeocodeError::EmptyQuery)));
+        assert!(matches!(search(Provider::Google, "Taipei", None, None).await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(search(Provider::Google, "Taipei", Some(""), None).await, Err(GeocodeError::NoApiKey)));
     }
 
     #[test]
@@ -425,8 +428,8 @@ mod tests {
 
     #[tokio::test]
     async fn reverse_requires_a_google_key_before_any_network_call() {
-        assert!(matches!(reverse(Provider::Google, 25.0, 121.5, None).await, Err(GeocodeError::NoApiKey)));
-        assert!(matches!(reverse(Provider::Google, 25.0, 121.5, Some("")).await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(reverse(Provider::Google, 25.0, 121.5, None, None).await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(reverse(Provider::Google, 25.0, 121.5, Some(""), None).await, Err(GeocodeError::NoApiKey)));
     }
 
     #[test]

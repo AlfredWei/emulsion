@@ -3,6 +3,8 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { geolocatedPoints, clusterPoints, boundsOfPoints, clustersInBounds } from "$lib/mapClusters.js";
   import { openExternalUrl } from "$lib/api/system.js";
+  import { getMapSettings } from "$lib/api/map.js";
+  import { tileLayerConfig, OSM_COPYRIGHT_URL } from "$lib/mapTiles.js";
   import { shell } from "$lib/state/shell.svelte.js";
 
   /**
@@ -43,8 +45,7 @@
    */
   let { images, onSelectCluster, onAssignLocation, onNeedThumbnail } = $props();
 
-  const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-  const COPYRIGHT_URL = "https://www.openstreetmap.org/copyright";
+  const COPYRIGHT_URL = OSM_COPYRIGHT_URL;
   /** Extra viewport fraction to draw around the visible area, so panning does not show markers popping in. */
   const VIEWPORT_PAD = 0.25;
 
@@ -174,7 +175,10 @@
         leaflet = L;
         map = L.map(container, { worldCopyJump: false, minZoom: 2, zoomControl: true, attributionControl: true });
         map.attributionControl.setPrefix(false);
-        L.tileLayer(TILE_URL, { maxZoom: 19, attribution: `© <a href="${COPYRIGHT_URL}">OpenStreetMap</a> contributors` }).addTo(map);
+        // The tile address and credit are settings (Settings > Map); no tile is requested before this view opens.
+        const tiles = tileLayerConfig(await getMapSettings().catch(() => null));
+        if (disposed) return; // the cleanup below has already removed the map
+        L.tileLayer(tiles.url, { maxZoom: 19, attribution: tiles.attributionHtml }).addTo(map);
         markers = L.layerGroup().addTo(map);
         map.setView([20, 0], 2);
         container.addEventListener("click", handleAttributionClick);

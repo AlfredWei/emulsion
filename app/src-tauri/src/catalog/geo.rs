@@ -1,5 +1,13 @@
 use super::*;
 
+/// Raw stored map endpoint settings; see `Catalog::get_map_endpoint_settings`.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct MapEndpointSettings {
+    pub tile_url: Option<String>,
+    pub attribution: Option<String>,
+    pub nominatim_url: Option<String>,
+}
+
 impl Catalog {
     /// Applies one location to many images in a single transaction
     /// (all-or-nothing). Altitude is deliberately left untouched: a
@@ -52,6 +60,38 @@ impl Catalog {
                 params![v],
             ),
             None => self.conn.execute("DELETE FROM settings WHERE key = 'maps_api_key'", []),
+        }?;
+        Ok(())
+    }
+
+    /// The map's three optional endpoint settings (see `map_endpoints.rs`): raw stored text, `None` meaning "use the
+    /// default". Validation happens when saving and again when using, not here.
+    pub fn get_map_endpoint_settings(&self) -> Result<MapEndpointSettings> {
+        Ok(MapEndpointSettings {
+            tile_url: self.get_text_setting("map_tile_url")?,
+            attribution: self.get_text_setting("map_attribution")?,
+            nominatim_url: self.get_text_setting("nominatim_url")?,
+        })
+    }
+
+    /// Saves all three together; `None` or a blank string removes that setting.
+    pub fn set_map_endpoint_settings(&self, tile_url: Option<&str>, attribution: Option<&str>, nominatim_url: Option<&str>) -> Result<()> {
+        self.set_text_setting("map_tile_url", tile_url)?;
+        self.set_text_setting("map_attribution", attribution)?;
+        self.set_text_setting("nominatim_url", nominatim_url)
+    }
+
+    fn get_text_setting(&self, key: &str) -> Result<Option<String>> {
+        self.conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |row| row.get(0)).optional()
+    }
+
+    fn set_text_setting(&self, key: &str, value: Option<&str>) -> Result<()> {
+        match value.map(str::trim).filter(|v| !v.is_empty()) {
+            Some(v) => self.conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, v],
+            ),
+            None => self.conn.execute("DELETE FROM settings WHERE key = ?1", params![key]),
         }?;
         Ok(())
     }
@@ -124,6 +164,21 @@ mod tests {
         assert_eq!(catalog.get_maps_api_key().unwrap().as_deref(), Some("def"));
         catalog.set_maps_api_key(Some("   ")).unwrap();
         assert_eq!(catalog.get_maps_api_key().unwrap(), None);
+    }
+
+    #[test]
+    fn map_endpoint_settings_round_trip_and_blank_removes_each() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        assert_eq!(catalog.get_map_endpoint_settings().unwrap(), MapEndpointSettings::default());
+        catalog.set_map_endpoint_settings(Some(" https://t.example/{z}/{x}/{y}.png "), Some("(c) Example"), Some("https://geo.example")).unwrap();
+        let got = catalog.get_map_endpoint_settings().unwrap();
+        assert_eq!(got.tile_url.as_deref(), Some("https://t.example/{z}/{x}/{y}.png"));
+        assert_eq!(got.attribution.as_deref(), Some("(c) Example"));
+        assert_eq!(got.nominatim_url.as_deref(), Some("https://geo.example"));
+        catalog.set_map_endpoint_settings(None, Some("   "), Some("https://geo.example")).unwrap();
+        let got = catalog.get_map_endpoint_settings().unwrap();
+        assert_eq!((got.tile_url, got.attribution), (None, None));
+        assert_eq!(got.nominatim_url.as_deref(), Some("https://geo.example"), "saving is per setting, a blank removes only itself");
     }
 
     #[test]

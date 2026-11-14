@@ -7,6 +7,10 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## Library licence list; LibRaw and Lensfun surfaced (2026-11-14, `feature/library-licences`)
+
+The notices covered only the models. New generated **`THIRD_PARTY_LIBRARIES.md`** (`scripts/gen_third_party_libraries.py`: `cargo tree -e normal --target all` for the 554 Rust crates that ship, the non-dev `package-lock.json` entries for the 4 JS packages), grouped by declared licence, bundled beside the notices. Scanning it found three things the project had not stated anywhere: **LibRaw** (LGPL-2.1 or CDDL-1.0) is statically linked, the **`lensfun` crate** (LGPL-3.0-or-later) is statically linked, and the **Lensfun lens database** it embeds is CC-BY-SA 3.0. Both are listed with their terms in the file's top table. Whether static linking an LGPL library needs more than the notice (for example a way for a recipient to relink) is **not decided here**; it is the open question for whoever owns the release licensing.
+
 ## In-app link to the third-party notices (2026-11-14, `feature/about-notices-link`)
 
 The notices file shipped with the installer but nothing in the app pointed at it. Settings gains an **About** tab with an "Open third-party notices" button. New Rust command `third_party_notices_path` (`bundled_models::notices_path`) looks for `THIRD_PARTY_NOTICES.md` in the app's resources, and in a development build also the checkout, then the frontend opens it with the OS's default viewer via `openThirdPartyNotices()` in `api/system.js` (`allow-open-path` was already granted). Unit test covers the lookup order; the button itself needs a look in the installed app (backlog: "not verified" until milestone end).

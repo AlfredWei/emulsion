@@ -7,6 +7,10 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## Upstream licence files for LaMa and MediaPipe read (2026-11-14, `feature/notices-upstream-licences`)
+
+Read the upstream `LICENSE` of `advimman/lama` (Apache-2.0, appendix names Samsung Research 2021) and `google-ai-edge/mediapipe` (Apache-2.0, no single holder). `THIRD_PARTY_NOTICES.md` and the two model notes updated. Still open: the ONNX conversion repositories' own licence files and the Face Mesh V2 bundle's own file.
+
 ## Library licence list; LibRaw and Lensfun surfaced (2026-11-14, `feature/library-licences`)
 
 The notices covered only the models. New generated **`THIRD_PARTY_LIBRARIES.md`** (`scripts/gen_third_party_libraries.py`: `cargo tree -e normal --target all` for the 554 Rust crates that ship, the non-dev `package-lock.json` entries for the 4 JS packages), grouped by declared licence, bundled beside the notices. Scanning it found three things the project had not stated anywhere: **LibRaw** (LGPL-2.1 or CDDL-1.0) is statically linked, the **`lensfun` crate** (LGPL-3.0-or-later) is statically linked, and the **Lensfun lens database** it embeds is CC-BY-SA 3.0. Both are listed with their terms in the file's top table. Whether static linking an LGPL library needs more than the notice (for example a way for a recipient to relink) is **not decided here**; it is the open question for whoever owns the release licensing.

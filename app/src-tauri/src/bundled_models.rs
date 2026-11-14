@@ -59,6 +59,21 @@ pub fn bundled_dirs(app: &AppHandle) -> Vec<PathBuf> {
     dirs
 }
 
+/// Where this build's `THIRD_PARTY_NOTICES.md` is: next to the app in its resources (`tauri.conf.json`
+/// `bundle.resources`), and in a development build also the checkout's copy. `None` when neither exists.
+pub fn notices_path(app: &AppHandle) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = app.path().resource_dir().ok().map(|d| d.join(NOTICES_FILE)).into_iter().collect();
+    #[cfg(debug_assertions)]
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(NOTICES_FILE));
+    first_existing(&candidates)
+}
+
+const NOTICES_FILE: &str = "THIRD_PARTY_NOTICES.md";
+
+fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|p| p.is_file()).cloned()
+}
+
 fn valid(path: &Path, f: &Shipped) -> bool {
     matches!(std::fs::metadata(path), Ok(m) if m.len() == f.size) && sha256_file(path).map(|h| h == f.sha256).unwrap_or(false)
 }
@@ -113,6 +128,17 @@ mod tests {
 
     // SHA-256("abc"), the standard test vector.
     const ABC: Shipped = Shipped { name: "abc.onnx", size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" };
+
+    #[test]
+    fn notices_lookup_takes_the_first_candidate_that_is_a_file() {
+        let d = dir("notices");
+        let present = d.join(NOTICES_FILE);
+        std::fs::write(&present, "x").unwrap();
+        // A directory of the same name, a missing path, then the real file.
+        let candidates = [d.join("nope"), d.clone(), present.clone()];
+        assert_eq!(first_existing(&candidates), Some(present));
+        assert_eq!(first_existing(&[d.join("nope")]), None);
+    }
 
     /// Every model file the installer ships must be named in THIRD_PARTY_NOTICES.md (which the installer also ships),
     /// so a newly bundled model cannot go out without its licence being stated for recipients.

@@ -7,6 +7,10 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## In-app link to the third-party notices (2026-11-14, `feature/about-notices-link`)
+
+The notices file shipped with the installer but nothing in the app pointed at it. Settings gains an **About** tab with an "Open third-party notices" button. New Rust command `third_party_notices_path` (`bundled_models::notices_path`) looks for `THIRD_PARTY_NOTICES.md` in the app's resources, and in a development build also the checkout, then the frontend opens it with the OS's default viewer via `openThirdPartyNotices()` in `api/system.js` (`allow-open-path` was already granted). Unit test covers the lookup order; the button itself needs a look in the installed app (backlog: "not verified" until milestone end).
+
 ## Third-party notices for the bundled models (2026-11-14, `feature/third-party-notices`)
 
 The installer ships six AI model families made by others (NAFNet, SAM 2, D-FINE, LaMa, Real-ESRGAN, the MediaPipe face mesh), and the blink slice had left "the Apache-2.0 text must reach recipients" open. New repo-root **`THIRD_PARTY_NOTICES.md`**: a table per model (what it does, who made it and where from, the licence and the holder as far as the per-model notes in `models/` establish it), the two models the app downloads on first use (YuNet, SFace), and the Apache-2.0, MIT and BSD-3 texts (copied from the model notes that already held them). It is a `bundle.resources` entry in `tauri.conf.json`, so it sits next to the app in every installer. Rust test `every_bundled_model_has_an_entry_in_the_third_party_notices` fails if a model is added to `models/bundled-models.json` without an entry.

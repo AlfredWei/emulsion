@@ -2,6 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
+  import { openThirdPartyNotices } from "$lib/api/system.js";
   import { getMapSettings, setGeocodeProvider, setMapsApiKey } from "$lib/api/map.js";
   import {
     listExportPlugins,
@@ -23,7 +24,7 @@
    */
   let { open: isOpen, onClose } = $props();
 
-  let activeTab = $state(/** @type {"backup" | "shortcuts" | "storage" | "exportPlugins" | "map"} */ ("shortcuts"));
+  let activeTab = $state(/** @type {"backup" | "shortcuts" | "storage" | "exportPlugins" | "map" | "about"} */ ("shortcuts"));
 
   // Backup settings state
   let settings = $state(/** @type {import('$lib/api/backup.js').BackupSettings | null} */ (null));
@@ -34,6 +35,18 @@
   let storageInfo = $state(/** @type {import('$lib/api/storage.js').StorageInfo | null} */ (null));
   let movingCache = $state(false);
   let storageError = $state("");
+
+  // About tab: the bundled licence notices open in the OS's default viewer.
+  let noticesError = $state("");
+
+  async function handleOpenNotices() {
+    noticesError = "";
+    try {
+      await openThirdPartyNotices();
+    } catch (/** @type {any} */ e) {
+      noticesError = String(e);
+    }
+  }
 
   // Map settings state (M5.5): the key is write-only from here -- the
   // backend never sends it back, so this field can only set or clear it.
@@ -337,6 +350,14 @@
           >
             Map
           </button>
+          <button
+            type="button"
+            class="tab-btn"
+            class:active={activeTab === "about"}
+            onclick={() => (activeTab = "about")}
+          >
+            About
+          </button>
         </div>
       </div>
 
@@ -590,6 +611,19 @@
 
           {#if pluginError}
             <div class="status">{pluginError}</div>
+          {/if}
+        </section>
+      {:else if activeTab === "about"}
+        <section class="backup-section">
+          <p class="storage-note">
+            Emulsion ships AI models made by others (denoising, subject selection, object detection, inpainting,
+            upscaling and face landmarks). Their licences, and who made each model, are in the third-party notices.
+          </p>
+          <div class="backup-now-row">
+            <button class="secondary" type="button" onclick={handleOpenNotices}>Open third-party notices</button>
+          </div>
+          {#if noticesError}
+            <div class="status">{noticesError}</div>
           {/if}
         </section>
       {/if}

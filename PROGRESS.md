@@ -7,6 +7,10 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## RFC-0038: licensing plan, with the proprietary case costed (2026-11-14, `docs/rfc-0038-licensing-plan`)
+
+New `docs/rfc/RFC-0038-lgpl-and-database-licence-plan.md`: what to do about the LGPL libraries (LibRaw, `lensfun`) and the CC-BY-SA lens database before installers go to others, in phases (no-regret work, release plumbing, a per-release gate), six decisions for the owner and counsel, and nine questions for counsel. Section **B5** costs the proprietary or paid case: 12 steps, about 27 to 119 engineer-days, mostly in model remediation. Appendix `docs/rfc/RFC-0038-appendix/model-training-data.md` records what each of the eight models was trained on and the terms of that data: LaMa, YuNet and SFace look like blockers for a paid product, D-FINE and Real-ESRGAN need a closer look. Section 5 lists five first slices. Two arena runs produced it; two verdict-driving pages (Places2 archive, WIDER FACE) could not be re-opened at merge and are the first thing slice 1 re-checks. Docs only; no code or licence change. Engineering planning, not legal advice.
+
 ## Upstream licence files for LaMa and MediaPipe read (2026-11-14, `feature/notices-upstream-licences`)
 
 Read the upstream `LICENSE` of `advimman/lama` (Apache-2.0, appendix names Samsung Research 2021) and `google-ai-edge/mediapipe` (Apache-2.0, no single holder). `THIRD_PARTY_NOTICES.md` and the two model notes updated. Still open: the ONNX conversion repositories' own licence files and the Face Mesh V2 bundle's own file.

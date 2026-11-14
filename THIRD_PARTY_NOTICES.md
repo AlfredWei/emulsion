@@ -2,7 +2,7 @@
 
 Emulsion itself is MIT-licensed (see `LICENSE`). The installer also ships AI model files made by others. Each is listed here with where it came from, who holds the rights, and the licence it is used under, followed by the licence texts those terms require recipients to receive. The per-model notes in `models/` (`*_MODEL.md`) hold the full provenance, hashes and the open questions behind each reading; this file is the part meant for people who receive the app.
 
-This file covers the model files only. The Rust and JavaScript libraries the app is built from carry their own licences, which are not collected here yet.
+This file covers the model files only. The Rust and JavaScript libraries the app is built from, including LibRaw and the Lensfun lens database, are listed with their licences in `THIRD_PARTY_LIBRARIES.md`, installed beside this file.
 
 ## Models shipped in the installer
 

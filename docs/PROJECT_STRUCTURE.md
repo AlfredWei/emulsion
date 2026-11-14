@@ -116,6 +116,7 @@ src-tauri/
 │   ├── removal.rs               Object removal, render side (RFC-0032 §12): a photograph's stored patches laid into a picture of it, scaled to the picture's size; the user's marks (lasso, brush) rasterised and split into separate things (pure); `inline_patches` / `bake` put a stack's patches into a render
 │   ├── removal_preview.rs       The Develop canvas's source with removals (RFC-0032 §12.5): the plain preview, the denoise mix, then the patches, stored as `bake-*.png` (command `get_develop_source_preview` is in removal_commands.rs)
 │   ├── lens_profile.rs          Lens-profile matching for Lens Corrections
+│   ├── testdata/                lens_profile_golden.json: pinned match_profile results (about 400 queries) the lens-profile test checks against
 │   ├── soft_proof.rs / print.rs   Soft proofing / Print module output
 │   └── storage.rs               User-configurable cache location (Settings > Storage)
 ├── capabilities/

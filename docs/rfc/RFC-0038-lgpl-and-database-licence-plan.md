@@ -190,6 +190,8 @@ New decisions (in addition to D1 to D6):
 - **Relicensing edits**: `LICENSE`, the `license` fields in `app/package.json` and `Cargo.toml`, `README.md`, line 3 of
   `THIRD_PARTY_NOTICES.md`, the text in `scripts/gen_third_party_libraries.py`, and the About copy in `SettingsDialog.svelte`.
 
+**B5.3 scope note.** The coefficient-rescaling functions in `lens_profile.rs` (`rescale_distortion`, `rescale_tca`, `rescale_vignetting`) describe themselves as "a direct port" of lensfun's own math, so LGPL-derived logic already sits in the app's own source file. A clean-room replacement must rewrite those functions from the published model definitions too, not only swap the crate; the golden fixture from slice 2 pins their output. Counsel should also be asked about them (question 1).
+
 **B5.3 contingency.** If counsel says the CC-BY-SA database cannot ship even as a separate data file beside a proprietary binary (D5),
 the lens feature needs another data source: roughly 10 to 25 days, not researched.
 

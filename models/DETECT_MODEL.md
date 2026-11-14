@@ -12,6 +12,15 @@ The app ships one detector file for the adaptive "person" preset, **hosted by th
 - **Training data**: COCO train2017 (per the model card). Annotations are CC BY 4.0; the images are Flickr photographs under various licences and are not part of the model file.
 - **Licence**: Apache License 2.0, in the model card (`license: apache-2.0`) and in the upstream repository, whose `LICENSE` file (Peterande/D-FINE at commit `956d1709314c2c6a4df6f34de232054578a7449f`, git blob `261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64`, 11,357 bytes) is the unmodified Apache-2.0 text, read in full on 2026-11-01; it names no copyright holder, and the repository has no NOTICE file. The Hugging Face port (`huggingface/transformers`, also Apache-2.0) is the code the export ran. The upstream README's licence note warns that checkpoints trained or pretrained on Objects365 (`*_obj365`, `*_obj2coco`) may be subject to the Objects365 dataset terms; this checkpoint is the COCO-only one by the card's naming. The same Hugging Face account publishes the other variants as separate repositories (`dfine-medium-obj2coco`, `dfine-medium-obj365`), and the transformers conversion script treats `dfine_m_coco` and `dfine_m_obj2coco` as different upstream checkpoints, so `-coco` is the COCO-only one. **Not independently verified**: the weights' training history beyond the card (the upstream `dfine_m_coco.pth` was not downloaded and compared tensor by tensor). Paper: Peng et al., "D-FINE: Redefine Regression Task in DETRs as Fine-grained Distribution Refinement", arXiv 2410.13842.
 
+## Training data and its terms (read 2026-11-14)
+
+- **Detector trained on**: COCO train2017. Terms (COCO's website source): annotations "licensed under a Creative Commons Attribution 4.0 License"; "The COCO Consortium does not own the copyright of the images. Use of the images must abide by the Flickr Terms of Use". The images are not in the model file.
+- **Backbone initialisation**: the medium config uses HGNetv2 `B2` with `pretrained: True`, and the code downloads `PPHGNetV2_B2_stage1.pth` (D-FINE `configs/dfine/dfine_hgnetv2_m_coco.yml`, `include/dfine_hgnetv2.yml`, `src/nn/backbone/hgnetv2.py`). The timm card for the same-named checkpoint says "Trained by model authors on mined ImageNet-22k and ImageNet-1k using SSLD distillation"; ImageNet's terms say "Researcher shall use the Database only for non-commercial research and educational purposes" (read on its Hugging Face dataset card). Almost every detector shares this lineage; for a paid product it is a policy question.
+- **Upstream warning**: D-FINE says its Objects365 checkpoints "should not be assumed to be commercially cleared"; this file is the COCO-only checkpoint.
+- **Not retrieved**: whether the backbone file is byte-identical to the PaddleClas or timm checkpoint (matched by name only).
+
+Whether a dataset's terms reach the trained weights is a legal question this note does not answer (RFC-0038, question 7). Engineering research, not legal advice.
+
 ## Apache License 2.0 (Peterande/D-FINE, LICENSE)
 
                                  Apache License

@@ -10,6 +10,14 @@
 - **Weights' origin**: `realesr-general-x4v3.pth` (4,885,111 bytes, SHA-256 `8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292`) from the `v0.2.5.0` release of github.com/xinntao/Real-ESRGAN, downloaded 2026-10-17 and loaded with `torch.load(weights_only=True)`.
 - **Licence**: the repository is BSD-3-Clause, Copyright (c) 2021, Xintao Wang (full text below); **the weights carry no separate stated terms and the training data's terms are unstated** (RFC-0029 §8). That reading is implicit, not explicit.
 
+## Training data and its terms (read 2026-11-14)
+
+- **Trained on**: not documented for this checkpoint. The model zoo calls it only "A tiny small model" and the v0.2.5.0 release notes do not mention it. The project's general recipe (`docs/Training.md`) is "DF2K (DIV2K and Flickr2K) + OST".
+- **Dataset terms, if that recipe was used**: DIV2K is "made available for academic research purpose only" and "the copyright belongs to the original owners" (https://data.vision.ee.ethz.ch/cvl/DIV2K/); Flickr2K was "collected by ourselves using Flickr API" with no licence stated; OST has no licence stated.
+- **Not retrieved**: this checkpoint's real training set; whether a VGG perceptual loss was used. The maintainer has not been asked.
+
+Whether a dataset's terms reach the trained weights is a legal question this note does not answer (RFC-0038, question 7). Engineering research, not legal advice.
+
 ## BSD 3-Clause License (xinntao/Real-ESRGAN)
 
 Reproduced because the model is now redistributed in the installer (clause 2). Fetched from the repository's `LICENSE` on 2026-10-17.

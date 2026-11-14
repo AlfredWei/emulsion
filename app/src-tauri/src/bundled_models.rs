@@ -129,6 +129,21 @@ mod tests {
     // SHA-256("abc"), the standard test vector.
     const ABC: Shipped = Shipped { name: "abc.onnx", size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" };
 
+    /// A model row in the notices must also say what the model was trained on and under what terms (the last column),
+    /// so a model cannot be added with only its weights licence recorded. The text is a research record, not a
+    /// legal conclusion, but an empty cell is always wrong.
+    #[test]
+    fn every_model_row_in_the_third_party_notices_states_its_training_data() {
+        let notices = include_str!("../../../THIRD_PARTY_NOTICES.md");
+        let rows: Vec<&str> = notices.lines().filter(|l| l.starts_with("| ") && l.contains(".onnx")).collect();
+        assert!(rows.len() >= 8, "expected at least the eight model rows, found {}", rows.len());
+        for row in rows {
+            let cells: Vec<&str> = row.trim().trim_matches('|').split('|').map(str::trim).collect();
+            assert_eq!(cells.len(), 5, "a model row needs five columns (model, use, source, licence, training data): {row}");
+            assert!(cells[4].len() > 10, "empty training-data cell in: {row}");
+        }
+    }
+
     #[test]
     fn notices_lookup_takes_the_first_candidate_that_is_a_file() {
         let d = dir("notices");

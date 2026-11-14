@@ -7,6 +7,10 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## Training data and its terms recorded for every model (2026-11-14, `docs/model-training-data`)
+
+RFC-0038 slice 1. `THIRD_PARTY_NOTICES.md` records each model's weights licence; it now also has a **Training data (and its terms)** column for all eight models, backed by a block in each `models/*_MODEL.md` (new `models/SEGMENT_MODEL.md` for SAM 2, which had no note) with the sources read and what was not retrieved. Findings: LaMa (Places2, non-commercial, from an archived page), YuNet (WIDER FACE, CC BY-NC-ND 4.0, now also read on its Hugging Face card) and SFace (MS-Celeb-1M lineage, unconfirmed) look like blockers for a paid product; D-FINE (ImageNet-initialised backbone) and Real-ESRGAN (undocumented checkpoint) need a closer look; NAFNet, SAM 2 and Face Mesh have no known blocker. ADR-0010 and `FACE_MODELS.md` carry dated updates (their earlier acceptances were for the free app). New Rust test `every_model_row_in_the_third_party_notices_states_its_training_data` fails on a row with an empty last cell. Not verified: the Places2 download page (refused connections) and WIDER FACE's own page could not be re-opened; the SA-1B licence text, the CASIA-WebFace and VGGFace2 terms and the Real-ESRGAN checkpoint's real training set were not retrieved. Whether dataset terms reach trained weights is a legal question left to counsel. No behaviour change.
+
 ## Upstream licence files for LaMa and MediaPipe read (2026-11-14, `feature/notices-upstream-licences`)
 
 Read the upstream `LICENSE` of `advimman/lama` (Apache-2.0, appendix names Samsung Research 2021) and `google-ai-edge/mediapipe` (Apache-2.0, no single holder). `THIRD_PARTY_NOTICES.md` and the two model notes updated. Still open: the ONNX conversion repositories' own licence files and the Face Mesh V2 bundle's own file.

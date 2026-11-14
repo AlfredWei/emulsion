@@ -6,21 +6,23 @@ This file covers the model files only. The Rust and JavaScript libraries the app
 
 ## Models shipped in the installer
 
-| Model | Used for | Made by / source | Licence |
-|---|---|---|---|
-| NAFNet-SIDD-width32 (`nafnet_sidd_w32.onnx`) | AI Denoise | megvii-research/NAFNet; trained on SIDD (MIT) | MIT, Copyright (c) 2022 megvii-model. Its architecture code derives from BasicSR (Apache-2.0, Copyright 2018-2020 BasicSR Authors) |
-| SAM 2 Hiera Tiny encoder and decoder (`sam2_hiera_tiny.*.onnx`) | Select Subject | Meta, facebookresearch/sam2, ONNX conversion hosted at `vietanhdev/segment-anything-2-onnx-models` | Apache-2.0 (the host's model card) |
-| D-FINE medium, COCO (`dfine_medium_coco.onnx`) | Person detection | Peterande/D-FINE, via the Hugging Face port `ustc-community/dfine-medium-coco`; trained on COCO (annotations CC BY 4.0) | Apache-2.0 |
-| LaMa (`lama_fp32.onnx`) | Object removal | advimman/lama ("big-lama"), ONNX conversion `Carve/LaMa-ONNX` | Apache-2.0 (the model cards, and the upstream repository's `LICENSE`, retrieved 2026-11-14, which is the Apache-2.0 text with `Copyright [2021] Samsung Research` in its appendix) |
-| Real-ESRGAN `realesr-general-x4v3` (`realesr_general_x4v3.onnx`) | Upscale | xinntao/Real-ESRGAN | BSD-3-Clause, Copyright (c) 2021, Xintao Wang (the repository's licence; the weights state no separate terms) |
-| MediaPipe Face Mesh V2 (`face_landmarks.onnx`) | Eye check in Similar | Google MediaPipe, ONNX conversion `fernandotonon/QtMeshEditor-facemesh-onnx` | Apache-2.0 (the conversion's model card, Google's model card, and the `LICENSE` of the upstream `google-ai-edge/mediapipe` repository, retrieved 2026-11-14) |
+| Model | Used for | Made by / source | Licence | Training data (and its terms) |
+|---|---|---|---|---|
+| NAFNet-SIDD-width32 (`nafnet_sidd_w32.onnx`) | AI Denoise | megvii-research/NAFNet; trained on SIDD (MIT) | MIT, Copyright (c) 2022 megvii-model. Its architecture code derives from BasicSR (Apache-2.0, Copyright 2018-2020 BasicSR Authors) | SIDD only (MIT), no pretrained initialisation |
+| SAM 2 Hiera Tiny encoder and decoder (`sam2_hiera_tiny.*.onnx`) | Select Subject | Meta, facebookresearch/sam2, ONNX conversion hosted at `vietanhdev/segment-anything-2-onnx-models` | Apache-2.0 (the host's model card) | SA-V (CC BY 4.0), SA-1B (research-only licence, text not read), Meta internal video (terms not public) |
+| D-FINE medium, COCO (`dfine_medium_coco.onnx`) | Person detection | Peterande/D-FINE, via the Hugging Face port `ustc-community/dfine-medium-coco`; trained on COCO (annotations CC BY 4.0) | Apache-2.0 | COCO train2017 (annotations CC BY 4.0, images under Flickr terms); backbone initialised from ImageNet-22k/1k (non-commercial research terms) |
+| LaMa (`lama_fp32.onnx`) | Object removal | advimman/lama ("big-lama"), ONNX conversion `Carve/LaMa-ONNX` | Apache-2.0 (the model cards, and the upstream repository's `LICENSE`, retrieved 2026-11-14, which is the Apache-2.0 text with `Copyright [2021] Samsung Research` in its appendix) | Places2 (non-commercial research terms, per an archived page); an ADE20K network in the training loss only (non-commercial) |
+| Real-ESRGAN `realesr-general-x4v3` (`realesr_general_x4v3.onnx`) | Upscale | xinntao/Real-ESRGAN | BSD-3-Clause, Copyright (c) 2021, Xintao Wang (the repository's licence; the weights state no separate terms) | Not documented for this checkpoint; the project's recipe uses DF2K and OST (DIV2K is academic-research only) |
+| MediaPipe Face Mesh V2 (`face_landmarks.onnx`) | Eye check in Similar | Google MediaPipe, ONNX conversion `fernandotonon/QtMeshEditor-facemesh-onnx` | Apache-2.0 (the conversion's model card, Google's model card, and the `LICENSE` of the upstream `google-ai-edge/mediapipe` repository, retrieved 2026-11-14) | Google's own smartphone and AR captures (no public dataset terms) |
+
+The Licence column is the licence of the weights. The last column records what the weights were trained on and that data's terms as read on 2026-11-14 (see each model's note in `models/`); several are non-commercial research datasets. Whether dataset terms reach trained weights is a legal question this file does not answer.
 
 ## Models the app downloads on first use (not in the installer)
 
-| Model | Used for | Source | Licence |
-|---|---|---|---|
-| YuNet (`face_detection_yunet_2023mar.onnx`) | Face detection | opencv/opencv_zoo | MIT (the upstream `LICENSE`) |
-| SFace (`face_recognition_sface_2021dec.onnx`) | Face grouping | opencv/opencv_zoo | Apache-2.0 (the upstream `LICENSE`; the original SFace repository states no licence, see `models/FACE_MODELS.md`) |
+| Model | Used for | Source | Licence | Training data (and its terms) |
+|---|---|---|---|---|
+| YuNet (`face_detection_yunet_2023mar.onnx`) | Face detection | opencv/opencv_zoo | MIT (the upstream `LICENSE`) | WIDER FACE (CC BY-NC-ND 4.0) |
+| SFace (`face_recognition_sface_2021dec.onnx`) | Face grouping | opencv/opencv_zoo | Apache-2.0 (the upstream `LICENSE`; the original SFace repository states no licence, see `models/FACE_MODELS.md`) | Not stated for the released weights; the paper used CASIA-WebFace, VGGFace2 and MS-Celeb-1M (withdrawn 2019; non-commercial) |
 
 ## Licence texts
 

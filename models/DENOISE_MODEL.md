@@ -11,6 +11,14 @@ The app downloads one model file for AI denoise, **hosted by this project** (a G
 - **Training data**: SIDD (Smartphone Image Denoising Dataset), released under the MIT License per its own page (https://abdokamel.github.io/sidd/). Smartphone sensor noise: results on other cameras are only partly checked (RFC-0027 §8).
 - **Licence**: MIT, Copyright (c) 2022 megvii-model (text below). The architecture code used for the export derives from BasicSR (Apache-2.0, Copyright 2018-2020 BasicSR Authors); the ONNX file contains the trained numbers and the network graph, not that source.
 
+## Training data and its terms (read 2026-11-14)
+
+- **Trained on**: SIDD only. The upstream config reads SIDD crops and sets `pretrain_network_g: ~`, so there is no pretrained initialisation (`options/train/SIDD/NAFNet-width32.yml` in megvii-research/NAFNet).
+- **Dataset terms**: the SIDD project page says "The dataset and the associated code repositories are under the MIT License" (https://www.eecs.yorku.ca/~kamel/sidd/ and its mirror https://abdokamel.github.io/sidd/). Attribution; no commercial restriction stated.
+- **Not retrieved**: a byte-for-byte comparison of the Hugging Face mirror's checkpoint with upstream (the mirror `nyanko7/nafnet-models` has no card and states no terms).
+
+Whether a dataset's terms reach the trained weights is a legal question this note does not answer (RFC-0038, question 7). Engineering research, not legal advice.
+
 ## MIT License (megvii-research/NAFNet)
 
 Copyright (c) 2022 megvii-model

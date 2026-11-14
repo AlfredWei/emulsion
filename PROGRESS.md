@@ -7,6 +7,10 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
+## Lens matching pinned by a golden fixture (2026-11-14, `test/lens-profile-golden`)
+
+RFC-0038 slice 2. `match_profile` (`lens_profile.rs`) is the whole contract with the `lensfun` crate, and replacing the crate (RFC-0038 B5.3) needs an oracle. New fixture `app/src-tauri/src/testdata/lens_profile_golden.json`: 410 queries, 248 of which resolve to a profile (248 with distortion, 180 with TCA, 81 with vignetting), taken from the bundled database (lens names exact, with maker prefix, upper case, lower case and doubled spaces; calibration focal lengths plus a point between two samples), ten hand-written real-world camera and lens names, and the missing-field and nonsense cases. Expected values are the current code's output. New test `match_profile_still_gives_the_pinned_results_for_the_golden_queries` (strings and nulls exact, numbers within 1e-6); `regenerate_the_lens_profile_golden` (ignored) rewrites the fixture on purpose. No behaviour change. Mutation-checked: shifting `lens_center_x` by 0.0001 and taking the last instead of the first camera match each fail it. **Finding for B5.3:** the header of the rescale functions in `lens_profile.rs` says they are "a direct port" of lensfun's own math, so LGPL-derived logic already sits in the app's own file; a clean-room replacement must rewrite those too, not only swap the crate. Not verified: queries built from the EXIF of the images in `test_image/` (the EXIF reader is not wired into this test); Windows (the fixture is platform-neutral, CI will say).
+
 ## Upstream licence files for LaMa and MediaPipe read (2026-11-14, `feature/notices-upstream-licences`)
 
 Read the upstream `LICENSE` of `advimman/lama` (Apache-2.0, appendix names Samsung Research 2021) and `google-ai-edge/mediapipe` (Apache-2.0, no single holder). `THIRD_PARTY_NOTICES.md` and the two model notes updated. Still open: the ONNX conversion repositories' own licence files and the Face Mesh V2 bundle's own file.

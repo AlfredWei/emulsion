@@ -3,7 +3,7 @@
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
   import { openThirdPartyNotices } from "$lib/api/system.js";
-  import { getMapSettings, setGeocodeProvider, setMapsApiKey } from "$lib/api/map.js";
+  import { getMapSettings, setGeocodeProvider, setMapsApiKey, setMapEndpoints } from "$lib/api/map.js";
   import {
     listExportPlugins,
     addExportPlugin,
@@ -54,6 +54,30 @@
   let mapsKeySaved = $state(false);
   let mapsKeyInput = $state("");
   let mapsError = $state("");
+
+  // Where the map tiles and the place search come from (blank = OpenStreetMap's public servers).
+  let mapTileUrl = $state("");
+  let mapAttribution = $state("");
+  let mapNominatimUrl = $state("");
+  let mapEndpointsSaved = $state(false);
+
+  async function handleSaveMapEndpoints() {
+    mapsError = "";
+    mapEndpointsSaved = false;
+    try {
+      await setMapEndpoints(mapTileUrl, mapAttribution, mapNominatimUrl);
+      mapEndpointsSaved = true;
+    } catch (/** @type {any} */ e) {
+      mapsError = String(e);
+    }
+  }
+
+  async function handleResetMapEndpoints() {
+    mapTileUrl = "";
+    mapAttribution = "";
+    mapNominatimUrl = "";
+    await handleSaveMapEndpoints();
+  }
 
   /** @param {import('$lib/api/map.js').GeocodeProvider} provider */
   async function handleProviderChange(provider) {
@@ -115,9 +139,13 @@
       mapsError = "";
       mapsKeyInput = "";
       shortcuts = getStoredShortcuts();
+      mapEndpointsSaved = false;
       getMapSettings().then((m) => {
         mapProvider = m.provider;
         mapsKeySaved = m.has_google_key;
+        mapTileUrl = m.tile_url ?? "";
+        mapAttribution = m.attribution ?? "";
+        mapNominatimUrl = m.nominatim_url ?? "";
       });
       getBackupSettings().then((s) => (settings = s));
       getStorageInfo().then((s) => (storageInfo = s));
@@ -554,6 +582,40 @@
               OpenStreetMap contributors.
             </p>
           {/if}
+          <details class="map-servers">
+            <summary>Map and search servers</summary>
+            <p class="storage-note">
+              By default the map uses OpenStreetMap's free public tile server and place search uses its Nominatim
+              server. Those are meant for light, personal use and OpenStreetMap may limit or withdraw access. Fill
+              these in to use a provider you have an account with, or your own server. Leave a field blank for the
+              default.
+            </p>
+            <div class="row">
+              <label class="label" for="map-tile-url">Map tile address</label>
+              <input
+                id="map-tile-url"
+                type="text"
+                autocomplete="off"
+                bind:value={mapTileUrl}
+                placeholder={"https://tiles.example.com/{z}/{x}/{y}.png"}
+              />
+            </div>
+            <div class="row">
+              <label class="label" for="map-attribution">Credit shown on the map</label>
+              <input id="map-attribution" type="text" autocomplete="off" bind:value={mapAttribution} placeholder="© Your tile provider" />
+            </div>
+            <div class="row">
+              <label class="label" for="map-nominatim-url">Place search server (OpenStreetMap option)</label>
+              <input id="map-nominatim-url" type="text" autocomplete="off" bind:value={mapNominatimUrl} placeholder="https://geo.example.com" />
+            </div>
+            <div class="backup-now-row">
+              <button class="primary" type="button" onclick={handleSaveMapEndpoints}>Save</button>
+              <button class="secondary" type="button" onclick={handleResetMapEndpoints}>Use OpenStreetMap defaults</button>
+              {#if mapEndpointsSaved}
+                <span class="last-backup">Saved — reopen the map to apply</span>
+              {/if}
+            </div>
+          </details>
           {#if mapsError}
             <div class="status">{mapsError}</div>
           {/if}
@@ -636,6 +698,12 @@
 {/if}
 
 <style>
+  .map-servers {
+    margin-top: 12px;
+  }
+  .map-servers summary {
+    cursor: pointer;
+  }
   .overlay {
     position: fixed;
     inset: 0;

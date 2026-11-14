@@ -48,6 +48,9 @@ export function setGeoLocationBatch(
  * @typedef {Object} MapSettings
  * @property {GeocodeProvider} provider
  * @property {boolean} has_google_key
+ * @property {string | null} tile_url Saved tile address, or null for OpenStreetMap's public server.
+ * @property {string | null} attribution Credit text for a custom tile provider.
+ * @property {string | null} nominatim_url Saved Nominatim server address, or null for OpenStreetMap's.
  */
 
 /** @returns {Promise<MapSettings>} */
@@ -62,4 +65,17 @@ export function setGeocodeProvider(/** @type {GeocodeProvider} */ provider) {
 /** Google key only. A blank or null key removes the stored one. */
 export function setMapsApiKey(/** @type {string | null} */ key) {
   return invoke("set_maps_api_key", { key });
+}
+
+/**
+ * Saves the map tile address, its credit text and the Nominatim server address (blank or null restores the
+ * OpenStreetMap default for that field). Rejects with a message naming the field if a value is not acceptable.
+ * @returns {Promise<void>}
+ */
+export function setMapEndpoints(
+  /** @type {string | null} */ tileUrl,
+  /** @type {string | null} */ attribution,
+  /** @type {string | null} */ nominatimUrl,
+) {
+  return invoke("set_map_endpoints", { tileUrl, attribution, nominatimUrl });
 }

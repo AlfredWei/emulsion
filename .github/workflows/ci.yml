@@ -24,8 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, not `stable`: Rust 1.100 (2026-11-09) moved Cargo's build directory to `build/<crate>/<hash>/out`, and
+      # `ort-sys` 2.0.0-rc.13 (pinned in Cargo.toml) takes `OUT_DIR`'s third ancestor for the target directory, so on
+      # Windows its `copy-dylibs` step lands one level too deep (`target/debug/build`) and panics on a directory that
+      # does not exist ("The system cannot find the path specified", build script of ort-sys). Fixed upstream in
+      # ort-sys 2.0.0-rc.14. Drop this pin when `ort` moves to rc.14 or later.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -154,8 +161,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, not `stable`: Rust 1.100 (2026-11-09) moved Cargo's build directory to `build/<crate>/<hash>/out`, and
+      # `ort-sys` 2.0.0-rc.13 (pinned in Cargo.toml) takes `OUT_DIR`'s third ancestor for the target directory, so on
+      # Windows its `copy-dylibs` step lands one level too deep (`target/debug/build`) and panics on a directory that
+      # does not exist ("The system cannot find the path specified", build script of ort-sys). Fixed upstream in
+      # ort-sys 2.0.0-rc.14. Drop this pin when `ort` moves to rc.14 or later.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

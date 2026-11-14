@@ -13,6 +13,7 @@ lr_replace/
 ├── Makefile               make dev / make test / make build, see `make help`
 ├── README.md               Project overview + quick start
 ├── PROGRESS.md             Running status log — read this first after time away
+├── THIRD_PARTY_NOTICES.md  Licences of the AI models the installer ships (bundled as a resource)
 └── .gitignore
 ```
 

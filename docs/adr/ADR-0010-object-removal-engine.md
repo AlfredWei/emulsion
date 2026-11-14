@@ -27,7 +27,7 @@ M7 asks for a fill approach documented before implementation. RFC-0032's bake-of
 ## Not settled
 
 - The small study with people (RFC-0032 slice C2, appendix protocol) was not run. Items 4 and 5 adopt the design its measured part (§10) favoured, so slice D proceeds; the study can still change the "needs regenerating" wording or the default before the UI (slice E) ships.
-- Places2's terms remain unread (item 2). If the owner later wants them read, this ADR is where the answer is recorded; a different, differently trained model would replace LaMa behind the same op.
+- Places2's terms remain unread (item 2). **Update 2026-11-14:** one research run read archived copies of the Places2 and ADE20K download pages; both say non-commercial research use only, and Places2 also "You will NOT distribute the above images". The live page was unreachable and the archived text has not been re-opened since, so treat it as a lead to confirm, not a settled reading. Nothing in this decision changes for the free app; for a paid product see RFC-0038 section B5 and `models/INPAINT_MODEL.md`. If the owner later wants them read, this ADR is where the answer is recorded; a different, differently trained model would replace LaMa behind the same op.
 
 ## Alternatives considered
 

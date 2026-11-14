@@ -9,3 +9,11 @@
 - **Where from**: Hugging Face repository `fernandotonon/QtMeshEditor-facemesh-onnx` (a mirror of one graph in `fernandotonon/QtMeshEditor-models`), downloaded 2026-11-09 with the go-ahead of the project owner. Size and hash matched the repository's listed LFS object.
 - **Licence reading (not complete)**: the mirror's model card says **Apache-2.0** ("a direct ONNX conversion of a Google MediaPipe model, Apache-2.0 code and weights"); Google's own Face Mesh V2 and Blendshape V2 model cards say Apache-2.0 too (read through a third-party mirror of the card PDFs, not from Google's storage). **Open items:** (1) the Apache-2.0 licence text reaches recipients of the installer through `THIRD_PARTY_NOTICES.md` (bundled as a resource; §4 of the licence), which names this model and reproduces the text, and the upstream `google-ai-edge/mediapipe` `LICENSE` was read on 2026-11-14 (the Apache-2.0 text; it names no single holder for the repository, so none is stated there); (2) the conversion script's own licence was not read; (3) the licence file of the Face Mesh V2 model bundle itself was not read (only the repository's).
 - **How it was checked**: the Rust reading (`blink_mesh.rs`) matches the Python tool's output on two real faces to presence 0.02 and eye ratio 0.01 (test `matches_the_python_tool_on_two_real_faces`, which now runs in CI because the file is committed).
+
+## Training data and its terms (read 2026-11-14)
+
+- **Trained on** (the model card, read in full): "All dataset images were captured on a diverse set of smartphone cameras ... via an AR (Augmented Reality) application"; evaluation samples came from the same source. It is Google's own data, and Google licensed the weights under Apache-2.0.
+- **Dataset terms**: none published.
+- **Conversion**: `fernandotonon/QtMeshEditor-facemesh-onnx` adds no terms, but it mirrors a graph from an aggregate repository (`QtMeshEditor-models`) whose own terms are not stated.
+- **Not retrieved**: the conversion script's licence; the model bundle's own licence file.
+Whether a dataset's terms reach the trained weights is a legal question this note does not answer (RFC-0038, question 7). Engineering research, not legal advice.

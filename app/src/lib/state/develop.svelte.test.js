@@ -414,6 +414,19 @@ describe("DevelopStore.installCpuFallback", () => {
   });
 });
 
+describe("editSettledHook on flushEditStack", () => {
+  it("fires with the version id after a labelled edit is written, not for a plain flush", async () => {
+    const { develop } = setup();
+    const hook = vi.fn();
+    develop.editSettledHook = hook;
+    api.setEditStack.mockResolvedValue([]);
+    await develop.flushEditStack();
+    expect(hook).not.toHaveBeenCalled();
+    await develop.flushEditStack("Exposure");
+    expect(hook).toHaveBeenCalledExactlyOnceWith(10);
+  });
+});
+
 describe("Auto Sync hook on flushEditStack (RFC-0028 §3.5)", () => {
   /** @param {number[] | null} targets */
   function withHook(targets) {

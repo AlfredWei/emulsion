@@ -15,7 +15,7 @@ whose licence expression has no permissive alternative (`MIT OR Apache-2.0 OR LG
 Rust: `cargo tree -e normal --target all` (what the app links on any platform; build scripts, dev dependencies and
 proc-macros do not ship). npm: the non-dev entries of app/package-lock.json (what Vite bundles).
 The hand-written section at the top of the output is the TEXT constant below; edit it there, not in the output."""
-import hashlib, json, re, subprocess, sys, unittest
+import difflib, hashlib, json, re, subprocess, sys, unittest
 from collections import defaultdict
 from pathlib import Path
 
@@ -184,6 +184,14 @@ def licence_outputs():
     return out
 
 
+def first_difference(have, want, limit=24):
+    """A short unified diff (what is on disk -> what the build gives) so a CI failure shows the cause, not just the name."""
+    diff = list(difflib.unified_diff(have.decode(errors="replace").splitlines(), want.decode(errors="replace").splitlines(),
+                                     "on disk", "generated", lineterm="", n=1))
+    clipped = [line[:200] for line in diff[:limit]]
+    return "\n" + "\n".join("      " + line for line in clipped) + (f"\n      ... ({len(diff) - limit} more lines)" if len(diff) > limit else "")
+
+
 def drift(outputs, present):
     """What differs between the generated outputs and the files on disk: names that are missing, changed or unexpected.
     `present` is the set of paths that exist under licenses/ (so a stray file counts)."""
@@ -192,7 +200,7 @@ def drift(outputs, present):
         if not path.is_file():
             problems.append(f"missing: {path.relative_to(ROOT)}")
         elif path.read_bytes() != want:
-            problems.append(f"out of date: {path.relative_to(ROOT)}")
+            problems.append(f"out of date: {path.relative_to(ROOT)}" + first_difference(path.read_bytes(), want))
     for path in sorted(present - set(outputs)):
         problems.append(f"unexpected: {path.relative_to(ROOT)}")
     return problems
@@ -249,8 +257,10 @@ class SelfTest(unittest.TestCase):
                 same, changed, stray = ROOT / "licenses/a", ROOT / "licenses/b", ROOT / "licenses/stray"
                 same.write_bytes(b"x"); changed.write_bytes(b"old"); stray.write_bytes(b"?")
                 outputs = {same: b"x", changed: b"new", ROOT / "licenses/c": b"c"}
-                self.assertEqual(drift(outputs, {same, changed, stray}),
-                                 ["out of date: licenses/b", "missing: licenses/c", "unexpected: licenses/stray"])
+                found = drift(outputs, {same, changed, stray})
+                self.assertEqual([f.split("\n")[0] for f in found], ["out of date: licenses/b", "missing: licenses/c", "unexpected: licenses/stray"])
+                self.assertIn("-old", found[0])
+                self.assertIn("+new", found[0])
                 self.assertEqual(drift({same: b"x"}, {same}), [])
             finally:
                 ROOT = saved

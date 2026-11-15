@@ -68,8 +68,10 @@ jobs:
         shell: bash
         run: |
           git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin cdf98aaa2411f565eacb3c7566e5e20542ae151a
-          git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports/libraw
+          rm -rf "$VCPKG_INSTALLATION_ROOT/ports"
+          git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" list
           # The vcpkg *crate* (used by rsraw-sys's build.rs) looks for
           # VCPKG_ROOT specifically -- the runner only sets
           # VCPKG_INSTALLATION_ROOT, which is a different variable. Confirmed
@@ -260,8 +262,10 @@ jobs:
         shell: bash
         run: |
           git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin cdf98aaa2411f565eacb3c7566e5e20542ae151a
-          git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports/libraw
+          rm -rf "$VCPKG_INSTALLATION_ROOT/ports"
+          git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" list
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
 
       # RFC-0038 A4: the vcpkg port must be the LibRaw this repository vendors (bindgen builds the FFI structs from the

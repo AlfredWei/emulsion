@@ -60,8 +60,21 @@ The extra static libraries come from the port's dependencies. This is what each 
 | libspng | 0.7.4 | `BSD-2-Clause AND libpng-2.0` | Randy |
 | zlib | 1.3.2 | `Zlib` | Jean-loup Gailly and Mark Adler |
 
-Two further vcpkg dependency lines of lcms (`GPL-3.0-or-later`) appeared in the grep of its `vcpkg.json`. They sit on lines that
-look like feature or dependency entries and were **not examined**; whether any GPL-licensed code reaches the link is open until they are.
+Two lines in lcms's `vcpkg.json` say `GPL-3.0-or-later`. They belong to the **optional features** `fastfloat` and `threaded`
+(the fast-float and multi-threaded plug-ins), read from the vcpkg repository's `ports/lcms/vcpkg.json` at version 2.19.1, port-version 1
+(the version the CI log installed). The CI plan lists `lcms:x64-windows-static-md@2.19.1#1` with no feature in brackets, the libraw port
+depends on plain `lcms`, and the only lcms library installed is `lcms2.lib`, so those features were **not** built. The licence of
+those two plug-ins matters only if a build ever turns them on.
+
+The rustc command line of the `rsraw-sys` crate in the Windows log shows the link directives
+`-l raw_r -l zs -l lcms2 -l jasper -l jpeg -l turbojpeg -l spng_static` (a debug build in `rust-core`), so the five extra
+libraries are asked for at link time, not merely installed. Whether the release `emulsion.exe` keeps all of them was not inspected.
+
+**Only the libraw port is pinned.** CI checks out `ports/libraw` at vcpkg commit `cdf98aaa…`; its dependencies (jasper, lcms,
+libjpeg-turbo, libspng, zlib) come from whatever vcpkg the `windows-latest` image carries, so their versions above are what that
+image had on 2026-11-15, and they can change when the image does (at that pinned commit the lcms port was 2.14, not 2.19.1).
+The licence rows in the generated notices are therefore as stable as the runner image, not as the repository.
+
 The build-only ports (`vcpkg-cmake`, `vcpkg-cmake-config`, `vcpkg-cmake-get-vars`, `vcpkg-tool-meson`) install no library.
 
 None of the five libraries is named in `THIRD_PARTY_LIBRARIES.md` or `THIRD_PARTY_NOTICES.md` before this change; the generator now
@@ -71,8 +84,7 @@ lists them in a Windows-only row, with their texts still to be copied into `lice
 ## What is not covered
 
 - A packaged installer on either platform (the `.app`/`.dmg`, the Windows `.msi`/`.exe`): `tauri build` was not run.
-- Whether the Windows `emulsion.exe` really contains the five extra libraries (the port installs them; the linked binary was not inspected).
-- The two `GPL-3.0-or-later` lines in lcms's `vcpkg.json` (see above).
+- Whether the release `emulsion.exe` keeps the five extra libraries (the debug link line names them; the binary was not inspected).
 - Linux (not a target, PRD section 5).
 - `lipo`/universal builds, signing and notarisation.
 - Whether the macOS binary embeds the 5 MB lens database as bytes or as a compressed blob (strings only found the parser).

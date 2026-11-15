@@ -265,8 +265,12 @@ clean-machine test. B5 (only if proprietary): about 27 to 119 days, see its cost
 2. LibRaw: LGPL-2.1 or CDDL-1.0 for our case, and does the Windows build from vcpkg's port need its own source offer?
    The vcpkg port also links other static libraries into the Windows build (jasper under the JasPer License 2.0, lcms under MIT,
    libjpeg-turbo under BSD-3-Clause and IJG, zlib under Zlib, and freeglut, whose port declares no licence; appendix: installer-inventory.md).
-   Is reproducing their notices enough? (lcms 2.19.1's `GPL-3.0-or-later` lines belong to two optional plug-in features that are not built.)
+   Is reproducing their notices enough? Their copyright files are now in `licenses/` (`vcpkg-<port>-copyright.txt`; the pinned lcms 2.14 port has no features, so there is no GPL-labelled line at the pin).
    Their versions are pinned with the whole vcpkg `ports/` tree and CI fails if an installed version differs from the recorded one.
+   Measured on the release `emulsion.exe` (appendix): only LibRaw and zlib's inflate code come from the vcpkg libraries; jasper, libjpeg-turbo and freeglut
+   have no symbol in the image, and the lcms code in it is the Rust crate `lcms2-sys`'s own copy. Does a notice have to name a library that is linked
+   but contributes no code? libjpeg-turbo's file also asks binary distributions to carry an IJG acknowledgement sentence; is that needed here?
+   freeglut's port declares no licence; its copyright file is an MIT-style notice by Pawel W. Olszta.
 3. Does a GitHub link satisfy source availability, or must each release carry the source (B2)?
 4. CC-BY-SA 3.0 database embedded unmodified (gzipped) in the executable: what attribution form is enough, and does
    embedding make our binary an adaptation or a collection?

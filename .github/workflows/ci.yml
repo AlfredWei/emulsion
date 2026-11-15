@@ -156,6 +156,20 @@ jobs:
           test "$(grep -c '^include ' "$RUNNER_TEMP/no-lama.txt")" = 6
           test "$(node scripts/fetch-bundled-models.mjs --list | grep -c '^include ')" = 7
 
+  scripts-selftest:
+    name: Scripts self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The provenance report builds its own throwaway git repository, so it needs no history from this checkout. It needs
+      # Python 3.11 or later (tomllib). The committed report is a snapshot pinned to one commit, so CI does not regenerate it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python3 scripts/provenance_report.py --self-test
+
   e2e:
     name: E2E (WebdriverIO)
     strategy:

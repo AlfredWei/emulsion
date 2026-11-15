@@ -2087,6 +2087,15 @@ fn third_party_notices_path(app: AppHandle) -> Result<String, String> {
         .ok_or_else(|| "THIRD_PARTY_NOTICES.md was not found next to the app".to_string())
 }
 
+/// Settings > About: the path of the bundled `THIRD_PARTY_LIBRARIES.md` (the code libraries' licences; the full texts it
+/// names are in the `licenses/` folder beside it).
+#[tauri::command]
+fn third_party_libraries_path(app: AppHandle) -> Result<String, String> {
+    bundled_models::libraries_path(&app)
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| "THIRD_PARTY_LIBRARIES.md was not found next to the app".to_string())
+}
+
 /// Settings > Storage: reports where thumbnails + the Develop preview
 /// cache currently live (the user's override if one is set, else the
 /// default) and how much disk space each is using -- the two facts the
@@ -2495,6 +2504,7 @@ pub fn run() {
             update_backup_settings,
             get_storage_info,
             third_party_notices_path,
+            third_party_libraries_path,
             set_cache_dir,
             perform_catalog_backup,
         ])

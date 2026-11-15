@@ -61,16 +61,28 @@ pub fn bundled_dirs(app: &AppHandle) -> Vec<PathBuf> {
     dirs
 }
 
-/// Where this build's `THIRD_PARTY_NOTICES.md` is: next to the app in its resources (`tauri.conf.json`
-/// `bundle.resources`), and in a development build also the checkout's copy. `None` when neither exists.
-pub fn notices_path(app: &AppHandle) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = app.path().resource_dir().ok().map(|d| d.join(NOTICES_FILE)).into_iter().collect();
+/// Where this build's copy of a file the repository root ships as a bundled resource is (`tauri.conf.json`
+/// `bundle.resources`): next to the app in its resources, and in a development build also the checkout's copy.
+/// `None` when neither exists.
+fn resource_path(app: &AppHandle, name: &str) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = app.path().resource_dir().ok().map(|d| d.join(name)).into_iter().collect();
     #[cfg(debug_assertions)]
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(NOTICES_FILE));
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(name));
     first_existing(&candidates)
 }
 
+/// This build's `THIRD_PARTY_NOTICES.md` (the AI models' licences).
+pub fn notices_path(app: &AppHandle) -> Option<PathBuf> {
+    resource_path(app, NOTICES_FILE)
+}
+
+/// This build's `THIRD_PARTY_LIBRARIES.md` (the code libraries' licences; the texts it names are in `licenses/` beside it).
+pub fn libraries_path(app: &AppHandle) -> Option<PathBuf> {
+    resource_path(app, LIBRARIES_FILE)
+}
+
 const NOTICES_FILE: &str = "THIRD_PARTY_NOTICES.md";
+const LIBRARIES_FILE: &str = "THIRD_PARTY_LIBRARIES.md";
 
 fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates.iter().find(|p| p.is_file()).cloned()

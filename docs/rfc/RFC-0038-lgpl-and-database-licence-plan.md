@@ -79,6 +79,10 @@ until Phase B is done and Phase C passes.
 - Extend `scripts/gen_third_party_libraries.py`: a "Native libraries" section (LibRaw version 0.21.3, how it is
   built per platform, the vcpkg commit, any transitive static libs) and an "elected licence" column for multi-licence
   entries (`r-efi`: MIT; LibRaw: per D2, "not yet elected" until then). Keep it generated, as today.
+- Status: measured in `docs/installer-inventory` (appendix: installer-inventory.md). macOS: both LGPL components are in the one
+  `emulsion` binary; `emulsion-ai` has neither. Windows: the vcpkg port also installs five other static libraries (jasper, lcms,
+  libjpeg-turbo, libspng, zlib), now listed in a Windows-only row of the generated table and raised in question 2. Not done: a
+  packaged installer was not built, so what `tauri build` copies is unknown; the "elected licence" column waits for D2.
 
 **A2. Ship the licence texts with the installer (1 PR).**
 - New repo directory `licenses/` populated by the generator, not by hand, so it cannot drift:
@@ -259,6 +263,9 @@ clean-machine test. B5 (only if proprietary): about 27 to 119 days, see its cost
    build/relink instructions sufficient for LGPL-2.1 §6 (LibRaw) and LGPL-3.0 §4 (lensfun)? Does that change if the
    app later becomes proprietary?
 2. LibRaw: LGPL-2.1 or CDDL-1.0 for our case, and does the Windows build from vcpkg's port need its own source offer?
+   The vcpkg port also links five other static libraries into the Windows build (jasper under the JasPer License 2.0, lcms under MIT,
+   libjpeg-turbo under BSD-3-Clause and IJG, libspng under BSD-2-Clause and libpng-2.0, zlib under Zlib; appendix: installer-inventory.md).
+   Is reproducing their notices enough, and does the unexamined `GPL-3.0-or-later` in lcms's `vcpkg.json` matter?
 3. Does a GitHub link satisfy source availability, or must each release carry the source (B2)?
 4. CC-BY-SA 3.0 database embedded unmodified (gzipped) in the executable: what attribution form is enough, and does
    embedding make our binary an adaptation or a collection?

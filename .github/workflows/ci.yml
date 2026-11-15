@@ -83,6 +83,27 @@ jobs:
         shell: bash
         run: python "$GITHUB_WORKSPACE/scripts/check_libraw_version.py" "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/include/libraw/libraw_version.h"
 
+      # RFC-0038 A1: record in the log what the vcpkg LibRaw is made of (version, what it depends on, the port's patches and
+      # source archive, the libraries it installs), which docs/rfc/RFC-0038-appendix/installer-inventory.md quotes. Information
+      # only: it never fails the job.
+      - name: Record what the vcpkg LibRaw is made of (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" list libraw || true
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" depend-info libraw:x64-windows-static-md || true
+          echo "--- ports/libraw"; ls "$VCPKG_INSTALLATION_ROOT/ports/libraw" || true
+          echo "--- portfile.cmake"; grep -nE 'URL|SHA512|REF |REPO|PATCHES|\.patch|LICENSE|COPYRIGHT' "$VCPKG_INSTALLATION_ROOT/ports/libraw/portfile.cmake" || true
+          echo "--- vcpkg.json"; cat "$VCPKG_INSTALLATION_ROOT/ports/libraw/vcpkg.json" || true
+          echo "--- installed lib"; ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib" || true
+          echo "--- installed share/libraw"; ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/libraw" || true
+          # The libraries the port pulls in (their licences are what THIRD_PARTY_LIBRARIES.md must name for Windows builds).
+          for p in jasper lcms libjpeg-turbo libspng zlib; do
+            echo "--- $p"
+            grep -E '"(version|version-string|license|homepage)"' "$VCPKG_INSTALLATION_ROOT/ports/$p/vcpkg.json" || true
+            head -n 6 "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright" || true
+          done
+
       - name: cargo build
         run: cargo build --verbose
 

@@ -113,6 +113,24 @@ jobs:
             head -n 6 "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright" || true
           done
 
+      - name: Collect the vcpkg licence texts (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/vcpkg-copyright"
+          for p in $(python -c "import json; print(' '.join(json.load(open('$GITHUB_WORKSPACE/scripts/vcpkg_expected_versions.json'))['versions']))"); do
+            f="$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright"
+            ls -l "$f" && cp "$f" "$RUNNER_TEMP/vcpkg-copyright/$p-copyright" || echo "no copyright file for $p"
+          done
+
+      - name: Upload the vcpkg licence texts (Windows only)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: vcpkg-copyright
+          path: ${{ runner.temp }}/vcpkg-copyright
+          if-no-files-found: error
+
       - name: cargo build
         run: cargo build --verbose
 

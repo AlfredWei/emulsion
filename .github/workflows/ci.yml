@@ -97,6 +97,12 @@ jobs:
           echo "--- vcpkg.json"; cat "$VCPKG_INSTALLATION_ROOT/ports/libraw/vcpkg.json" || true
           echo "--- installed lib"; ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib" || true
           echo "--- installed share/libraw"; ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/libraw" || true
+          # The libraries the port pulls in (their licences are what THIRD_PARTY_LIBRARIES.md must name for Windows builds).
+          for p in jasper lcms libjpeg-turbo libspng zlib; do
+            echo "--- $p"
+            grep -E '"(version|version-string|license|homepage)"' "$VCPKG_INSTALLATION_ROOT/ports/$p/vcpkg.json" || true
+            head -n 6 "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright" || true
+          done
 
       - name: cargo build
         run: cargo build --verbose

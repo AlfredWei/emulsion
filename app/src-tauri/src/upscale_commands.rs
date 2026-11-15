@@ -98,6 +98,9 @@ pub fn upscale_cancel_download() {
 /// most every ~250 ms; the file is verified against its pinned SHA-256 before it is kept.
 #[tauri::command]
 pub async fn upscale_download_model(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
+    if !crate::editions::current().includes(upscale_models::FAMILY) {
+        return Err(crate::editions::refusal(upscale_models::FAMILY));
+    }
     let dir = models_dir(&app, &state)?;
     DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
     let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
@@ -116,6 +119,9 @@ pub async fn upscale_download_model(app: AppHandle, state: State<'_, AppState>) 
 /// The offline path: verify the user-chosen model file by name and checksum and copy it in.
 #[tauri::command]
 pub async fn upscale_import_model(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<ModelStatus, String> {
+    if !crate::editions::current().includes(upscale_models::FAMILY) {
+        return Err(crate::editions::refusal(upscale_models::FAMILY));
+    }
     let dir = models_dir(&app, &state)?;
     tauri::async_runtime::spawn_blocking(move || upscale_models::import_file(&dir, Path::new(&path)).map_err(|e| e.to_string()))
         .await

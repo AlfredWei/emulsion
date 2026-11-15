@@ -7,6 +7,7 @@ mod cull_groups;
 mod cull_probe;
 mod diag;
 mod develop_engine;
+mod editions;
 mod export;
 mod export_plugin;
 mod geocode;
@@ -2293,6 +2294,8 @@ pub fn run() {
             let _ = app.emit("menu-action", id);
         })
         .setup(|app| {
+            // First, before anything asks which models this build may use (RFC-0038 slice 4, ADR-0012).
+            editions::init(app.handle());
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
             let catalog = Catalog::open(app_data_dir.join("catalog.sqlite"))?;
@@ -2390,7 +2393,8 @@ pub fn run() {
             removal_commands::removal_hole,
             removal_commands::removal_engine,
             removal_commands::removal_cancel,
-            removal_commands::removal_available,
+            removal_commands::removal_model_status,
+            editions::model_edition,
             blink_commands::blink_for_images,
             denoise_commands::denoise_run,
             denoise_commands::denoise_cancel,

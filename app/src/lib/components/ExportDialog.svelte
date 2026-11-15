@@ -1,4 +1,5 @@
 <script>
+  import { notInEdition } from "$lib/modelEdition.js";
   import { open } from "@tauri-apps/plugin-dialog";
   import { exportImages, listExportPlugins } from "$lib/api/export.js";
   import { exportConcurrency, runPool } from "$lib/exportPool.js";
@@ -77,7 +78,9 @@
   async function denoiseFirst() {
     denoiseNote = "";
     const outcome = await handleDenoiseBatch(missingDenoise);
-    if (outcome === "no-model") {
+    if (outcome === "not-in-edition") {
+      denoiseNote = notInEdition("AI Denoise");
+    } else if (outcome === "no-model") {
       denoiseNote = "The denoise model is not installed yet. Open a photo in Develop and choose Denoise whole photo once to install it.";
     } else if (outcome === "busy") {
       denoiseNote = "Another denoise job is running; try again when it has finished.";

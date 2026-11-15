@@ -14,7 +14,17 @@ pub const SHA256: &str = "d16e5a55e6a480284d468ee32469692464049518c311662ab39566
 pub const DIR: &str = "blink_models";
 
 /// The installed file's path when it is there and matches its pin; None otherwise (never a path to a damaged file).
+pub const FAMILY: crate::editions::ModelFamily = crate::editions::ModelFamily::Blink;
+
 pub fn ready_path(models_dir: &Path) -> Option<PathBuf> {
+    ready_path_for(crate::editions::current(), models_dir)
+}
+
+/// `None` too when the edition leaves the eye check out, even if a valid copy is cached.
+pub fn ready_path_for(edition: &crate::editions::Edition, models_dir: &Path) -> Option<PathBuf> {
+    if !edition.includes(FAMILY) {
+        return None;
+    }
     let path = models_dir.join(FILENAME);
     let ok = matches!(std::fs::metadata(&path), Ok(m) if m.len() == SIZE) && crate::segment_models::sha256_file(&path).map(|h| h == SHA256).unwrap_or(false);
     ok.then_some(path)
@@ -41,4 +51,16 @@ mod tests {
         assert_eq!(std::fs::metadata(&file).unwrap().len(), SIZE);
         assert_eq!(crate::segment_models::sha256_file(&file).unwrap(), SHA256);
     }
+
+    #[test]
+    fn an_excluded_eye_check_model_is_hidden_even_when_the_pinned_file_is_installed() {
+        use crate::editions::{tests::without, Edition};
+        let dir = std::env::temp_dir().join("emulsion-blink-edition-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models").join(FILENAME), dir.join(FILENAME)).unwrap();
+        assert!(ready_path_for(&Edition::all("default"), &dir).is_some());
+        assert!(ready_path_for(&without(FAMILY), &dir).is_none(), "excluded beats cached");
+    }
+
 }

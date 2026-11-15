@@ -54,6 +54,8 @@ pub enum ModelState {
     Ready,
     /// At least one file is missing or fails its checksum.
     Missing,
+    /// The build's edition leaves this model out (RFC-0038 slice 4): nothing is offered, whatever is on disk.
+    NotInEdition,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,7 +118,16 @@ fn is_valid_cache(path: &Path, spec: &ModelSpec) -> bool {
 
 /// Cheap enough for every arm of the tool: two size checks, then two streamed
 /// hashes only when sizes match (about 0.3 s for 155 MB on an SSD).
+pub const FAMILY: crate::editions::ModelFamily = crate::editions::ModelFamily::Segment;
+
 pub fn status(cache_dir: &Path) -> ModelStatus {
+    status_for(crate::editions::current(), cache_dir)
+}
+
+pub fn status_for(edition: &crate::editions::Edition, cache_dir: &Path) -> ModelStatus {
+    if !edition.includes(FAMILY) {
+        return ModelStatus { state: ModelState::NotInEdition, download_bytes: 0, host: "huggingface.co" };
+    }
     let missing: u64 = SPECS
         .iter()
         .filter(|spec| !is_valid_cache(&cache_dir.join(spec.filename), spec))
@@ -129,8 +140,16 @@ pub fn status(cache_dir: &Path) -> ModelStatus {
     }
 }
 
-/// Paths of a fully valid pair, or `None` (the caller then offers download / manual import).
+/// Paths of a fully valid pair, or `None` (the caller then offers download / manual import). `None` too when this
+/// build's edition leaves the model out.
 pub fn ready_paths(cache_dir: &Path) -> Option<SegmentModelPaths> {
+    ready_paths_for(crate::editions::current(), cache_dir)
+}
+
+pub fn ready_paths_for(edition: &crate::editions::Edition, cache_dir: &Path) -> Option<SegmentModelPaths> {
+    if !edition.includes(FAMILY) {
+        return None;
+    }
     let encoder = cache_dir.join(ENCODER.filename);
     let decoder = cache_dir.join(DECODER.filename);
     (is_valid_cache(&encoder, &ENCODER) && is_valid_cache(&decoder, &DECODER)).then_some(SegmentModelPaths { encoder, decoder })
@@ -304,4 +323,16 @@ mod tests {
         assert_eq!(last, ENCODER.size + DECODER.size);
         assert_eq!(status(&dir).state, ModelState::Ready);
     }
+
+    #[test]
+    fn an_excluded_segment_model_is_not_in_edition_and_has_nothing_to_download() {
+        use crate::editions::{tests::without, Edition};
+        let dir = test_dir("edition");
+        assert_eq!(status_for(&Edition::all("default"), &dir).state, ModelState::Missing);
+        let s = status_for(&without(FAMILY), &dir);
+        assert_eq!((&s.state, s.download_bytes), (&ModelState::NotInEdition, 0));
+        assert_eq!(serde_json::to_value(&s).unwrap()["state"], "not_in_edition");
+        assert!(ready_paths_for(&without(FAMILY), &dir).is_none());
+    }
+
 }

@@ -1,5 +1,6 @@
 <script>
   import { MAX_MASKS } from "$lib/api/develop.js";
+  import { notInEdition } from "$lib/modelEdition.js";
 
   /**
    * Contextual tool strip above the Filmstrip in Develop, matching
@@ -39,7 +40,7 @@
    *   onSegmentCandidate?: (index: number) => void,
    *   onSegmentAccept?: () => void,
    *   onSegmentCancel?: () => void,
-   *   removal?: { active: boolean, available: boolean | null, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number, removalPatches?: number[], healable?: number[], retryable?: number[], problems?: { patch: number, text: string }[] },
+   *   removal?: { active: boolean, available: boolean | null, notInEdition?: boolean, mode: "brush" | "lasso" | "select", brushRadius: number, marks: number, canCycle: boolean, selectPhase: string, selectNote: string, running: boolean, guarding: boolean, error: string, notice: string, removals: number, removalPatches?: number[], healable?: number[], retryable?: number[], problems?: { patch: number, text: string }[] },
    *   onRemoveToggle?: () => void,
    *   onRemoveMode?: (mode: "brush" | "lasso" | "select") => void,
    *   onRemoveNextGuess?: () => void,
@@ -349,7 +350,7 @@
     <div class="divider"></div>
     <div class="brush-options" data-testid="remove-options">
       {#if removal.available === false}
-        <span class="seg-status err" data-testid="remove-unavailable">The removal model is not installed in this copy of Emulsion.</span>
+        <span class="seg-status err" data-testid="remove-unavailable">{removal.notInEdition ? notInEdition("Remove") : "The removal model is not installed in this copy of Emulsion."}</span>
       {:else}
         <button class="tool small" class:active={removal.mode === "brush"} type="button" title="Paint over what to remove" onclick={() => onRemoveMode("brush")} disabled={removal.running}>Brush</button>
         <button class="tool small" class:active={removal.mode === "lasso"} type="button" title="Draw around what to remove" onclick={() => onRemoveMode("lasso")} disabled={removal.running}>Lasso</button>

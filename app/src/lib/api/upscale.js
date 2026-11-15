@@ -7,7 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 
 /**
  * @typedef {Object} UpscaleModelStatus
- * @property {"ready" | "missing"} state
+ * @property {"ready" | "missing" | "not_in_edition"} state
  * @property {number} download_bytes - bytes still to fetch (0 when ready)
  * @property {string} host - what a download would contact
  */

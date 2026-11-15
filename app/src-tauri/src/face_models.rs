@@ -45,6 +45,8 @@ pub struct FaceModelPaths {
 
 #[derive(Debug, thiserror::Error)]
 pub enum FaceModelError {
+    #[error("Face detection is not included in this edition of Emulsion.")]
+    NotInEdition,
     #[error("could not create model cache directory {0}: {1}")]
     CreateDir(PathBuf, std::io::Error),
     #[error("failed to download {0}: {1}")]
@@ -115,6 +117,9 @@ async fn ensure_one(client: &reqwest::Client, cache_dir: &Path, spec: &ModelSpec
 /// The face detector's file when it is already cached and valid, without ever fetching it: for the callers that only want to
 /// use a detector that an earlier face scan has already put there.
 pub fn cached_detector(cache_dir: &Path) -> Option<PathBuf> {
+    if !crate::editions::current().includes(crate::editions::ModelFamily::Face) {
+        return None;
+    }
     let path = cache_dir.join(YUNET.filename);
     is_valid_cache(&path, YUNET.sha256).then_some(path)
 }
@@ -123,12 +128,23 @@ pub fn cached_detector(cache_dir: &Path) -> Option<PathBuf> {
 /// whichever ones are missing or fail checksum verification -- and returns
 /// their paths. Safe to call on every app start: a fully-cached, valid
 /// pair costs one checksum read per file and no network request.
+/// Fails with [`FaceModelError::NotInEdition`] before touching the disk or the network when the edition leaves face
+/// detection out.
 pub async fn ensure_models(cache_dir: &Path) -> Result<FaceModelPaths, FaceModelError> {
+    check_included(crate::editions::current())?;
     std::fs::create_dir_all(cache_dir).map_err(|e| FaceModelError::CreateDir(cache_dir.to_path_buf(), e))?;
     let client = reqwest::Client::new();
     let yunet = ensure_one(&client, cache_dir, &YUNET).await?;
     let sface = ensure_one(&client, cache_dir, &SFACE).await?;
     Ok(FaceModelPaths { yunet, sface })
+}
+
+fn check_included(edition: &crate::editions::Edition) -> Result<(), FaceModelError> {
+    if edition.includes(crate::editions::ModelFamily::Face) {
+        Ok(())
+    } else {
+        Err(FaceModelError::NotInEdition)
+    }
 }
 
 #[cfg(test)]
@@ -197,4 +213,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
+
+    #[test]
+    fn an_edition_without_face_detection_refuses_before_any_download() {
+        use crate::editions::{tests::without, Edition, ModelFamily};
+        assert!(check_included(&Edition::all("default")).is_ok());
+        let err = check_included(&without(ModelFamily::Face)).unwrap_err();
+        assert!(matches!(err, FaceModelError::NotInEdition));
+        assert_eq!(err.to_string(), crate::editions::refusal(ModelFamily::Face));
+    }
+
 }

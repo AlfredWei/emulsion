@@ -8,6 +8,7 @@
 // candidate changes (so the user sees the real red overlay, with nothing special for a "preview");
 // Esc removes it again, Enter / toggling the tool off keeps it.
 
+import { modelGate, notInEdition } from "$lib/modelEdition.js";
 import { open } from "@tauri-apps/plugin-dialog";
 import { develop } from "$lib/state/develop.svelte.js";
 import { masks } from "$lib/state/masks.svelte.js";
@@ -77,6 +78,11 @@ export async function startSegmentSession(seed = null, handOffFrom = null) {
     const status = await segmentModelStatus();
     if (gen !== segment.generation) return;
     segment.modelStatus = status;
+    if (modelGate(status) === "excluded") {
+      segment.phase = "failed";
+      segment.error = notInEdition("Select Subject");
+      return;
+    }
     if (status.state !== "ready") {
       segment.phase = "idle";
       segment.dialog = "consent";

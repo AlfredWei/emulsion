@@ -1,4 +1,5 @@
 <script>
+  import { notInEdition } from "$lib/modelEdition.js";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import LibrarySurveyView from "$lib/components/LibrarySurveyView.svelte";
@@ -40,7 +41,9 @@
       : similar.blinkState === "unavailable"
         ? similar.blinkReason === "face_models"
           ? "Eye check needs the face detector: a face scan fetches it once."
-          : "Eye check is not available."
+          : similar.blinkReason === "not_in_edition"
+            ? notInEdition("Eye check")
+            : "Eye check is not available."
         : "",
   );
   let keepVersionId = $derived(selection.selectedId !== null && group?.frames.some((f) => f.image.version_id === selection.selectedId) ? selection.selectedId : null);

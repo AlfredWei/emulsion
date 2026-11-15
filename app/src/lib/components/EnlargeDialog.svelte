@@ -4,6 +4,7 @@
    * written until Enlarge is pressed; the original is never changed. The form is the `upscale` store's, so the
    * choices are the same next time. The first use asks to download the model (ModelDownloadDialog, mounted beside).
    */
+  import { notInEdition } from "$lib/modelEdition.js";
   import { upscale } from "$lib/state/upscale.svelte.js";
   import { closeEnlargeDialog, refreshEnlargePlan, handleEnlarge, handleEnlargePreview } from "$lib/actions/enlargeActions.js";
   import EnlargeCompare from "$lib/components/EnlargeCompare.svelte";
@@ -18,8 +19,9 @@
     batch ? (batch.items && batch.items.length > 0 ? batchRows(batch.items.map((i) => i.plan), batch.photos.length) : []) : upscale.plan ? planRows(upscale.plan) : [],
   );
   let modelMissing = $derived(upscale.modelStatus?.state === "missing");
+  let modelExcluded = $derived(upscale.modelStatus?.state === "not_in_edition");
   let hasPlan = $derived(batch ? (batch.items?.length ?? 0) > 0 : upscale.plan !== null);
-  let canEnlarge = $derived(hasPlan && upscale.job === null && !upscale.previewing);
+  let canEnlarge = $derived(hasPlan && upscale.job === null && !upscale.previewing && !modelExcluded);
   let thumbnail = $derived(photo ? (library.images.find((i) => i.version_id === photo.versionId)?.thumbnail_path ?? null) : null);
 
   /** @param {string} value */
@@ -166,6 +168,9 @@
           The enlargement model is not installed. It is a one-time download of about
           {Math.round((upscale.modelStatus?.download_bytes ?? 0) / 1_000_000)} MB; you will be asked before anything is fetched.
         </p>
+      {/if}
+      {#if modelExcluded}
+        <p class="notice" data-testid="enlarge-not-in-edition">{notInEdition("Enlarge (AI)")}</p>
       {/if}
       {#if upscale.error}<p class="err" role="alert">{upscale.error}</p>{/if}
 

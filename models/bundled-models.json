@@ -1,47 +1,79 @@
 {
-  "comment": "Model files shipped inside the installer (bundle.resources, see app/src-tauri/tauri.bundle-models.conf.json). Fetched into app/src-tauri/bundled-models/ by app/scripts/fetch-bundled-models.mjs before a release build (an entry with a url is downloaded; one with a path is copied from this models/ folder, where the file is committed). A Rust test (bundled_models.rs) checks every entry against the constants the app verifies models with, so this list cannot drift from them.",
+  "comment": "Model files shipped inside the installer (bundle.resources, see app/src-tauri/tauri.bundle-models.conf.json). Fetched into app/src-tauri/bundled-models/ by app/scripts/fetch-bundled-models.mjs before a release build (an entry with a url is downloaded; one with a path is copied from this models/ folder, where the file is committed). A Rust test (bundled_models.rs) checks every entry against the constants the app verifies models with, so this list cannot drift from them. Each file names its model family (denoise, segment, detect, inpaint, upscale, blink); `editions` lists, per edition, the families a build may use (an allow-list, so a family added later is never in a restricted edition by accident; `face` has no file because YuNet and SFace are downloaded). app/scripts/fetch-bundled-models.mjs --edition <name> (or EMULSION_EDITION) bundles only that edition's files and writes bundled-models.edition.json beside them; editions.rs checks the lists against the code. `default` must list every family. `test-no-lama` is a fixture for the mechanism (RFC-0038 slice 4, ADR-0012), not a product edition: which real editions exist is RFC-0038 D1, D7 and D11.",
   "files": [
     {
       "name": "nafnet_sidd_w32.onnx",
+      "family": "denoise",
       "size": 117316644,
       "sha256": "5ff072283fe8c86b7c990aa7331cdb26183e20b08961769c70057b82260b133d",
       "url": "https://github.com/AlfredWei/emulsion/releases/download/denoise-model-nafnet-sidd-w32-v1/nafnet_sidd_w32.onnx"
     },
     {
       "name": "sam2_hiera_tiny.encoder.onnx",
+      "family": "segment",
       "size": 134261315,
       "sha256": "4cc015ee18520e93f8c7ddfeaca7436039daaaaf19721b4b96a8810a805e82f7",
       "url": "https://huggingface.co/vietanhdev/segment-anything-2-onnx-models/resolve/071f58077599431edd0e5d2ac52ecca4c78f1cab/sam2_hiera_tiny.encoder.onnx"
     },
     {
       "name": "sam2_hiera_tiny.decoder.onnx",
+      "family": "segment",
       "size": 20640886,
       "sha256": "f5a4bd656c143899fb7f52d64ed81e6f6aeb37d477a0b6da50146ac7cf2187bf",
       "url": "https://huggingface.co/vietanhdev/segment-anything-2-onnx-models/resolve/071f58077599431edd0e5d2ac52ecca4c78f1cab/sam2_hiera_tiny.decoder.onnx"
     },
     {
       "name": "dfine_medium_coco.onnx",
+      "family": "detect",
       "size": 78809647,
       "sha256": "f0ccdada55b67e57f6d6c7aba48045bb8cc417fd0b2e7bf18e89a6a74cd2e6ab",
       "url": "https://github.com/AlfredWei/emulsion/releases/download/person-detector-dfine-medium-coco-v1/dfine_medium_coco.onnx"
     },
     {
       "name": "lama_fp32.onnx",
+      "family": "inpaint",
       "size": 208044816,
       "sha256": "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
       "url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/c3c0c9e468934d62e79c329e35d82dd09ff8c444/lama_fp32.onnx"
     },
     {
       "name": "realesr_general_x4v3.onnx",
+      "family": "upscale",
       "size": 4866388,
       "sha256": "a337283437fd0fc12e6882a4f4cc0467cf2f275782e8290f487d755f806137fb",
       "path": "realesr_general_x4v3.onnx"
     },
     {
       "name": "face_landmarks.onnx",
+      "family": "blink",
       "size": 4920979,
       "sha256": "d16e5a55e6a480284d468ee32469692464049518c311662ab3956681de31e3e9",
       "path": "face_landmarks.onnx"
     }
-  ]
+  ],
+  "editions": {
+    "default": {
+      "comment": "Every model: what every build has shipped so far.",
+      "include": [
+        "denoise",
+        "segment",
+        "detect",
+        "inpaint",
+        "upscale",
+        "blink",
+        "face"
+      ]
+    },
+    "test-no-lama": {
+      "comment": "Fixture for the edition mechanism: the default without the object-removal model. Not a product decision.",
+      "include": [
+        "denoise",
+        "segment",
+        "detect",
+        "upscale",
+        "blink",
+        "face"
+      ]
+    }
+  }
 }

@@ -265,7 +265,8 @@ clean-machine test. B5 (only if proprietary): about 27 to 119 days, see its cost
 2. LibRaw: LGPL-2.1 or CDDL-1.0 for our case, and does the Windows build from vcpkg's port need its own source offer?
    The vcpkg port also links five other static libraries into the Windows build (jasper under the JasPer License 2.0, lcms under MIT,
    libjpeg-turbo under BSD-3-Clause and IJG, libspng under BSD-2-Clause and libpng-2.0, zlib under Zlib; appendix: installer-inventory.md).
-   Is reproducing their notices enough, and does the unexamined `GPL-3.0-or-later` in lcms's `vcpkg.json` matter?
+   Is reproducing their notices enough? (lcms's `GPL-3.0-or-later` lines belong to two optional plug-in features that are not built.)
+   Their versions are not pinned: only the libraw port is.
 3. Does a GitHub link satisfy source availability, or must each release carry the source (B2)?
 4. CC-BY-SA 3.0 database embedded unmodified (gzipped) in the executable: what attribution form is enough, and does
    embedding make our binary an adaptation or a collection?

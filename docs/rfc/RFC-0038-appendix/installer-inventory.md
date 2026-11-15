@@ -67,43 +67,49 @@ vcpkg port installs and declares; it does not look inside the linked `emulsion.e
 | Licence the port declares | `LGPL-2.1-only OR CDDL-1.0` |
 | Port files | `portfile.cmake`, `dependencies.patch`, `fix-install.patch`, `vcpkg-cmake-wrapper.cmake`, `usage` |
 | Source archives (`portfile.cmake`) | `LibRaw/LibRaw` (SHA512 `c88d0268…`) and `LibRaw/LibRaw-cmake` (REF `eb98e432…`, SHA512 `63e68a4d…`) |
-| Libraries the port installs | `raw_r.lib` (LibRaw) and, besides it, **`jasper.lib`, `jpeg.lib`, `turbojpeg.lib`, `lcms2.lib`, `spng_static.lib`, `zs.lib`** |
+| Libraries the port installs (pinned tree) | `raw_r.lib` (LibRaw) and, besides it, `jasper.lib`, `jpeg.lib`, `turbojpeg.lib`, `lcms2.lib`, `zlib.lib`, `freeglut.lib` (plus the system `GlU32.Lib` and `OpenGL32.Lib` import libraries) |
 
-The extra static libraries come from the port's dependencies. This is what each declares in its own vcpkg port:
+The extra static libraries come from the port's dependencies. The versions below are the ones CI installs from the pinned vcpkg
+tree (measured on the CI run of branch `chore/vcpkg-registry-pin`, 2026-11-15, `vcpkg list` and the port manifests). The same
+versions are recorded in `scripts/vcpkg_expected_versions.json`, and both Windows jobs fail if an installed one differs.
 
-| Library | Version | Declared licence | Copyright holder named in its `share/<port>/copyright` |
+| Library | Version | Declared licence (its port's `vcpkg.json`) | Copyright holder named in its `share/<port>/copyright` |
 | --- | --- | --- | --- |
-| jasper | 4.2.9 | none in `vcpkg.json` (`"license": null`); the copyright file is "JasPer License Version 2.0" | Michael David Adams (2001-2016); Image Power, Inc. and The University of British Columbia (1999-2000) |
-| lcms (Little CMS) | 2.19.1 | MIT | Marti Maria Saguer |
-| libjpeg-turbo | 3.2.0 | `BSD-3-Clause AND IJG` | (IJG and libjpeg-turbo notices in one file) |
-| libspng | 0.7.4 | `BSD-2-Clause AND libpng-2.0` | Randy |
-| zlib | 1.3.2 | `Zlib` | Jean-loup Gailly and Mark Adler |
+| jasper | 4.2.1 | none (`"license": null`); the copyright file is "JasPer License Version 2.0" | Michael David Adams (2001-2016); Image Power, Inc. and The University of British Columbia (1999-2000) |
+| lcms (Little CMS) | 2.14 | MIT | Marti Maria Saguer (1998-2020) |
+| libjpeg-turbo | 3.0.4 | `BSD-3-Clause` (the copyright file also carries the IJG licence) | (IJG and libjpeg-turbo notices in one file) |
+| zlib | 1.3.1 | `Zlib` | Jean-loup Gailly and Mark Adler |
+| freeglut | 3.4.0#3 | none (`"license": null`); its copyright file was not read yet | not read yet |
 
-Two lines in lcms's `vcpkg.json` say `GPL-3.0-or-later`. They belong to the **optional features** `fastfloat` and `threaded`
-(the fast-float and multi-threaded plug-ins), read from the vcpkg repository's `ports/lcms/vcpkg.json` at version 2.19.1, port-version 1
-(the version the CI log installed). The CI plan lists `lcms:x64-windows-static-md@2.19.1#1` with no feature in brackets, the libraw port
-depends on plain `lcms`, and the only lcms library installed is `lcms2.lib`, so those features were **not** built. The licence of
-those two plug-ins matters only if a build ever turns them on.
+Pulled in by jasper's default `opengl` feature, which is why `freeglut.lib` is linked: `freeglut`, `opengl`, `opengl-registry`
+and `egl-registry` (the last two are headers). The installed set is exactly: `egl-registry` 2024-01-25, `freeglut` 3.4.0#3,
+`jasper` 4.2.1, `lcms` 2.14, `libjpeg-turbo` 3.0.4, `libraw` 0.21.3, `opengl` 2022-12-04#3, `opengl-registry` 2024-02-10#1,
+`zlib` 1.3.1.
 
-The rustc command line of the `rsraw-sys` crate in the Windows log shows the link directives
-`-l raw_r -l zs -l lcms2 -l jasper -l jpeg -l turbojpeg -l spng_static` (a debug build in `rust-core`), so the five extra
-libraries are asked for at link time, not merely installed. Whether the release `emulsion.exe` keeps all of them was not inspected.
+The rustc command line of `rsraw-sys` in the Windows log shows the link directives
+`-l raw_r -l zlib -l lcms2 -l jasper -l freeglut -l jpeg -l turbojpeg`, so these libraries are asked for at link time, not merely
+installed. Whether the release `emulsion.exe` keeps all of them was not inspected.
 
-**Only the libraw port is pinned.** CI checks out `ports/libraw` at vcpkg commit `cdf98aaa…`; its dependencies (jasper, lcms,
-libjpeg-turbo, libspng, zlib) come from whatever vcpkg the `windows-latest` image carries, so their versions above are what that
-image had on 2026-11-15, and they can change when the image does (at that pinned commit the lcms port was 2.14, not 2.19.1).
-The licence rows in the generated notices are therefore as stable as the runner image, not as the repository.
+Two lines in lcms's `vcpkg.json` say `GPL-3.0-or-later` in the newer lcms 2.19.1 port that the runner image carried before the
+pin. They belong to the **optional features** `fastfloat` and `threaded`. At the pinned tree the plan lists `lcms` with no feature
+and only `lcms2.lib` is installed, so those features are not built; whether the 2.14 port has the same features was **not checked**.
+
+**The whole vcpkg `ports/` tree is pinned** to commit `cdf98aaa2411f565eacb3c7566e5e20542ae151a` (before this change only
+`ports/libraw` was, and the other libraries followed the `windows-latest` image: lcms 2.19.1, jasper 4.2.9, libjpeg-turbo 3.2.0,
+libspng 0.7.4, zlib 1.3.2). Pinning changed what is linked: `libspng` is gone (the pinned libraw does not use it), zlib is now
+`zlib.lib` rather than `zs.lib`, and `freeglut` appeared. The versions above are now as stable as that commit, not as the runner
+image. One thing is still not pinned: the vcpkg tool binary itself comes from the runner image (the ports tree is older than the
+binary and worked with it on this run).
 
 The build-only ports (`vcpkg-cmake`, `vcpkg-cmake-config`, `vcpkg-cmake-get-vars`, `vcpkg-tool-meson`) install no library.
 
-None of the five libraries is named in `THIRD_PARTY_LIBRARIES.md` or `THIRD_PARTY_NOTICES.md` before this change; the generator now
-lists them in a Windows-only row, with their texts still to be copied into `licenses/` once the exact files are chosen
+None of these libraries is named in `THIRD_PARTY_NOTICES.md` yet; `THIRD_PARTY_LIBRARIES.md` lists them in a Windows-only row, with their texts still to be copied into `licenses/` once the exact files are chosen
 (not done here: the texts in the vcpkg package should be copied from a build, not retyped).
 
 ## What is not covered
 
 - A packaged installer on Windows (`.msi`/`.exe`). The macOS `.app`/`.dmg` was built (see above); it was not signed or notarised, and the `.dmg` was not opened.
-- Whether the release `emulsion.exe` keeps the five extra libraries (the debug link line names them; the binary was not inspected).
+- Whether the release `emulsion.exe` keeps the extra libraries (the debug link line names them; the binary was not inspected).
 - Linux (not a target, PRD section 5).
 - `lipo`/universal builds, signing and notarisation.
 - Whether the macOS binary embeds the 5 MB lens database as bytes or as a compressed blob (strings only found the parser).

@@ -10,7 +10,7 @@ lr_replace/
 ├── docs/                 Engineering docs — how it's built, and why
 ├── app/                  The actual Tauri + Svelte application
 ├── .github/workflows/    CI (GitHub Actions)
-├── scripts/              Repo-level tools: gen_third_party_libraries.py (library licence list), provenance_report.py (read-only git report for RFC-0038; --self-test runs in CI)
+├── scripts/              Repo-level tools: gen_third_party_libraries.py (library licence list and licenses/; `--check` and the copyleft guard run in CI), check_libraw_version.py (the Windows vcpkg LibRaw must match the vendored header; runs in both Windows jobs), provenance_report.py (read-only git report for RFC-0038; --self-test runs in CI)
 ├── Makefile               make dev / make test / make build, see `make help`
 ├── README.md               Project overview + quick start
 ├── PROGRESS.md             Running status log — read this first after time away

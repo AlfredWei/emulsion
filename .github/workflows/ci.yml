@@ -76,6 +76,13 @@ jobs:
           # via a real CI failure (VcpkgNotFound) before this line existed.
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
 
+      # RFC-0038 A4: the vcpkg port must be the LibRaw this repository vendors (bindgen builds the FFI structs from the
+      # vendored header), which also makes "the source of LibRaw is the vendored 0.21.3 plus the port's patches" a checked claim.
+      - name: LibRaw from vcpkg is the vendored version (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python "$GITHUB_WORKSPACE/scripts/check_libraw_version.py" "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/include/libraw/libraw_version.h"
+
       - name: cargo build
         run: cargo build --verbose
 
@@ -157,7 +164,7 @@ jobs:
           test "$(node scripts/fetch-bundled-models.mjs --list | grep -c '^include ')" = 7
 
   scripts-selftest:
-    name: Scripts self-test
+    name: Scripts self-test and generated licence files
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -169,6 +176,29 @@ jobs:
           python-version: "3.12"
 
       - run: python3 scripts/provenance_report.py --self-test
+      - run: python3 scripts/check_libraw_version.py --self-test
+      - run: python3 scripts/gen_third_party_libraries.py --self-test
+
+      # RFC-0038 A4: THIRD_PARTY_LIBRARIES.md and licenses/ are generated from the lockfile, the vendored LibRaw and the
+      # crates' own files. `--check` writes nothing and fails if either differs from what the build would give, or if a
+      # copyleft-only dependency appears that the conditions table does not name. It needs the same Rust as the build
+      # (cargo tree and cargo metadata) and fetches the crate sources, which takes about a minute.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+
+      - run: python3 scripts/gen_third_party_libraries.py --check
+
+      # When the check fails, regenerate in place and show how it differs, so the log says why (a platform difference in
+      # `cargo tree` and a forgotten regeneration look the same in `--check`'s output).
+      - name: Show how the generated files differ
+        if: failure()
+        run: |
+          python3 scripts/gen_third_party_libraries.py || true
+          git --no-pager diff --stat
+          git --no-pager diff -U0 -- THIRD_PARTY_LIBRARIES.md | grep -E '^[-+]###' | head -80
+          git --no-pager diff -U0 -- THIRD_PARTY_LIBRARIES.md | grep -E '^[-+]' | grep -vE '^[-+]###|^[-+]{3}' | tr ',' '\n' | sed 's/^[-+] *//' | head -0
 
   e2e:
     name: E2E (WebdriverIO)
@@ -212,6 +242,13 @@ jobs:
           git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports/libraw
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      # RFC-0038 A4: the vcpkg port must be the LibRaw this repository vendors (bindgen builds the FFI structs from the
+      # vendored header), which also makes "the source of LibRaw is the vendored 0.21.3 plus the port's patches" a checked claim.
+      - name: LibRaw from vcpkg is the vendored version (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python "$GITHUB_WORKSPACE/scripts/check_libraw_version.py" "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/include/libraw/libraw_version.h"
 
       - uses: actions/setup-node@v4
         with:

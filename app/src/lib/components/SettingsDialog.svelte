@@ -2,7 +2,8 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
-  import { openThirdPartyNotices, openThirdPartyLibraries } from "$lib/api/system.js";
+  import { openThirdPartyNotices, openThirdPartyLibraries, getModelEdition } from "$lib/api/system.js";
+  import { editionAboutLine } from "$lib/modelEdition.js";
   import { getMapSettings, setGeocodeProvider, setMapsApiKey, setMapEndpoints } from "$lib/api/map.js";
   import {
     listExportPlugins,
@@ -38,6 +39,7 @@
 
   // About tab: the bundled licence notices open in the OS's default viewer.
   let noticesError = $state("");
+  let editionLine = $state(/** @type {string | null} */ (null));
 
   async function handleOpenNotices() {
     noticesError = "";
@@ -156,6 +158,10 @@
         mapAttribution = m.attribution ?? "";
         mapNominatimUrl = m.nominatim_url ?? "";
       });
+      getModelEdition().then(
+        (info) => (editionLine = editionAboutLine(info)),
+        () => (editionLine = null),
+      );
       getBackupSettings().then((s) => (settings = s));
       getStorageInfo().then((s) => (storageInfo = s));
       listExportPlugins().then((p) => (plugins = p));
@@ -696,6 +702,9 @@
             database (CC-BY-SA 3.0, the Lensfun community), used unmodified. Every library, and where the licence texts
             are, is in the library licences.
           </p>
+          {#if editionLine}
+            <p class="storage-note" data-testid="about-edition-line">{editionLine}</p>
+          {/if}
           <div class="backup-now-row">
             <button class="secondary" type="button" onclick={handleOpenNotices}>Open third-party notices</button>
             <button class="secondary" type="button" onclick={handleOpenLibraries}>Open library licences</button>

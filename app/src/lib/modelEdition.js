@@ -17,3 +17,29 @@ export function modelGate(status) {
 export function notInEdition(feature) {
   return `${feature} is not included in this edition of Emulsion.`;
 }
+
+/** What a person calls the feature each model family drives, in the order Settings > About lists them. The names are
+ * the ones the "not included" sentences already use where the feature itself says so. */
+const FAMILY_FEATURE = /** @type {const} */ ([
+  ["denoise", "AI Denoise"],
+  ["segment", "Select Subject"],
+  ["detect", "Subject detection (person preset)"],
+  ["inpaint", "Remove"],
+  ["upscale", "Enlarge (AI)"],
+  ["blink", "Eye check"],
+  ["face", "Face grouping"],
+]);
+
+/** The one line Settings > About shows when the running edition leaves features out, or null when it leaves none.
+ * Reads the `model_edition` command's result. A failed or odd result, and a family this table does not know, give no
+ * line rather than a wrong one.
+ * @param {{ name?: string, excluded?: unknown } | null | undefined} info
+ * @returns {string | null} */
+export function editionAboutLine(info) {
+  const excluded = Array.isArray(info?.excluded) ? info.excluded : [];
+  const features = FAMILY_FEATURE.filter(([family]) => excluded.includes(family)).map(([, feature]) => feature);
+  if (features.length === 0) return null;
+  if (features.length === 1) return notInEdition(features[0]);
+  const last = features[features.length - 1];
+  return `${features.slice(0, -1).join(", ")} and ${last} are not included in this edition of Emulsion.`;
+}

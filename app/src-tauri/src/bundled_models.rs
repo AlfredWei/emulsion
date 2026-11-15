@@ -167,6 +167,34 @@ mod tests {
         }
     }
 
+    /// The licence texts that carry conditions beyond "keep the notice" (LibRaw, the `lensfun` crate and its database,
+    /// MPL-2.0, CDLA-Permissive-2.0) are copied by `scripts/gen_third_party_libraries.py` into `licenses/`, and
+    /// `tauri.conf.json` ships that folder. A file that goes missing, or a folder that stops being bundled, fails here.
+    #[test]
+    fn the_licence_texts_are_in_the_repo_and_bundled_with_the_installer() {
+        let conf = include_str!("../tauri.conf.json");
+        assert!(conf.contains("\"../../licenses/\": \"licenses/\""), "tauri.conf.json must bundle the licenses/ folder");
+        let libs = include_str!("../../../THIRD_PARTY_LIBRARIES.md");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../licenses");
+        let files = [
+            "LibRaw-COPYRIGHT", "LibRaw-LICENSE.LGPL", "LibRaw-LICENSE.CDDL", "lensfun-LICENSE-LGPL-3.0", "lensfun-LICENSE-GPL-3.0",
+            "lensfun-NOTICE", "CC-BY-SA-3.0.txt", "MPL-2.0.txt", "CDLA-Permissive-2.0.txt", "README.txt",
+        ];
+        for f in files {
+            let len = std::fs::metadata(dir.join(f)).unwrap_or_else(|e| panic!("licenses/{f}: {e}")).len();
+            assert!(len > 200, "licenses/{f} is empty or truncated");
+            // README.txt is the only one that names the others; every text must be named in the library list's table or the README.
+            if f != "README.txt" {
+                let readme = std::fs::read_to_string(dir.join("README.txt")).unwrap();
+                assert!(readme.contains(f) || libs.contains(f), "licenses/{f} is not named in README.txt or THIRD_PARTY_LIBRARIES.md");
+            }
+        }
+        for name in ["LibRaw", "`lensfun` crate", "Lensfun lens database"] {
+            assert!(libs.contains(name), "THIRD_PARTY_LIBRARIES.md does not name {name}");
+        }
+        assert!(libs.contains("licenses/"), "THIRD_PARTY_LIBRARIES.md must say where the texts are");
+    }
+
     #[test]
     fn notices_lookup_takes_the_first_candidate_that_is_a_file() {
         let d = dir("notices");

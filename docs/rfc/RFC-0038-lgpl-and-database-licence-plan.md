@@ -89,6 +89,9 @@ until Phase B is done and Phase C passes.
 - `app/src-tauri/tauri.conf.json` `bundle.resources`: add `"../../licenses/": "licenses/"`.
 - Change the generator's `TEXT` so `THIRD_PARTY_LIBRARIES.md` says the texts are in `licenses/` beside it, and states
   that the Lensfun database is included unmodified.
+- Status: done in `feature/licence-texts` (the unmodified-database statement was already in the table; the generator copies
+  from the vendored LibRaw and from the crates `cargo metadata` resolves; `CC-BY-SA-3.0.txt` is committed once and its SHA-256 is
+  pinned in the generator; the four MPL files carry one text, which the generator checks; `selectors` ships no licence file).
 
 **A3. Make the notices reachable from the app (1 small PR).**
 - `SettingsDialog.svelte` About tab: one sentence naming LibRaw (copyright LibRaw LLC), Lensfun (copyright the

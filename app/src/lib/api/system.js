@@ -53,3 +53,9 @@ export async function openThirdPartyLibraries() {
   const path = await invoke("third_party_libraries_path");
   return openPath(path);
 }
+
+/** The running edition: its name and the model families it leaves out (RFC-0038 slice 4, ADR-0012).
+ * @returns {Promise<{ name: string, excluded: string[] }>} */
+export function getModelEdition() {
+  return invoke("model_edition");
+}

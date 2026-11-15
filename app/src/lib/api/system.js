@@ -45,3 +45,11 @@ export async function openThirdPartyNotices() {
   const path = await invoke("third_party_notices_path");
   return openPath(path);
 }
+
+/** Opens the bundled THIRD_PARTY_LIBRARIES.md (the licences of the code libraries Emulsion is built from, and where
+ * the full texts of the ones with conditions are) in the OS's default viewer. Found the same way as the notices.
+ * @returns {Promise<void>} */
+export async function openThirdPartyLibraries() {
+  const path = await invoke("third_party_libraries_path");
+  return openPath(path);
+}

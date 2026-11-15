@@ -2,7 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
-  import { openThirdPartyNotices } from "$lib/api/system.js";
+  import { openThirdPartyNotices, openThirdPartyLibraries } from "$lib/api/system.js";
   import { getMapSettings, setGeocodeProvider, setMapsApiKey, setMapEndpoints } from "$lib/api/map.js";
   import {
     listExportPlugins,
@@ -43,6 +43,15 @@
     noticesError = "";
     try {
       await openThirdPartyNotices();
+    } catch (/** @type {any} */ e) {
+      noticesError = String(e);
+    }
+  }
+
+  async function handleOpenLibraries() {
+    noticesError = "";
+    try {
+      await openThirdPartyLibraries();
     } catch (/** @type {any} */ e) {
       noticesError = String(e);
     }
@@ -681,8 +690,15 @@
             Emulsion ships AI models made by others (denoising, subject selection, object detection, inpainting,
             upscaling and face landmarks). Their licences, and who made each model, are in the third-party notices.
           </p>
+          <p class="storage-note">
+            RAW files are decoded with LibRaw (copyright LibRaw LLC; LGPL-2.1 or CDDL-1.0). Lens corrections use the Rust
+            port of Lensfun (copyright the Lensfun contributors and David Veszelovszki; LGPL-3.0) and the Lensfun lens
+            database (CC-BY-SA 3.0, the Lensfun community), used unmodified. Every library, and where the licence texts
+            are, is in the library licences.
+          </p>
           <div class="backup-now-row">
             <button class="secondary" type="button" onclick={handleOpenNotices}>Open third-party notices</button>
+            <button class="secondary" type="button" onclick={handleOpenLibraries}>Open library licences</button>
           </div>
           {#if noticesError}
             <div class="status">{noticesError}</div>

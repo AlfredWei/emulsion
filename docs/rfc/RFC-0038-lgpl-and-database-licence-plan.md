@@ -98,6 +98,7 @@ until Phase B is done and Phase C passes.
   fallback) and add a `third_party_libraries_path` command next to `third_party_notices_path` in `src/lib.rs`.
   `capabilities/default.json` already allows `opener:allow-open-path` on `**`, so no capability change.
 - Whether this UI wording satisfies any "prominent notice" condition is for counsel; it costs little either way.
+- Status: done in `feature/about-library-licences`.
 
 **A4. CI guards so this does not rot (1 PR, `.github/workflows/ci.yml`).**
 - Add `--check` to the generator (regenerate to memory, diff against `THIRD_PARTY_LIBRARIES.md` and `licenses/`, exit

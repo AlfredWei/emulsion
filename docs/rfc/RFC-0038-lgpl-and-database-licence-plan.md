@@ -181,7 +181,8 @@ New decisions (in addition to D1 to D6):
 | B5.12 Public OpenStreetMap services | The tile policy gives commercial apps no special terms, says access "may be withdrawn at any point" and asks apps not to hard-code the tile URL; Nominatim allows at most 1 request per second across all users and warns commercial apps. Make the endpoints configurable (slice 5), then choose a provider | 1 to 2 | none | Provider and cost | Configurability: yes |
 
 **B5.2 details.**
-- **Ownership facts** (read-only git, 2026-11-14): one author identity, `Alfred, S.-Y., Wei`; 888 commits on `main` (911 across all branches).
+- **Ownership facts** (read-only git, 2026-11-14): one author identity, `Alfred, S.-Y., Wei`; 888 commits on `main` (911 across all branches) at `e5fcd3a26`; current
+  figures and their pin are in [RFC-0038-appendix/provenance.md](RFC-0038-appendix/provenance.md).
   No other human author appears in git; contributions made on the GitHub side only would not show there.
 - **AI co-authors**: 463 commits on `main` carry a `Co-Authored-By` trailer naming a Claude model. Counsel should check ownership and
   copyrightability against the tool terms in force at the time.
@@ -259,8 +260,13 @@ clean-machine test. B5 (only if proprietary): about 27 to 119 days, see its cost
 6. Are the shipped notice files plus the About-tab sentence a sufficient "prominent notice"?
 7. Does a model's training-data licence (non-commercial research data such as Places2, WIDER FACE, ImageNet) reach weights that
    a third party licensed as Apache-2.0 or MIT, and does an ImageNet-initialised backbone count? (Appendix: model-training-data.md.)
-8. Who owns code written with AI assistance (463 commits on `main` carry a Claude co-author trailer), and does the published MIT
-   history limit a later proprietary licence for future versions?
+8. **AI-assisted authorship** (appendix: provenance.md). Git shows one human author identity. At `e5fcd3a26`, 463 of 888 commits on
+   `main` carry a `Co-authored-by` trailer naming a Claude model; the appendix gives current counts, the models named with date ranges,
+   and the share of added lines by area. (a) Who owns code produced with this assistance, and does copyright subsist in it, under the
+   tool terms in force when each commit was made? (b) Is a commit trailer adequate evidence that assistance was or was not used, or
+   should the project keep other records from now on? (c) Does the published MIT history limit a later proprietary licence for future
+   versions (D8), and does the answer differ for AI-assisted commits? (d) In a relicensing, do the vendored `rsraw` and `rsraw-sys`
+   code (MIT, patched) and the two committed model weight files need anything beyond their existing notices?
 9. Are face embeddings (SFace) acceptable in a paid product under the biometric-data rules of the target markets?
 
 ## 5. Change plan: first slices (start now, no regret under any D1 answer)
@@ -287,8 +293,10 @@ One PR per slice, each with a `PROGRESS.md` entry in the house style and an expl
 
 **Slice 3: provenance report** (`chore/provenance-report`).
 - **Files**: `scripts/provenance_report.py` (read-only git: shortlog, committer split, co-author trailers, vendored directories);
-  output in `docs/rfc/RFC-0038-appendix/provenance.md`; a question 7 in section 4 on AI-assisted authorship.
-- **Done when**: it reproduces 1 author, 888 commits on `main` and 463 trailer commits, and gives identical output on a second run.
+  output in `docs/rfc/RFC-0038-appendix/provenance.md`; question 8 in section 4 (AI-assisted authorship) rewritten around it (question 7 is
+  training data, so no new question is added).
+- **Done when**: `--ref e5fcd3a26` reproduces 1 author, 888 commits and 463 trailer commits, and gives identical output on a second run.
+  (`main` has moved on: the appendix is pinned to the commit named in its first lines. Status: done in `chore/provenance-report`.)
 - **Verified by**: run it twice and diff; spot-check against `git shortlog -sne`.
 
 **Slice 4: edition manifest and a "not included" state** (`feature/model-editions`).

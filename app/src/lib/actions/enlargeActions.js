@@ -6,6 +6,7 @@
 // dialog closes the moment it starts): progress is in the status strip, and it ends in a status line and a new
 // photo in the catalog, connected to the original.
 
+import { modelGate, notInEdition } from "$lib/modelEdition.js";
 import { open } from "@tauri-apps/plugin-dialog";
 import { upscale } from "$lib/state/upscale.svelte.js";
 import { library } from "$lib/state/library.svelte.js";
@@ -140,6 +141,10 @@ export async function handleEnlargePreview(centre) {
   if (!photo || !target || upscale.batch !== null || upscale.plan === null || upscale.job !== null || upscale.previewing) return;
   if (centre) upscale.previewCentre = centre;
   upscale.previewError = "";
+  if (upscale.modelStatus?.state === "not_in_edition") {
+    upscale.previewError = notInEdition("Enlarge (AI)");
+    return;
+  }
   if (upscale.modelStatus?.state === "missing") {
     upscale.previewError = "The enlargement model is not installed yet. Press Enlarge to install it (you will be asked first).";
     return;
@@ -231,6 +236,10 @@ export async function handleEnlarge() {
   try {
     const status = await upscaleModelStatus();
     upscale.modelStatus = status;
+    if (modelGate(status) === "excluded") {
+      upscale.error = notInEdition("Enlarge (AI)");
+      return;
+    }
     if (status.state !== "ready") {
       // Ask first; the jobs start when the model is in. The Enlarge dialog stays open underneath.
       upscale.pendingRun = { queue, options };

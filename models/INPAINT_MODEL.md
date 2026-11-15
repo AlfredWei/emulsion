@@ -1,6 +1,6 @@
 # Object-removal model: LaMa (fp32) as ONNX (RFC-0032, ADR-0010)
 
-The app ships one inpainting file for the Remove tool, **bundled in the installer** beside the other models; the build fetches it and the app verifies it. There is no download dialog.
+The app ships one inpainting file for the Remove tool, **bundled in the installer** beside the other models; the build fetches it and the app verifies it. There is no download dialog. A build whose edition leaves the removal model out (`models/bundled-models.json` `editions`, ADR-0012) does not bundle or seed it, and the Remove tool says "Remove is not included in this edition of Emulsion.", even if a valid copy is cached from an earlier build.
 
 - **File**: `lama_fp32.onnx`
 - **Source**: Hugging Face `Carve/LaMa-ONNX`, revision `c3c0c9e468934d62e79c329e35d82dd09ff8c444` (pinned in `models/bundled-models.json`)

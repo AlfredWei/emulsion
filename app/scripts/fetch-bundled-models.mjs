@@ -4,22 +4,34 @@
 //
 //   node scripts/fetch-bundled-models.mjs                   download what is missing
 //   node scripts/fetch-bundled-models.mjs --from <dir>      copy what is missing from <dir> first (no network)
+//   node scripts/fetch-bundled-models.mjs --edition <name>  bundle only that edition's models (default: EMULSION_EDITION, else "default")
+//   node scripts/fetch-bundled-models.mjs --list            print the files the edition bundles and stop (no network, nothing written)
+//
+// An edition (models/bundled-models.json, "editions") is the list of model families a build may use. The app binary is built for
+// one name (EMULSION_EDITION at compile time), so build both with the same variable: `EMULSION_EDITION=<name> npm run build:release`.
+// Files of other editions are removed from the output folder (a stale 208 MB model must not ride along), and
+// bundled-models.edition.json is written last, only after every file has verified; the app reads it and can only narrow itself by it.
 //
 // An entry with a "path" instead of a "url" is a small model committed in models/ itself: it is copied from there
 // (and verified) with no network use.
 
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, copyFileSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, copyFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
+import { editionFile, resolveEdition, strayFiles } from "./bundledEditions.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const manifest = JSON.parse(readFileSync(resolve(here, "../../models/bundled-models.json"), "utf8"));
+const manifestText = readFileSync(resolve(here, "../../models/bundled-models.json"), "utf8");
+const manifest = JSON.parse(manifestText);
+const EDITION_FILE = "bundled-models.edition.json";
 const outDir = resolve(here, "../src-tauri/bundled-models");
 const fromIdx = process.argv.indexOf("--from");
 const fromDir = fromIdx >= 0 ? resolve(process.argv[fromIdx + 1]) : null;
+const editionIdx = process.argv.indexOf("--edition");
+const edition = resolveEdition(manifest, { flag: editionIdx >= 0 ? process.argv[editionIdx + 1] : null, env: process.env.EMULSION_EDITION });
 
 async function sha256(path) {
   const h = createHash("sha256");
@@ -40,8 +52,20 @@ async function download(file, part) {
   await pipeline(Readable.fromWeb(res.body), createWriteStream(part, { flags: append ? "a" : "w" }));
 }
 
+if (process.argv.includes("--list")) {
+  console.log(`edition ${edition.name}: ${edition.include.join(", ")}`);
+  for (const f of edition.files) console.log(`include  ${f.name}`);
+  for (const f of edition.omitted) console.log(`omit     ${f.name}`);
+  process.exit(0);
+}
+
 mkdirSync(outDir, { recursive: true });
-for (const file of manifest.files) {
+// Another edition's files, and the old edition file, go first: if this run fails half way, no stale file is left to ship.
+for (const name of strayFiles(readdirSync(outDir), edition, EDITION_FILE)) {
+  rmSync(join(outDir, name), { force: true });
+  console.log(`removed  ${name} (not in edition ${edition.name})`);
+}
+for (const file of edition.files) {
   const dest = join(outDir, file.name);
   if (await valid(dest, file)) {
     console.log(`ok       ${file.name}`);
@@ -70,4 +94,5 @@ for (const file of manifest.files) {
   renameSync(part, dest);
   console.log(`verified ${file.name}`);
 }
-console.log(`bundled models ready in ${outDir}`);
+writeFileSync(join(outDir, EDITION_FILE), JSON.stringify(editionFile(edition, createHash("sha256").update(manifestText).digest("hex")), null, 2) + "\n");
+console.log(`bundled models for edition ${edition.name} ready in ${outDir}`);

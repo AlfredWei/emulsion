@@ -35,6 +35,8 @@ export class RemovalStore {
   notice = $state("");
   /** Whether the model is installed; null until asked. */
   available = $state(/** @type {boolean | null} */ (null));
+  /** Whether this build's edition leaves Remove out (RFC-0038 slice 4): then `available` is false and no model is ever offered. */
+  notInEdition = $state(false);
   /** The object the last click-select click(s) took, still being refined: its clicks, the model's candidates for them and
    * the one shown. It is a mark like any other once the user starts another object or leaves select mode.
    * @type {null | { prompts: import('$lib/api/develop.js').SegmentPrompt[], candidates: import('$lib/api/segment.js').SegmentCandidate[], index: number, mark: import('$lib/api/removal.js').MaskShape }} */

@@ -9,6 +9,7 @@
 //! updated model simply replaces the file there. The cost is a second copy on disk (about 272 MB); the benefit is
 //! no second code path for "where is the model". A debug or CI build has no `models/` resource and does nothing.
 
+use crate::editions::{Edition, ModelFamily};
 use crate::segment_models::sha256_file;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -16,28 +17,29 @@ use tauri::{AppHandle, Manager};
 
 /// A model file the installer may carry, as the app verifies it.
 pub struct Shipped {
+    pub family: ModelFamily,
     pub name: &'static str,
     pub size: u64,
     pub sha256: &'static str,
 }
 
-pub const DENOISE: [Shipped; 1] = [Shipped { name: crate::denoise_models::FILENAME, size: crate::denoise_models::SIZE, sha256: crate::denoise_models::SHA256 }];
+pub const DENOISE: [Shipped; 1] = [Shipped { family: ModelFamily::Denoise, name: crate::denoise_models::FILENAME, size: crate::denoise_models::SIZE, sha256: crate::denoise_models::SHA256 }];
 
 pub const SEGMENT: [Shipped; 2] = [
-    Shipped { name: crate::segment_models::ENCODER.filename, size: crate::segment_models::ENCODER.size, sha256: crate::segment_models::ENCODER.sha256 },
-    Shipped { name: crate::segment_models::DECODER.filename, size: crate::segment_models::DECODER.size, sha256: crate::segment_models::DECODER.sha256 },
+    Shipped { family: ModelFamily::Segment, name: crate::segment_models::ENCODER.filename, size: crate::segment_models::ENCODER.size, sha256: crate::segment_models::ENCODER.sha256 },
+    Shipped { family: ModelFamily::Segment, name: crate::segment_models::DECODER.filename, size: crate::segment_models::DECODER.size, sha256: crate::segment_models::DECODER.sha256 },
 ];
 
 /// The person detector (RFC-0037), installed beside the Select Subject files: the detector's boxes are cut by that model.
-pub const DETECT: [Shipped; 1] = [Shipped { name: crate::detect_models::FILENAME, size: crate::detect_models::SIZE, sha256: crate::detect_models::SHA256 }];
+pub const DETECT: [Shipped; 1] = [Shipped { family: ModelFamily::Detect, name: crate::detect_models::FILENAME, size: crate::detect_models::SIZE, sha256: crate::detect_models::SHA256 }];
 
 /// The object-removal model (RFC-0032, ADR-0010), installed into its own folder.
-pub const INPAINT: [Shipped; 1] = [Shipped { name: crate::inpaint_models::FILENAME, size: crate::inpaint_models::SIZE, sha256: crate::inpaint_models::SHA256 }];
+pub const INPAINT: [Shipped; 1] = [Shipped { family: ModelFamily::Inpaint, name: crate::inpaint_models::FILENAME, size: crate::inpaint_models::SIZE, sha256: crate::inpaint_models::SHA256 }];
 
 /// The face-mesh model for blink evidence (RFC-0031 §8.15), installed into its own folder.
-pub const BLINK: [Shipped; 1] = [Shipped { name: crate::blink_models::FILENAME, size: crate::blink_models::SIZE, sha256: crate::blink_models::SHA256 }];
+pub const BLINK: [Shipped; 1] = [Shipped { family: ModelFamily::Blink, name: crate::blink_models::FILENAME, size: crate::blink_models::SIZE, sha256: crate::blink_models::SHA256 }];
 
-pub const UPSCALE: [Shipped; 1] = [Shipped { name: crate::upscale_models::FILENAME, size: crate::upscale_models::SIZE, sha256: crate::upscale_models::SHA256 }];
+pub const UPSCALE: [Shipped; 1] = [Shipped { family: ModelFamily::Upscale, name: crate::upscale_models::FILENAME, size: crate::upscale_models::SIZE, sha256: crate::upscale_models::SHA256 }];
 
 /// One seeding at a time: the startup pass and a status check must not both write a `.part` file, and a status
 /// check that arrives mid-copy waits for it rather than reporting "missing" and opening the download dialog.
@@ -105,9 +107,18 @@ pub fn seed(dest_dir: &Path, bundled: &Path, wanted: &[Shipped]) -> Result<usize
     Ok(copied)
 }
 
+/// Whether the edition lets every file of `wanted` be installed: a family it leaves out is never seeded, so a checkout
+/// or a stale bundle holding the file cannot put it back in an installed model folder.
+fn allowed(edition: &Edition, wanted: &[Shipped]) -> bool {
+    wanted.iter().all(|f| edition.includes(f.family))
+}
+
 /// Seeds one family from this build's bundle, if it has one. Failures are logged, not raised: the download path
 /// still works, and a status check must never fail because a bundled copy could not be installed.
 pub fn seed_from_app(app: &AppHandle, dest_dir: &Path, wanted: &[Shipped]) {
+    if !allowed(crate::editions::current(), wanted) {
+        return;
+    }
     for bundled in bundled_dirs(app) {
         if let Err(e) = seed(dest_dir, &bundled, wanted) {
             eprintln!("bundled model seeding: {e}");
@@ -127,7 +138,7 @@ mod tests {
     }
 
     // SHA-256("abc"), the standard test vector.
-    const ABC: Shipped = Shipped { name: "abc.onnx", size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" };
+    const ABC: Shipped = Shipped { family: ModelFamily::Denoise, name: "abc.onnx", size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" };
 
     /// A model row in the notices must also say what the model was trained on and under what terms (the last column),
     /// so a model cannot be added with only its weights licence recorded. The text is a research record, not a
@@ -200,6 +211,16 @@ mod tests {
     }
 
     #[test]
+    fn a_family_the_edition_leaves_out_is_not_seeded() {
+        let all = Edition::all("default");
+        let mut no_lama = Edition::all("test-no-lama");
+        no_lama.include.remove(&ModelFamily::Inpaint);
+        assert!(allowed(&all, &INPAINT) && allowed(&all, &SEGMENT));
+        assert!(!allowed(&no_lama, &INPAINT), "LaMa must not be seeded into an edition without it");
+        assert!(allowed(&no_lama, &SEGMENT) && allowed(&no_lama, &DETECT));
+    }
+
+    #[test]
     fn a_missing_file_is_copied_verified_and_a_valid_one_is_left_alone() {
         let (bundled, dest) = (dir("a-bundled"), dir("a-dest").join("models"));
         std::fs::write(bundled.join("abc.onnx"), b"abc").unwrap();
@@ -247,6 +268,8 @@ mod tests {
         for (name, size, sha, url, path) in &listed {
             let k = known.iter().find(|k| k.name == name).unwrap_or_else(|| panic!("{name} is not a model the app verifies"));
             assert_eq!((k.size, k.sha256), (*size, sha.as_str()), "{name}");
+            let family = manifest["files"].as_array().unwrap().iter().find(|f| f["name"] == name.as_str()).unwrap()["family"].clone();
+            assert_eq!(serde_json::to_value(k.family).unwrap(), family, "{name}: the manifest's `family` and Shipped.family differ");
             match path {
                 // A small model committed in models/: the file must be there and be the one the app verifies.
                 Some(rel) => {

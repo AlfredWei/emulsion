@@ -221,6 +221,19 @@ describe("the model dialog", () => {
     m.denoiseModelStatus.mockResolvedValue(MISSING);
   });
 
+  it("says the feature is not in this edition, opens no dialog and runs nothing (RFC-0038 slice 4)", async () => {
+    m.denoiseModelStatus.mockResolvedValue({ state: "not_in_edition", download_bytes: 0, host: "github.com" });
+    await A.handleDenoiseWhole();
+    expect(denoise.dialog).toBeNull();
+    expect(denoise.pendingJob).toBeNull();
+    expect(denoise.error).toBe("AI Denoise is not included in this edition of Emulsion.");
+    expect(m.denoiseDownloadModel).not.toHaveBeenCalled();
+    expect(m.denoiseImportModel).not.toHaveBeenCalled();
+    expect(m.denoiseRun).not.toHaveBeenCalled();
+    expect(await A.handleDenoiseBatch([{ path: "/photos/a.jpg", content_hash: "hash-a" }])).toBe("not-in-edition");
+    expect(m.denoiseRun).not.toHaveBeenCalled();
+  });
+
   it("asks first when the model is missing, and runs nothing", async () => {
     await A.handleDenoiseWhole();
     expect(denoise.dialog).toBe("consent");

@@ -42,7 +42,7 @@ export function cullAnalysisStatus() {
  */
 
 /** The eye check for these photographs: stored answers as they are, the rest measured now (a second or so each).
- * `available` is false when a model it needs is missing: `reason` is "mesh_model" or "face_models".
+ * `available` is false when a model it needs is missing: `reason` is "mesh_model", "face_models" or "not_in_edition" (the build's edition leaves it out).
  * @returns {Promise<{ available: boolean, reason: string, photos: BlinkPhoto[] }>} */
 export function blinkForImages(/** @type {number[]} */ imageIds) {
   return invoke("blink_for_images", { imageIds });

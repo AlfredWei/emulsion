@@ -366,6 +366,14 @@ describe("the preview", () => {
     expect(upscale.previewError).toBe("");
   });
 
+  it("says the feature is not in this edition and renders no preview (RFC-0038 slice 4)", async () => {
+    await opened();
+    upscale.modelStatus = /** @type {any} */ ({ state: "not_in_edition", download_bytes: 0, host: "github.com" });
+    await A.handleEnlargePreview();
+    expect(m.upscalePreview).not.toHaveBeenCalled();
+    expect(upscale.previewError).toBe("Enlarge (AI) is not included in this edition of Emulsion.");
+  });
+
   it("does not ask for the model to be downloaded: it says Enlarge will", async () => {
     await opened();
     upscale.modelStatus = /** @type {any} */ (MISSING);

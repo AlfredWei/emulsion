@@ -145,6 +145,17 @@ jobs:
       - run: npm ci
       - run: npm run check
 
+      # Model editions (RFC-0038 slice 4, ADR-0012). Neither step uses the network. The first runs the pure edition tests
+      # (Vitest is not otherwise part of this workflow); the second checks what the fetch script would bundle: the
+      # no-LaMa fixture leaves out exactly the removal model, and the default edition bundles all seven files.
+      - run: npx vitest run scripts
+      - name: Edition manifest resolves
+        run: |
+          node scripts/fetch-bundled-models.mjs --edition test-no-lama --list | tee "$RUNNER_TEMP/no-lama.txt"
+          grep -qx 'omit     lama_fp32.onnx' "$RUNNER_TEMP/no-lama.txt"
+          test "$(grep -c '^include ' "$RUNNER_TEMP/no-lama.txt")" = 6
+          test "$(node scripts/fetch-bundled-models.mjs --list | grep -c '^include ')" = 7
+
   scripts-selftest:
     name: Scripts self-test
     runs-on: ubuntu-latest

@@ -24,18 +24,25 @@ jobs:
           git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+      - name: Install plans, dry run
+        shell: bash
+        run: |
+          V="$VCPKG_INSTALLATION_ROOT/vcpkg"
+          echo "--- libraw alone"; "$V" install --dry-run libraw:x64-windows-static-md
+          echo "--- jasper[core] then libraw"; "$V" install --dry-run "jasper[core]:x64-windows-static-md" libraw:x64-windows-static-md
+          echo "--- jasper[core] alone"; "$V" install --dry-run "jasper[core]:x64-windows-static-md"
       - name: Release build with a linker map
         shell: bash
         env:
-          RUSTFLAGS: -C link-arg=/MAP:D:\a\emulsion.map
-        run: cargo build --release --bin emulsion
+          RUSTFLAGS: -C link-arg=/MAP:D:\a\_temp\emulsion.map
+        run: cargo build --release --target x86_64-pc-windows-msvc --bin emulsion
       - name: Inspect
         shell: bash
         run: |
-          exe=target/release/emulsion.exe
-          ls -l "$exe" /d/a/emulsion.map
-          python "$GITHUB_WORKSPACE/scripts/inspect_exe_tmp.py" "$exe" /d/a/emulsion.map
+          exe=target/x86_64-pc-windows-msvc/release/emulsion.exe
+          ls -l "$exe" /d/a/_temp/emulsion.map
+          python "$GITHUB_WORKSPACE/scripts/inspect_exe_tmp.py" "$exe" /d/a/_temp/emulsion.map
       - uses: actions/upload-artifact@v4.6.2
         with:
           name: emulsion-map
-          path: D:\a\emulsion.map
+          path: D:\a\_temp\emulsion.map

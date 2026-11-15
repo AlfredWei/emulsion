@@ -12,7 +12,7 @@ The grounding file is accurate. Checked against the tree, with additions that ch
 | Fact | Where checked | Consequence |
 | --- | --- | --- |
 | LibRaw 0.21.3, dual LGPL-2.1 / CDDL-1.0; macOS compiles vendored source, `cargo:rustc-link-lib=static=raw` | `vendor/rsraw-sys/LibRaw/COPYRIGHT`, `libraw/libraw_version.h`, `vendor/rsraw-sys/build.rs` | Static link on macOS. LibRaw source itself is unmodified (`PATCH.md`: only `build.rs` changed). |
-| Windows links vcpkg `libraw:x64-windows-static-md`, port pinned by checking out `ports/libraw` at vcpkg commit `cdf98aaa…` | `.github/workflows/ci.yml` (both jobs) | The Windows binary's LibRaw is built from *vcpkg's* port, which may apply its own patches and pull other static libraries. Not yet inventoried. |
+| Windows links vcpkg `libraw:x64-windows-static-md`, the whole `ports/` tree checked out at vcpkg commit `cdf98aaa…` | `.github/workflows/ci.yml` (both jobs) | The Windows binary's LibRaw is built from *vcpkg's* port, which may apply its own patches and pull other static libraries. Not yet inventoried. |
 | `lensfun` 0.7.0, LGPL-3.0-or-later, normal crates.io dependency | `app/src-tauri/Cargo.toml`, crate `NOTICE` | Compiled into the same Rust binary. |
 | Lens DB: 60 files in `data/db/`, gzipped by lensfun's own `build.rs` and embedded with `include_bytes!` | crate `build.rs`, `src/db.rs:101` | The CC-BY-SA data is inside the executable, not a separate file. Unmodified. |
 | The installer ships `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LIBRARIES.md` | `tauri.conf.json` `bundle.resources` | Notices exist, but **no LGPL, GPL, CDDL or CC-BY-SA text is shipped**: `THIRD_PARTY_LIBRARIES.md` says full texts are "in its own source distribution". |
@@ -80,8 +80,8 @@ until Phase B is done and Phase C passes.
   built per platform, the vcpkg commit, any transitive static libs) and an "elected licence" column for multi-licence
   entries (`r-efi`: MIT; LibRaw: per D2, "not yet elected" until then). Keep it generated, as today.
 - Status: measured in `docs/installer-inventory` (appendix: installer-inventory.md). macOS: both LGPL components are in the one
-  `emulsion` binary; `emulsion-ai` has neither. Windows: the vcpkg port also installs five other static libraries (jasper, lcms,
-  libjpeg-turbo, libspng, zlib), now listed in a Windows-only row of the generated table and raised in question 2. Not done: a
+  `emulsion` binary; `emulsion-ai` has neither. Windows: the vcpkg port also installs other static libraries (jasper, lcms,
+  libjpeg-turbo, zlib, freeglut), now listed in a Windows-only row of the generated table and raised in question 2. Not done: a
   packaged installer was not built, so what `tauri build` copies is unknown; the "elected licence" column waits for D2.
 
 **A2. Ship the licence texts with the installer (1 PR).**
@@ -263,10 +263,10 @@ clean-machine test. B5 (only if proprietary): about 27 to 119 days, see its cost
    build/relink instructions sufficient for LGPL-2.1 §6 (LibRaw) and LGPL-3.0 §4 (lensfun)? Does that change if the
    app later becomes proprietary?
 2. LibRaw: LGPL-2.1 or CDDL-1.0 for our case, and does the Windows build from vcpkg's port need its own source offer?
-   The vcpkg port also links five other static libraries into the Windows build (jasper under the JasPer License 2.0, lcms under MIT,
-   libjpeg-turbo under BSD-3-Clause and IJG, libspng under BSD-2-Clause and libpng-2.0, zlib under Zlib; appendix: installer-inventory.md).
-   Is reproducing their notices enough? (lcms's `GPL-3.0-or-later` lines belong to two optional plug-in features that are not built.)
-   Their versions are not pinned: only the libraw port is.
+   The vcpkg port also links other static libraries into the Windows build (jasper under the JasPer License 2.0, lcms under MIT,
+   libjpeg-turbo under BSD-3-Clause and IJG, zlib under Zlib, and freeglut, whose port declares no licence; appendix: installer-inventory.md).
+   Is reproducing their notices enough? (lcms 2.19.1's `GPL-3.0-or-later` lines belong to two optional plug-in features that are not built.)
+   Their versions are pinned with the whole vcpkg `ports/` tree and CI fails if an installed version differs from the recorded one.
 3. Does a GitHub link satisfy source availability, or must each release carry the source (B2)?
 4. CC-BY-SA 3.0 database embedded unmodified (gzipped) in the executable: what attribution form is enough, and does
    embedding make our binary an adaptation or a collection?

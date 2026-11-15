@@ -67,16 +67,23 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          # The whole ports/ tree, not only ports/libraw: libraw's dependencies must not follow the runner image.
           git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin cdf98aaa2411f565eacb3c7566e5e20542ae151a
           rm -rf "$VCPKG_INSTALLATION_ROOT/ports"
           git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" list
           # The vcpkg *crate* (used by rsraw-sys's build.rs) looks for
           # VCPKG_ROOT specifically -- the runner only sets
           # VCPKG_INSTALLATION_ROOT, which is a different variable. Confirmed
           # via a real CI failure (VcpkgNotFound) before this line existed.
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      # RFC-0038 A1: the whole ports/ tree comes from one vcpkg commit, so the libraries LibRaw pulls in (and their licences)
+      # are the ones recorded in scripts/vcpkg_expected_versions.json; fails when an installed version differs or one is new.
+      - name: vcpkg libraries are the recorded versions (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: '"$VCPKG_INSTALLATION_ROOT/vcpkg" list | python "$GITHUB_WORKSPACE/scripts/check_vcpkg_versions.py" -'
 
       # RFC-0038 A4: the vcpkg port must be the LibRaw this repository vendors (bindgen builds the FFI structs from the
       # vendored header), which also makes "the source of LibRaw is the vendored 0.21.3 plus the port's patches" a checked claim.
@@ -100,7 +107,7 @@ jobs:
           echo "--- installed lib"; ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib" || true
           echo "--- installed share/libraw"; ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/libraw" || true
           # The libraries the port pulls in (their licences are what THIRD_PARTY_LIBRARIES.md must name for Windows builds).
-          for p in jasper lcms libjpeg-turbo libspng zlib; do
+          for p in jasper lcms libjpeg-turbo zlib freeglut; do
             echo "--- $p"
             grep -E '"(version|version-string|license|homepage)"' "$VCPKG_INSTALLATION_ROOT/ports/$p/vcpkg.json" || true
             head -n 6 "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright" || true
@@ -200,6 +207,7 @@ jobs:
 
       - run: python3 scripts/provenance_report.py --self-test
       - run: python3 scripts/check_libraw_version.py --self-test
+      - run: python3 scripts/check_vcpkg_versions.py --self-test
       - run: python3 scripts/gen_third_party_libraries.py --self-test
 
       # RFC-0038 A4: THIRD_PARTY_LIBRARIES.md and licenses/ are generated from the lockfile, the vendored LibRaw and the
@@ -265,8 +273,14 @@ jobs:
           rm -rf "$VCPKG_INSTALLATION_ROOT/ports"
           git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" list
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      # RFC-0038 A1: the whole ports/ tree comes from one vcpkg commit, so the libraries LibRaw pulls in (and their licences)
+      # are the ones recorded in scripts/vcpkg_expected_versions.json; fails when an installed version differs or one is new.
+      - name: vcpkg libraries are the recorded versions (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: '"$VCPKG_INSTALLATION_ROOT/vcpkg" list | python "$GITHUB_WORKSPACE/scripts/check_vcpkg_versions.py" -'
 
       # RFC-0038 A4: the vcpkg port must be the LibRaw this repository vendors (bindgen builds the FFI structs from the
       # vendored header), which also makes "the source of LibRaw is the vendored 0.21.3 plus the port's patches" a checked claim.

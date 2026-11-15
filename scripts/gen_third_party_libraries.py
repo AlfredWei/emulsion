@@ -2,12 +2,20 @@
 """Regenerates THIRD_PARTY_LIBRARIES.md: the Rust crates compiled into the app and the npm packages bundled into
 its frontend, with the licence each declares. Run from anywhere:  python3 scripts/gen_third_party_libraries.py
 
-Also writes licenses/, the licence texts the installer ships beside this file (see licence_files() below).
+Also writes licenses/, the licence texts the installer ships beside this file (see licence_outputs() below).
+
+  python3 scripts/gen_third_party_libraries.py            write THIRD_PARTY_LIBRARIES.md and licenses/
+  python3 scripts/gen_third_party_libraries.py --check    write nothing; exit 1 if either differs from what the build would give
+  python3 scripts/gen_third_party_libraries.py --self-test  the rule for "copyleft-only" and the drift comparison, no cargo needed
+
+Either way it refuses a copyleft-only dependency that the conditions table does not name (RFC-0038 A4): a crate or package
+whose licence expression has no permissive alternative (`MIT OR Apache-2.0 OR LGPL-2.1-or-later` is fine; `MPL-2.0` and
+`LGPL-3.0-or-later` are not) must be listed in COPYLEFT_ALLOWED, which mirrors the hand-written table.
 
 Rust: `cargo tree -e normal --target all` (what the app links on any platform; build scripts, dev dependencies and
 proc-macros do not ship). npm: the non-dev entries of app/package-lock.json (what Vite bundles).
 The hand-written section at the top of the output is the TEXT constant below; edit it there, not in the output."""
-import hashlib, json, re, shutil, subprocess, sys
+import hashlib, json, re, subprocess, sys, unittest
 from collections import defaultdict
 from pathlib import Path
 
@@ -122,10 +130,29 @@ The MIT, Apache-2.0 and BSD texts that most other libraries use are in THIRD_PAR
 """
 
 
-def licence_files():
-    """Writes licenses/: copies of the licence texts of the components with conditions beyond "keep the notice".
-    Everything is copied from the files that are really in the build (the vendored LibRaw, the crates Cargo resolved), so
-    the folder follows a version bump; CC-BY-SA-3.0.txt is the one committed by hand and is checked against its pinned hash."""
+COPYLEFT = re.compile(r"GPL|CDDL|EPL|CC-BY-SA|MPL|SSPL|OSL|CPL|EUPL", re.I)
+# Crates named in the conditions table in TEXT (LibRaw and the database are not crates). A crate with one of these
+# licences that is not listed here fails the run, so a new copyleft dependency cannot arrive unnoticed.
+COPYLEFT_ALLOWED = {"cssparser", "dtoa-short", "dyn-eq", "lensfun", "option-ext", "selectors"}
+
+
+def copyleft_only(expression):
+    """True if every OR alternative of an SPDX-like licence expression names a copyleft licence (so the user cannot
+    choose a permissive one). `MIT OR Apache-2.0 OR LGPL-2.1-or-later` is not copyleft-only; `MPL-2.0` and
+    `LGPL-3.0-or-later` are. AND terms stay in one alternative, so `MIT AND MPL-2.0` counts as copyleft."""
+    alternatives = [a for a in re.split(r"\s+OR\s+|/", expression.replace("(", " ").replace(")", " ")) if a.strip()]
+    return bool(alternatives) and all(COPYLEFT.search(a) for a in alternatives)
+
+
+def copyleft_offenders(libs, allowed=COPYLEFT_ALLOWED):
+    return sorted(f"{name} {version} ({lic})" for (name, version), lic in libs.items() if copyleft_only(lic) and name not in allowed)
+
+
+def licence_outputs():
+    """The files licenses/ must hold, as {path: bytes}: copies of the licence texts of the components with conditions
+    beyond "keep the notice". Everything is copied from the files that are really in the build (the vendored LibRaw, the
+    crates Cargo resolved), so the folder follows a version bump; CC-BY-SA-3.0.txt is the one committed by hand and is
+    checked against its pinned hash."""
     cc = LICENSES / "CC-BY-SA-3.0.txt"
     if not cc.is_file() or hashlib.sha256(cc.read_bytes()).hexdigest() != CC_BY_SA_SHA256:
         raise SystemExit(f"{cc} is missing or is not the pinned CC-BY-SA 3.0 legal code (see CC_BY_SA_SHA256)")
@@ -147,23 +174,87 @@ def licence_files():
     for name, fname in (("dtoa-short", "LICENSE"), ("dyn-eq", "LICENSE"), ("option-ext", "LICENSE.txt")):
         if squash((one(name) / fname).read_text()) != squash(wanted["MPL-2.0.txt"].read_text()):
             raise SystemExit(f"{name}'s {fname} differs from cssparser's MPL-2.0 text: ship both")
-    LICENSES.mkdir(exist_ok=True)
+    out = {}
     for name, src in wanted.items():
         if not src.is_file():
             raise SystemExit(f"missing licence source {src}")
-        shutil.copyfile(src, LICENSES / name)
-    (LICENSES / "README.txt").write_text(README)
-    extra = sorted(p.name for p in LICENSES.iterdir() if p.name not in wanted and p.name not in ("README.txt", "CC-BY-SA-3.0.txt"))
-    if extra:
-        raise SystemExit(f"licenses/ holds files the generator does not know: {', '.join(extra)}")
-    return len(wanted) + 2
+        out[LICENSES / name] = src.read_bytes()
+    out[LICENSES / "README.txt"] = README.encode()
+    out[cc] = cc.read_bytes()
+    return out
 
 
-def main():
-    text = TEXT + "\n" + section("Rust crates", rust_libs()) + "\n" + section("JavaScript packages", npm_libs())
-    OUT.write_text(text.rstrip() + "\n")
-    print(f"wrote {OUT} ({len(text.splitlines())} lines) and {licence_files()} files in {LICENSES}")
+def drift(outputs, present):
+    """What differs between the generated outputs and the files on disk: names that are missing, changed or unexpected.
+    `present` is the set of paths that exist under licenses/ (so a stray file counts)."""
+    problems = []
+    for path, want in outputs.items():
+        if not path.is_file():
+            problems.append(f"missing: {path.relative_to(ROOT)}")
+        elif path.read_bytes() != want:
+            problems.append(f"out of date: {path.relative_to(ROOT)}")
+    for path in sorted(present - set(outputs)):
+        problems.append(f"unexpected: {path.relative_to(ROOT)}")
+    return problems
+
+
+def main(argv):
+    if "--self-test" in argv:
+        return 0 if unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(SelfTest)).wasSuccessful() else 1
+    rust, npm = rust_libs(), npm_libs()
+    bad = copyleft_offenders(rust) + copyleft_offenders(npm)
+    if bad:
+        print("copyleft-only dependencies that THIRD_PARTY_LIBRARIES.md does not name (add them to the conditions table in TEXT "
+              "and to COPYLEFT_ALLOWED, with their licence text in licenses/, after a decision about them):\n  " + "\n  ".join(bad), file=sys.stderr)
+        return 1
+    text = (TEXT + "\n" + section("Rust crates", rust) + "\n" + section("JavaScript packages", npm)).rstrip() + "\n"
+    outputs = {OUT: text.encode(), **licence_outputs()}
+    if "--check" in argv:
+        problems = drift(outputs, {p for p in LICENSES.rglob("*") if p.is_file()} if LICENSES.is_dir() else set())
+        if problems:
+            print("generated licence files are out of date (run python3 scripts/gen_third_party_libraries.py and commit):\n  " + "\n  ".join(problems), file=sys.stderr)
+            return 1
+        print(f"up to date: THIRD_PARTY_LIBRARIES.md and {len(outputs) - 1} files in licenses/")
+        return 0
+    LICENSES.mkdir(exist_ok=True)
+    for path, data in outputs.items():
+        path.write_bytes(data)
+    stray = sorted(p.name for p in LICENSES.iterdir() if p not in outputs)
+    if stray:
+        print(f"licenses/ holds files the generator does not know: {', '.join(stray)}", file=sys.stderr)
+        return 1
+    print(f"wrote {OUT} ({len(text.splitlines())} lines) and {len(outputs) - 1} files in {LICENSES}")
+    return 0
+
+
+class SelfTest(unittest.TestCase):
+    def test_copyleft_only_needs_every_alternative_to_be_copyleft(self):
+        for expr in ("MPL-2.0", "LGPL-3.0-or-later", "GPL-2.0-only OR LGPL-2.1", "MIT AND MPL-2.0", "CC-BY-SA-3.0", "(MPL-2.0)"):
+            self.assertTrue(copyleft_only(expr), expr)
+        for expr in ("MIT", "MIT OR Apache-2.0 OR LGPL-2.1-or-later", "Apache-2.0/MIT", "(MIT OR Apache-2.0) AND Unicode-3.0", "MPL-2.0 OR MIT", "(none declared)"):
+            self.assertFalse(copyleft_only(expr), expr)
+
+    def test_a_new_copyleft_dependency_is_an_offender_and_a_named_one_is_not(self):
+        libs = {("cssparser", "1"): "MPL-2.0", ("newcrate", "1"): "LGPL-3.0-only", ("r-efi", "5"): "MIT OR Apache-2.0 OR LGPL-2.1-or-later", ("serde", "1"): "MIT OR Apache-2.0"}
+        self.assertEqual(copyleft_offenders(libs), ["newcrate 1 (LGPL-3.0-only)"])
+        self.assertEqual(copyleft_offenders(libs, allowed={"cssparser", "newcrate"}), [])
+
+    def test_drift_names_missing_changed_and_unexpected_files(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            global ROOT
+            saved, ROOT = ROOT, Path(d)
+            try:
+                (ROOT / "licenses").mkdir()
+                same, changed, stray = ROOT / "licenses/a", ROOT / "licenses/b", ROOT / "licenses/stray"
+                same.write_bytes(b"x"); changed.write_bytes(b"old"); stray.write_bytes(b"?")
+                outputs = {same: b"x", changed: b"new", ROOT / "licenses/c": b"c"}
+                self.assertEqual(drift(outputs, {same, changed, stray}),
+                                 ["out of date: licenses/b", "missing: licenses/c", "unexpected: licenses/stray"])
+                self.assertEqual(drift({same: b"x"}, {same}), [])
+            finally:
+                ROOT = saved
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

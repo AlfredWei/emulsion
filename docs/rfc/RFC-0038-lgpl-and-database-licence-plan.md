@@ -116,6 +116,8 @@ until Phase B is done and Phase C passes.
   also makes "the source of LibRaw is the vendored 0.21.3 plus vcpkg's port patches" a checked claim.
 - Rust test beside `every_bundled_model_has_an_entry_in_the_third_party_notices` (`bundled_models.rs`): assert the
   `licenses/` files exist and that `THIRD_PARTY_LIBRARIES.md` names LibRaw, lensfun and the database.
+- Status: done in `chore/licence-ci-guards` (the Rust test came with A2). The allow-list is the generator's own rule rather
+  than `cargo deny`: a crate whose licence expression has no permissive alternative must be in `COPYLEFT_ALLOWED`.
 
 ### Phase B — after D1–D4
 

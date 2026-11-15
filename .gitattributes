@@ -1,0 +1,2 @@
+# Windows checkouts must keep the licence texts byte for byte (their SHA-256 is pinned in scripts/gen_third_party_libraries.py).
+licenses/** -text

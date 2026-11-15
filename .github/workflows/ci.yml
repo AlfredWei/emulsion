@@ -113,6 +113,16 @@ jobs:
             head -n 6 "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright" || true
           done
 
+      # RFC-0038 A1/A2: the copyright files licenses/ ships for the Windows libraries must be the ones the pinned vcpkg tree installs.
+      # Costs a few `cmp` calls; fails if a vcpkg bump changes a text without licenses/ following (see VCPKG_TEXTS in the generator).
+      - name: vcpkg licence texts are the shipped ones (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          for p in jasper lcms libjpeg-turbo zlib freeglut; do
+            cmp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright" "$GITHUB_WORKSPACE/licenses/vcpkg-$p-copyright.txt"
+          done
+
       - name: cargo build
         run: cargo build --verbose
 

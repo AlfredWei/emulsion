@@ -7,6 +7,7 @@
 // running when they open another photo; it ends in a status line, and in the Amount being set to a starting
 // value if the photo has none yet, so the result is visible straight away.
 
+import { modelGate, notInEdition } from "$lib/modelEdition.js";
 import { open } from "@tauri-apps/plugin-dialog";
 import { develop } from "$lib/state/develop.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
@@ -103,6 +104,10 @@ async function startJob(kind) {
   try {
     const status = await denoiseModelStatus();
     denoise.modelStatus = status;
+    if (modelGate(status) === "excluded") {
+      denoise.error = notInEdition("AI Denoise");
+      return;
+    }
     if (status.state !== "ready") {
       // Ask first; the job starts when the model is in, for the photo it was asked on.
       denoise.pendingJob = { kind, hash, path };
@@ -158,12 +163,13 @@ async function runJob(kind, hash, path) {
  * Stops at the first one that is stopped or fails. Resolves to how it ended; "no-model" means the model is
  * not installed (the download dialog lives in Develop, so the caller says where to get it).
  * @param {{ path: string, content_hash: string }[]} photos
- * @returns {Promise<"done" | "stopped" | "failed" | "no-model" | "busy">} */
+ * @returns {Promise<"done" | "stopped" | "failed" | "no-model" | "not-in-edition" | "busy">} */
 export async function handleDenoiseBatch(photos) {
   if (denoise.job !== null || denoise.batch !== null) return "busy";
   try {
     const status = await denoiseModelStatus();
     denoise.modelStatus = status;
+    if (modelGate(status) === "excluded") return "not-in-edition";
     if (status.state !== "ready") return "no-model";
   } catch {
     return "failed";

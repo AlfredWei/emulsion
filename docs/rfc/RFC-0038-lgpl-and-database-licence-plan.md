@@ -299,6 +299,7 @@ One PR per slice, each with a `PROGRESS.md` entry in the house style and an expl
   default build is unchanged.
 - **Verified by**: `cargo test`, Vitest, and a `verify-emulsion` run on the no-LaMa build. Also the route RFC-0029 names for
   removing a model if a licence reading is challenged. Not verified: catalogs that already hold face embeddings.
+  Status: built in `feature/model-editions`; the decisions are in [ADR-0012](../adr/ADR-0012-model-editions.md) (ADR-0011 stays reserved for D7 to D11).
 
 **Slice 5: configurable map-tile and geocoder endpoints** (`feature/osm-endpoints-configurable`).
 - **Files**: `LibraryMapView.svelte` (the tile URL becomes a setting; attribution follows it); `geocode.rs` (endpoints from settings,

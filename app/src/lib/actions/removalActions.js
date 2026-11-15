@@ -7,7 +7,8 @@ import { masks } from "$lib/state/masks.svelte.js";
 import { removal, LARGE_MARK_FRACTION } from "$lib/state/removal.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { regenerateThumbnailFor } from "$lib/actions/importActions.js";
-import { removalAvailable, removeObject, removalCancel, isRemovalCancelled, removalHole, removalInfo, removalEngine, regenerateRemoval } from "$lib/api/removal.js";
+import { modelGate, notInEdition } from "$lib/modelEdition.js";
+import { removalModelStatus, removeObject, removalCancel, isRemovalCancelled, removalHole, removalInfo, removalEngine, regenerateRemoval } from "$lib/api/removal.js";
 import { segmentModelStatus, segmentPrepare, segmentDecode, segmentRelease, isNotPrepared } from "$lib/api/segment.js";
 import { readCut } from "$lib/segmentCut.js";
 import { addRemovals, getEditStack, getRemovals, removeRemoval, replaceRemoval, setEditStack, addMask, createSpotMask, listMasks, countBrushLayers, MAX_MASKS } from "$lib/api/develop.js";
@@ -33,9 +34,12 @@ export async function handleRemoveToolToggle() {
   removal.selectNote = "";
   removal.clearMarks();
   try {
-    removal.available = await removalAvailable();
+    const status = await removalModelStatus();
+    removal.available = status.state === "ready";
+    removal.notInEdition = status.state === "not_in_edition";
   } catch {
     removal.available = false;
+    removal.notInEdition = false;
   }
   try {
     removal.engine = await removalEngine();
@@ -69,9 +73,10 @@ async function startSelect() {
   try {
     const status = await segmentModelStatus();
     if (!removal.active) return;
-    if (status.state !== "ready") {
+    const gate = modelGate(status);
+    if (gate !== "ready") {
       removal.selectPhase = "idle";
-      removal.selectNote = "Click-select needs its model: install it once from Select Subject, then come back.";
+      removal.selectNote = gate === "excluded" ? notInEdition("Select Subject") : "Click-select needs its model: install it once from Select Subject, then come back.";
       return;
     }
     await prepareSelect();

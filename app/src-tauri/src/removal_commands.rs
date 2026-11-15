@@ -313,14 +313,15 @@ pub async fn removal_cancel(helper: State<'_, Arc<AiHelper>>) -> Result<(), Stri
 }
 
 /// Whether the removal model is installed (the installer carries it; a build or install without it has no Remove, and
-/// the tool says so). Cheap: the check is a size and a hash of one file, done once per call.
+/// the tool says so), or the build's edition leaves it out (`not_in_edition`, RFC-0038 slice 4). Cheap: the check is a
+/// size and a hash of one file, done once per call.
 #[tauri::command]
-pub async fn removal_available(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn removal_model_status(app: AppHandle, state: State<'_, AppState>) -> Result<inpaint_models::ModelStatus, String> {
     let models = resolve_cache_root(&app, &state.catalog)?.join("inpaint_models");
     tauri::async_runtime::spawn_blocking(move || {
         // Seeds first (and waits for the startup pass), like the other families' status checks.
         crate::bundled_models::seed_from_app(&app, &models, &crate::bundled_models::INPAINT);
-        inpaint_models::ready_path(&models).is_some()
+        inpaint_models::status(&models)
     })
     .await
     .map_err(|e| e.to_string())

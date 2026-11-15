@@ -56,6 +56,9 @@ pub fn segment_cancel_download() {
 /// Emits `"segment-model-progress"` `{downloaded, total}` at most every ~250 ms.
 #[tauri::command]
 pub async fn segment_download_models(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
+    if !crate::editions::current().includes(segment_models::FAMILY) {
+        return Err(crate::editions::refusal(segment_models::FAMILY));
+    }
     let dir = models_dir(&app, &state)?;
     DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
     let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
@@ -75,6 +78,9 @@ pub async fn segment_download_models(app: AppHandle, state: State<'_, AppState>)
 /// The offline path: verify user-chosen model files by name and checksum and copy them in.
 #[tauri::command]
 pub async fn segment_import_model_files(app: AppHandle, state: State<'_, AppState>, paths: Vec<String>) -> Result<ModelStatus, String> {
+    if !crate::editions::current().includes(segment_models::FAMILY) {
+        return Err(crate::editions::refusal(segment_models::FAMILY));
+    }
     let dir = models_dir(&app, &state)?;
     let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     tauri::async_runtime::spawn_blocking(move || segment_models::import_files(&dir, &files).map_err(|e| e.to_string()))

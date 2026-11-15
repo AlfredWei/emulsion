@@ -22,10 +22,11 @@ import { invoke } from "@tauri-apps/api/core";
  * @property {number} ms
  */
 
-/** Whether the removal model is installed. A build without it has no Remove.
- * @returns {Promise<boolean>} */
-export function removalAvailable() {
-  return invoke("removal_available");
+/** Whether the removal model is installed: "ready", "missing" (a build or install without it has no Remove; there is no
+ * download), or "not_in_edition" (this build's edition leaves it out).
+ * @returns {Promise<{ state: "ready" | "missing" | "not_in_edition" }>} */
+export function removalModelStatus() {
+  return invoke("removal_model_status");
 }
 
 /** Removes what the marks cover from the photograph of `versionId`. Stores the patches and returns them; the caller

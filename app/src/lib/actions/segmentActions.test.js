@@ -72,6 +72,16 @@ describe("arming the tool", () => {
     expect(m.segmentPrepare).not.toHaveBeenCalled();
   });
 
+  it("says the feature is not in this edition, opens no dialog and prepares nothing (RFC-0038 slice 4)", async () => {
+    m.segmentModelStatus.mockResolvedValue({ state: "not_in_edition", download_bytes: 0, host: "huggingface.co" });
+    await A.handleSegmentToolToggle();
+    expect(segment.dialog).toBeNull();
+    expect(segment.phase).toBe("failed");
+    expect(segment.error).toBe("Select Subject is not included in this edition of Emulsion.");
+    expect(m.segmentPrepare).not.toHaveBeenCalled();
+    expect(m.segmentDownloadModels).not.toHaveBeenCalled();
+  });
+
   it("prepares the open image through the helper and becomes ready for clicks", async () => {
     await armed();
     expect(m.segmentPrepare).toHaveBeenCalledWith("/photos/a.jpg", "hash-a");

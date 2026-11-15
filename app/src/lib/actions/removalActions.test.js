@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const api = vi.hoisted(() => ({ removalAvailable: vi.fn(), removeObject: vi.fn(), removalCancel: vi.fn(), removalHole: vi.fn(), removalInfo: vi.fn(), removalEngine: vi.fn(), regenerateRemoval: vi.fn(), isRemovalCancelled: (/** @type {unknown} */ e) => String(e).includes("removal cancelled") }));
+const api = vi.hoisted(() => ({ removalModelStatus: vi.fn(), removeObject: vi.fn(), removalCancel: vi.fn(), removalHole: vi.fn(), removalInfo: vi.fn(), removalEngine: vi.fn(), regenerateRemoval: vi.fn(), isRemovalCancelled: (/** @type {unknown} */ e) => String(e).includes("removal cancelled") }));
 vi.mock("$lib/api/removal.js", () => api);
 const dev = vi.hoisted(() => ({ getEditStack: vi.fn(), setEditStack: vi.fn() }));
 vi.mock("$lib/api/develop.js", async (importOriginal) => ({ ...(await importOriginal()), getEditStack: dev.getEditStack, setEditStack: dev.setEditStack }));
@@ -37,7 +37,7 @@ beforeEach(() => {
   removal.error = "";
   removal.notice = "";
   removal.available = null;
-  api.removalAvailable.mockResolvedValue(true);
+  api.removalModelStatus.mockResolvedValue({ state: "ready" });
   api.removalCancel.mockResolvedValue(undefined);
   api.removalEngine.mockResolvedValue("lama-512-places2");
   removal.engine = "";
@@ -64,17 +64,27 @@ describe("arming the tool", () => {
     expect(masks.activeTool).toBe("remove");
     expect(masks.selectedMaskId).toBeNull();
     expect(removal.available).toBe(true);
-    expect(api.removalAvailable).toHaveBeenCalledTimes(1);
+    expect(api.removalModelStatus).toHaveBeenCalledTimes(1);
+    expect(removal.notInEdition).toBe(false);
   });
 
   it("says unavailable when the model is missing or the check fails", async () => {
-    api.removalAvailable.mockResolvedValue(false);
+    api.removalModelStatus.mockResolvedValue({ state: "missing" });
     await handleRemoveToolToggle();
     expect(removal.available).toBe(false);
+    expect(removal.notInEdition).toBe(false);
     leaveRemoveTool();
-    api.removalAvailable.mockRejectedValue(new Error("x"));
+    api.removalModelStatus.mockRejectedValue(new Error("x"));
     await handleRemoveToolToggle();
     expect(removal.available).toBe(false);
+  });
+
+  it("says so, and nothing else, when this edition leaves Remove out", async () => {
+    api.removalModelStatus.mockResolvedValue({ state: "not_in_edition" });
+    await handleRemoveToolToggle();
+    expect(removal.available).toBe(false);
+    expect(removal.notInEdition).toBe(true);
+    expect(removal.error).toBe("");
   });
 
   it("toggling again leaves it and drops the marks not yet removed", async () => {

@@ -22,8 +22,9 @@ pub struct BlinkPhoto {
 
 #[derive(Debug, Serialize)]
 pub struct BlinkResult {
-    /// False when a model the check needs is not there: `reason` is "mesh_model" (the bundled file is missing) or "face_models"
-    /// (the face detector has not been fetched yet, which the first face scan does).
+    /// False when a model the check needs is not there: `reason` is "mesh_model" (the bundled file is missing), "face_models"
+    /// (the face detector has not been fetched yet, which the first face scan does) or "not_in_edition" (the build's edition
+    /// leaves the eye check or face detection out).
     pub available: bool,
     pub reason: String,
     pub photos: Vec<BlinkPhoto>,
@@ -35,6 +36,10 @@ fn unavailable(reason: &str) -> BlinkResult {
 
 #[tauri::command]
 pub async fn blink_for_images(app: AppHandle, state: State<'_, AppState>, image_ids: Vec<i64>) -> Result<BlinkResult, String> {
+    let edition = crate::editions::current();
+    if !edition.includes(crate::editions::ModelFamily::Blink) || !edition.includes(crate::editions::ModelFamily::Face) {
+        return Ok(unavailable("not_in_edition"));
+    }
     let catalog = state.catalog.clone();
     let blink_dir = resolve_cache_root(&app, &catalog)?.join(blink_models::DIR);
     let face_dir = resolve_face_models_dir(&app, &catalog)?;

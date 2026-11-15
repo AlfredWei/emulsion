@@ -13,7 +13,17 @@ pub const SIZE: u64 = 78_809_647;
 pub const SHA256: &str = "f0ccdada55b67e57f6d6c7aba48045bb8cc417fd0b2e7bf18e89a6a74cd2e6ab";
 
 /// The model's path if it is installed in `dir` and is the pinned file; `None` otherwise (a damaged copy counts as absent).
+pub const FAMILY: crate::editions::ModelFamily = crate::editions::ModelFamily::Detect;
+
 pub fn ready_path(dir: &Path) -> Option<PathBuf> {
+    ready_path_for(crate::editions::current(), dir)
+}
+
+/// `None` too when the edition leaves person detection out, even if a valid copy is cached.
+pub fn ready_path_for(edition: &crate::editions::Edition, dir: &Path) -> Option<PathBuf> {
+    if !edition.includes(FAMILY) {
+        return None;
+    }
     let path = dir.join(FILENAME);
     let sized = matches!(std::fs::metadata(&path), Ok(m) if m.len() == SIZE);
     (sized && sha256_file(&path).map(|h| h == SHA256).unwrap_or(false)).then_some(path)
@@ -32,4 +42,17 @@ mod tests {
         std::fs::write(dir.join(FILENAME), b"not the detector").unwrap();
         assert!(ready_path(&dir).is_none());
     }
+
+    #[test]
+    fn an_excluded_detector_is_never_ready() {
+        use crate::editions::{tests::without, Edition};
+        // Nothing is installed here, so the default edition cannot be ready either: the point is that the gate adds no
+        // path to a file the edition leaves out. (The pinned file is 79 MB and is not committed.)
+        let dir = std::env::temp_dir().join("emulsion-detect-edition-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(ready_path_for(&Edition::all("default"), &dir).is_none());
+        assert!(ready_path_for(&without(FAMILY), &dir).is_none());
+    }
+
 }

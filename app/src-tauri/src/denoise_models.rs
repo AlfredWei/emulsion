@@ -32,6 +32,8 @@ pub const SHA256: &str = "5ff072283fe8c86b7c990aa7331cdb26183e20b08961769c70057b
 pub enum ModelState {
     Ready,
     Missing,
+    /// The build's edition leaves this model out (RFC-0038 slice 4): nothing is offered, whatever is on disk.
+    NotInEdition,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,14 +83,34 @@ fn is_valid_with(path: &Path, sha256: &str, size: u64) -> bool {
     }
 }
 
-/// The verified model file, or `None` (the caller then offers the import).
-pub fn ready_path(dir: &Path) -> Option<PathBuf> {
+/// The family this model belongs to in an edition (`models/bundled-models.json`).
+pub const FAMILY: crate::editions::ModelFamily = crate::editions::ModelFamily::Denoise;
+
+/// The pinned file if it is in `dir` and valid, whatever the edition says.
+fn installed(dir: &Path) -> Option<PathBuf> {
     let p = dir.join(FILENAME);
     is_valid(&p).then_some(p)
 }
 
+/// The verified model file, or `None` (the caller then offers the import). `None` too when this build's edition leaves
+/// the model out, even if a valid copy is cached from an earlier build.
+pub fn ready_path(dir: &Path) -> Option<PathBuf> {
+    ready_path_for(crate::editions::current(), dir)
+}
+
+pub fn ready_path_for(edition: &crate::editions::Edition, dir: &Path) -> Option<PathBuf> {
+    edition.includes(FAMILY).then(|| installed(dir)).flatten()
+}
+
 pub fn status(dir: &Path) -> ModelStatus {
-    match ready_path(dir) {
+    status_for(crate::editions::current(), dir)
+}
+
+pub fn status_for(edition: &crate::editions::Edition, dir: &Path) -> ModelStatus {
+    if !edition.includes(FAMILY) {
+        return ModelStatus { state: ModelState::NotInEdition, download_bytes: 0, host: HOST };
+    }
+    match installed(dir) {
         Some(_) => ModelStatus { state: ModelState::Ready, download_bytes: 0, host: HOST },
         None => ModelStatus { state: ModelState::Missing, download_bytes: SIZE, host: HOST },
     }
@@ -375,4 +397,22 @@ mod tests {
         assert_eq!(s.state, ModelState::Ready);
         assert_eq!(ready_path(&cache).unwrap(), cache.join(FILENAME));
     }
+
+    /// A family the edition leaves out reports `not_in_edition` with nothing to download, even when a valid copy is cached
+    /// (RFC-0038 slice 4, ADR-0012): that is what makes an edition a real removal route.
+    #[test]
+    fn an_excluded_denoise_model_is_not_in_edition_even_when_a_valid_copy_is_cached() {
+        use crate::editions::tests::without;
+        let dir = std::env::temp_dir().join("emulsion-denoise-edition-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // No file: Missing in the default edition, NotInEdition in one without the family.
+        assert_eq!(status_for(&without(crate::editions::ModelFamily::Inpaint), &dir).state, ModelState::Missing);
+        let out = without(FAMILY);
+        let s = status_for(&out, &dir);
+        assert_eq!((&s.state, s.download_bytes), (&ModelState::NotInEdition, 0));
+        assert_eq!(serde_json::to_value(&s).unwrap()["state"], "not_in_edition");
+        assert!(ready_path_for(&out, &dir).is_none());
+    }
+
 }

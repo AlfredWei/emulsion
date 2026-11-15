@@ -118,7 +118,7 @@ jobs:
         shell: bash
         run: |
           mkdir "$RUNNER_TEMP/vcpkg-copyright"
-          for p in $(python -c "import json; print(' '.join(json.load(open('$GITHUB_WORKSPACE/scripts/vcpkg_expected_versions.json'))['versions']))"); do
+          for p in $(python -c "import json, sys; print(' '.join(json.load(open(sys.argv[1]))['versions']))" "$GITHUB_WORKSPACE/scripts/vcpkg_expected_versions.json"); do
             f="$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright"
             ls -l "$f" && cp "$f" "$RUNNER_TEMP/vcpkg-copyright/$p-copyright" || echo "no copyright file for $p"
           done

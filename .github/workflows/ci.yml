@@ -190,6 +190,16 @@ jobs:
 
       - run: python3 scripts/gen_third_party_libraries.py --check
 
+      # When the check fails, regenerate in place and show how it differs, so the log says why (a platform difference in
+      # `cargo tree` and a forgotten regeneration look the same in `--check`'s output).
+      - name: Show how the generated files differ
+        if: failure()
+        run: |
+          python3 scripts/gen_third_party_libraries.py || true
+          git --no-pager diff --stat
+          git --no-pager diff -U0 -- THIRD_PARTY_LIBRARIES.md | grep -E '^[-+]###' | head -80
+          git --no-pager diff -U0 -- THIRD_PARTY_LIBRARIES.md | grep -E '^[-+]' | grep -vE '^[-+]###|^[-+]{3}' | tr ',' '\n' | sed 's/^[-+] *//' | head -0
+
   e2e:
     name: E2E (WebdriverIO)
     strategy:

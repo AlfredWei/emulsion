@@ -15,11 +15,14 @@ whose licence expression has no permissive alternative (`MIT OR Apache-2.0 OR LG
 Rust: `cargo tree -e normal --target all` (what the app links on any platform; build scripts, dev dependencies and
 proc-macros do not ship). npm: the non-dev entries of app/package-lock.json (what Vite bundles).
 The hand-written section at the top of the output is the TEXT constant below; edit it there, not in the output."""
-import difflib, hashlib, json, re, subprocess, sys, unittest
+import difflib, hashlib, json, os, re, subprocess, sys, unittest
 from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# CI sets CARGO_TERM_COLOR=always, which makes `cargo tree` wrap its "(*)" repeat markers in colour codes and breaks the
+# parsing below (found by this script's own --check on the first Linux run). Parsed output must never be coloured.
+NO_COLOR_ENV = {**os.environ, "CARGO_TERM_COLOR": "never", "NO_COLOR": "1"}
 OUT = ROOT / "THIRD_PARTY_LIBRARIES.md"
 LICENSES = ROOT / "licenses"
 # The one text committed by hand: the Creative Commons legal code for the Lensfun database, downloaded once from
@@ -59,8 +62,8 @@ Emulsion's own code is under the licence in the repository's `LICENSE` file.
 
 def rust_libs():
     out = subprocess.run(
-        ["cargo", "tree", "-e", "normal", "--target", "all", "--prefix", "none", "--format", "{p}|{l}"],
-        cwd=ROOT / "app" / "src-tauri", capture_output=True, text=True, check=True).stdout
+        ["cargo", "--color", "never", "tree", "-e", "normal", "--target", "all", "--prefix", "none", "--format", "{p}|{l}"],
+        cwd=ROOT / "app" / "src-tauri", capture_output=True, text=True, check=True, env=NO_COLOR_ENV).stdout
     libs = {}
     for line in out.splitlines():
         line = line.replace(" (*)", "")
@@ -96,8 +99,8 @@ def section(title, libs):
 
 
 def cargo_packages():
-    out = subprocess.run(["cargo", "metadata", "--format-version", "1", "--locked"], cwd=ROOT / "app" / "src-tauri",
-                         capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(["cargo", "--color", "never", "metadata", "--format-version", "1", "--locked"], cwd=ROOT / "app" / "src-tauri",
+                         capture_output=True, text=True, check=True, env=NO_COLOR_ENV).stdout
     pk = defaultdict(list)
     for p in json.loads(out)["packages"]:
         pk[p["name"]].append(Path(p["manifest_path"]).parent)

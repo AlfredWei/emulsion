@@ -7,8 +7,8 @@ states what was observed; it draws no conclusion about what any licence requires
 ## macOS (arm64), `cargo build --release`
 
 Built here with `cargo build --release` in `app/src-tauri` (the two binaries `emulsion` and `emulsion-ai`, then the library
-targets). **Not** a packaged installer: no `tauri build`, no `.app`, no signing. The `bundle/macos/Emulsion.app` in `target/`
-is from 2026-11-01 and was not used.
+targets). The measurements below are of those binaries, not of a packaged installer. The packaged app is covered in the
+section "The packaged macOS app" below (added 2026-11-15, same arm64 Mac, unsigned).
 
 | Binary | LibRaw | `lensfun` crate and its database | Dynamic libraries it loads |
 | --- | --- | --- | --- |
@@ -33,8 +33,27 @@ vendored header, 0.21.3 (`LIBRAW_MAJOR/MINOR/PATCH_VERSION`, checked by `scripts
 | `libemulsion_lib.dylib` | 21 MB | **No** LibRaw or lensfun symbols and no database strings (nothing links them in, since the dylib exports no app code) |
 | `libemulsion_lib.rlib` | 36 MB | Rust intermediate |
 
-`cargo tauri build` is the intended way to make an installer and was not run for this inventory; whether it emits or copies
-the static library into the bundle was **not checked**. Release packaging should publish only the installer bundles (RFC-0038 A1).
+Release packaging should publish only the installer bundles (RFC-0038 A1). `tauri build` was later run; see the next section for
+what it did with these three files.
+
+## The packaged macOS app (measured 2026-11-15)
+
+`npm run build:release` steps run by hand on a clean target directory (the fetch script with `--from` a local cache, then
+`prepare-ai-helper.mjs`, then `tauri build` with both bundle configs), default edition, arm64, no signing identity set.
+`tauri build` finished and wrote `Emulsion.app` and a 549 MB `Emulsion_0.1.0_aarch64.dmg`.
+
+- **The static library is not copied and not even written.** `target/release/` held no `libemulsion_lib.a`, `.dylib` or `.rlib`
+  after `tauri build` (it builds the binaries only), and `find` over `target/release/bundle` found no `.a`, `.dylib` or `.rlib`.
+  The bundle directory holds `macos/`, `dmg/` and a `share/create-dmg` helper folder. So the 173 MB library above comes from a
+  plain `cargo build --release`, not from the release path.
+- **Inside the app.** `Contents/MacOS/` has `emulsion` (54 MB, `libraw_init` defined, one match) and `emulsion-ai` (28 MB, no
+  libraw symbol). `otool -L emulsion` lists only `/System` and `/usr/lib` libraries.
+- **Resources.** `THIRD_PARTY_NOTICES.md`, `THIRD_PARTY_LIBRARIES.md`, `licenses/` (10 files, byte-identical to the repository's
+  `licenses/`, including `README.txt`), and `models/` (the seven model files and `bundled-models.edition.json`).
+  `resource_path` and `editions.rs` look at `Resources/<name>` and `Resources/models/`, which are those paths.
+  Note that `models/bundled-models.json`, the manifest in the repository, is not bundled; the file the app reads is the
+  edition file the fetch script writes.
+
 
 ## Windows (x64, MSVC), the CI runner
 
@@ -89,7 +108,7 @@ None of these libraries is named in `THIRD_PARTY_NOTICES.md` yet; `THIRD_PARTY_L
 
 ## What is not covered
 
-- A packaged installer on either platform (the `.app`/`.dmg`, the Windows `.msi`/`.exe`): `tauri build` was not run.
+- A packaged installer on Windows (`.msi`/`.exe`). The macOS `.app`/`.dmg` was built (see above); it was not signed or notarised, and the `.dmg` was not opened.
 - Whether the release `emulsion.exe` keeps the extra libraries (the debug link line names them; the binary was not inspected).
 - Linux (not a target, PRD section 5).
 - `lipo`/universal builds, signing and notarisation.

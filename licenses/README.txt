@@ -15,7 +15,7 @@ CDLA-Permissive-2.0.txt
     webpki-root-certs (the root certificates used to check HTTPS), Community Data License Agreement Permissive 2.0.
 vcpkg-jasper-copyright.txt, vcpkg-lcms-copyright.txt, vcpkg-libjpeg-turbo-copyright.txt, vcpkg-zlib-copyright.txt
     Windows installer only. The notice each vcpkg package installs as share/<port>/copyright, copied unchanged, for the
-    static libraries the Windows build links besides LibRaw: jasper (JPEG 2000, JasPer License 2.0), lcms (Little CMS,
+    static libraries the Windows build installs from vcpkg and passes to the linker besides LibRaw: jasper (JPEG 2000, JasPer License 2.0), lcms (Little CMS,
     colour management), libjpeg-turbo (JPEG) and zlib (deflate).
 
 The MIT, Apache-2.0 and BSD texts that most other libraries use are in THIRD_PARTY_NOTICES.md.

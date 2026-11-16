@@ -64,6 +64,11 @@ class SelfTest(unittest.TestCase):
         self.assertIn("zlib: expected 1.3.1, installed nothing", msg)
         self.assertIn("other: installed", msg)
 
+    def test_freeglut_returning_through_jasper_default_features_fails(self):
+        ok, msg = check(self.LIST + "freeglut:x64-windows-static-md  3.4.0#3  GLUT\n", self.EXP)
+        self.assertFalse(ok)
+        self.assertIn("freeglut: installed 3.4.0#3 but not recorded", msg)
+
     def test_feature_lines_are_not_counted(self):
         self.assertTrue(check(self.LIST + "lcms[fastfloat]:x64-windows-static-md  2.14  feature\n", self.EXP)[0])
 
@@ -71,6 +76,7 @@ class SelfTest(unittest.TestCase):
         data = json.loads(EXPECTED.read_text())
         self.assertEqual(data["triplet"], "x64-windows-static-md")
         self.assertEqual(data["versions"]["libraw"].split("#")[0], "0.21.3")
+        self.assertFalse({"freeglut", "opengl", "opengl-registry", "egl-registry"} & set(data["versions"]))
 
 
 def main(argv):

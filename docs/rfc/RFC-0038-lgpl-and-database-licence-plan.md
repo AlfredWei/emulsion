@@ -81,7 +81,7 @@ until Phase B is done and Phase C passes.
   entries (`r-efi`: MIT; LibRaw: per D2, "not yet elected" until then). Keep it generated, as today.
 - Status: measured in `docs/installer-inventory` (appendix: installer-inventory.md). macOS: both LGPL components are in the one
   `emulsion` binary; `emulsion-ai` has neither. Windows: the vcpkg port also installs other static libraries (jasper, lcms,
-  libjpeg-turbo, zlib, freeglut), now listed in a Windows-only row of the generated table and raised in question 2. Not done: a
+  libjpeg-turbo, zlib; freeglut and the OpenGL ports were also installed until PR #347 removed them), now listed in a Windows-only row of the generated table and raised in question 2. Not done: a
   packaged installer was not built, so what `tauri build` copies is unknown; the "elected licence" column waits for D2.
 
 **A2. Ship the licence texts with the installer (1 PR).**
@@ -173,7 +173,7 @@ New decisions (in addition to D1 to D6):
 | --- | --- | --- | --- | --- | --- |
 | B5.1 Evidence pack | Training-data terms for all eight models in `models/*_MODEL.md` plus a "Training data" column in the notices; A1's inventory | 1.5 to 2.5 | A1 | none | Yes |
 | B5.2 Ownership check, then relicense | Details below | 1 to 2 | B5.1 | D8; counsel on AI-assisted authorship and the published MIT history | The check: yes (read-only) |
-| B5.3 Replace `lensfun` (clean room) | New `src/lens_db/` behind the existing `lens_profile::match_profile`: an XML reader on `roxmltree` (already a dependency), a fuzzy camera/lens matcher, and the interpolation. Drop `lensfun` from `Cargo.toml`. Ship the 60 XML files unmodified as a separate resource (`bundle.resources`), with `licenses/CC-BY-SA-3.0.txt` and attribution; regenerate `THIRD_PARTY_LIBRARIES.md`. The implementer writes from the XML schema and golden outputs, not from the LGPL source, and keeps a clean-room log. Gets its own RFC | 4 to 8 (3 to 6, +1 harness, +0.5 to 1 notices) | Golden harness (slice 2) | D5 | Harness: yes |
+| B5.3 Replace `lensfun` (clean room) | New `src/lens_db/` behind the existing `lens_profile::match_profile`: an XML reader on `roxmltree` (already a dependency), a fuzzy camera/lens matcher, and the interpolation. Drop `lensfun` from `Cargo.toml`. Ship the 60 XML files unmodified as a separate resource (`bundle.resources`), with `licenses/CC-BY-SA-3.0.txt` and attribution; regenerate `THIRD_PARTY_LIBRARIES.md`. The implementer writes from the XML schema and golden outputs, not from the LGPL source, and keeps a clean-room log. Gets its own RFC, now [RFC-0039](RFC-0039-lensfun-clean-room-replacement.md), which finds four more ported regions and re-costs the step at 6.5 to 12 days | 4 to 8 (3 to 6, +1 harness, +0.5 to 1 notices) | Golden harness (slice 2) | D5 | Harness: yes |
 | B5.4 LibRaw | (a) Elect CDDL-1.0 (0.5 to 1 day): election column in the generator, `LibRaw-LICENSE.CDDL` becomes the operative text, B2 carries LibRaw's source and the vcpkg port patches, the EULA must not restrict the CDDL source rights. (b) Ship LibRaw as a shared library (3 to 5 days): `vendor/rsraw-sys/build.rs` to `dylib`, macOS `bundle.macOS.frameworks` with `@rpath` and nested signing, the Windows `x64-windows` DLL; the EULA still needs the LGPL-2.1 section 6 terms. (a) is preferred, pending counsel | 0.5 to 5 | A1; B1 for (b) | D2; counsel on CDDL | No |
 | B5.5 Model remediation | The mechanism first (1 to 2 days, slice 4), then the per-model rows below | 5.5 to 74 total | D7 | D7, D11 | Mechanism: yes |
 | - LaMa (likely blocker) | (i) Fall back to the existing `inpaint_patchmatch.rs` (1 to 2 days; RFC-0032 section 9 shows a large quality loss); (ii) retrain the LaMa architecture on CC0 or CC BY photos with a non-ADE20K perceptual loss and re-run the bake-off (15 to 30 days plus GPU); (iii) a commercially licensed inpainter (not researched). Reverses ADR-0010, so record a new decision | 1 to 30 | mechanism | D7 | No |
@@ -263,14 +263,14 @@ clean-machine test. B5 (only if proprietary): about 27 to 119 days, see its cost
    build/relink instructions sufficient for LGPL-2.1 §6 (LibRaw) and LGPL-3.0 §4 (lensfun)? Does that change if the
    app later becomes proprietary?
 2. LibRaw: LGPL-2.1 or CDDL-1.0 for our case, and does the Windows build from vcpkg's port need its own source offer?
-   The vcpkg port also links other static libraries into the Windows build (jasper under the JasPer License 2.0, lcms under MIT,
-   libjpeg-turbo under BSD-3-Clause and IJG, zlib under Zlib, and freeglut, whose port declares no licence; appendix: installer-inventory.md).
+   The vcpkg port also installs other static libraries for the Windows build and the linker is asked for them (jasper under the JasPer License 2.0, lcms under MIT,
+   libjpeg-turbo under BSD-3-Clause and IJG, and zlib under Zlib; appendix: installer-inventory.md).
    Is reproducing their notices enough? Their copyright files are now in `licenses/` (`vcpkg-<port>-copyright.txt`; the pinned lcms 2.14 port has no features, so there is no GPL-labelled line at the pin).
    Their versions are pinned with the whole vcpkg `ports/` tree and CI fails if an installed version differs from the recorded one.
-   Measured on the release `emulsion.exe` (appendix): only LibRaw and zlib's inflate code come from the vcpkg libraries; jasper, libjpeg-turbo and freeglut
-   have no symbol in the image, and the lcms code in it is the Rust crate `lcms2-sys`'s own copy. Does a notice have to name a library that is linked
+   Measured on the release `emulsion.exe` (appendix): only LibRaw and zlib's inflate code come from the vcpkg libraries; jasper and libjpeg-turbo
+   (and freeglut, then installed) have no symbol in the image, and the lcms code in it is the Rust crate `lcms2-sys`'s own copy. Does a notice have to name a library that is linked
    but contributes no code? libjpeg-turbo's file also asks binary distributions to carry an IJG acknowledgement sentence; is that needed here?
-   freeglut's port declares no licence; its copyright file is an MIT-style notice by Pawel W. Olszta.
+   freeglut is no longer installed, so its notice is no longer shipped.
 3. Does a GitHub link satisfy source availability, or must each release carry the source (B2)?
 4. CC-BY-SA 3.0 database embedded unmodified (gzipped) in the executable: what attribution form is enough, and does
    embedding make our binary an adaptation or a collection?

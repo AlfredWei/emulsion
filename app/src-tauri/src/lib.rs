@@ -2078,22 +2078,28 @@ fn update_backup_settings(state: State<'_, AppState>, settings: BackupSettings) 
         .map_err(|e| e.to_string())
 }
 
-/// Settings > About: the path of the bundled `THIRD_PARTY_NOTICES.md`, which the frontend opens with the OS's
-/// default app for Markdown (or text) files.
-#[tauri::command]
-fn third_party_notices_path(app: AppHandle) -> Result<String, String> {
-    bundled_models::notices_path(&app)
-        .map(|p| p.to_string_lossy().into_owned())
-        .ok_or_else(|| "THIRD_PARTY_NOTICES.md was not found next to the app".to_string())
+/// Opens one of the app's own bundled files in the OS's default app. This runs in Rust because the opener plugin's
+/// webview scope refuses a path with a hidden directory component (its glob requires a literal leading dot on
+/// Unix), so a checkout under a dot directory could not open its own notices.
+fn open_bundled_file(app: &AppHandle, path: Option<PathBuf>, name: &str) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = path.ok_or_else(|| format!("{name} was not found next to the app"))?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
-/// Settings > About: the path of the bundled `THIRD_PARTY_LIBRARIES.md` (the code libraries' licences; the full texts it
+/// Settings > About: opens the bundled `THIRD_PARTY_NOTICES.md` in the OS's default app for Markdown (or text) files.
+#[tauri::command]
+fn open_third_party_notices(app: AppHandle) -> Result<(), String> {
+    open_bundled_file(&app, bundled_models::notices_path(&app), "THIRD_PARTY_NOTICES.md")
+}
+
+/// Settings > About: opens the bundled `THIRD_PARTY_LIBRARIES.md` (the code libraries' licences; the full texts it
 /// names are in the `licenses/` folder beside it).
 #[tauri::command]
-fn third_party_libraries_path(app: AppHandle) -> Result<String, String> {
-    bundled_models::libraries_path(&app)
-        .map(|p| p.to_string_lossy().into_owned())
-        .ok_or_else(|| "THIRD_PARTY_LIBRARIES.md was not found next to the app".to_string())
+fn open_third_party_libraries(app: AppHandle) -> Result<(), String> {
+    open_bundled_file(&app, bundled_models::libraries_path(&app), "THIRD_PARTY_LIBRARIES.md")
 }
 
 /// Settings > Storage: reports where thumbnails + the Develop preview
@@ -2503,8 +2509,8 @@ pub fn run() {
             get_backup_settings,
             update_backup_settings,
             get_storage_info,
-            third_party_notices_path,
-            third_party_libraries_path,
+            open_third_party_notices,
+            open_third_party_libraries,
             set_cache_dir,
             perform_catalog_backup,
         ])

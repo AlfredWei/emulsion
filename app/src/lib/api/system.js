@@ -39,19 +39,17 @@ export async function openExternalUrl(/** @type {string} */ url) {
 
 /** Opens the bundled THIRD_PARTY_NOTICES.md (the licences of the AI models that ship with the app) in the OS's
  * default viewer. The Rust side finds the file -- next to the app in an installed build, the checkout's copy in a
- * development build -- and `allow-open-path` (capabilities/default.json) lets the opener plugin open it.
+ * development build -- and opens it itself, so the webview's `allow-open-path` scope is not involved.
  * @returns {Promise<void>} */
-export async function openThirdPartyNotices() {
-  const path = await invoke("third_party_notices_path");
-  return openPath(path);
+export function openThirdPartyNotices() {
+  return invoke("open_third_party_notices");
 }
 
 /** Opens the bundled THIRD_PARTY_LIBRARIES.md (the licences of the code libraries Emulsion is built from, and where
- * the full texts of the ones with conditions are) in the OS's default viewer. Found the same way as the notices.
+ * the full texts of the ones with conditions are) in the OS's default viewer. Opened the same way as the notices.
  * @returns {Promise<void>} */
-export async function openThirdPartyLibraries() {
-  const path = await invoke("third_party_libraries_path");
-  return openPath(path);
+export function openThirdPartyLibraries() {
+  return invoke("open_third_party_libraries");
 }
 
 /** The running edition: its name and the model families it leaves out (RFC-0038 slice 4, ADR-0012).

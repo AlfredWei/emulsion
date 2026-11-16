@@ -71,7 +71,9 @@ jobs:
           git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin cdf98aaa2411f565eacb3c7566e5e20542ae151a
           rm -rf "$VCPKG_INSTALLATION_ROOT/ports"
           git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
+          # Classic mode installs jasper with its default `opengl` feature although libraw asks for default-features false;
+          # naming jasper[core] in the same command keeps freeglut and the OpenGL ports out (scripts/vcpkg_expected_versions.json).
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install "jasper[core]:x64-windows-static-md" libraw:x64-windows-static-md
           # The vcpkg *crate* (used by rsraw-sys's build.rs) looks for
           # VCPKG_ROOT specifically -- the runner only sets
           # VCPKG_INSTALLATION_ROOT, which is a different variable. Confirmed
@@ -107,7 +109,7 @@ jobs:
           echo "--- installed lib"; ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib" || true
           echo "--- installed share/libraw"; ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/libraw" || true
           # The libraries the port pulls in (their licences are what THIRD_PARTY_LIBRARIES.md must name for Windows builds).
-          for p in jasper lcms libjpeg-turbo zlib freeglut; do
+          for p in jasper lcms libjpeg-turbo zlib; do
             echo "--- $p"
             grep -E '"(version|version-string|license|homepage)"' "$VCPKG_INSTALLATION_ROOT/ports/$p/vcpkg.json" || true
             head -n 6 "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright" || true
@@ -119,7 +121,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          for p in jasper lcms libjpeg-turbo zlib freeglut; do
+          for p in jasper lcms libjpeg-turbo zlib; do
             cmp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/share/$p/copyright" "$GITHUB_WORKSPACE/licenses/vcpkg-$p-copyright.txt"
           done
 
@@ -282,7 +284,9 @@ jobs:
           git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin cdf98aaa2411f565eacb3c7566e5e20542ae151a
           rm -rf "$VCPKG_INSTALLATION_ROOT/ports"
           git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libraw:x64-windows-static-md
+          # Classic mode installs jasper with its default `opengl` feature although libraw asks for default-features false;
+          # naming jasper[core] in the same command keeps freeglut and the OpenGL ports out (scripts/vcpkg_expected_versions.json).
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install "jasper[core]:x64-windows-static-md" libraw:x64-windows-static-md
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
 
       # RFC-0038 A1: the whole ports/ tree comes from one vcpkg commit, so the libraries LibRaw pulls in (and their licences)

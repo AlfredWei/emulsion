@@ -81,7 +81,7 @@ until Phase B is done and Phase C passes.
   entries (`r-efi`: MIT; LibRaw: per D2, "not yet elected" until then). Keep it generated, as today.
 - Status: measured in `docs/installer-inventory` (appendix: installer-inventory.md). macOS: both LGPL components are in the one
   `emulsion` binary; `emulsion-ai` has neither. Windows: the vcpkg port also installs other static libraries (jasper, lcms,
-  libjpeg-turbo, zlib, freeglut), now listed in a Windows-only row of the generated table and raised in question 2. Not done: a
+  libjpeg-turbo, zlib; freeglut and the OpenGL ports were also installed until PR #347 removed them), now listed in a Windows-only row of the generated table and raised in question 2. Not done: a
   packaged installer was not built, so what `tauri build` copies is unknown; the "elected licence" column waits for D2.
 
 **A2. Ship the licence texts with the installer (1 PR).**
@@ -263,14 +263,14 @@ clean-machine test. B5 (only if proprietary): about 27 to 119 days, see its cost
    build/relink instructions sufficient for LGPL-2.1 §6 (LibRaw) and LGPL-3.0 §4 (lensfun)? Does that change if the
    app later becomes proprietary?
 2. LibRaw: LGPL-2.1 or CDDL-1.0 for our case, and does the Windows build from vcpkg's port need its own source offer?
-   The vcpkg port also links other static libraries into the Windows build (jasper under the JasPer License 2.0, lcms under MIT,
-   libjpeg-turbo under BSD-3-Clause and IJG, zlib under Zlib, and freeglut, whose port declares no licence; appendix: installer-inventory.md).
+   The vcpkg port also installs other static libraries for the Windows build and the linker is asked for them (jasper under the JasPer License 2.0, lcms under MIT,
+   libjpeg-turbo under BSD-3-Clause and IJG, and zlib under Zlib; appendix: installer-inventory.md).
    Is reproducing their notices enough? Their copyright files are now in `licenses/` (`vcpkg-<port>-copyright.txt`; the pinned lcms 2.14 port has no features, so there is no GPL-labelled line at the pin).
    Their versions are pinned with the whole vcpkg `ports/` tree and CI fails if an installed version differs from the recorded one.
-   Measured on the release `emulsion.exe` (appendix): only LibRaw and zlib's inflate code come from the vcpkg libraries; jasper, libjpeg-turbo and freeglut
-   have no symbol in the image, and the lcms code in it is the Rust crate `lcms2-sys`'s own copy. Does a notice have to name a library that is linked
+   Measured on the release `emulsion.exe` (appendix): only LibRaw and zlib's inflate code come from the vcpkg libraries; jasper and libjpeg-turbo
+   (and freeglut, then installed) have no symbol in the image, and the lcms code in it is the Rust crate `lcms2-sys`'s own copy. Does a notice have to name a library that is linked
    but contributes no code? libjpeg-turbo's file also asks binary distributions to carry an IJG acknowledgement sentence; is that needed here?
-   freeglut's port declares no licence; its copyright file is an MIT-style notice by Pawel W. Olszta.
+   freeglut is no longer installed, so its notice is no longer shipped.
 3. Does a GitHub link satisfy source availability, or must each release carry the source (B2)?
 4. CC-BY-SA 3.0 database embedded unmodified (gzipped) in the executable: what attribution form is enough, and does
    embedding make our binary an adaptation or a collection?

@@ -68,7 +68,7 @@ release `emulsion.exe` contains" below.
 | Licence the port declares | `LGPL-2.1-only OR CDDL-1.0` |
 | Port files | `portfile.cmake`, `dependencies.patch`, `fix-install.patch`, `vcpkg-cmake-wrapper.cmake`, `usage` |
 | Source archives (`portfile.cmake`) | `LibRaw/LibRaw` (SHA512 `c88d0268…`) and `LibRaw/LibRaw-cmake` (REF `eb98e432…`, SHA512 `63e68a4d…`) |
-| Libraries the port installs (pinned tree) | `raw_r.lib` (LibRaw) and, besides it, `jasper.lib`, `jpeg.lib`, `turbojpeg.lib`, `lcms2.lib`, `zlib.lib`, `freeglut.lib` (plus the system `GlU32.Lib` and `OpenGL32.Lib` import libraries) |
+| Libraries the port installs (pinned tree) | `raw_r.lib` (LibRaw) and, besides it, `jasper.lib`, `jpeg.lib`, `turbojpeg.lib`, `lcms2.lib` and `zlib.lib`. Before 2026-11-16 `freeglut.lib` was installed too, see "Why a GLUT toolkit was installed" |
 
 The extra static libraries come from the port's dependencies. The versions below are the ones CI installs from the pinned vcpkg
 tree (measured on the CI run of branch `chore/vcpkg-registry-pin`, 2026-11-15, `vcpkg list` and the port manifests). The same
@@ -80,16 +80,15 @@ versions are recorded in `scripts/vcpkg_expected_versions.json`, and both Window
 | lcms (Little CMS) | 2.14 | MIT | Marti Maria Saguer (1998-2020) |
 | libjpeg-turbo | 3.0.4 | `BSD-3-Clause` (the copyright file also carries the IJG licence) | (IJG and libjpeg-turbo notices in one file) |
 | zlib | 1.3.1 | `Zlib` | Jean-loup Gailly and Mark Adler |
-| freeglut | 3.4.0#3 | none (`"license": null`); its copyright file is an MIT-style permission notice, see "The freeglut copyright file" below | Pawel W. Olszta (1999-2000) |
 
-Pulled in by jasper's default `opengl` feature, which is why `freeglut.lib` is linked: `freeglut`, `opengl`, `opengl-registry`
-and `egl-registry` (the last two are headers). The installed set is exactly: `egl-registry` 2024-01-25, `freeglut` 3.4.0#3,
-`jasper` 4.2.1, `lcms` 2.14, `libjpeg-turbo` 3.0.4, `libraw` 0.21.3, `opengl` 2022-12-04#3, `opengl-registry` 2024-02-10#1,
-`zlib` 1.3.1.
+The installed set is exactly `jasper` 4.2.1, `lcms` 2.14, `libjpeg-turbo` 3.0.4, `libraw` 0.21.3 and `zlib` 1.3.1 (the
+build-only ports aside). Until 2026-11-16 it also held `freeglut` 3.4.0#3, `opengl` 2022-12-04#3, `opengl-registry` 2024-02-10#1 and
+`egl-registry` 2024-01-25, pulled in by jasper's default `opengl` feature; see "Why a GLUT toolkit was installed".
 
-The rustc command line of `rsraw-sys` in the Windows log shows the link directives
-`-l raw_r -l zlib -l lcms2 -l jasper -l freeglut -l jpeg -l turbojpeg`, so these libraries are asked for at link time, not merely
-installed. Whether the release `emulsion.exe` keeps them is answered in "What the release `emulsion.exe` contains" below (measured:
+The rustc command line of `rsraw-sys` in the Windows log (CI run 43867690779, 2026-11-16, with `jasper[core]`) shows the link directives
+`-l raw_r -l zlib -l lcms2 -l jasper -l jpeg -l turbojpeg` (measured; the earlier run also had `-l freeglut`), so these libraries are
+asked for at link time, not merely installed. Whether the release `emulsion.exe` keeps them is answered in "What the release
+`emulsion.exe` contains" below (measured: most of them are not in it). Whether the release `emulsion.exe` keeps them is answered in "What the release `emulsion.exe` contains" below (measured:
 most of them are not in it).
 
 Two lines in lcms's `vcpkg.json` say `GPL-3.0-or-later` in the newer lcms 2.19.1 port that the runner image carried before the
@@ -100,7 +99,7 @@ GPL-labelled in the pinned lcms port.
 **The whole vcpkg `ports/` tree is pinned** to commit `cdf98aaa2411f565eacb3c7566e5e20542ae151a` (before this change only
 `ports/libraw` was, and the other libraries followed the `windows-latest` image: lcms 2.19.1, jasper 4.2.9, libjpeg-turbo 3.2.0,
 libspng 0.7.4, zlib 1.3.2). Pinning changed what is linked: `libspng` is gone (the pinned libraw does not use it), zlib is now
-`zlib.lib` rather than `zs.lib`, and `freeglut` appeared. The versions above are now as stable as that commit, not as the runner
+`zlib.lib` rather than `zs.lib`, and `freeglut` appeared (it is gone again, see below). The versions above are now as stable as that commit, not as the runner
 image. One thing is still not pinned: the vcpkg tool binary itself comes from the runner image (the ports tree is older than the
 binary and worked with it on this run).
 
@@ -113,7 +112,7 @@ texts are in `licenses/` (next section).
 
 A throwaway CI step copied `installed/x64-windows-static-md/share/<port>/copyright` of every port in
 `scripts/vcpkg_expected_versions.json` and uploaded the nine files as an artifact; they were downloaded with `gh run download` and
-read in full. Five are now committed unchanged under `licenses/` as `vcpkg-<port>-copyright.txt`, pinned by SHA-256 in
+read in full. Four are now committed unchanged (a fifth, freeglut's, was committed by PR #346 and removed again, see below) under `licenses/` as `vcpkg-<port>-copyright.txt`, pinned by SHA-256 in
 `VCPKG_TEXTS` of the generator, and a permanent CI step (`cmp`, a few milliseconds) fails if the pinned vcpkg tree installs a
 different text. What each file says in its first lines (no conclusion drawn):
 
@@ -123,7 +122,6 @@ different text. What each file says in its first lines (no conclusion drawn):
 | `vcpkg-lcms-copyright.txt` | 1,083 B | "Little CMS"; Marti Maria Saguer (1998-2020); an MIT-style permission notice |
 | `vcpkg-libjpeg-turbo-copyright.txt` | 5,620 B | "libjpeg-turbo Licenses"; says the library is covered by the IJG License and the Modified (3-clause) BSD License; D. R. Commander (2009-2023), Viktor Szathmáry (2015) |
 | `vcpkg-zlib-copyright.txt` | 1,002 B | zlib licence text; Jean-loup Gailly and Mark Adler (1995-2022) |
-| `vcpkg-freeglut-copyright.txt` | 1,439 B | "Freeglut Copyright"; Pawel W. Olszta (1999-2000); an MIT-style permission notice |
 
 The libjpeg-turbo file points to a `README.ijg` for the IJG licence and says that a binary distribution's documentation must
 include the sentence "This software is based in part on the work of the Independent JPEG Group." (clause 2 of the IJG licence, as
@@ -133,6 +131,8 @@ license in and of itself".
 
 Not shipped, with reasons:
 
+- `freeglut-copyright` (1,439 B, "Freeglut Copyright"; Pawel W. Olszta, 1999-2000; an MIT-style permission notice). It was shipped by
+  PR #346 and is removed with the library, because freeglut is no longer installed.
 - `libraw-copyright` (43,333 B). It is byte-equal, after squashing whitespace, to the three vendored LibRaw files already in
   `licenses/` (`COPYRIGHT`, `LICENSE.LGPL`, `LICENSE.CDDL` concatenated; 41,878 normalised characters on both sides, measured).
 - `opengl-copyright` (100 B). It reads "See https://developer.microsoft.com/windows/downloads/windows-10-sdk for the Windows 10 SDK
@@ -140,31 +140,31 @@ Not shipped, with reasons:
 - `opengl-registry-copyright` (147 B). It says the installed files carry different licences, each in a comment at the top of the
   file. A header-only port.
 - `egl-registry-copyright` (1,236 B). A Khronos MIT-style notice for `khrplatform.h` and Apache-2.0 for `EGL/*` and `egl.xml`. A header-only port.
-  The three registry ports install headers and XML only, and no library of theirs appears in the rsraw-sys link line or in the linker map of the
-  release exe (next section). They are build-time inputs of jasper and freeglut, not linked.
+  The three registry ports install headers and XML only. They are no longer installed (see below).
 
-### The freeglut copyright file (read in full)
+### Why a GLUT toolkit was installed, and how it was removed (2026-11-16)
 
-freeglut's port declares `"license": null`. Its copyright file opens "Freeglut code without an explicit copyright is covered by the
-following copyright" and gives "Copyright (c) 1999-2000 Pawel W. Olszta. All Rights Reserved." followed by a permission notice
-that grants use, copy, modify, merge, publish, distribute, sublicense and/or sell, requires the copyright and permission notice in
-all copies or substantial portions, disclaims warranty, and says the name of Pawel W. Olszta shall not be used in advertising or to
-promote sale or use without prior written authorisation. It is the text shipped as `licenses/vcpkg-freeglut-copyright.txt`. No
-conclusion about what it requires is drawn here.
-
-### Why a GLUT toolkit is installed (finding)
-
-`freeglut` is installed only because the pinned jasper port enables its `opengl` feature by default. The port manifest at
+`freeglut` was installed only because the pinned jasper port enables its `opengl` feature by default. The port manifest at
 `cdf98aaa` has `"default-features": ["default-features"]`, and that feature depends on `jasper[opengl]` on every platform except
 macOS, Windows-on-ARM, UWP and iOS. `jasper[opengl]` depends on `freeglut` and `opengl`. `libraw` asks for
-`{"name": "jasper", "default-features": false}`, yet the measured plan for `vcpkg install libraw:x64-windows-static-md` on a clean
-tree still lists `jasper[core,default-features,opengl]`. Why vcpkg's classic mode does so was not investigated (guess: classic mode
-applies the default features to a dependency regardless).
+`{"name": "jasper", "default-features": false}` (read from `ports/libraw/vcpkg.json` at the pin), yet the measured plan for
+`vcpkg install libraw:x64-windows-static-md` on a clean tree listed `jasper[core,default-features,opengl]`. The libraw portfile passes
+`-DCMAKE_REQUIRE_FIND_PACKAGE_Jasper=1` and has no opengl option, so libraw itself does not ask for OpenGL (read, not tested).
+Why vcpkg's classic mode turns the default features on for a dependency that asks for none was not found (guess: classic mode
+applies a dependency's default features regardless of the requesting port's `default-features: false`).
 
-An install without that feature **is possible**, measured as a dry run on the CI runner with the pinned ports tree
-(`vcpkg install --dry-run "jasper[core]:x64-windows-static-md" libraw:x64-windows-static-md`): the plan holds `jasper` (no
-features), `lcms`, `libjpeg-turbo`, `libraw`, `zlib` and the two host cmake ports, and no `freeglut`, `opengl`, `opengl-registry`
-or `egl-registry`. The build was not changed in this PR (the measured install of `jasper[core]` was not run, only the plan).
+The smallest mechanism that works is to name `jasper[core]` in the same install command, in both Windows jobs of `ci.yml`:
+`vcpkg install "jasper[core]:x64-windows-static-md" libraw:x64-windows-static-md`. Measured on CI run 43867690779: the install plan is `jasper` 4.2.1, `lcms` 2.14, `libjpeg-turbo` 3.0.4, `libraw` 0.21.3, `zlib` 1.3.1,
+`vcpkg-cmake` and `vcpkg-cmake-config`, with no `freeglut`, `opengl`, `opengl-registry` or `egl-registry`; `vcpkg list` matched the
+record; `lib/` holds `jasper.lib`, `jpeg.lib`, `lcms2.lib`, `raw_r.lib`, `turbojpeg.lib` and `zlib.lib`; and the build, the 806 library
+tests and the other test binaries passed on `windows-latest`. Why it works is inferred, not read from vcpkg's source. An explicit
+request for `jasper[core]` fixes the feature set of jasper in the plan, so no default feature is added for it. The informational
+`vcpkg depend-info` step in the same log still prints `freeglut` and `opengl` as dependencies of `jasper[default-features, opengl]`. That
+is the manifest graph, not what is installed.
+
+Its freeglut copyright file ("Freeglut Copyright"; Pawel W. Olszta, 1999-2000; an MIT-style permission notice) was shipped by
+PR #346 and is removed with the library, with its pin in `VCPKG_TEXTS`, its line in `licenses/README.txt`, its `cmp` in CI and its
+entry in the Rust test.
 
 ## What the release `emulsion.exe` contains (measured 2026-11-16)
 
@@ -183,19 +183,21 @@ a release Windows exe carries no symbol table (names live in the PDB).
 | lcms (vcpkg `lcms2.lib`) | **Not found** | 0 symbols from a `lcms2:` object. The lcms code that is in the exe comes from the Rust crate `lcms2-sys` 4.0.7 (feature `static`, its own bundled lcms 2.19 source, MIT, Marti Maria Saguer): 1,995 symbols from `liblcms2_sys-*:*.o`, `cmsOpenProfileFromMem` and `cmsCreateTransform` among them |
 | jasper (`jasper.lib`) | **Not found** | 0 symbols named `jas_*` and 0 map lines naming jasper; LibRaw's `redcine_load_raw` (the jasper user) is not in the image either |
 | libjpeg-turbo (`jpeg.lib`, `turbojpeg.lib`) | **Not found** | 0 symbols `jpeg_CreateDecompress`, `jpeg_create*`, `jpeg_read*`, `tjInitDecompress`; `lossy_dng_load_raw` is present in LibRaw but no libjpeg symbol is. The JPEG code that is in the exe is the Rust crates `zune-jpeg` and `jpeg-encoder` |
-| freeglut (`freeglut.lib`) | **Not found** | 0 symbols `glutInit` or `glut*` |
+| freeglut (`freeglut.lib`, installed when the map was taken) | **Not found** | 0 symbols `glutInit` or `glut*` |
 
-So `rsraw-sys` asks for seven static libraries on the link line, and the linker kept objects from two of them (LibRaw and zlib).
-Whether `jasper.lib`, `jpeg.lib`, `turbojpeg.lib` and `freeglut.lib` were never pulled in or were pulled in and discarded by
+So `rsraw-sys` asked for seven static libraries on the link line when the map was taken, and the linker kept objects from two of them (LibRaw and zlib).
+Whether `jasper.lib`, `jpeg.lib`, `turbojpeg.lib` and `freeglut.lib` (the map was taken before freeglut was removed) were never pulled in or were pulled in and discarded by
 `/OPT:REF` was not distinguished; the final image has none of their symbols either way. The statement holds for this build
 configuration (same Cargo profile and features, no LTO setting changed). It was not repeated on the exe inside a `tauri build`
 installer, and a different dependency set or a LibRaw built with `dng-lossy` would change it.
 
-What this changes for the notice. Naming the five vcpkg libraries in the Windows row is broader than the binary: measured, the exe
-holds LibRaw, zlib's inflate code and an lcms that comes from a crate (a different copy and version than the vcpkg one). The files
-for jasper, libjpeg-turbo and freeglut are shipped anyway (cheap, and the installer still names them as libraries the Windows
-build links, which is what the link line shows); the question whether they are needed belongs to counsel (question 2). The
-`lcms2-sys` copy is an MIT crate already in the Rust crate list, its `vendor/LICENSE` is not among the files in `licenses/`.
+What this changes for the notice. The Windows row used to say the build links jasper, lcms, libjpeg-turbo and zlib. The map says
+otherwise. The libraries are installed from vcpkg and passed to the linker, and the linker output holds only LibRaw and zlib's inflate
+side from vcpkg, plus an lcms that comes from a crate (a different copy and version than the vcpkg one). The row now says exactly that,
+with the measurement and its limit (a linker map of a release build, not a packaged installer). The texts of jasper, lcms,
+libjpeg-turbo and zlib stay shipped because the build asks for these libraries (cheap, and no conclusion is drawn here). Whether they
+are needed belongs to counsel (question 2). The `lcms2-sys` copy is an MIT crate already in the Rust crate list, its `vendor/LICENSE`
+is not among the files in `licenses/`.
 
 ## What is not covered
 

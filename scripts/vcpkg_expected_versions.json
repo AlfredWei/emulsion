@@ -2,14 +2,10 @@
   "vcpkg_commit": "cdf98aaa2411f565eacb3c7566e5e20542ae151a",
   "triplet": "x64-windows-static-md",
   "versions": {
-    "egl-registry": "2024-01-25",
-    "freeglut": "3.4.0#3",
     "jasper": "4.2.1",
     "lcms": "2.14",
     "libjpeg-turbo": "3.0.4",
     "libraw": "0.21.3",
-    "opengl": "2022-12-04#3",
-    "opengl-registry": "2024-02-10#1",
     "zlib": "1.3.1"
   }
 }

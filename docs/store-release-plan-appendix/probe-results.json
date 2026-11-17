@@ -1,0 +1,225 @@
+{
+  "env": {
+    "gpu": "adapter ok apple/apple device ok yes",
+    "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+  },
+  "helperInfoBefore": {
+    "ok": {
+      "exists": true,
+      "path": "/private/tmp/claude-501/mas/drive.app/Contents/MacOS/emulsion-ai",
+      "running": false
+    }
+  },
+  "segModelStatus": {
+    "ok": {
+      "download_bytes": 0,
+      "host": "huggingface.co",
+      "state": "ready"
+    }
+  },
+  "denoiseModelStatus": {
+    "ok": {
+      "download_bytes": 0,
+      "host": "github.com",
+      "state": "ready"
+    }
+  },
+  "importOutside": {
+    "ok": {
+      "failed": 1,
+      "import_batch": 1794921459022,
+      "imported": 0,
+      "skipped_duplicates": 0
+    }
+  },
+  "importOutsideRaw": {
+    "ok": {
+      "failed": 1,
+      "import_batch": 1794921459080,
+      "imported": 0,
+      "skipped_duplicates": 0
+    }
+  },
+  "importOutsideFolder": {
+    "ok": {
+      "failed": 0,
+      "import_batch": 1794921459137,
+      "imported": 0,
+      "skipped_duplicates": 0
+    }
+  },
+  "importInside": {
+    "ok": {
+      "failed": 0,
+      "import_batch": 1794921459198,
+      "imported": 0,
+      "skipped_duplicates": 2
+    }
+  },
+  "list": {
+    "ok": [
+      {
+        "added_at": "2026-11-17 13:16:32",
+        "altitude": null,
+        "aperture": null,
+        "camera_make": null,
+        "camera_model": null,
+        "caption": null,
+        "captured_at": null,
+        "color_label": "none",
+        "contact": null,
+        "content_hash": "06013f0a320b3e9473f4db8279b38c59e43c399696339451bb423a9c3fe0db66",
+        "copyright": null,
+        "enlarged_from": null,
+        "enlarged_scale": null,
+        "enlargement_count": 0,
+        "exposure_bias": null,
+        "faces_scanned": false,
+        "file_size": 542714,
+        "flag": "none",
+        "flash": null,
+        "focal_length": null,
+        "height": 1536,
+        "image_id": 1,
+        "import_batch": 1794921392034,
+        "iso": null,
+        "latitude": null,
+        "lens_model": null,
+        "longitude": null,
+        "metering_mode": null,
+        "path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg",
+        "rating": 0,
+        "shutter_speed": null,
+        "thumbnail_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Library/Application Support/dev.alfredwei.emulsion/thumbnails/1.jpg",
+        "version_id": 1,
+        "width": 2048
+      },
+      {
+        "added_at": "2026-11-17 13:16:32",
+        "altitude": null,
+        "aperture": 7.1,
+        "camera_make": "Canon",
+        "camera_model": "EOS 1000D",
+        "caption": null,
+        "captured_at": "2015-01-07T11:03:15+08:00",
+        "color_label": "none",
+        "contact": null,
+        "content_hash": "e71f9eb9f9b69da3c8ff61c821609259c1b66786f559ff67e392575e51b0e6e3",
+        "copyright": null,
+        "enlarged_from": null,
+        "enlarged_scale": null,
+        "enlargement_count": 0,
+        "exposure_bias": null,
+        "faces_scanned": false,
+        "file_size": 8996104,
+        "flag": "none",
+        "flash": null,
+        "focal_length": 29,
+        "height": 2602,
+        "image_id": 2,
+        "import_batch": 1794921392034,
+        "iso": 100,
+        "latitude": null,
+        "lens_model": null,
+        "longitude": null,
+        "metering_mode": null,
+        "path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/setup1_complex_gt1.cr2",
+        "rating": 0,
+        "shutter_speed": 0.125,
+        "thumbnail_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Library/Application Support/dev.alfredwei.emulsion/thumbnails/2.jpg",
+        "version_id": 2,
+        "width": 3906
+      }
+    ]
+  },
+  "exportOutside": {
+    "ok": [
+      {
+        "error": "Operation not permitted (os error 1)",
+        "metadata_warning": null,
+        "output_path": null,
+        "plugin_error": null,
+        "source_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
+      }
+    ]
+  },
+  "exportOutsideFiles": [],
+  "exportInside": {
+    "ok": [
+      {
+        "error": null,
+        "metadata_warning": null,
+        "output_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out/Field-corn-Liechtenstein-landscape-1.jpg",
+        "plugin_error": null,
+        "source_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
+      }
+    ]
+  },
+  "exportInsideFiles": [
+    "Field-corn-Liechtenstein-landscape-1.jpg",
+    "Field-corn-Liechtenstein-landscape.jpg"
+  ],
+  "addPlugin": {
+    "ok": {
+      "args_template": [
+        "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/plugin-marker.txt"
+      ],
+      "command": "/usr/bin/touch",
+      "created_at": "2026-11-17 13:17:41",
+      "id": 1,
+      "name": "probe"
+    }
+  },
+  "exportWithPlugin": {
+    "ok": [
+      {
+        "error": null,
+        "metadata_warning": null,
+        "output_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out2/Field-corn-Liechtenstein-landscape-1.jpg",
+        "plugin_error": null,
+        "source_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
+      }
+    ]
+  },
+  "pluginMarkerExists": true,
+  "exportWithPlugin2": {
+    "ok": [
+      {
+        "error": null,
+        "metadata_warning": null,
+        "output_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out3/Field-corn-Liechtenstein-landscape.jpg",
+        "plugin_error": "Operation not permitted (os error 1)",
+        "source_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
+      }
+    ]
+  },
+  "pluginMarker2Exists": false,
+  "segmentPrepare": {
+    "ok": {
+      "cached": false,
+      "encode_ms": 1247
+    }
+  },
+  "helperInfoAfter": {
+    "ok": {
+      "exists": true,
+      "path": "/private/tmp/claude-501/mas/drive.app/Contents/MacOS/emulsion-ai",
+      "running": true
+    }
+  },
+  "geocode": {
+    "ok": [
+      {
+        "label": "Singapore",
+        "latitude": 1.357107,
+        "longitude": 103.8194992
+      },
+      {
+        "label": "Singapore",
+        "latitude": 1.2899175,
+        "longitude": 103.8519072
+      }
+    ]
+  },
+  "tile": "loaded 256"
+}

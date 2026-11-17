@@ -12,21 +12,21 @@ beforeEach(() => {
 });
 
 describe("the licence documents in Settings > About", () => {
-  it("opens the notices file the backend located", async () => {
-    invoke.mockResolvedValue("/app/THIRD_PARTY_NOTICES.md");
+  it("asks the backend to open the notices file, not the webview's opener scope", async () => {
+    invoke.mockResolvedValue(undefined);
     await openThirdPartyNotices();
-    expect(invoke).toHaveBeenCalledWith("third_party_notices_path");
-    expect(openPath).toHaveBeenCalledWith("/app/THIRD_PARTY_NOTICES.md");
+    expect(invoke).toHaveBeenCalledWith("open_third_party_notices");
+    expect(openPath).not.toHaveBeenCalled();
   });
 
-  it("opens the library licences file the backend located", async () => {
-    invoke.mockResolvedValue("/app/THIRD_PARTY_LIBRARIES.md");
+  it("asks the backend to open the library licences file, not the webview's opener scope", async () => {
+    invoke.mockResolvedValue(undefined);
     await openThirdPartyLibraries();
-    expect(invoke).toHaveBeenCalledWith("third_party_libraries_path");
-    expect(openPath).toHaveBeenCalledWith("/app/THIRD_PARTY_LIBRARIES.md");
+    expect(invoke).toHaveBeenCalledWith("open_third_party_libraries");
+    expect(openPath).not.toHaveBeenCalled();
   });
 
-  it("opens nothing, and passes the reason on, when the file was not found", async () => {
+  it("passes the reason on when the file was not found", async () => {
     invoke.mockRejectedValue("THIRD_PARTY_LIBRARIES.md was not found next to the app");
     await expect(openThirdPartyLibraries()).rejects.toMatch(/not found/);
     expect(openPath).not.toHaveBeenCalled();

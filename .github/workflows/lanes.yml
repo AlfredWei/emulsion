@@ -1,0 +1,152 @@
+name: Lanes
+
+# Runs one WebDriver spec on a fresh runner and uploads the screenshots and logs it made. Dispatch it by hand:
+#   gh workflow run lanes.yml --ref <branch with this file> -f ref=<sha> -f os=macos-latest -f spec=sandbox-smoke
+# `ref` is checked out. The harness (this workflow's own scripts and specs) is copied over it when `ref` is another commit,
+# so a trunk that lacks the harness can still be driven. `sandbox-*` specs on macOS run against a sandboxed bundle built by
+# scripts/lanes/build-sandboxed.sh. Any other spec runs against the debug build. `perf-interleave` measures `ref` against `trunk_ref`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit under test
+        required: true
+      os:
+        description: Runner
+        type: choice
+        options: [macos-latest, windows-latest]
+        default: macos-latest
+      spec:
+        description: Spec name under app/e2e/specs without .e2e.js, or perf-interleave
+        required: true
+        default: sandbox-smoke
+      channel:
+        description: Channel (recorded until the channel flag lands)
+        type: choice
+        options: [direct, mas]
+        default: direct
+      bundle_id:
+        description: Bundle ID of the sandboxed app
+        default: dev.alfredwei.emulsion.lane
+      trunk_ref:
+        description: perf-interleave only, the commit to compare against
+        required: false
+      metric:
+        description: perf-interleave only, the perf.json key
+        default: first_grid_ms
+
+jobs:
+  lane:
+    name: ${{ inputs.spec }} on ${{ inputs.os }}
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 60
+    env:
+      LANE_OUT: ${{ runner.temp }}/lane-out
+      LANE_BUNDLE_ID: ${{ inputs.bundle_id }}
+      LANE_SPEC: ${{ inputs.spec }}
+      LANE_CHANNEL: ${{ inputs.channel }}
+      LANE_TRUNK_REF: ${{ inputs.trunk_ref }}
+      LANE_METRIC: ${{ inputs.metric }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Copy the harness over the commit under test
+        shell: bash
+        run: |
+          mkdir -p "$LANE_OUT"
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            mkdir -p scripts app/e2e/specs app/src-tauri
+            cp -R harness/scripts/lanes scripts/
+            cp harness/app/e2e/wdio.sandbox.conf.js app/e2e/
+            cp harness/app/e2e/specs/sandbox-smoke.e2e.js harness/app/e2e/specs/perf-probe.e2e.js app/e2e/specs/
+            cp -R harness/app/src-tauri/entitlements app/src-tauri/
+            echo "harness copied from $GITHUB_SHA over $(git rev-parse HEAD)" | tee "$LANE_OUT/harness.txt"
+          else
+            echo "commit under test is the harness commit" | tee "$LANE_OUT/harness.txt"
+          fi
+          rm -rf harness
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Install LibRaw via vcpkg (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin cdf98aaa2411f565eacb3c7566e5e20542ae151a
+          rm -rf "$VCPKG_INSTALLATION_ROOT/ports"
+          git -C "$VCPKG_INSTALLATION_ROOT" checkout cdf98aaa2411f565eacb3c7566e5e20542ae151a -- ports
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install "jasper[core]:x64-windows-static-md" libraw:x64-windows-static-md
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Build the sandboxed bundle
+        if: runner.os == 'macOS' && startsWith(inputs.spec, 'sandbox-')
+        shell: bash
+        run: |
+          start=$(date +%s)
+          (cd app && node scripts/fetch-bundled-models.mjs)
+          app_path="$(scripts/lanes/build-sandboxed.sh --channel "$LANE_CHANNEL" --bundle-id "$LANE_BUNDLE_ID" --out "$RUNNER_TEMP/lane-apps")"
+          echo "APP_BIN=$app_path/Contents/MacOS/emulsion" >> "$GITHUB_ENV"
+          cp "$RUNNER_TEMP/lane-apps/$LANE_BUNDLE_ID.entitlements.txt" "$LANE_OUT/entitlements.txt"
+          echo "build_seconds=$(( $(date +%s) - start ))" >> "$LANE_OUT/timing.txt"
+
+      - name: Build the debug app
+        if: inputs.spec != 'perf-interleave' && !(runner.os == 'macOS' && startsWith(inputs.spec, 'sandbox-'))
+        shell: bash
+        working-directory: app
+        run: |
+          start=$(date +%s)
+          npx tauri build --debug --no-bundle --features wdio-webdriver --config src-tauri/tauri.e2e.conf.json
+          if [ "$RUNNER_OS" = Windows ]; then ext=.exe; else ext=; fi
+          echo "APP_BIN=$GITHUB_WORKSPACE/app/src-tauri/target/debug/emulsion$ext" >> "$GITHUB_ENV"
+          echo "build_seconds=$(( $(date +%s) - start ))" >> "$LANE_OUT/timing.txt"
+
+      - name: Run the spec
+        if: inputs.spec != 'perf-interleave'
+        shell: bash
+        working-directory: app
+        run: |
+          start=$(date +%s)
+          trap 'echo "spec_seconds=$(( $(date +%s) - start ))" >> "$LANE_OUT/timing.txt"' EXIT
+          npx wdio run ./e2e/wdio.sandbox.conf.js --spec "./e2e/specs/$LANE_SPEC.e2e.js" 2>&1 | tee "$LANE_OUT/run.log"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Run the interleaved perf pairs
+        if: inputs.spec == 'perf-interleave'
+        shell: bash
+        run: |
+          scripts/lanes/perf-interleave.sh "$LANE_TRUNK_REF" "$(git rev-parse HEAD)" "$LANE_METRIC" 2>&1 | tee "$LANE_OUT/perf-interleave.txt"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lane-${{ inputs.spec }}-${{ inputs.os }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/lane-out
+          if-no-files-found: warn

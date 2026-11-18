@@ -159,6 +159,7 @@ and B2's source bundle is the "how to obtain the source" pointer CDDL asks for (
 **B5. If D1 = proprietary/paid (only then; large; costed sequence).** Steps are in dependency order. Effort is engineer-days for one
 person who knows the codebase. Counsel time, account approvals and GPU rental are not counted. Model findings are in
 [RFC-0038-appendix/model-training-data.md](RFC-0038-appendix/model-training-data.md). B1 and B2 are prerequisites, costed in Phase B.
+The owner chose D1 (b), paid sale on the Mac App Store and the Microsoft Store, on 2026-11-17. The [store release plan](../store-release-plan.md) builds on this section and orders its steps with the store work.
 
 New decisions (in addition to D1 to D6):
 - **D7. Model-data policy (owner, then counsel)**: which dataset-term classes a paid build accepts. Two questions for counsel: do

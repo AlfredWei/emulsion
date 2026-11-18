@@ -19,7 +19,7 @@ make install   # npm install
 make dev       # start the app (Tauri window + Vite dev server)
 ```
 
-`make help` lists everything else (`test`, `build`, `check`, `spike`, `clean`). See [Makefile](Makefile).
+`make help` lists everything else (`test`, `build`, `check`, `clean`). See [Makefile](Makefile).
 
 ## Current state: what you'll actually see
 
@@ -27,7 +27,7 @@ Running `make dev` opens a real, dogfoodable app, not a scaffold. **Library**: g
 
 - **The Rust core** (catalog, RAW decode, develop engine, every merge/faces/print pipeline) has a large real unit test suite: `make test`.
 - **E2E tests** drive the actual Tauri window via WebdriverIO (`app/e2e/`) — golden-path, GPU-fallback, CPU/GPU parity, and performance specs among them.
-- See [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for what every file/folder in this repo is for, including the throwaway diagnostic routes (`m0-spike`, `m1-smoke`, `m1-slice2-smoke`) that predate the real app and aren't part of it.
+- See [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for what every file/folder in this repo is for, including the throwaway diagnostic routes (`m1-smoke`, `m1-slice2-smoke` and the other `m*-smoke` routes) that predate the real app and aren't part of it.
 - Looking for how to actually *use* the app once it's running? See [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## Documentation map

@@ -141,7 +141,7 @@ src/
 │   ├── +layout.js          SPA-mode config (Tauri has no server, so no SSR)
 │   ├── +page.svelte         THE REAL APP — all four modules' orchestration (being split per RFC-0009;
 │   │                         state/actions modules will land in lib/state/ and lib/actions/)
-│   └── m*-spike / m*-smoke/   Throwaway diagnostic routes (see note below), not part of the app
+│   └── m*-smoke/           Throwaway diagnostic routes (see note below), not part of the app
 ├── lib/
 │   ├── api/                 Thin wrappers around invoke(): the only place that knows Tauri command names/shapes
 │   │                        (catalog, develop, export, faces, map, print, storage, backup, system, segment, denoise, upscale)
@@ -218,7 +218,7 @@ src/
 e2e/                         WebdriverIO specs (parity, gpu-fallback, performance, golden-path, …) run in CI on macOS + Windows
 ```
 
-**The `m*-spike`/`m*-smoke` routes are not part of the app** — they're throwaway diagnostic pages used to verify something empirically (in-webview WebGPU, a real RAW decode, the asset protocol) when there's no tool available in this environment to screenshot or drive the native window directly. Each one is self-contained, reports its result by invoking a `report_spike_result` Tauri command that prints to the Rust process's stdout, and is left in the repo as a re-runnable check rather than deleted — but none of them are linked from the real UI. If one of these routes is ever loaded by the actual app (via `tauri.conf.json`'s window `url`), that's a leftover from manual testing that should have been reverted — check `git diff app/src-tauri/tauri.conf.json` if `make dev` ever opens one of these instead of the real Library view.
+**The `m*-smoke` routes are not part of the app** (`m0-spike` and `m1-slice3-smoke` were deleted so the store bundle does not ship them) — they're throwaway diagnostic pages used to verify something empirically (in-webview WebGPU, a real RAW decode, the asset protocol) when there's no tool available in this environment to screenshot or drive the native window directly. Each one is self-contained, reports its result by invoking a `report_spike_result` Tauri command that prints to the Rust process's stdout, and is left in the repo as a re-runnable check rather than deleted — but none of them are linked from the real UI. If one of these routes is ever loaded by the actual app (via `tauri.conf.json`'s window `url`), that's a leftover from manual testing that should have been reverted — check `git diff app/src-tauri/tauri.conf.json` if `make dev` ever opens one of these instead of the real Library view.
 
 ## `.github/workflows/ci.yml`
 

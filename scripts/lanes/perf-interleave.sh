@@ -58,8 +58,15 @@ build_side() {
 trunk_bin="$(build_side "$trunk" "${PERF_BIN_TRUNK:-}")"
 head_bin="$(build_side "$head_sha" "${PERF_BIN_HEAD:-}")"
 
+port_taken() { (exec 3<>/dev/tcp/127.0.0.1/4445) 2>/dev/null; }
+
 probe() {
-  local bin="$1" out home
+  local bin="$1" out home waited=0
+  while port_taken; do
+    waited=$((waited + 1))
+    [ "$waited" -le 360 ] || { echo "port 4445 stayed taken by another app" >&2; return 1; }
+    sleep 5
+  done
   out="$(mktemp -d "$work/probe-XXXXXX")"
   home="$(mktemp -d "$work/home-XXXXXX")"
   (cd "$repo/app" && HOME="$home" APP_BIN="$bin" LANE_OUT="$out" ./node_modules/.bin/wdio run ./e2e/wdio.sandbox.conf.js --spec ./e2e/specs/perf-probe.e2e.js) >"$out/run.log" 2>&1 || { echo "probe failed, see $out/run.log" >&2; return 1; }

@@ -38,22 +38,16 @@ describe("perf probe", () => {
 
   it("times a reload up to the first grid cell", async () => {
     await browser.refresh();
-    // The service's bridge check delays the first command after a reload by up to 20 s, so polling from the Node side would
-    // measure that delay. The page's own clock starts at navigation, and the first thumbnail request comes after the first
-    // cell exists, so that request's start bounds the first cell from above.
+    // WebDriver cannot see the app's own launch, so the metric is a reload of a populated catalog. The page's own clock starts at
+    // navigation, which excludes the service's delay on the first command after a reload. The poll can start after the cell
+    // exists, so the number is an upper bound with 10 ms resolution.
     const result = await browser.execute(async () => {
-      const firstThumb = () => {
-        const starts = performance.getEntriesByType("resource").filter((e) => /thumbnails/.test(e.name)).map((e) => e.startTime);
-        return starts.length ? Math.min(...starts) : null;
-      };
       const deadline = performance.now() + 60000;
-      while (!document.querySelector(".cell") && performance.now() < deadline) await new Promise((r) => setTimeout(r, 25));
-      return { cell: !!document.querySelector(".cell"), thumb: firstThumb(), polledAt: performance.now() };
+      while (!document.querySelector(".cell") && performance.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+      return { cell: !!document.querySelector(".cell"), at: performance.now() };
     });
     expect(result.cell).toBe(true);
-    perf.first_grid_ms = Math.round(result.thumb ?? result.polledAt);
-    perf.first_grid_source = result.thumb == null ? "poll" : "first thumbnail request";
-    perf.first_grid_polled_at_ms = Math.round(result.polledAt);
+    perf.first_grid_ms = Math.round(result.at);
   });
 
   it("exports one JPEG and times it", async () => {

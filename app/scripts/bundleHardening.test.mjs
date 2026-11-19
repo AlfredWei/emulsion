@@ -30,6 +30,10 @@ describe("the content security policy", () => {
     expect(directive("img-src")).toEqual(expect.arrayContaining(["asset:", "http://asset.localhost", "data:", "blob:"]));
   });
 
+  it("lets a spec read a data: URL with fetch, as develop-adaptive-presets does", () => {
+    expect(directive("connect-src")).toContain("data:");
+  });
+
   it("does not let the page connect to the open internet", () => {
     expect(directive("connect-src")).not.toContain("https:");
     expect(directive("connect-src")).not.toContain("*");

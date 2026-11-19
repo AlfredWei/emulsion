@@ -2356,21 +2356,7 @@ pub fn run() {
                 diag::timed("startup: cull analyse_missing", || cull::analyse_missing(&catalog_for_thumbs, &thumbnail_dir, |_, _| {}));
             });
 
-            // Models shipped in the installer (release builds only) are copied into the model folders once, in the
-            // background, so the first use finds them ready. A status check also seeds (and waits on this).
-            {
-                let handle = app.handle().clone();
-                let catalog_for_models = catalog.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    let Ok(root) = resolve_cache_root(&handle, &catalog_for_models) else { return };
-                    bundled_models::seed_from_app(&handle, &root.join("denoise_models"), &bundled_models::DENOISE);
-                    bundled_models::seed_from_app(&handle, &root.join("segment_models"), &bundled_models::SEGMENT);
-                    bundled_models::seed_from_app(&handle, &root.join("segment_models"), &bundled_models::DETECT);
-                    bundled_models::seed_from_app(&handle, &root.join("upscale_models"), &bundled_models::UPSCALE);
-                    bundled_models::seed_from_app(&handle, &root.join("inpaint_models"), &bundled_models::INPAINT);
-                    bundled_models::seed_from_app(&handle, &root.join(blink_models::DIR), &bundled_models::BLINK);
-                });
-            }
+            bundled_models::init(app.handle());
 
             // AI helper process (RFC-0026 §3.1): spawned lazily on the first AI request, not here.
             app.manage(Arc::new(ai::supervisor::AiHelper::new(

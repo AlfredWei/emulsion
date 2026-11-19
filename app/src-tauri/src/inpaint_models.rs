@@ -4,7 +4,6 @@
 //! the installer (`bundled_models::INPAINT`) and installed into the `inpaint_models` folder of the cache root; there is
 //! no download dialog, so a build without it has no Remove and says so.
 
-use crate::segment_models::sha256_file;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -56,9 +55,7 @@ pub fn ready_path_for(edition: &crate::editions::Edition, dir: &Path) -> Option<
     if !edition.includes(FAMILY) {
         return None;
     }
-    let path = dir.join(FILENAME);
-    let sized = matches!(std::fs::metadata(&path), Ok(m) if m.len() == SIZE);
-    (sized && sha256_file(&path).map(|h| h == SHA256).unwrap_or(false)).then_some(path)
+    crate::bundled_models::resolve(dir, &crate::bundled_models::INPAINT[0])
 }
 
 #[cfg(test)]

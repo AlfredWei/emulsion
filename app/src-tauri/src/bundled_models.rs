@@ -3,47 +3,41 @@
 //! (4.8 MB, committed in `models/`) joined them on 2026-10-17 (user decision), and the person detector (79 MB, RFC-0037)
 //! on 2026-10-31.
 //!
-//! A release build (`npm run build:release`) puts them in the app's resources under `models/`. On first use they
-//! are **copied into the same model directories the downloads use** (verified by size and SHA-256 on the way), so
-//! everything downstream (`ready_path`, `ready_paths`, the helper) is unchanged and a later downloaded or
-//! updated model simply replaces the file there. The cost is a second copy on disk (about 272 MB); the benefit is
-//! no second code path for "where is the model". A debug or CI build has no `models/` resource and does nothing.
+//! A release build (`npm run build:release`) puts them in the app's resources under `models/`. They are **read in
+//! place** from there (verified by size and SHA-256 on every lookup) and never copied, so a store build in a sandbox
+//! container holds one copy of each file. The cache-root model folders keep only what a person downloaded or imported.
+//! A copy an earlier build left in a cache folder stays where it is and is used only when the bundle has no valid
+//! file of that name. A debug or CI build has no `models/` resource, and a debug build also reads the checkout's `models/`.
 
-use crate::editions::{Edition, ModelFamily};
 use crate::segment_models::sha256_file;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 
 /// A model file the installer may carry, as the app verifies it.
 pub struct Shipped {
-    pub family: ModelFamily,
     pub name: &'static str,
     pub size: u64,
     pub sha256: &'static str,
 }
 
-pub const DENOISE: [Shipped; 1] = [Shipped { family: ModelFamily::Denoise, name: crate::denoise_models::FILENAME, size: crate::denoise_models::SIZE, sha256: crate::denoise_models::SHA256 }];
+pub const DENOISE: [Shipped; 1] = [Shipped { name: crate::denoise_models::FILENAME, size: crate::denoise_models::SIZE, sha256: crate::denoise_models::SHA256 }];
 
 pub const SEGMENT: [Shipped; 2] = [
-    Shipped { family: ModelFamily::Segment, name: crate::segment_models::ENCODER.filename, size: crate::segment_models::ENCODER.size, sha256: crate::segment_models::ENCODER.sha256 },
-    Shipped { family: ModelFamily::Segment, name: crate::segment_models::DECODER.filename, size: crate::segment_models::DECODER.size, sha256: crate::segment_models::DECODER.sha256 },
+    Shipped { name: crate::segment_models::ENCODER.filename, size: crate::segment_models::ENCODER.size, sha256: crate::segment_models::ENCODER.sha256 },
+    Shipped { name: crate::segment_models::DECODER.filename, size: crate::segment_models::DECODER.size, sha256: crate::segment_models::DECODER.sha256 },
 ];
 
 /// The person detector (RFC-0037), installed beside the Select Subject files: the detector's boxes are cut by that model.
-pub const DETECT: [Shipped; 1] = [Shipped { family: ModelFamily::Detect, name: crate::detect_models::FILENAME, size: crate::detect_models::SIZE, sha256: crate::detect_models::SHA256 }];
+pub const DETECT: [Shipped; 1] = [Shipped { name: crate::detect_models::FILENAME, size: crate::detect_models::SIZE, sha256: crate::detect_models::SHA256 }];
 
 /// The object-removal model (RFC-0032, ADR-0010), installed into its own folder.
-pub const INPAINT: [Shipped; 1] = [Shipped { family: ModelFamily::Inpaint, name: crate::inpaint_models::FILENAME, size: crate::inpaint_models::SIZE, sha256: crate::inpaint_models::SHA256 }];
+pub const INPAINT: [Shipped; 1] = [Shipped { name: crate::inpaint_models::FILENAME, size: crate::inpaint_models::SIZE, sha256: crate::inpaint_models::SHA256 }];
 
 /// The face-mesh model for blink evidence (RFC-0031 §8.15), installed into its own folder.
-pub const BLINK: [Shipped; 1] = [Shipped { family: ModelFamily::Blink, name: crate::blink_models::FILENAME, size: crate::blink_models::SIZE, sha256: crate::blink_models::SHA256 }];
+pub const BLINK: [Shipped; 1] = [Shipped { name: crate::blink_models::FILENAME, size: crate::blink_models::SIZE, sha256: crate::blink_models::SHA256 }];
 
-pub const UPSCALE: [Shipped; 1] = [Shipped { family: ModelFamily::Upscale, name: crate::upscale_models::FILENAME, size: crate::upscale_models::SIZE, sha256: crate::upscale_models::SHA256 }];
-
-/// One seeding at a time: the startup pass and a status check must not both write a `.part` file, and a status
-/// check that arrives mid-copy waits for it rather than reporting "missing" and opening the download dialog.
-static SEED_LOCK: Mutex<()> = Mutex::new(());
+pub const UPSCALE: [Shipped; 1] = [Shipped { name: crate::upscale_models::FILENAME, size: crate::upscale_models::SIZE, sha256: crate::upscale_models::SHA256 }];
 
 /// The folders that may carry this build's models, best first: the `models/` folder of the app's resources, and in a
 /// development build also the source checkout's `models/`. A development build used to take the first one only, so a
@@ -92,55 +86,41 @@ fn valid(path: &Path, f: &Shipped) -> bool {
     matches!(std::fs::metadata(path), Ok(m) if m.len() == f.size) && sha256_file(path).map(|h| h == f.sha256).unwrap_or(false)
 }
 
-/// Copies each of `wanted` that `bundled` has and `dest_dir` lacks (or has damaged), verified before it is kept.
-/// Returns how many were copied. A bundled file that fails verification is an error and leaves nothing behind.
-pub fn seed(dest_dir: &Path, bundled: &Path, wanted: &[Shipped]) -> Result<usize, String> {
-    let _guard = SEED_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut copied = 0;
-    for f in wanted {
-        let dest = dest_dir.join(f.name);
-        let src = bundled.join(f.name);
-        if !src.is_file() || valid(&dest, f) {
-            continue;
-        }
-        std::fs::create_dir_all(dest_dir).map_err(|e| format!("could not create {}: {e}", dest_dir.display()))?;
-        let part = dest_dir.join(format!("{}.part", f.name));
-        std::fs::copy(&src, &part).map_err(|e| format!("could not copy {}: {e}", src.display()))?;
-        if !valid(&part, f) {
-            let _ = std::fs::remove_file(&part);
-            return Err(format!("the bundled {} failed verification", f.name));
-        }
-        std::fs::rename(&part, &dest).map_err(|e| {
-            let _ = std::fs::remove_file(&part);
-            format!("could not install {}: {e}", f.name)
-        })?;
-        copied += 1;
-    }
-    Ok(copied)
+static BUNDLE: OnceLock<Vec<PathBuf>> = OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    // A test names its own bundle here because the process-wide one is set once and shared by every test thread.
+    static TEST_BUNDLE: std::cell::RefCell<Option<Vec<PathBuf>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Whether the edition lets every file of `wanted` be installed: a family it leaves out is never seeded, so a checkout
-/// or a stale bundle holding the file cannot put it back in an installed model folder.
-fn allowed(edition: &Edition, wanted: &[Shipped]) -> bool {
-    wanted.iter().all(|f| edition.includes(f.family))
+/// Records where this build's bundled models are. Called once at startup, before any model lookup.
+pub fn init(app: &AppHandle) {
+    let _ = BUNDLE.set(bundled_dirs(app));
 }
 
-/// Seeds one family from this build's bundle, if it has one. Failures are logged, not raised: the download path
-/// still works, and a status check must never fail because a bundled copy could not be installed.
-pub fn seed_from_app(app: &AppHandle, dest_dir: &Path, wanted: &[Shipped]) {
-    if !allowed(crate::editions::current(), wanted) {
-        return;
+fn bundle() -> Vec<PathBuf> {
+    #[cfg(test)]
+    if let Some(dirs) = TEST_BUNDLE.with(|b| b.borrow().clone()) {
+        return dirs;
     }
-    for bundled in bundled_dirs(app) {
-        if let Err(e) = seed(dest_dir, &bundled, wanted) {
-            eprintln!("bundled model seeding: {e}");
-        }
-    }
+    BUNDLE.get().cloned().unwrap_or_default()
+}
+
+/// The verified file for `f`. A valid copy in the app bundle wins and is never copied out. Otherwise a valid copy in
+/// `cache_dir` (downloaded, imported, or left by an earlier build) is used. Callers check the edition first.
+pub fn resolve(cache_dir: &Path, f: &Shipped) -> Option<PathBuf> {
+    resolve_in(&bundle(), cache_dir, f)
+}
+
+fn resolve_in(bundles: &[PathBuf], cache_dir: &Path, f: &Shipped) -> Option<PathBuf> {
+    bundles.iter().map(|d| d.join(f.name)).chain(std::iter::once(cache_dir.join(f.name))).find(|p| valid(p, f))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editions::{Edition, ModelFamily};
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("emulsion-bundled-models-{name}"));
@@ -150,7 +130,7 @@ mod tests {
     }
 
     // SHA-256("abc"), the standard test vector.
-    const ABC: Shipped = Shipped { family: ModelFamily::Denoise, name: "abc.onnx", size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" };
+    const ABC: Shipped = Shipped { name: "abc.onnx", size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" };
 
     /// A model row in the notices must also say what the model was trained on and under what terms (the last column),
     /// so a model cannot be added with only its weights licence recorded. The text is a research record, not a
@@ -223,48 +203,64 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_family_the_edition_leaves_out_is_not_seeded() {
-        let all = Edition::all("default");
-        let mut no_lama = Edition::all("test-no-lama");
-        no_lama.include.remove(&ModelFamily::Inpaint);
-        assert!(allowed(&all, &INPAINT) && allowed(&all, &SEGMENT));
-        assert!(!allowed(&no_lama, &INPAINT), "LaMa must not be seeded into an edition without it");
-        assert!(allowed(&no_lama, &SEGMENT) && allowed(&no_lama, &DETECT));
+    fn with_bundle<T>(dirs: Vec<PathBuf>, f: impl FnOnce() -> T) -> T {
+        TEST_BUNDLE.with(|b| *b.borrow_mut() = Some(dirs));
+        let out = f();
+        TEST_BUNDLE.with(|b| *b.borrow_mut() = None);
+        out
+    }
+
+    fn committed_models() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models")
     }
 
     #[test]
-    fn a_missing_file_is_copied_verified_and_a_valid_one_is_left_alone() {
-        let (bundled, dest) = (dir("a-bundled"), dir("a-dest").join("models"));
+    fn a_valid_bundled_file_is_returned_from_the_bundle_and_nothing_is_copied() {
+        let (bundled, cache) = (dir("a-bundled"), dir("a-cache"));
         std::fs::write(bundled.join("abc.onnx"), b"abc").unwrap();
-        assert_eq!(seed(&dest, &bundled, &[ABC]).unwrap(), 1);
-        assert_eq!(std::fs::read(dest.join("abc.onnx")).unwrap(), b"abc");
-        assert!(!dest.join("abc.onnx.part").exists());
-        assert_eq!(seed(&dest, &bundled, &[ABC]).unwrap(), 0, "already installed and valid");
+        assert_eq!(resolve_in(&[bundled.clone()], &cache, &ABC), Some(bundled.join("abc.onnx")));
+        assert!(std::fs::read_dir(&cache).unwrap().next().is_none());
     }
 
     #[test]
-    fn a_damaged_installed_copy_is_replaced_from_the_bundle() {
-        let (bundled, dest) = (dir("b-bundled"), dir("b-dest"));
-        std::fs::write(bundled.join("abc.onnx"), b"abc").unwrap();
-        std::fs::write(dest.join("abc.onnx"), b"xyz").unwrap();
-        assert_eq!(seed(&dest, &bundled, &[ABC]).unwrap(), 1);
-        assert_eq!(std::fs::read(dest.join("abc.onnx")).unwrap(), b"abc");
-    }
-
-    #[test]
-    fn a_bundled_file_that_fails_verification_is_refused_and_leaves_nothing() {
-        let (bundled, dest) = (dir("c-bundled"), dir("c-dest"));
+    fn the_bundle_is_tried_before_the_cache_and_the_cache_only_when_the_bundle_has_no_valid_file() {
+        let (bundled, cache) = (dir("b-bundled"), dir("b-cache"));
+        std::fs::write(cache.join("abc.onnx"), b"abc").unwrap();
+        assert_eq!(resolve_in(&[bundled.clone()], &cache, &ABC), Some(cache.join("abc.onnx")), "bundle empty");
         std::fs::write(bundled.join("abc.onnx"), b"abd").unwrap();
-        assert!(seed(&dest, &bundled, &[ABC]).unwrap_err().contains("failed verification"));
-        assert!(!dest.join("abc.onnx").exists() && !dest.join("abc.onnx.part").exists());
+        assert_eq!(resolve_in(&[bundled.clone()], &cache, &ABC), Some(cache.join("abc.onnx")), "bundled copy damaged");
+        std::fs::write(bundled.join("abc.onnx"), b"abc").unwrap();
+        assert_eq!(resolve_in(&[bundled.clone()], &cache, &ABC), Some(bundled.join("abc.onnx")), "bundle first");
     }
 
     #[test]
-    fn a_build_without_the_file_does_nothing() {
-        let (bundled, dest) = (dir("d-bundled"), dir("d-dest"));
-        assert_eq!(seed(&dest, &bundled, &[ABC]).unwrap(), 0);
-        assert!(std::fs::read_dir(&dest).unwrap().next().is_none());
+    fn a_damaged_or_missing_file_everywhere_resolves_to_nothing() {
+        let (bundled, cache) = (dir("c-bundled"), dir("c-cache"));
+        assert_eq!(resolve_in(&[bundled.clone()], &cache, &ABC), None);
+        std::fs::write(bundled.join("abc.onnx"), b"abd").unwrap();
+        std::fs::write(cache.join("abc.onnx"), b"xyz").unwrap();
+        assert_eq!(resolve_in(&[bundled], &cache, &ABC), None);
+    }
+
+    #[test]
+    fn a_family_the_edition_leaves_out_refuses_even_when_the_bundle_holds_its_file() {
+        let (all, none_blink) = (Edition::all("default"), {
+            let mut e = Edition::all("test-no-blink");
+            e.include.remove(&ModelFamily::Blink);
+            e
+        });
+        let mut none_upscale = Edition::all("test-no-upscale");
+        none_upscale.include.remove(&ModelFamily::Upscale);
+        let cache = dir("d-cache");
+        with_bundle(vec![committed_models()], || {
+            let blink = crate::blink_models::ready_path_for(&all, &cache).expect("the committed blink model resolves from the bundle");
+            assert!(blink.starts_with(committed_models()));
+            assert!(crate::blink_models::ready_path_for(&none_blink, &cache).is_none());
+            assert!(crate::upscale_models::ready_path_for(&all, &cache).is_some());
+            assert!(crate::upscale_models::ready_path_for(&none_upscale, &cache).is_none());
+            assert_eq!(crate::upscale_models::status_for(&none_upscale, &cache).state, crate::upscale_models::ModelState::NotInEdition);
+        });
+        assert!(std::fs::read_dir(&cache).unwrap().next().is_none(), "reading in place copies nothing");
     }
 
     #[test]
@@ -276,13 +272,21 @@ mod tests {
             .iter()
             .map(|f| (f["name"].as_str().unwrap().into(), f["size"].as_u64().unwrap(), f["sha256"].as_str().unwrap().into(), f["url"].as_str().unwrap_or("").to_string(), f["path"].as_str().map(String::from)))
             .collect();
-        let known: Vec<&Shipped> = DENOISE.iter().chain(SEGMENT.iter()).chain(DETECT.iter()).chain(UPSCALE.iter()).chain(INPAINT.iter()).chain(BLINK.iter()).collect();
+        let known: Vec<(&Shipped, ModelFamily)> = DENOISE
+            .iter()
+            .map(|k| (k, crate::denoise_models::FAMILY))
+            .chain(SEGMENT.iter().map(|k| (k, crate::segment_models::FAMILY)))
+            .chain(DETECT.iter().map(|k| (k, crate::detect_models::FAMILY)))
+            .chain(UPSCALE.iter().map(|k| (k, crate::upscale_models::FAMILY)))
+            .chain(INPAINT.iter().map(|k| (k, crate::inpaint_models::FAMILY)))
+            .chain(BLINK.iter().map(|k| (k, crate::blink_models::FAMILY)))
+            .collect();
         assert_eq!(listed.len(), known.len());
         for (name, size, sha, url, path) in &listed {
-            let k = known.iter().find(|k| k.name == name).unwrap_or_else(|| panic!("{name} is not a model the app verifies"));
+            let (k, family_of_k) = known.iter().find(|(k, _)| k.name == name).unwrap_or_else(|| panic!("{name} is not a model the app verifies"));
             assert_eq!((k.size, k.sha256), (*size, sha.as_str()), "{name}");
             let family = manifest["files"].as_array().unwrap().iter().find(|f| f["name"] == name.as_str()).unwrap()["family"].clone();
-            assert_eq!(serde_json::to_value(k.family).unwrap(), family, "{name}: the manifest's `family` and Shipped.family differ");
+            assert_eq!(serde_json::to_value(family_of_k).unwrap(), family, "{name}: the manifest's `family` and the module's FAMILY differ");
             match path {
                 // A small model committed in models/: the file must be there and be the one the app verifies.
                 Some(rel) => {

@@ -130,7 +130,7 @@ pub fn status_for(edition: &crate::editions::Edition, cache_dir: &Path) -> Model
     }
     let missing: u64 = SPECS
         .iter()
-        .filter(|spec| !is_valid_cache(&cache_dir.join(spec.filename), spec))
+        .filter(|spec| resolve_spec(cache_dir, spec).is_none())
         .map(|spec| spec.size)
         .sum();
     ModelStatus {
@@ -150,9 +150,12 @@ pub fn ready_paths_for(edition: &crate::editions::Edition, cache_dir: &Path) -> 
     if !edition.includes(FAMILY) {
         return None;
     }
-    let encoder = cache_dir.join(ENCODER.filename);
-    let decoder = cache_dir.join(DECODER.filename);
-    (is_valid_cache(&encoder, &ENCODER) && is_valid_cache(&decoder, &DECODER)).then_some(SegmentModelPaths { encoder, decoder })
+    Some(SegmentModelPaths { encoder: resolve_spec(cache_dir, &ENCODER)?, decoder: resolve_spec(cache_dir, &DECODER)? })
+}
+
+fn resolve_spec(cache_dir: &Path, spec: &ModelSpec) -> Option<PathBuf> {
+    let shipped = crate::bundled_models::SEGMENT.iter().find(|f| f.name == spec.filename)?;
+    crate::bundled_models::resolve(cache_dir, shipped)
 }
 
 fn url_for(spec: &ModelSpec) -> String {

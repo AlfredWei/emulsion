@@ -24,6 +24,9 @@ pub struct ImportSummary {
     pub imported: usize,
     pub skipped_duplicates: usize,
     pub failed: usize,
+    /// Folders the walk could not open (permission denied, or gone before the walk), so their photos were never seen.
+    /// Empty when every folder was readable.
+    pub unreadable_folders: Vec<String>,
     /// The batch id every image landed by this call was tagged with (see
     /// `import_paths_with_progress`'s own doc comment) -- lets the
     /// frontend scope the post-import thumbnail backfill
@@ -48,20 +51,29 @@ pub struct ImportProgress {
     pub total: usize,
 }
 
-fn collect_candidate_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
+/// What an import call will look at: the files, and the folders that could not be read.
+#[derive(Debug, Default)]
+struct Candidates {
+    files: Vec<PathBuf>,
+    unreadable_folders: Vec<String>,
+}
+
+fn collect_candidate_files(dir: &Path, found: &mut Candidates) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            found.unreadable_folders.push(dir.to_string_lossy().into_owned());
+            return;
+        }
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            out.extend(collect_candidate_files(&path));
+            collect_candidate_files(&path, found);
         } else if ImageFormat::from_path(&path).is_some() {
-            out.push(path);
+            found.files.push(path);
         }
     }
-    out
 }
 
 /// Extract the largest embedded thumbnail and write it to `thumbnail_dir`
@@ -242,16 +254,16 @@ fn import_one<A: CatalogAccess>(path: &Path, access: &A, thumbnail_dir: &Path, i
 }
 
 /// The files an import call will look at: a directory is walked recursively, anything else is taken as it is.
-fn candidates_of(paths: &[PathBuf]) -> Vec<PathBuf> {
-    let mut candidate_paths = Vec::new();
+fn candidates_of(paths: &[PathBuf]) -> Candidates {
+    let mut found = Candidates::default();
     for p in paths {
         if p.is_dir() {
-            candidate_paths.extend(collect_candidate_files(p));
+            collect_candidate_files(p, &mut found);
         } else {
-            candidate_paths.push(p.clone());
+            found.files.push(p.clone());
         }
     }
-    candidate_paths
+    found
 }
 
 fn count(summary: &mut ImportSummary, outcome: &FileOutcome) {
@@ -274,16 +286,24 @@ pub fn import_paths_with_progress<F: FnMut(usize, usize)>(
     paths: &[PathBuf],
     catalog: &Catalog,
     thumbnail_dir: &Path,
+    on_progress: F,
+) -> ImportSummary {
+    import_candidates_with_progress(candidates_of(paths), catalog, thumbnail_dir, on_progress)
+}
+
+fn import_candidates_with_progress<F: FnMut(usize, usize)>(
+    found: Candidates,
+    catalog: &Catalog,
+    thumbnail_dir: &Path,
     mut on_progress: F,
 ) -> ImportSummary {
     let import_batch = new_import_batch();
-    let candidate_paths = candidates_of(paths);
-    let mut summary = ImportSummary { import_batch, ..Default::default() };
+    let mut summary = ImportSummary { import_batch, unreadable_folders: found.unreadable_folders, ..Default::default() };
     let _ = std::fs::create_dir_all(thumbnail_dir);
-    let total = candidate_paths.len();
+    let total = found.files.len();
     let access = Direct(catalog);
 
-    for (i, path) in candidate_paths.iter().enumerate() {
+    for (i, path) in found.files.iter().enumerate() {
         let outcome = import_one(path, &access, thumbnail_dir, import_batch);
         count(&mut summary, &outcome);
         on_progress(i + 1, total);
@@ -305,14 +325,24 @@ pub fn import_paths_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
     catalog: &Arc<Mutex<Catalog>>,
     thumbnail_dir: &Path,
     workers: Option<usize>,
+    on_progress: F,
+    on_ready: R,
+) -> ImportSummary {
+    import_candidates_streaming(candidates_of(paths), catalog, thumbnail_dir, workers, on_progress, on_ready)
+}
+
+fn import_candidates_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
+    found: Candidates,
+    catalog: &Arc<Mutex<Catalog>>,
+    thumbnail_dir: &Path,
+    workers: Option<usize>,
     mut on_progress: F,
     mut on_ready: R,
 ) -> ImportSummary {
     let import_batch = new_import_batch();
-    let candidate_paths = candidates_of(paths);
-    let mut summary = ImportSummary { import_batch, ..Default::default() };
+    let mut summary = ImportSummary { import_batch, unreadable_folders: found.unreadable_folders, ..Default::default() };
     let _ = std::fs::create_dir_all(thumbnail_dir);
-    let total = candidate_paths.len();
+    let total = found.files.len();
     if total == 0 {
         return summary;
     }
@@ -350,7 +380,7 @@ pub fn import_paths_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
         }
         drop(ready_tx);
 
-        for (i, path) in candidate_paths.iter().enumerate() {
+        for (i, path) in found.files.iter().enumerate() {
             let outcome = import_one(path, &access, thumbnail_dir, import_batch);
             count(&mut summary, &outcome);
             if let FileOutcome::Imported { image_id, needs_thumbnail: true } = outcome {
@@ -390,7 +420,9 @@ pub fn scan_and_import_with_progress<F: FnMut(usize, usize)>(
     thumbnail_dir: &Path,
     on_progress: F,
 ) -> ImportSummary {
-    import_paths_with_progress(&collect_candidate_files(dir), catalog, thumbnail_dir, on_progress)
+    let mut found = Candidates::default();
+    collect_candidate_files(dir, &mut found);
+    import_candidates_with_progress(found, catalog, thumbnail_dir, on_progress)
 }
 
 /// `import_paths_streaming` over everything found under `dir`.
@@ -401,7 +433,9 @@ pub fn scan_and_import_streaming<F: FnMut(usize, usize), R: FnMut(i64, &Path)>(
     on_progress: F,
     on_ready: R,
 ) -> ImportSummary {
-    import_paths_streaming(&collect_candidate_files(dir), catalog, thumbnail_dir, None, on_progress, on_ready)
+    let mut found = Candidates::default();
+    collect_candidate_files(dir, &mut found);
+    import_candidates_streaming(found, catalog, thumbnail_dir, None, on_progress, on_ready)
 }
 
 /// Background pass (M2 Slice 1): fills in `thumbnail_path` for any
@@ -921,6 +955,83 @@ mod tests {
         let thumb_dir = root.join("thumbs");
         std::fs::create_dir_all(&scan_dir).unwrap();
         (scan_dir, thumb_dir)
+    }
+
+    #[cfg(unix)]
+    fn deny(dir: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn restore(dir: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Root reads a mode 000 folder anyway, so the denial cannot be staged.
+    #[cfg(unix)]
+    fn denial_holds(dir: &Path) -> bool {
+        std::fs::read_dir(dir).is_err()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_folder_is_reported_not_swallowed() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("unreadable");
+        let denied = dir.join("denied");
+        std::fs::create_dir_all(&denied).unwrap();
+        deny(&denied);
+        if !denial_holds(&denied) {
+            restore(&denied);
+            return;
+        }
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let summary = scan_and_import(&denied, &catalog, &thumb_dir);
+        let nested = scan_and_import(&dir, &catalog, &thumb_dir);
+        restore(&denied);
+
+        assert_eq!(summary.unreadable_folders, vec![denied.to_string_lossy().into_owned()]);
+        assert_eq!((summary.imported, summary.failed), (0, 0));
+        assert_eq!(nested.unreadable_folders, summary.unreadable_folders, "a denied subfolder is named too");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_denied_folder_dropped_with_files_is_reported_and_the_files_still_import() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("unreadable-mixed");
+        let denied = dir.join("denied");
+        std::fs::create_dir_all(&denied).unwrap();
+        std::fs::write(dir.join("a.dng"), b"not really a DNG").unwrap();
+        deny(&denied);
+        if !denial_holds(&denied) {
+            restore(&denied);
+            return;
+        }
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        let summary = import_paths(std::slice::from_ref(&dir), &catalog, &thumb_dir);
+        restore(&denied);
+
+        assert_eq!(summary.unreadable_folders, vec![denied.to_string_lossy().into_owned()]);
+        assert_eq!(summary.failed, 1, "the readable file was still looked at");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn a_folder_that_is_gone_is_reported_and_an_empty_one_is_not() {
+        let (dir, thumb_dir) = scan_and_thumb_dirs("unreadable-gone");
+        let catalog = Catalog::open_in_memory().unwrap();
+
+        let empty = scan_and_import(&dir, &catalog, &thumb_dir);
+        assert!(empty.unreadable_folders.is_empty());
+
+        let gone = dir.join("gone");
+        let summary = scan_and_import(&gone, &catalog, &thumb_dir);
+        assert_eq!(summary.unreadable_folders, vec![gone.to_string_lossy().into_owned()]);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
     #[test]

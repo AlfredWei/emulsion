@@ -38,6 +38,16 @@ import { queueThumbnailRegeneration } from "$lib/thumbnailBatchQueue.js";
 // leaves the placeholder, which is the correct outcome in that case.
 let pollingThumbnailsOnStartup = false;
 
+/** The status line for a finished import. A folder the app could not open is named, so an import that found nothing
+ * because of a denied folder never reads as an import that found nothing to add. */
+export function importStatusMessage(/** @type {import('$lib/api/catalog.js').ImportSummary} */ summary) {
+  const unreadable = summary.unreadable_folders.map((folder) => `Emulsion could not read ${folder}.`);
+  const nothingElse = summary.imported + summary.skipped_duplicates + summary.failed === 0;
+  if (unreadable.length > 0 && nothingElse) return unreadable.join(" ");
+  const counts = `Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`;
+  return unreadable.length > 0 ? `${counts}. ${unreadable.join(" ")}` : counts;
+}
+
 export async function runImport(/** @type {() => Promise<import('$lib/api/catalog.js').ImportSummary | null>} */ doImport) {
   importFlow.importing = true;
   importFlow.catalogProgress = null;
@@ -48,7 +58,7 @@ export async function runImport(/** @type {() => Promise<import('$lib/api/catalo
   try {
     const summary = await doImport();
     if (!summary) return; // user cancelled the dialog
-    shell.notify(`Imported ${summary.imported}, ${summary.skipped_duplicates} already in library, ${summary.failed} failed`);
+    shell.notify(importStatusMessage(summary));
     stopRefreshingWhileImporting();
     await refresh();
     // Cataloging (importProgress, tracked above) is only half of "import

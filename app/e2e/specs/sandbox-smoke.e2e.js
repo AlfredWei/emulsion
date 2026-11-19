@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE = path.resolve(__dirname, "../../../test_image/Field-corn-Liechtenstein-landscape.jpg");
+const FIXTURE = path.resolve(__dirname, "../../../test_image", process.env.LANE_FIXTURE ?? "Field-corn-Liechtenstein-landscape.jpg");
 const BUNDLE_ID = process.env.LANE_BUNDLE_ID;
 const OUT = process.env.LANE_OUT ?? fs.mkdtempSync(path.join(os.tmpdir(), "sandbox-smoke-"));
 if (!BUNDLE_ID) throw new Error("LANE_BUNDLE_ID must name the sandboxed app's bundle identifier");
@@ -54,7 +54,14 @@ describe("sandbox smoke", () => {
     const before = await invoke("ai_helper_info");
     expect(before.ok.exists).toBe(true);
     const imported = await invoke("import_files", { paths: [path.join(inside, path.basename(FIXTURE))] });
-    expect(imported.ok.imported).toBe(1);
+    expect(imported.ok.imported + imported.ok.skipped_duplicates).toBe(1);
+    const deadline = Date.now() + 90000;
+    do {
+      facts.model_status = await invoke("segment_model_status");
+      if (facts.model_status.ok?.state === "ready") break;
+      await browser.pause(2000);
+    } while (Date.now() < deadline);
+    expect(facts.model_status.ok?.state).toBe("ready");
     const image = (await invoke("list_images")).ok[0];
     const prepared = await invoke("segment_prepare", { path: image.path, contentHash: image.content_hash });
     facts.segment_prepare = prepared;

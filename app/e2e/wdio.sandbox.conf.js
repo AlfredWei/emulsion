@@ -39,7 +39,10 @@ export const config = {
   reporters: ["spec"],
 
   onPrepare: async () => {
-    if (await portTaken()) throw new Error(`port ${embeddedPort} is taken by another app with the embedded WebDriver, and this run would drive that app instead of its own`);
+    if (await portTaken()) {
+      console.error(`port ${embeddedPort} is taken by another app with the embedded WebDriver, and this run would drive that app instead of its own`);
+      process.exit(1);
+    }
   },
   afterTest: async (test, _context, { passed }) => {
     if (!laneOut) return;

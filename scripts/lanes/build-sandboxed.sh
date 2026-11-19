@@ -33,7 +33,7 @@ sign_id="${LANE_SIGN_ID:--}"
 
 [ -d "$tauri/bundled-models" ] || { echo "app/src-tauri/bundled-models/ is missing: run node app/scripts/fetch-bundled-models.mjs" >&2; exit 2; }
 triple="$(rustc -vV | sed -n 's/^host: //p')"
-[ -f "$tauri/binaries/emulsion-ai-$triple" ] || (cd "$app" && node scripts/prepare-ai-helper.mjs)
+[ -f "$tauri/binaries/emulsion-ai-$triple" ] || (cd "$app" && node scripts/prepare-ai-helper.mjs >&2)
 
 mkdir -p "$out"
 work="$(mktemp -d "${TMPDIR:-/tmp}/lane-build-XXXXXX")"

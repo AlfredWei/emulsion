@@ -14,6 +14,8 @@ const appBinaryPath = path.resolve(__dirname, "../src-tauri/target/debug/emulsio
 export const config = {
   runner: "local",
   specs: ["./specs/**/*.e2e.js"],
+  // Lane specs: they need LANE_* variables and are driven by wdio.sandbox.conf.js (.github/workflows/lanes.yml).
+  exclude: ["./specs/sandbox-smoke.e2e.js", "./specs/perf-probe.e2e.js"],
   maxInstances: 1,
 
   services: [

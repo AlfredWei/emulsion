@@ -10,7 +10,7 @@ lr_replace/
 ├── docs/                 Engineering docs — how it's built, and why
 ├── app/                  The actual Tauri + Svelte application
 ├── .github/workflows/    CI (GitHub Actions)
-├── scripts/              Repo-level tools: gen_third_party_libraries.py (library licence list and licenses/; `--check` and the copyleft guard run in CI), check_libraw_version.py (the Windows vcpkg LibRaw must match the vendored header; runs in both Windows jobs), provenance_report.py (read-only git report for RFC-0038; --self-test runs in CI)
+├── scripts/              Repo-level tools: gen_third_party_libraries.py (library licence list and licenses/; `--check` and the copyleft guard run in CI), check_libraw_version.py (the Windows vcpkg LibRaw must match the vendored header; runs in both Windows jobs), provenance_report.py (read-only git report for RFC-0038; --self-test runs in CI), lanes/ (the lane harness: build-sandboxed.sh builds a sandboxed bundle with its own bundle ID, perf-interleave.sh measures a perf-probe metric at two commits in alternating order; `--self-test` and shellcheck run in CI)
 ├── Makefile               make dev / make test / make build, see `make help`
 ├── README.md               Project overview + quick start
 ├── PROGRESS.md             Running status log — read this first after time away
@@ -126,6 +126,7 @@ src-tauri/
 │   └── default.json      Which Tauri APIs the webview is allowed to call
 ├── icons/                 App icons for bundling
 ├── Cargo.toml              Rust dependencies
+├── entitlements/            Entitlements for lane bundles only (lane-drivable.entitlements adds network.server for the embedded WebDriver, so it never ships to a store; lane-helper.entitlements is the helper's sandbox plus inherit)
 ├── tauri.conf.json          App config: window, identifier, asset protocol, bundle targets
 ├── tauri.bundle-models.conf.json  Release overlay: ships bundled-models/ inside the installer (npm run build:release; `EMULSION_EDITION=<name>` picks which models, see scripts/bundledEditions.mjs and ADR-0012)
 └── tauri.bundle-helper.conf.json  Release overlay: ships the emulsion-ai helper as a sidecar (`bundle.externalBin`), copied by app/scripts/prepare-ai-helper.mjs into binaries/ (git-ignored)
@@ -215,10 +216,14 @@ src/
 │   └── styles/tokens.css     Dark-theme design tokens, ported from the reviewed mockup
 ├── app.html                 SvelteKit's HTML shell
 └── static/                  Static assets (icons, etc.)
-e2e/                         WebdriverIO specs (parity, gpu-fallback, performance, golden-path, …) run in CI on macOS + Windows
+e2e/                         WebdriverIO specs (parity, gpu-fallback, performance, golden-path, …) run in CI on macOS + Windows. `wdio.sandbox.conf.js` drives any binary named by APP_BIN for the lanes (screenshots into LANE_OUT); `sandbox-smoke` and `perf-probe` are the lane specs
 ```
 
 **The `m*-smoke` routes are not part of the app** (`m0-spike` and `m1-slice3-smoke` were deleted so the store bundle does not ship them) — they're throwaway diagnostic pages used to verify something empirically (in-webview WebGPU, a real RAW decode, the asset protocol) when there's no tool available in this environment to screenshot or drive the native window directly. Each one is self-contained, reports its result by invoking a `report_spike_result` Tauri command that prints to the Rust process's stdout, and is left in the repo as a re-runnable check rather than deleted — but none of them are linked from the real UI. If one of these routes is ever loaded by the actual app (via `tauri.conf.json`'s window `url`), that's a leftover from manual testing that should have been reverted — check `git diff app/src-tauri/tauri.conf.json` if `make dev` ever opens one of these instead of the real Library view.
+
+## `.github/workflows/lanes.yml`
+
+Manual dispatch only. Runs one spec from `app/e2e/specs/` on a fresh `macos-latest` or `windows-latest` runner and uploads the screenshots and logs. `sandbox-*` specs on macOS run against a sandboxed bundle from `scripts/lanes/build-sandboxed.sh`, the others against the debug build. `perf-interleave` runs `scripts/lanes/perf-interleave.sh` for the commit under test against `trunk_ref`. The workflow's own scripts and specs are copied over `ref` when it is another commit, so a commit without the harness can be driven.
 
 ## `.github/workflows/ci.yml`
 

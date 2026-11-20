@@ -221,6 +221,7 @@ jobs:
       - run: python3 scripts/check_libraw_version.py --self-test
       - run: python3 scripts/check_vcpkg_versions.py --self-test
       - run: python3 scripts/gen_third_party_libraries.py --self-test
+      - run: shellcheck scripts/lanes/*.sh && scripts/lanes/perf-interleave.sh --self-test
 
       # RFC-0038 A4: THIRD_PARTY_LIBRARIES.md and licenses/ are generated from the lockfile, the vendored LibRaw and the
       # crates' own files. `--check` writes nothing and fails if either differs from what the build would give, or if a

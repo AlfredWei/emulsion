@@ -2080,13 +2080,19 @@ fn update_backup_settings(state: State<'_, AppState>, settings: BackupSettings) 
 
 /// Opens one of the app's own bundled files in the OS's default app. This runs in Rust because the opener plugin's
 /// webview scope refuses a path with a hidden directory component (its glob requires a literal leading dot on
-/// Unix), so a checkout under a dot directory could not open its own notices.
-fn open_bundled_file(app: &AppHandle, path: Option<PathBuf>, name: &str) -> Result<(), String> {
+/// Unix), so a checkout under a dot directory could not open its own notices. The open runs on the blocking pool:
+/// on Windows, with no app registered for `.md`, `ShellExecuteExW` shows "Pick an app" and later calls can wait
+/// forever. On the main thread that froze the webview, and on an async worker it would starve the runtime.
+async fn open_bundled_file(app: AppHandle, path: Option<PathBuf>, name: &str) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let path = path.ok_or_else(|| format!("{name} was not found next to the app"))?;
-    app.opener()
-        .open_path(path.to_string_lossy(), None::<&str>)
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        app.opener()
+            .open_path(path.to_string_lossy(), None::<&str>)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Opens the OS file manager with `path` selected (Library right-click and the metadata panel). It runs in Rust so
@@ -2106,15 +2112,17 @@ fn open_folder(app: AppHandle, path: String) -> Result<(), String> {
 
 /// Settings > About: opens the bundled `THIRD_PARTY_NOTICES.md` in the OS's default app for Markdown (or text) files.
 #[tauri::command]
-fn open_third_party_notices(app: AppHandle) -> Result<(), String> {
-    open_bundled_file(&app, bundled_models::notices_path(&app), "THIRD_PARTY_NOTICES.md")
+async fn open_third_party_notices(app: AppHandle) -> Result<(), String> {
+    let path = bundled_models::notices_path(&app);
+    open_bundled_file(app, path, "THIRD_PARTY_NOTICES.md").await
 }
 
 /// Settings > About: opens the bundled `THIRD_PARTY_LIBRARIES.md` (the code libraries' licences; the full texts it
 /// names are in the `licenses/` folder beside it).
 #[tauri::command]
-fn open_third_party_libraries(app: AppHandle) -> Result<(), String> {
-    open_bundled_file(&app, bundled_models::libraries_path(&app), "THIRD_PARTY_LIBRARIES.md")
+async fn open_third_party_libraries(app: AppHandle) -> Result<(), String> {
+    let path = bundled_models::libraries_path(&app);
+    open_bundled_file(app, path, "THIRD_PARTY_LIBRARIES.md").await
 }
 
 /// Settings > Storage: reports where thumbnails + the Develop preview

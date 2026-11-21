@@ -1,28 +1,29 @@
 # Emulsion store release plan
 
-The owner wants to sell Emulsion on the Mac App Store and the Microsoft Store, and asked for the todo list for the whole project.
-That is RFC-0038 decision D1 option (b), public and paid. RFC-0038 section B5 (12 steps, 27 to 119 engineer-days) is now the real path, and this plan builds on it.
-The rule the program enforces is that no build reaches a store until the RFC-0038 Phase C gate and this plan's store gate pass on that exact build.
-The decisions only the owner or counsel can make come first, in **Arm the program**. Each names its recommended default and the PRs it gates.
-PR ids in dependency order. Shared S0 to S11, Mac M1 to M7, Windows W1 to W6, release G1 to G3.
-Total cost is about 50 to 168 engineer-days (guess), plus counsel, account approval and App Review time.
-Decide D14 (entity and accounts), D7 with D11 (model policy) and D15 (the name) first. They gate the most work or the longest calendar time.
+The owner sells Emulsion on the Mac App Store first, paid upfront, with an on-device purchase check. The Microsoft Store waits until the Mac release ships (owner message 2026-11-18, paraphrased).
+That is RFC-0038 decision D1 option (b), public and paid. RFC-0038 section B5 is the real path, and this plan builds on it.
+The first rule the program enforces is that no build reaches the store until the RFC-0038 Phase C gate and this plan's store gate pass on that exact build.
+The second rule is that every feature whose licence or data terms need a lawyer's answer is compiled out of the store edition. The default build, the open source build and development builds keep every feature.
+Active PR ids in dependency order. Shared S0 to S5 and S7 to S11, Mac M1 to M6 and M8, release G1 and G2. Deferred PRs are S6, M7, W1 to W6 and G3.
+Total cost of the active PRs is about 32.5 to 61 engineer-days (guess), plus research, account and App Review time.
+**Status on 2026-11-18.** The owner answered the decisions on 2026-11-18. Wave 0 is four PRs (S0, S7, S8, M1), and all four started on 2026-11-18. D15 (the name), D20 (the bundle ID) and D21 (what a failed purchase check does) are open. The licence research memo answered D2, D3 and D5 on 2026-11-18 as research, not legal advice, and waits for the owner to accept its stated risk.
 
 ## How to read this
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs the `pstack` plugin's `skills/poteto-mode/playbooks/autopilot-stack.md`. Agents build and verify each PR and stop at verified. The owner lands every PR. No agent merges. Autopilot-stack fits better than `playbooks/autopilot-full.md` because 17 of the 28 PRs wait on an owner or counsel answer, and the owner asked to review before anything lands (inferred from the brief). It fits better than `playbooks/orchestrate.md` because orchestrate's PR owners merge their own PRs (sourced, that playbook). Run it in waves. A wave is the set of PRs whose gates are answered, listed under **Spawn owners**.
+The program runs the `pstack` plugin's `skills/poteto-mode/playbooks/autopilot-stack.md`. The owner chose this execution policy on 2026-11-18 (owner message 2026-11-18, paraphrased). The owner agent of a PR that is not review-gated merges it once local checks and every CI check are green. A review-gated PR stops at verified, and the operator reviews and lands it. Each owner agent runs its own PR's live lanes, one after another. No ten-worker swarm runs per PR. A full swarm per the pstack `skills/swarm/SKILL.md` stays available when the operator asks for one. Autopilot-stack stays the program shape because 13 of the 20 active PRs are review-gated and stop for the owner. Run it in waves. A wave is the set of PRs whose parents have merged, listed under **Spawn owners**.
 
-Three sets matter for scheduling.
+Four sets matter for scheduling.
 
-- Owner-or-counsel-gated. S1, S2, S3, S4, S5, S6, S9, S10, M6, M7, W3, W4, W5, W6, G1, G2, G3. A gated PR does not start until its decision is recorded in ADR-0011.
-- Review-gated, because they change an interaction or need a human at the screen. S2, S3, S4, S9, S10, M1, M2, M3, M4, M5, M6, M7, W4, W5, W6, G2, G3.
-- Need accounts or secrets that no agent holds. M6, M7, W3, W5, W6, G2, G3. The owner puts each secret into GitHub Actions secrets. Agents dispatch workflows that use the secrets and never read them.
+- Decision-gated, because a decision is still open. M6 and G2 wait for D15, D20 and the trademark search. M8 waits for D21. S5 waits for the owner to accept the licence research memo's stated risk before merge. S10 waits for the privacy-policy research memo. G1 waits for the owner's written acceptance of the risk each research memo states. Every other active PR has an answered decision.
+- Review-gated, because they change an interaction or need a human at the screen. S2, S3, S4, S9, S10, M1, M2, M3, M4, M5, M6, M8 and G2.
+- Need accounts or secrets that no agent holds. M6, M8 and G2. The owner puts each secret into GitHub Actions secrets. Agents dispatch workflows that use the secrets and never read them.
+- Deferred, out of every wave and every cost total until the owner reopens them. S6, because the store edition builds without lens profile correction. M7, because D12 has no trial. W1 to W6 and G3, because the owner deferred the Microsoft Store until the Mac release ships (owner message 2026-11-18, paraphrased). Their sections stay so the plan keeps its shape.
 
-Costs are engineer-days for one person who knows the codebase. Every cost is a guess unless a box says otherwise. RFC-0038 B5 figures are reused where a row matches. RFC-0039 moved B5.3 from 4 to 8 days to 6.5 to 12 (sourced, RFC-0039 section 7). The total is higher than B5's 27 to 119 because B5 has no sandbox, store packaging or submission work. It is lower than a plain sum would be because B5.1, the edition mechanism and the lens golden harness are already merged (measured, PROGRESS.md), and the Mac store needs no Developer ID notarisation. The Mac App Store alone, without W1 to W6 and G3, is about 38 to 142 engineer-days (guess).
+Costs are engineer-days for one person who knows the codebase. Every cost is a guess unless a box says otherwise. RFC-0038 B5 figures are reused where a row matches. The active total is about 32.5 to 61 engineer-days (guess). The plan of 2026-11-17 said about 50 to 168 for both stores and about 38 to 142 for the Mac store alone. The total fell for three reasons. The deferred PRs leave it (S6 6.5 to 12, M7 3 to 6, W1 to W6 12.5 to 25, G3 0.5 to 1, all guesses). The retrain routes of S2, S3 and S4 are gone, because the owner took the recommended defaults. S3 and S4 now compile features out instead of replacing models. S1 grew by 1.5 to 3 days for the compile-time gating and the clean rewrite of one lens kernel. S5 grew by 1 to 1.5 days for the public source repository and the notice gaps. M8 adds 2.5 to 5 days for the purchase check (guesses).
 
-Critical path. With the fallback answers recommended below, the path is the Mac sandbox chain S0, S1, M2, M4, M6, G1, G2, about 14 to 28 engineer-days (guess). With retrain answers to D7 and D11, model remediation leads instead. S0, S1, S3 (an SFace replacement up to 25 days), S9, S10, G1, G2 is up to about 45 engineer-days plus GPU time (guess). Counsel's answers and Apple enrolment run on calendar time beside both and are likely the real critical path (guess).
+Critical path. It is the Mac sandbox chain S0, S1, M2, M4, M6, M8, G1, G2, about 18 to 33 engineer-days (guess). The plan of 2026-11-17 gave S0, S1, M2, M4, M6, G1, G2 at about 14 to 28 days (guess). The path is longer because M8 sits between M6 and G1, and S1 carries the gating. Calendar time runs beside it. The name research (D15), the bundle ID (D20) and the trademark search gate M6, because the App Store Connect record waits for them. App Review time is not published (sourced, research section 6). Those calendar items are likely the real critical path (guess).
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -31,34 +32,52 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Arm the program
 
 - [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go.
-- [ ] Get the owner's or counsel's answer to each decision below. Evidence is the owner's message in chat or counsel's letter, quoted into ADR-0011 by S1. A decision answered later is appended to ADR-0011 by the PR it gates.
+- [ ] Record the owner's answers in ADR-0011 through S1. Evidence is the owner's message in chat, quoted as "owner message 2026-11-18, paraphrased". A decision answered later is appended to ADR-0011 by the PR it gates.
 
-| Decision | Who | Recommended default | What would change it | Gates |
-| --- | --- | --- | --- | --- |
-| D14. Entity and store accounts (extends D10) | Owner, accountant | One legal entity. Request its D-U-N-S number now. Enrol it as an Apple organisation and open a Microsoft company account. Apple needs a legal entity, a D-U-N-S number, a domain email and a public website for an organisation (sourced, Apple enrol page). Microsoft requires a company account for anyone selling in their trade (sourced, Store Policy 10.14). | No entity. Then enrol Apple as an individual (the seller name is the owner's legal name) and verify the Microsoft company account as an independent developer with documents (sourced, Partner Center account page) | M6, W3, W5, G2, G3 |
-| D7. Model-data policy | Owner, counsel | Reject weights whose main training data has non-commercial terms. LaMa falls back to PatchMatch (S2). YuNet is swapped (S3). SFace is dropped (S3). Ask the Real-ESRGAN maintainer, and drop Upscale if the answer is unknown (S4). Counsel clears or rejects D-FINE's ImageNet backbone (S4). | Counsel says dataset terms do not reach the weights. Then S2, S3 and S4 shrink to notices. | S1, S2, S3, S4 |
-| D11. Face features in a paid build | Owner, counsel | Leave face grouping out of the first store release. Keep the eye check with the swapped detector. | Counsel clears biometric duties in the target markets and SFace is replaced | S1, S3, S9 |
-| D15. The name "Emulsion" | Owner, counsel | Keep it if the trademark searches are clear. A Mac photo catalog app named Emulsion by The Escapers sold on the Mac App Store in 2015 and had a 1.4.1 release in December 2016 (sourced, PetaPixel and Softpedia, secondary). No current listing was found (sourced, research). | A live mark in software classes, or Apple or Microsoft refusing the name. Rename before G2, because every listing asset carries it. | G2, G3 |
-| D16. Channel order | Owner | Mac App Store first, Microsoft Store second. Apple collects the money and the tax, so the Mac build needs no payment or licence system (sourced, guideline 3.1.1). The sandbox spike already runs (measured). The owner's machine is a Mac, so the human-at-screen checks can run. | Apple enrolment stalls on D-U-N-S, or Microsoft confirms that it collects payment for a Paid MSI listing (then Windows is cheaper) | Wave order |
-| D12. Mac price model | Owner | Paid upfront, one price tier, no In-App Purchase. M7 is skipped. | The owner wants a free trial. Then M7 builds the Price Tier 0 "XX-day Trial" item plus a paid unlock (sourced, guideline 3.1.1) | M7, G2 |
-| D13. Windows route | Owner | Route A. The same signed MSI or EXE that direct download would use, listed in Partner Center, with the app's own payment and licence keys. Tauri builds MSI and EXE officially (sourced, Tauri Microsoft Store guide). Third-party commerce carries no Store fee (sourced, App Developer Agreement v8.11). | Microsoft states in writing that a Paid MSI or EXE listing has Microsoft collect the money. Then W4 and W5 shrink to a Store licence check. The listing page says a one-time price is "collected through in-app purchase" and names no fee or money flow, so reading that as the app's own payment is an inference. | W4, W5, W6, G3 |
-| D2 and D3. LibRaw licence | Owner, counsel | Elect CDDL-1.0 (RFC-0038 B5.4 (a), 0.5 to 1 day) | Counsel prefers LGPL-2.1 with dynamic linking (B5.4 (b), 3 to 5 days) | S5 |
-| D5. Lens database | Counsel | Ship the unmodified XML as a separate resource beside the binary (RFC-0039) | Counsel says it cannot ship beside a proprietary binary. Then the RFC-0038 B5.3 contingency applies (10 to 25 days, not researched) | S6 |
-| D8. Relicensing | Owner, counsel | Future versions become proprietary. The repository goes private before the first store upload. | The owner keeps the source public. Selling a paid build of public source is not forbidden by either store's rules as read (inferred), but RFC-0038 B5 assumes a proprietary product. | S5, W6 |
-| D9. Activation | Owner | Offline signed licence file (RFC-0038 B5.8, PRD local-first) | Only needed under D13 route A | W4 |
-| D17. Map and place-search services | Owner | Online map and place search stay off until the user turns them on. Keep the OpenStreetMap defaults with attribution and the existing 1.1 s search throttle. Contract a paid provider later. | OpenStreetMap refuses commercial use, or review asks for a provider's retention terms (Apple privacy labels depend on them, sourced) | S9 |
-| D18. Mac minimum OS and architecture | Owner | Apple silicon only, `minimumSystemVersion` at least 12.0 (sourced, Tauri App Store guide), raised to the oldest macOS the owner tests | Intel users matter. Universal adds an x86_64 helper and LibRaw build, 1 to 3 days (guess, audit S7) | M6 |
-| D19. Windows code-signing route | Owner | Azure Artifact Signing if the entity qualifies, else an OV certificate. Prices were not retrieved (sourced, RFC-0038 B5.6). | Cost or eligibility | W3 |
+The owner answered on 2026-11-18. Every answer below is owner message 2026-11-18, paraphrased. The decisions of 2026-11-17, with their sources and alternatives, are kept in Appendix E.
 
-- [ ] The owner starts the calendar-time actions now. No agent can do these.
-  - [ ] Request the D-U-N-S number. Evidence is the D&B confirmation, as a screenshot. Apple says allow up to 5 business days for D&B and up to 2 more for Apple (sourced).
-  - [ ] Enrol in the Apple Developer Program (99 USD a year, sourced). Evidence is a screenshot of the membership page with the Team ID.
-  - [ ] Open the Microsoft Partner Center company account through storedeveloper.microsoft.com (no fee, sourced). Evidence is a screenshot of the verified account.
-  - [ ] Reserve "Emulsion" in Partner Center (three months, sourced) and create the App Store Connect app record for bundle ID `dev.alfredwei.emulsion`. Evidence is one screenshot of each.
-  - [ ] Run the USPTO, WIPO Global Brand Database and EUIPO TMview searches for "Emulsion" in software classes. Evidence is counsel's note or the saved result pages.
-  - [ ] Send counsel RFC-0038 section 4 questions 1 to 9, RFC-0039 questions Q1 to Q7, and the store questions in Appendix C. Evidence is the sent letter.
-  - [ ] Ask Microsoft Partner Center support whether a Paid MSI or EXE listing has Microsoft collect the payment. Evidence is the reply. It settles the inference under D13.
-  - [ ] Ask the Real-ESRGAN maintainer what `realesr-general-x4v3` was trained on (RFC-0038 B5.5). Evidence is the issue link.
+| Decision | Owner's answer | Status | Gates |
+| --- | --- | --- | --- |
+| D14. Entity and store accounts | The owner already holds an Apple Developer account as an individual. No D-U-N-S number and no organisation. Microsoft Partner Center and the name reservation there are skipped for now. | Answered for Apple. Deferred for Microsoft. | M6, G2 |
+| D7 and D11. Model data and face features | Follow the recommended defaults. Weights whose main training data has non-commercial terms stay out, and face features stay out of the first store release. | Answered | S1, S2, S3, S4 |
+| D12. Mac price model | Paid upfront, one price, no trial. The app must check that the purchase is real, so a copied app does not run for other people. | Answered. M7 is skipped and M8 is added. | M8, G2 |
+| D16. Channel order | Mac App Store first. | Answered | Wave order |
+| D18. Mac architecture | Apple silicon only, as recommended. | Answered | M6 |
+| D17. Map and place-search services | Online map and place search are off by default in release builds and on in debug builds. The user turns them on in Settings. | Answered | S9 |
+| D8. Relicensing | Approved. The repository goes private, and future versions become proprietary. | Answered | S5 |
+| D2 and D3. LibRaw licence | The owner has no lawyer and asked what CDDL is. CDDL-1.0 is a file-level licence that LibRaw LLC offers beside LGPL-2.1 (RFC-0038 D2, and `licenses/LibRaw-COPYRIGHT`). The licence research memo of 2026-11-18 elects CDDL-1.0 as an engineering default. CDDL section 3.5 lets the executable ship under the owner's own terms, and CDDL asks no relink. The only duty is to publish LibRaw's own source and say where it is (S5). | Answered by research, not legal advice. Waiting for the owner to accept the memo's stated risk. | S5 |
+| D5. Lens database | The memo answers D5 by the compile-time switch. The store edition ships no lens profiles, which removes the `lensfun` crate, its LGPL-3.0 terms and the CC-BY-SA database (the reconciliation below). For a later release the memo says to ship the database files unmodified with a credit line and the licence URI. | Answered by research. Not gating. | S6 (deferred) |
+| D15. The name | A name research agent is running. The project name and the product name may differ. | Pending, research report | M6, G2 |
+| D20. Bundle ID (new) | Recommended default is a neutral reverse-DNS form that carries no personal name, chosen with the D15 answer. The answer waits for the name research report. | Pending | M6, G2 |
+| D21. A failed purchase check (new) | The owner asked for exit code 173 on an invalid or missing receipt. Apple's current page says not to terminate the app (sourced, "Validating receipts on the device", retrieved 2026-11-18). Recommended default is Apple's current text. The app shows a blocking screen with "Check again" and "Quit", and opens no catalog. M8 explains the conflict. | Pending, owner to confirm | M8 |
+| D13, D19 and D9. Windows route, signing and activation | Skipped. | Deferred | W2 to W6, G3 |
+
+The bundle ID becomes permanent. Apple says a bundle ID cannot change once a build is uploaded, and that deleting an app record does not free its bundle ID (sourced, Apple "Changing the bundle identifier", retrieved 2026-11-18). The App Store Connect record is the step that leads to the first upload. So nobody creates the record, the App ID or the provisioning profile until the owner has recorded D15 and D20.
+
+**Compile-time legal gating, and how it meets the recommended defaults.** The owner asked that every feature whose licence or data terms need a lawyer's answer is switched off at compile time in the first store release, while the default build and the open source build keep everything (owner message 2026-11-18, paraphrased). The plan reconciles that with the recommended defaults as follows. The owner can overrule any line.
+
+- Remove ships in the store edition. It runs PatchMatch (`inpaint_patchmatch.rs`, S2), which is Emulsion's own code and needs no lawyer's answer. LaMa stays out.
+- Face grouping is compiled out of the store edition. The eye check goes with it, because `blink_commands.rs` refuses unless both the `blink` and the `face` families are in the edition, and it loads the YuNet detector (measured, lines 40 to 57). This differs from the 2026-11-17 default, which kept the eye check with a swapped detector. The detector swap becomes a later release.
+- AI Upscale is compiled out, because the Real-ESRGAN training data is unknown and the maintainer question is skipped.
+- The D-FINE person detector is compiled out, because of the ImageNet backbone question.
+- Lens profile correction is compiled out with a Cargo feature. That removes the LGPL-3.0 `lensfun` crate and the CC-BY-SA lens database it embeds from the store binary (S1). The profile path of the render code goes with it, because it holds app code described as a port of lensfun math (RFC-0039 section 3). Manual lens corrections stay. Manual distortion calls one ported kernel, so S1 rewrites that kernel clean, about half a day (guess), or the store edition drops the Manual distortion slider. S6, the clean-room replacement of RFC-0039, is deferred.
+- The store edition leaves out the LaMa, Real-ESRGAN, D-FINE, YuNet, SFace and Face Mesh models, as the licence research memo lists. It keeps NAFNet (AI Denoise) and SAM 2 (Select Subject). The memo rates NAFNet clean and keeps SAM 2 with one residual question, because the SA-1B licence text was not read (memo section 9). Whether training-data terms reach weights at all is still a lawyer's question (Appendix C).
+- Online map and place search stay in every build behind the D17 switch. They are not compiled out, because the owner asked for a setting.
+
+"Compiled out" means two mechanisms, and S1 states which one each feature uses. A model-driven feature is fixed out by the compiled edition name of ADR-0012 together with the absent weights and no download path. The lens profile path is removed from the binary by a Cargo feature, because its open question is about code and data inside the binary. S1 gives the evidence for that split.
+
+- [ ] Track the owner's actions. No agent can do these. Evidence for an owner action is the owner's message in chat, unless the box names other evidence.
+  - [ ] Request the D-U-N-S number. Skipped, because the owner enrols as an individual (owner message 2026-11-18, paraphrased).
+  - [x] Enrol in the Apple Developer Program. Done before 2026-11-18. Evidence is owner message 2026-11-18, paraphrased.
+  - [ ] Open the Microsoft Partner Center account and reserve the name there. Skipped for now. Deferred with the Windows PRs.
+  - [ ] Create the App Store Connect app record. Do this only after D15 and D20 are recorded and the trademark search is done, because the bundle ID becomes permanent. Evidence is a screenshot of the record.
+  - [ ] Run the USPTO, WIPO Global Brand Database and EUIPO TMview searches for the chosen product name in software classes. Wave 0 and the sandbox work do not need it. It must be done before the App Store Connect record, before any listing asset and before G2. Evidence is the saved result pages.
+  - [ ] Get a research memo for each open licence question, written by an agent from primary sources, with the risk the owner accepts stated in it. Evidence is the memo file and the owner's message accepting its risk. Appendix C lists the questions a lawyer would still need to answer.
+    - [ ] D2, D3 and D5, the licence research memo. Written on 2026-11-18 as research, not legal advice. It is held outside the repository. Check this box when the owner accepts its stated risk, and commit the memo beside ADR-0011 through S1.
+    - [ ] D8, the published MIT history and the AI-assisted commits. The licence research memo names it a question that still needs a lawyer (its section 10, question 1). S5 states the risk. Check this box when the owner accepts it or asks a lawyer.
+    - [ ] The privacy policy and the licence agreement for the Mac store. The licence research memo gives the open-source clause (its section 4). The privacy text is not started. S10 needs both.
+  - [ ] Ask Microsoft Partner Center support about Paid MSI payment collection. Skipped, deferred with D13.
+  - [ ] Ask the Real-ESRGAN maintainer about the training data. Skipped, so AI Upscale is off in the first store release.
 - [ ] Read these from trunk at program start. Re-read them at every tick.
   - [ ] `git show origin/main:docs/store-release-plan.md`
   - [ ] `git show origin/main:.claude/skills/verify-emulsion/SKILL.md`
@@ -72,23 +91,24 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ### Spawn owners
 
-- [ ] Spawn one owner per PR with the full lifecycle the execution playbook names. Owners write code on `sonnet medium` (the `feature, refactoring` line of the pstack model rule). S6 and M2 go to `opus high` (the `hardest tasks` line).
+- [ ] Spawn one owner per active PR with the full lifecycle the execution playbook names. Owners write code on `sonnet medium` (the `feature, refactoring` line of the pstack model rule). S1, M2 and M8 go to `opus high` (the `hardest tasks` line). S1 crosses many call sites, M2 holds the bookmark layer, and M8 parses signed data.
 - [ ] Follow this dependency graph. Start dependent work only after its parent merges, or base it on the parent branch when the execution playbook stacks.
-  - [ ] Wave 0, no decision needed. S0, S7, S8, M1 and W1 are independent and first. All branch from `main`. RFC-0039 step 1 may also start (RFC-0039 section 10).
-  - [ ] Wave 1, after D7, D11, D12 and D13 are answered. S1 after S0.
-  - [ ] Wave 2. S2, S3 and S4 after S1. S11 after S1. M2 after S1 and M1. M5 after S1.
-  - [ ] Wave 3. M3 and M4 after M2. S9 after S3 and D17. S5 after D2 and D8. S6 after RFC-0039 steps 1 to 5 and D5.
-  - [ ] Wave 4. M6 after S11, M2, D14 and D18. W2 after S11 and W1. S10 after S5, S6, S9 and counsel's texts.
-  - [ ] Wave 5. M7 after M6, only if D12 is the trial. W3 after W2, D14 and D19. W4 after S1, D9 and D13.
-  - [ ] Wave 6. W5 after W4. W6 after W3, W4 and D8. G1 after S2, S3, S4, S10, M6 and W3.
-  - [ ] Wave 7. G2 after G1, D12, D14 and D15. G3 after G1, W5, W6 and D15.
+  - [ ] Wave 0, no decision needed. S0, S7, S8 and M1 are independent and first. All branch from `main`. All four started on 2026-11-18.
+  - [ ] Wave 1. S1 after S0. S5 after S0, with its merge held until the owner accepts the licence research memo's stated risk. S9 after S0.
+  - [ ] Wave 2. S2 and S3 after S1. S4 after S3, because both edit `adaptive_commands.rs`. S11 after S1. M2 after S1 and M1. M5 after S1.
+  - [ ] Wave 3. M3 and M4 after M2. S10 after S5, S9 and the privacy-policy research memo.
+  - [ ] Wave 4. M6 after S11, M2 and M4, and after D15, D20 and the trademark search.
+  - [ ] Wave 5. M8 after M6 and D21.
+  - [ ] Wave 6. G1 after S2, S3, S4, S5, S7, S8, S9, S10, M1, M3, M4, M5 and M8, and after the owner accepts each research memo's stated risk.
+  - [ ] Wave 7. G2 after G1, D15 and D20.
+  - [ ] Deferred, in no wave. S6, M7, W1, W2, W3, W4, W5, W6 and G3. When the owner reopens one, its own **Depends on** block names its parents.
 - [ ] Hold the file boundaries. Two PRs in the same wave may run in parallel only on disjoint files.
   - [ ] S0 touches only `.github/workflows/lanes.yml`, `scripts/lanes/**`, `app/e2e/wdio.sandbox.conf.js`, `app/e2e/specs/{perf-probe,sandbox-smoke}.e2e.js` and `app/src-tauri/entitlements/lane-*.entitlements`.
-  - [ ] Only S1 creates `app/src-tauri/src/channel.rs` and the `store` edition. S3 and S4 change `models/bundled-models.json` after S1 merges, one at a time, S3 first.
-  - [ ] M2 owns `app/src-tauri/src/sandbox_access/**`, `catalog/folder_grants.rs` and the setup block of `lib.rs`. W1 owns the data-directory helpers of `lib.rs` and `storage.rs`. They touch different functions of `lib.rs`, so each rebases on the other's merge.
-  - [ ] S5 and S6 both edit `scripts/gen_third_party_libraries.py`. S5 lands first.
-  - [ ] S11 owns `.github/workflows/release.yml` as a reusable workflow. M6 adds only `release-mas.yml`. W3 adds only `release-msstore.yml`. Separate files keep the two store pipelines from serializing on one file.
-- [ ] Hold the review gate. S2, S3, S4, S9, S10, M1, M2, M3, M4, M5, M6, M7, W4, W5, W6, G2 and G3 wait for the operator's review in chat with screenshots and a video before merge.
+  - [ ] Only S1 creates `app/src-tauri/src/channel.rs`, the Cargo features and the `store` edition in `models/bundled-models.json`. S3 and S4 do not edit the manifest. Both edit `resolve_adaptive_region` in `adaptive_commands.rs`, so S4 starts after S3 merges.
+  - [ ] S1 adds the `store-edition` job to `.github/workflows/ci.yml`. S11 later moves the vcpkg step of `ci.yml` into a shared action. S11 runs after S1, so they never edit `ci.yml` at once.
+  - [ ] M2 owns `app/src-tauri/src/sandbox_access/**`, `catalog/folder_grants.rs` and the setup block of `lib.rs`. S1 edits the `lens_profile` lines of the same setup block and merges first.
+  - [ ] S11 owns `.github/workflows/release.yml` as a reusable workflow. M6 adds only `release-mas.yml`. M8 edits only the feature list that `release-mas.yml` passes to the build.
+- [ ] Hold the review gate. S2, S3, S4, S9, S10, M1, M2, M3, M4, M5, M6, M8 and G2 wait for the operator's review in chat with screenshots and a video before merge.
 
 ### PR mechanics, for every PR
 
@@ -102,9 +122,9 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ### Verdict and merge, for every PR
 
-- [ ] A full swarm runs once, at the code-ready head. Another full swarm runs only for new behavior, a redesign, or a large new diff. A rebase, a merge-conflict resolution, or a minor fix gets a single verifier at the new head, and a wording-only change gets none. Run each full swarm per the pstack `skills/swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. Two or more audit lanes, each with its own focus, that read the diff and the receipts and distrust the PR body. The root audits the receipts in the merge-ready report before the verdict.
+- [ ] The owner agent runs the verification itself at the code-ready head, one lane after another. That is the local checks, the ten live lanes from the PR's **Verify, live** block, and the perf lane from its **Verify, perf** block. The owner chose this on 2026-11-18 instead of a ten-worker swarm per PR (owner message 2026-11-18, paraphrased). A full swarm per the pstack `skills/swarm/SKILL.md` runs only when the operator asks for one. A rebase, a merge-conflict resolution, or a minor fix reruns the lanes the change can reach, and a wording-only change reruns none. The root audits the receipts in the merge-ready report before the verdict. Lanes run in sequence take more wall time and give less independence than a swarm, because the agent that wrote the code also checks it (inferred). The root's audit of the receipts is the counterweight.
 - [ ] Judge every finding by the execution playbook's blocking rule. The verdict is clean when none blocks. A failure on trunk behavior in a lane marked `Regression lane against trunk.` is recorded against trunk and does not block the PR. A new head gets a fresh verdict, except for results that stay valid under the patch-id rule in `playbooks/shipping.md`.
-- [ ] Stop at verified. The root lists the PR with its verdict for the operator. The operator lands the stack bottom-up. A restack that leaves a PR's `git patch-id` unchanged keeps its verdict (the patch-id rule in `playbooks/shipping.md`). Nobody pushes after the handoff without the operator's go.
+- [ ] Merge by the owner's standing practice. A PR that is not review-gated is squash-merged by its owner agent once the verdict is clean, local checks pass and every CI check is green. A review-gated PR stops at verified. The root lists it with its verdict, and the operator reviews and lands it. A restack that leaves a PR's `git patch-id` unchanged keeps its verdict (the patch-id rule in `playbooks/shipping.md`). Nobody pushes to a review-gated PR after the handoff without the operator's go.
 
 ### Boot recipe, for every live lane
 
@@ -145,7 +165,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] `scripts/lanes/perf-interleave.sh --self-test` checks the median and spread on fixed inputs. Run `shellcheck scripts/lanes/*.sh && scripts/lanes/perf-interleave.sh --self-test`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Run `golden-path` on the debug build at trunk and at head. Trunk has no lane harness, so record that and gate that `golden-path` also passes as a runner lane at head. Save `golden-path.png`. Pass when all three runs pass and show the same Library grid.
 - [ ] Lane 2. Runner lane, `macos-latest`, `sandbox-smoke`, ad hoc signing. Save `smoke-adhoc.png`. Pass when the container folder exists and all three spike facts hold.
@@ -172,77 +192,88 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] The owner agent squash-merges it once local checks and every CI check are green.
 
-## Add the channel flag and the store edition, and record the decisions (S1, shared)
+## Add the channel flag, the store edition and compile-time legal gating, and record the decisions (S1, shared)
 
-**Depends on.** S0. Owner-gated on D7, D11, D12 and D13. Cost 1.5 to 2.5 engineer-days (guess). One codebase makes the direct, Mac store and Windows store builds.
+**Depends on.** S0. D7, D11, D12, D16 and D17 are answered (owner message 2026-11-18, paraphrased), and the licence research memo gives the compile-out list. Cost 3 to 5.5 engineer-days (guess). That is 1.5 to 3 days more than the 2026-11-17 figure, for the Cargo feature, the profile render path, the clean rewrite of one lens kernel, the edition fields and the CI job. One codebase makes the default build and the Mac store build. The Windows store channel joins when the owner reopens the Windows PRs.
 
 **Files.**
 
-- [ ] Create `app/src-tauri/src/channel.rs` and add features `channel-mas` and `channel-msstore` to `app/src-tauri/Cargo.toml`.
-- [ ] Edit `app/src-tauri/src/export_plugin.rs`, the model download commands in `lib.rs` and the `*_models.rs` files, and `storage.rs` `move_cache_dir`.
-- [ ] Edit `models/bundled-models.json` (new `store` edition) and `app/src/lib/api/system.js` plus the Settings rows that read the channel.
-- [ ] Create `docs/adr/ADR-0011-paid-store-distribution.md` with every answered decision of RFC-0038 and of this plan.
+- [ ] Edit `app/src-tauri/Cargo.toml`. Make `lensfun` optional, and add the features `default = ["lens-profiles"]`, `lens-profiles = ["dep:lensfun"]` and `channel-mas = []`.
+- [ ] Create `app/src-tauri/src/channel.rs`. Edit `app/src-tauri/src/editions.rs` (`compiled_name`, `EditionInfo`) and `app/src-tauri/src/lib.rs` (`mod lens_profile`, `lookup_lens_profile`, the `warm_lens_db` call in `setup`, and the download commands in the handler list).
+- [ ] Edit the profile path of `develop_engine/lens.rs` and of `app/src/lib/gpu/shaders/lens.js`, and rewrite `lens_undist_poly3` and its WGSL twin `lensUndistPoly3` clean.
+- [ ] Edit the crate-dependent tests in `lens_profile.rs` and `develop_engine/tests/geometry.rs` so they compile only with `lens-profiles`. Edit `export_plugin.rs`, the download functions of the `*_models.rs` files, and `storage.rs` `move_cache_dir`.
+- [ ] Edit `models/bundled-models.json` (new `store` edition), `app/src/lib/modelEdition.js`, `app/src/lib/api/system.js`, the Lens Corrections panel in Develop, and the Settings rows that read the channel.
+- [ ] Edit `.github/workflows/ci.yml` (new `store-edition` job). Create `docs/adr/ADR-0011-paid-store-distribution.md` with every answered decision of RFC-0038 and of this plan, and add a dated note to ADR-0012 that points at it.
 
 **Build.**
 
-- [ ] `Channel` is `Direct`, `MacAppStore` or `MicrosoftStore`, chosen by Cargo feature. `ChannelCaps` is one table row per channel with `export_command_hook`, `model_downloads`, `custom_cache_dir`, `own_licence`, `self_update` and `launch_licence_screen`. `compile_error!` fires when both store features are on.
-- [ ] The Mac store binary compiles out `export_plugin` and every model download command, so it holds no code that starts a user program or fetches a model (Apple guidelines 2.5.2 and 2.4.5(iv), sourced). A Cargo feature is used here, unlike ADR-0012, because the code must be absent from the binary.
-- [ ] The `store` edition lists only the families ADR-0011 allows. Store builds bundle every model of the edition and download none (audit S1).
-- [ ] New `channel_info` command. Settings hides Plugins, download buttons and "Move cache" when the cap is off.
+- [ ] Record the evidence for the split in ADR-0011. These facts were measured on `main` at `93ee992`.
+  - [ ] Lens profiles. `lens_profile.rs` says it is the only file in the crate that touches the `lensfun` types (its header, lines 3 to 8). The database ships inside the crate binary through `Database::load_bundled()` (lines 12 to 13 and 35). Production reaches it only through `lookup_lens_profile` and `warm_lens_db` in `lib.rs`. The render path in `develop_engine/lens.rs` works from coefficients baked into the edit stack and never touches the crate (its header, lines 8 to 10). So one Cargo feature on one module removes the LGPL-3.0 crate and the CC-BY-SA database from the binary.
+  - [ ] Model families. `editions.rs` fixes the edition name at compile time through `option_env!("EMULSION_EDITION")`. An excluded family is refused even when a copy is cached (ADR-0012 rule 3), and the fetch script leaves its weights out of the bundle (rule 6). ADR-0012 rejected a Cargo feature per family, because it multiplies CI cells and cannot express a family with no file. That reason still holds, and the open questions attach to the weights and their training data, not to Emulsion's own code (RFC-0038 B5.5). So face grouping, the eye check, AI Upscale and the person detector stay on the edition mechanism.
+  - [ ] Online services. `geocode.rs` and `mapTiles.js` stay in every build. S9 gives them the D17 default.
+- [ ] Compile out the profile path of the render code too. RFC-0039 regions 2 to 4 are the app's own code, described as ports of lensfun math (sourced, RFC-0039 section 3). Whether they are LGPL-3.0 code is a lawyer's question (licence research memo, section 10, question 3). Without `lens-profiles`, `develop_engine/lens.rs` compiles out `LensNorm::for_profile` and the profile kernels. The store build sets `VITE_LENS_PROFILES=off`, and `lens.js` adds the profile functions to the shader only when the flag is not `off`, so Vite drops them from the store bundle (inferred). A stored profile op then renders without its profile part in the store build, and the op stays in the catalog (inferred, the memo says the same).
+- [ ] Rewrite the one ported kernel that Manual distortion calls. That is `lens_undist_poly3` and its WGSL twin `lensUndistPoly3` (measured in the memo, `develop_engine/lens.rs` lines 60 and 406 to 408, `lens.js` lines 71 and 213). A fresh agent session writes both from the published Newton iteration under RFC-0039 section 5's clean-room rules, about half a day (guess, the memo's figure). The rewrite replaces the port in every build only if the existing hand-derived `geometry.rs` tests pass and the old and new kernels agree within 0.05 px on a sample grid. If it does not, the store edition drops the Manual distortion slider instead, and the default build keeps the old kernel.
+- [ ] `channel-mas` fixes the edition at compile time. Under `cfg(feature = "channel-mas")`, `compiled_name()` returns `Some("store")` whatever `EMULSION_EDITION` says. A `compile_error!` fires when `channel-mas` and `lens-profiles` are both on, so a store build that leaves the default features on does not compile.
+- [ ] The `store` edition includes `denoise` and `segment` only. It leaves out `inpaint` (LaMa, and S2 gives Remove its PatchMatch path), `detect` (D-FINE), `upscale` (Real-ESRGAN), `face` (YuNet and SFace) and `blink`. `blink` goes because `blink_commands.rs` refuses unless `face` is also in the edition (measured, line 40).
+- [ ] `Channel` is `Direct` or `MacAppStore`, chosen by the `channel-mas` feature. `ChannelCaps` is one table row per channel with `export_command_hook`, `model_downloads` and `custom_cache_dir`. The Mac store binary compiles out `export_plugin` and every model download command, so it holds no code that starts a user program or fetches a model (Apple guidelines 2.5.2 and 2.4.5(iv), sourced).
+- [ ] The frontend learns what is compiled in from the command it already calls. `system.js` calls `model_edition` (measured, line 58). `EditionInfo` gains `channel` and `compiled_out`. `compiled_out` lists `lens_profiles` when the build lacks `lens-profiles`. No new command is added.
+- [ ] Without `lens-profiles`, `lookup_lens_profile` stays registered and returns `None`, so the frontend call never fails. The Lens Corrections panel shows "Lens profile correction is not included in this edition of Emulsion." in the Profile part when `compiled_out` lists `lens_profiles`. The Manual sliders stay. `editionAboutLine` names the feature in Settings, About.
+- [ ] Settings hides Plugins, download buttons and "Move cache" when the cap is off.
+- [ ] The `store-edition` CI job on `macos-latest` runs `cargo test --no-default-features --features channel-mas` and `cargo tree -e normal --no-default-features --features channel-mas -i lensfun`, and fails when the tree finds the package. The existing default jobs do not change.
+- [ ] Check first that `npx tauri build -- --no-default-features --features channel-mas` reaches cargo with both flags. The Tauri CLI passes arguments after `--` to cargo (inferred, not tried). Record the result in the PR.
 
 **You see.**
 
-- [ ] In the Mac store sandbox build, Settings has no Plugins section, and `nm` on `emulsion` finds no `export_plugin` symbol.
+- [ ] In the Mac store sandbox build, Settings has no Plugins section, Lens Corrections shows the sentence in place of the profile, and `nm` on `emulsion` finds no `lensfun` and no `export_plugin` symbol.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `channel.rs` tests each row of the caps table. The `editions` test asserts `store` lists exactly the ADR-0011 families. Run `cargo test && cargo test --features channel-mas && npx vitest run`.
+- [ ] The `geometry.rs` Manual distortion tests pass unchanged with the rewritten kernel. `channel.rs` tests each row of the caps table. The `editions` tests assert that `store` lists exactly `denoise` and `segment`, that a `channel-mas` build resolves to `store`, and that `compiled_out` serialises as `["lens_profiles"]` without the feature. `modelEdition.test.js` gains the About line with lens profiles. Run `cargo test && cargo test --no-default-features --features channel-mas && npx vitest run`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
-- [ ] Lane 1. Regression lane against trunk. Run `golden-path` on the debug build, default channel, at trunk and head. Save `golden.png`. Pass when both pass with the same grid.
+- [ ] Lane 1. Regression lane against trunk. Run `golden-path` on the debug build, default features, at trunk and head. Save `golden.png`. Pass when both pass with the same grid.
 - [ ] Lane 2. Sandbox build, channel `mas`, open Settings. Save `mas-settings.png`. Pass when Plugins and "Move cache" are absent.
-- [ ] Lane 3. `nm -gU` and `strings` on the `mas` binary for `export_plugin`, `huggingface.co` and `media.githubusercontent.com`. Save `mas-symbols.txt`. Pass when none is found.
-- [ ] Lane 4. Sandbox build, `mas`, `segment-model` spec. Save `mas-segment.png`. Pass when the status is `ready` from `Resources/models` and no download control exists.
-- [ ] Lane 5. Sandbox build, `mas`, open a feature whose family `store` excludes. Save `mas-excluded.png`. Pass when it shows "{Feature} is not included in this edition of Emulsion." and no dialog.
-- [ ] Lane 6. Runner lane, `windows-latest`, channel `msstore`, Settings. Save `ms-settings.png`. Pass when Plugins is present and download buttons are absent.
-- [ ] Lane 7. Debug build, default channel, Settings. Save `direct-settings.png`. Pass when Plugins, downloads and "Move cache" are present as on trunk.
-- [ ] Lane 8. `cargo build --features channel-mas,channel-msstore`. Save `both-features.txt`. Pass when the build fails with the `compile_error!` text.
-- [ ] Lane 9. Sandbox build, `mas`, call `set_cache_dir` from the spec. Save `mas-cache-refused.txt`. Pass when the command returns a refusal and the cache root is unchanged.
-- [ ] Lane 10. Sandbox build, `mas`, Settings, About. Save `mas-about.png`. Pass when the edition line names exactly the excluded features.
+- [ ] Lane 3. `nm -gU` and `strings` on the `mas` binary for `lensfun`, `export_plugin`, `huggingface.co` and `media.githubusercontent.com`, and `grep` of the store frontend bundle for `lensNormForProfile`. Save `mas-symbols.txt`. Pass when none is found.
+- [ ] Lane 4. Sandbox build, `mas`, open `exif-shot-info.jpg` in Develop and open Lens Corrections. Save `mas-lens.png`. Pass when the Profile part shows the sentence and a Manual distortion change moves the preview.
+- [ ] Lane 5. Sandbox build, `mas`, open Enlarge, face grouping, the Cull eye check and the person preset in turn. Save `mas-excluded.png`. Pass when each shows "{Feature} is not included in this edition of Emulsion." and no dialog opens.
+- [ ] Lane 6. Debug build, default features, `exif-shot-info.jpg` in Lens Corrections. Save `default-lens.png`. Pass when the profile matches and applies as on trunk.
+- [ ] Lane 7. Debug build, default features, Settings. Save `direct-settings.png`. Pass when Plugins, downloads and "Move cache" are present as on trunk.
+- [ ] Lane 8. `cargo build --features channel-mas` with the default features left on. Save `gating-guard.txt`. Pass when the build fails with the `compile_error!` text.
+- [ ] Lane 9. `cargo tree -e normal -i lensfun` for the default build and for the store build. Save `lensfun-tree.txt`. Pass when the default build lists the crate and the store build finds no such package.
+- [ ] Lane 10. Sandbox build, `mas`, Settings, About. Save `mas-about.png`. Pass when the edition line names exactly the features the `store` edition and `compiled_out` leave out.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. `first_grid_ms` of the default channel at trunk and head. Diff-added work is the size of the `mas` `emulsion` binary.
+- [ ] Metric. `first_grid_ms` of the default build at trunk and head. Diff-added work is the size of the `mas` `emulsion` binary.
 - [ ] Probe. `perf-interleave.sh <trunk> <head> first_grid_ms` on `macos-latest`, and `stat -f %z` on both binaries.
 - [ ] Baseline. Record the trunk `first_grid_ms` median and the default binary size first.
-- [ ] Rule. Fail if the head median exceeds trunk by more than 10 percent. Fail if the `mas` binary is larger than the default binary.
+- [ ] Rule. Fail if the head median exceeds trunk by more than 10 percent. Fail if the `mas` binary is not smaller than the default binary, because the embedded lens database leaves it.
 
-**Review gate.** None. S1 is not review-gated. The default channel is unchanged, and store channels reuse the existing "not included" sentence.
+**Review gate.** None. S1 is not review-gated. The default build is unchanged, and the store build reuses the existing "not included" sentence.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] The owner agent squash-merges it once local checks and every CI check are green.
 
 ## Make Remove work without LaMa in the store edition (S2, shared)
 
-**Depends on.** S1. Owner-gated on D7. Cost 1 to 30 engineer-days (RFC-0038 B5.5 LaMa row, guess). Route (i) PatchMatch is 1 to 2 days. Route (ii) retraining is 15 to 30 days plus GPU. Skip this PR if counsel clears LaMa.
+**Depends on.** S1. D7 is answered with the recommended default (owner message 2026-11-18, paraphrased), so the route is PatchMatch, RFC-0038 B5.5 LaMa route (i). Cost 1 to 2 engineer-days (guess). The retrain route (ii) is dropped from this plan.
 
 **Files.**
 
-- [ ] Edit `app/src-tauri/src/removal_commands.rs` and the Remove status in the frontend.
-- [ ] Create `docs/adr/ADR-0013-remove-without-lama.md`, which records the reversal of ADR-0010.
-- [ ] Edit `THIRD_PARTY_NOTICES.md` only on route (ii), for the retrained model's training data.
+- [ ] Edit `app/src-tauri/src/removal_commands.rs`, the Remove status in the frontend and `FAMILY_FEATURE` handling in `app/src/lib/modelEdition.js`.
+- [ ] Create `docs/adr/ADR-0013-remove-without-lama.md`, which records the reversal of ADR-0010 for the store edition.
 
 **Build.**
 
 - [ ] When `inpaint` is not in the edition, Remove runs `inpaint_patchmatch.rs` and reports `removal_model_status` as a new `patchmatch` state instead of `not_in_edition`.
-- [ ] On route (ii), the retrained weights join `inpaint` with their training-data row, and the bake-off from RFC-0032 section 9 is re-run.
+- [ ] The About edition line stops naming Remove when Remove runs on PatchMatch, because the feature is present.
 
 **You see.**
 
@@ -252,7 +283,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] A `removal_commands` test asserts the engine choice per edition. Run `cargo test removal`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Run `develop-remove-tool-real-model` on the default edition at trunk and head. Save `lama.png`. Pass when both pass and LaMa ran.
 - [ ] Lane 2. Sandbox build, `store` edition, `develop-remove-tool` on `Field-corn-Liechtenstein-landscape.jpg`. Save `store-remove.png`. Pass when the patch is applied and no "not included" text is in the DOM.
@@ -261,7 +292,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Lane 5. `store` build, remove, then undo and redo. Save `undo-redo.png`. Pass when History lists one Remove entry and redo restores it.
 - [ ] Lane 6. `store` build, `develop-removal-no-longer-fits`. Save `no-longer-fits.png`. Pass when the spec passes.
 - [ ] Lane 7. Runner lane, `windows-latest`, `store` edition, `develop-remove-tool`. Save `win-remove.png`. Pass when the patch is applied.
-- [ ] Lane 8. `ls Contents/Resources/models` of the `store` release artifact. Save `store-models.txt`. Pass when no LaMa file is present on route (i).
+- [ ] Lane 8. `ls Contents/Resources/models` of the `store` release artifact. Save `store-models.txt`. Pass when no LaMa file is present.
 - [ ] Lane 9. `store` build, a selection over 25 percent of the frame. Save `large-remove.png`. Pass when the run finishes and progress is shown.
 - [ ] Lane 10. LaMa and PatchMatch results side by side on the same mask. Save `compare.png`. Pass when both images exist for the owner's review.
 
@@ -283,55 +314,56 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
-## Swap the face detector and leave face grouping out (S3, shared)
+## Compile the face features out of the store edition (S3, shared)
 
-**Depends on.** S1. Owner-gated on D7 and D11. Cost 3 to 29 engineer-days (RFC-0038 B5.5, YuNet 2 to 4 plus SFace 1 to 25, guess). The low end drops SFace. The high end trains a replacement.
+**Depends on.** S1. D7 and D11 are answered (owner message 2026-11-18, paraphrased). Cost 0.5 to 1.5 engineer-days (guess), down from 3 to 29. S1 already leaves `face` and `blink` out of the `store` edition. This PR makes every face surface say so, and proves that nothing scans or downloads. The detector swap of RFC-0038 B5.5 (YuNet row, 2 to 4 days) becomes a later release.
 
 **Files.**
 
-- [ ] Edit `app/src-tauri/src/face_models.rs`, the face detection call sites and `blink_pass.rs`.
-- [ ] Edit `models/bundled-models.json`. Split the `face` family into `face-detect` (the new bundled detector) and `face-group` (SFace).
-- [ ] Edit `models/FACE_MODELS.md` and `THIRD_PARTY_NOTICES.md`.
+- [ ] Edit the People view and the face-grouping entry points in the Library frontend, and the eye-check result in `app/src/lib/components/SimilarView.svelte`.
+- [ ] Edit `resolve_adaptive_region` in `app/src-tauri/src/adaptive_commands.rs` for the `face` region, and the face and blink tests in `app/src-tauri/src/face_models.rs` and `app/src-tauri/src/blink_commands.rs`.
 
 **Build.**
 
-- [ ] First read the MediaPipe face detector's model card (RFC-0038 B5.5). If its terms fail D7, stop and report.
-- [ ] Load the new detector in `tract` in place of YuNet. The eye check and face grouping both call it.
-- [ ] The `store` edition includes `face-detect` and leaves out `face-group`, per D11.
+- [ ] Every face entry point in an edition without `face` shows the one sentence and starts no scan and no download. ADR-0012 says an edition without `face` refuses before any download. This PR adds the test that proves it.
+- [ ] Stored face rows from another build stay readable, and no new scan runs (ADR-0012 rule 4). ADR-0012 lists this case as not verified, and lane 4 closes it.
+- [ ] The adaptive `face` region refuses with the sentence in an edition without `face`. Today it reads stored face rows and may load YuNet to score them (measured, `adaptive_commands.rs` lines 80 to 121).
+- [ ] The Cull eye check shows the sentence in place of its result, because `blink_for_images` returns `not_in_edition` (measured, `blink_commands.rs` line 40).
+- [ ] No face-consent dialog is built. No store build scans faces, so the face half of the old S9 leaves the plan.
 
 **You see.**
 
-- [ ] In the `store` edition the Cull eye check flags closed eyes, and face grouping shows its "not included" sentence.
+- [ ] In the `store` edition, People and the eye check each show "{Feature} is not included in this edition of Emulsion." The default build behaves as on trunk.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] A parity test on the blink fixture set compares the new detector's hits with YuNet's. Run `cargo test face`.
+- [ ] A `face_models` test asserts that an edition without `face` refuses before the download function runs. Vitest cases cover the People and eye-check gate states. Run `cargo test face blink && npx vitest run`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
-- [ ] Lane 1. Regression lane against trunk. Run `similar-eyes-check` at trunk (YuNet) and head (new detector). Save `eyes.png`. Pass when the same photos are flagged.
-- [ ] Lane 2. Sandbox build, `store`, eye check on `Smiling-woman-pink-shirt-portrait.jpg`. Save `store-eyes.png`. Pass when one face is found and the result shows.
-- [ ] Lane 3. Same on `Szechenyi-Chain-Bridge-Budapest-night.jpg`. Save `night.png`. Pass when no face is reported.
-- [ ] Lane 4. `store` build, open face grouping. Save `group-excluded.png`. Pass when it shows the "not included" sentence and no download.
-- [ ] Lane 5. `store` build on a catalog copy that holds face rows from a default build. Save `old-faces.png`. Pass when the rows stay readable and no new scan runs.
-- [ ] Lane 6. `/usr/bin/log show` and the spec's network log during lanes 2 to 4. Save `no-download.txt`. Pass when no request reaches `media.githubusercontent.com`.
-- [ ] Lane 7. Runner lane, `windows-latest`, `store`, eye check. Save `win-eyes.png`. Pass when lane 2's result repeats.
-- [ ] Lane 8. Default edition, face grouping on the portrait fixture. Save `default-group.png`. Pass when grouping still works with the new detector.
-- [ ] Lane 9. `Red-eye-flash.jpeg` eye check. Save `red-eye.png`. Pass when the face is found.
-- [ ] Lane 10. `ls Contents/Resources/models` of the `store` artifact. Save `store-face-models.txt`. Pass when the detector is present and SFace and YuNet are absent.
+- [ ] Lane 1. Regression lane against trunk. Run `similar-eyes-check` on the default edition at trunk and head. Save `eyes.png`. Pass when the same photos are flagged.
+- [ ] Lane 2. Sandbox build, `store`, open People. Save `store-people.png`. Pass when the sentence shows and no scan starts.
+- [ ] Lane 3. Sandbox build, `store`, eye check on `Smiling-woman-pink-shirt-portrait.jpg`. Save `store-eyes.png`. Pass when the sentence shows in place of the result.
+- [ ] Lane 4. `store` build on a catalog copy that holds face rows from a default build. Save `old-faces.png`. Pass when the rows stay readable and no new scan runs.
+- [ ] Lane 5. `/usr/bin/log show` and the spec's network log during lanes 2 to 4. Save `no-download.txt`. Pass when no request reaches `media.githubusercontent.com`.
+- [ ] Lane 6. Runner lane, `windows-latest`, `EMULSION_EDITION=store`, open People. Save `win-people.png`. Pass when lane 2's result repeats.
+- [ ] Lane 7. Default edition, face grouping on the portrait fixture. Save `default-group.png`. Pass when grouping works as on trunk.
+- [ ] Lane 8. `ls Contents/Resources/models` of the `store` artifact. Save `store-face-models.txt`. Pass when `face_landmarks.onnx` is absent and no YuNet or SFace file is present.
+- [ ] Lane 9. `store` build, call `blink_for_images` from the spec. Save `blink-refused.txt`. Pass when it returns `not_in_edition`.
+- [ ] Lane 10. `store` build, Settings, About. Save `store-about.png`. Pass when the edition line names face grouping and the eye check.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Eye-check time per image over the 8 fixtures, at trunk (YuNet) and head (new detector).
-- [ ] Probe. A `perf-probe` case for the eye check, through `perf-interleave.sh`.
+- [ ] Metric. `first_grid_ms` of the default edition, which a gate check at startup could slow.
+- [ ] Probe. `perf-interleave.sh <trunk> <head> first_grid_ms`.
 - [ ] Baseline. Record the trunk median first.
-- [ ] Rule. Fail if the head median exceeds trunk by more than 20 percent.
+- [ ] Rule. Fail if the head median exceeds trunk by more than 10 percent.
 
-**Review gate.** The operator reviews before merge.
+**Review gate.** The operator reviews before merge. The owner sees what a store user gets in place of face grouping and the eye check.
 
-- [ ] Copy lane 2 and lane 4 screenshots into `/tmp/store-review/S3-review-eyes.png` and `/tmp/store-review/S3-review-group.png`.
+- [ ] Copy lane 2 and lane 3 screenshots into `/tmp/store-review/S3-review-people.png` and `/tmp/store-review/S3-review-eyes.png`.
 - [ ] Record a 30 to 60 second video of the change on a lane job. Save it as `/tmp/store-review/S3-review.mp4`.
 - [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
 
@@ -340,51 +372,51 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
-## Settle Upscale and person detection for the store edition (S4, shared)
+## Compile AI Upscale and the person detector out of the store edition (S4, shared)
 
-**Depends on.** S1, then S3 for `models/bundled-models.json`. Owner-gated on D7 and on the Real-ESRGAN maintainer's answer. Cost 0.5 to 13 engineer-days (RFC-0038 B5.5, Real-ESRGAN 0.5 to 10 plus D-FINE 0 to 3, guess). Skip this PR if counsel clears both models.
+**Depends on.** S1, then S3, because both edit `adaptive_commands.rs`. D7 is answered, and the Real-ESRGAN maintainer question is skipped, so AI Upscale stays out (owner message 2026-11-18, paraphrased). Cost 0.5 to 1.5 engineer-days (guess), down from 0.5 to 13. S1 already leaves `upscale` and `detect` out of the `store` edition. This PR makes both surfaces and the batch path say so. A retrain or a SAM 2 fallback for the person preset is a later release.
 
 **Files.**
 
-- [ ] Edit `models/bundled-models.json` (`store` edition) and `models/UPSCALE_MODEL.md`.
-- [ ] Edit the person preset code that calls D-FINE, only if counsel rejects the ImageNet backbone.
+- [ ] Edit `app/src/lib/components/EnlargeDialog.svelte`, `app/src/lib/actions/enlargeActions.js` and the adaptive person preset in the Develop frontend.
+- [ ] Edit `resolve_adaptive_region` in `app/src-tauri/src/adaptive_commands.rs` for the `person` region, and the step list of the adaptive batch.
 
 **Build.**
 
-- [ ] Real-ESRGAN. If the training set stays unknown, the `store` edition leaves out `upscale`. If the owner funds a retrain, SRVGGNetCompact is retrained on CC0 or CC BY photos and joins `upscale`.
-- [ ] D-FINE. If counsel rejects the backbone, the person preset falls back to SAM 2 or leaves the `store` edition.
+- [ ] Enlarge and the person preset each show the one sentence in an edition without their family.
+- [ ] The adaptive batch skips a step whose family is excluded and names the skipped feature in its result. ADR-0012 lists the person preset with `detect` excluded as not verified, and lanes 3 and 10 close it.
 
 **You see.**
 
-- [ ] In the `store` edition, Enlarge and the person preset each either work or show the "not included" sentence, as ADR-0011 says.
+- [ ] In the `store` edition, Enlarge and the person preset each show the "not included" sentence, and a batch finishes with the skipped step named.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] The `editions` test asserts the `store` families. Run `cargo test editions && npx vitest run scripts`.
+- [ ] An `adaptive_commands` test for the skipped step, and Vitest cases for both gate states. Run `cargo test adaptive editions && npx vitest run`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Run `develop-adaptive-person-real-model` on the default edition at trunk and head. Save `person.png`. Pass when both produce the same mask.
-- [ ] Lane 2. Sandbox build, `store`, Enlarge on the landscape fixture. Save `store-enlarge.png`. Pass when it matches ADR-0011, a result or the sentence.
-- [ ] Lane 3. Sandbox build, `store`, person preset on the portrait fixture. Save `store-person.png`. Pass when it matches ADR-0011.
+- [ ] Lane 2. Sandbox build, `store`, Enlarge on the landscape fixture. Save `store-enlarge.png`. Pass when the sentence shows and no job starts.
+- [ ] Lane 3. Sandbox build, `store`, person preset on the portrait fixture. Save `store-person.png`. Pass when the sentence shows and no mask is drawn.
 - [ ] Lane 4. `store` build, a catalog copy holding an Enlarge result from a default build. Save `old-enlarge.png`. Pass when the stored file opens.
-- [ ] Lane 5. Runner lane, `windows-latest`, `store`, lanes 2 and 3. Save `win-s4.png`. Pass when results equal the Mac lanes.
+- [ ] Lane 5. Runner lane, `windows-latest`, `EMULSION_EDITION=store`, lanes 2 and 3. Save `win-s4.png`. Pass when the results equal the Mac lanes.
 - [ ] Lane 6. Default edition, Enlarge. Save `default-enlarge.png`. Pass when it works as on trunk.
-- [ ] Lane 7. `store` build, Settings, About. Save `store-about.png`. Pass when the edition line lists exactly what is left out.
-- [ ] Lane 8. `ls Contents/Resources/models` of the `store` artifact. Save `store-models.txt`. Pass when only allowed files are present.
-- [ ] Lane 9. On a retrain, the bake-off images of old and new weights. Save `bakeoff.png`. Pass when both exist. Otherwise record that no retrain ran.
-- [ ] Lane 10. `library-adaptive-batch` on the `store` build. Save `batch.png`. Pass when the batch completes or skips excluded steps with the sentence.
+- [ ] Lane 7. `store` build, Settings, About. Save `store-about.png`. Pass when the edition line names Enlarge and person detection.
+- [ ] Lane 8. `ls Contents/Resources/models` of the `store` artifact. Save `store-models.txt`. Pass when only the NAFNet and SAM 2 files are present.
+- [ ] Lane 9. `store` build, call `upscale_run` from the spec. Save `upscale-refused.txt`. Pass when it returns the refusal and writes no file.
+- [ ] Lane 10. `library-adaptive-batch` on the `store` build. Save `batch.png`. Pass when the batch completes and names the skipped person step.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Person-mask time and Enlarge time on one fixture, default edition, trunk and head.
 - [ ] Probe. `perf-probe` cases for both, through `perf-interleave.sh`.
 - [ ] Baseline. Record both trunk medians first.
-- [ ] Rule. Fail if either head median exceeds trunk by more than 10 percent. A replacement model gets an absolute budget of twice the trunk time (guess).
+- [ ] Rule. Fail if either head median exceeds trunk by more than 10 percent.
 
-**Review gate.** The operator reviews before merge.
+**Review gate.** The operator reviews before merge. The owner sees what a store user gets in place of Enlarge and the person preset.
 
 - [ ] Copy lane 2 and lane 3 screenshots into `/tmp/store-review/S4-review-enlarge.png` and `/tmp/store-review/S4-review-person.png`.
 - [ ] Record a 30 to 60 second video of the change on a lane job. Save it as `/tmp/store-review/S4-review.mp4`.
@@ -395,50 +427,55 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
-## Change the licence terms for the paid build (S5, shared)
+## Change the licence terms, publish the LibRaw source and close the notice gaps (S5, shared)
 
-**Depends on.** None in code. Owner-gated on D8, D2 and counsel's answers to RFC-0038 questions 2 and 8. Cost 1.5 to 3 engineer-days (RFC-0038 B5.2 1 to 2 plus B5.4 (a) 0.5 to 1, guess). Route (b) adds 3 to 5. B5.1 is done (measured, PROGRESS slice 1 and A1).
+**Depends on.** S0 for the lanes, and nothing in code. D8 is answered (owner message 2026-11-18, paraphrased). The licence research memo of 2026-11-18 answers D2 and D3 as an engineering default, which is research and not legal advice. It elects CDDL-1.0 for LibRaw. CDDL section 3.5 lets the executable ship under the owner's own terms, and CDDL has no relink duty (inferred in the memo, checked against `licenses/LibRaw-LICENSE.CDDL`). The owner agent holds the merge until the owner accepts the memo's stated risk. Cost 2.5 to 4.5 engineer-days (guess). That is RFC-0038 B5.2 1 to 2 plus B5.4 (a) 0.5 to 1, plus about half a day for the public source repository (the memo's guess) and 0.5 to 1 for the notice gaps (guess). B5.1 is done (measured, PROGRESS slice 1 and A1).
 
 **Files.**
 
 - [ ] Edit `LICENSE`, the `license` fields in `app/package.json` and `app/src-tauri/Cargo.toml`, `README.md` and line 3 of `THIRD_PARTY_NOTICES.md`.
-- [ ] Edit `scripts/gen_third_party_libraries.py`, `THIRD_PARTY_LIBRARIES.md` and `licenses/README.txt`.
+- [ ] Edit `scripts/gen_third_party_libraries.py`, `THIRD_PARTY_LIBRARIES.md` and `licenses/README.txt`. Create `licenses/rust-crates.txt`, `licenses/LibRaw-third-party-BSD.txt` and `licenses/IJG-notice.txt` through the generator.
+- [ ] Create `scripts/release/export_open_source.sh`, which exports the public source repository's folders at a release tag.
 - [ ] Edit the About copy in `app/src/lib/components/SettingsDialog.svelte`.
 
 **Build.**
 
-- [ ] Apply counsel's relicensing text to the files RFC-0038 B5.2 lists.
-- [ ] Add the "elected licence" column. LibRaw's operative text becomes `LibRaw-LICENSE.CDDL` (RFC-0038 B5.4 (a)).
+- [ ] The relicensing text is the owner's. The memo names the published MIT history and the AI-assisted commits as a question that still needs a lawyer (its section 10, question 1). The PR body states that risk and quotes the owner's acceptance.
+- [ ] Fill the "elected licence" column. LibRaw's row says "Emulsion uses LibRaw 0.21.3 under the CDDL-1.0, as LibRaw LLC permits. Its source is at {URL}." `LibRaw-LICENSE.CDDL` becomes the operative text. `LibRaw-COPYRIGHT` and the LGPL text stay, because the COPYRIGHT file names both (memo section 9).
+- [ ] Publish the source that CDDL section 3.1 and MPL-2.0 section 3.2(a) ask for. The repository itself goes private (D8), so the owner creates one small public repository, tagged per release. It holds LibRaw 0.21.3 exactly as built, with its CDDL text and COPYRIGHT file. On macOS that is `vendor/rsraw-sys/LibRaw` unchanged, because `vendor/rsraw-sys/PATCH.md` changes only `build.rs` and `Cargo.toml` (measured in the memo). It also holds the two MIT wrapper crates `rsraw-sys` and `rsraw`, including the generated `src/bindings.rs`, and the five MPL-2.0 crates from `cargo vendor` or links to them on crates.io. `export_open_source.sh` writes those folders at a release tag and fails when a file differs from the tag. Evidence is the public URL and the tag.
+- [ ] Link that repository from the About window and from `licenses/README.txt`.
+- [ ] Close the three notice gaps the memo found (measured in the memo, section 7). The generator writes each runtime crate's own licence files, with their copyright lines, into `licenses/rust-crates.txt`. It copies the BSD notices of LibRaw's DCB, FBDD and X3F parts from their source headers into `licenses/LibRaw-third-party-BSD.txt`. It writes the IJG sentence that `jpeg-encoder` needs into `licenses/IJG-notice.txt`.
+- [ ] Run the generator per channel, so the store bundle's list matches what the store binary links. The store list has no `lensfun` row and no lens database row (memo section 9).
 
 **You see.**
 
-- [ ] `THIRD_PARTY_LIBRARIES.md` names CDDL-1.0 as LibRaw's elected licence, and About states the new product licence.
+- [ ] `THIRD_PARTY_LIBRARIES.md` names CDDL-1.0 as LibRaw's elected licence and links the public source. About states the new product licence and links the same URL. `licenses/` holds the three new files.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] The generator self-test gains an election case. Run `python3 scripts/gen_third_party_libraries.py --self-test && python3 scripts/gen_third_party_libraries.py --check && cargo test --lib bundled_models`.
+- [ ] The generator self-test gains an election case, a per-channel case and a missing-copyright-line case. The `bundled_models` test lists the three new files. Run `python3 scripts/gen_third_party_libraries.py --self-test && python3 scripts/gen_third_party_libraries.py --check && cargo test --lib bundled_models`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
-- [ ] Lane 1. Regression lane against trunk. Run `settings-about-open` on the debug build at trunk and head. Save `about.png`. Pass when both pass and head shows the new licence sentence.
-- [ ] Lane 2. Release artifact, `ls Contents/Resources/licenses`. Save `licenses.txt`. Pass when `LibRaw-LICENSE.CDDL` is present and `README.txt` names it operative.
+- [ ] Lane 1. Regression lane against trunk. Run `settings-about-open` on the debug build at trunk and head. Save `about.png`. Pass when both pass and head shows the new licence sentence and the source link.
+- [ ] Lane 2. A local `npm run build:release` bundle, `ls Contents/Resources/licenses`. Save `licenses.txt`. Pass when `LibRaw-LICENSE.CDDL` is present, `README.txt` names it operative, and the three new files are present.
 - [ ] Lane 3. Debug build, "Open library licences". Save `libraries-open.png`. Pass when no error line appears.
 - [ ] Lane 4. Runner lane, `windows-latest`, `--check`. Save `win-check.txt`. Pass when it exits 0.
-- [ ] Lane 5. `grep -rn "MIT"` over the files B5.2 lists. Save `mit-left.txt`. Pass when only vendored `rsraw` notices and third-party texts still say MIT.
-- [ ] Lane 6. Release artifact, open `THIRD_PARTY_LIBRARIES.md`. Save `libraries-md.txt`. Pass when the election column is filled for LibRaw and `r-efi`.
-- [ ] Lane 7. Sandbox build, `mas`, About. Save `mas-about.png`. Pass when the same sentence shows.
-- [ ] Lane 8. Runner lane, `windows-latest`, About. Save `win-about.png`. Pass when the same sentence shows.
+- [ ] Lane 5. For every runtime crate that `cargo metadata` resolves for the store build, look for its copyright line in the shipped `licenses/rust-crates.txt`. Save `notice-coverage.txt`. Pass when every MIT, BSD and ISC crate's line is found.
+- [ ] Lane 6. `grep` the shipped `licenses/` for the DCB, FBDD and X3F authors and for "Independent JPEG Group". Save `notice-gaps.txt`. Pass when all four are found.
+- [ ] Lane 7. `export_open_source.sh` at the head, then `diff -r` of its `libraw/` folder against `vendor/rsraw-sys/LibRaw`. Save `source-export.txt`. Pass when the diff is empty and the folder holds `LICENSE.CDDL` and `COPYRIGHT`.
+- [ ] Lane 8. Sandbox build, `mas`, About. Save `mas-about.png`. Pass when the licence sentence and the source link show, and the library list has no `lensfun` row.
 - [ ] Lane 9. Throwaway edit of `licenses/LibRaw-LICENSE.CDDL`, then `--check`. Save `drift.txt`. Pass when `--check` exits 1 and names the file.
-- [ ] Lane 10. `cat app/package.json | grep license` and `cargo metadata` for the app crate. Save `license-fields.txt`. Pass when both carry counsel's identifier.
+- [ ] Lane 10. `cat app/package.json | grep license` and `cargo metadata` for the app crate. Save `license-fields.txt`. Pass when both carry the identifier the owner chose.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. `first_grid_ms`, the one metric a text change could move if the About tab loaded eagerly. Bundle size of `licenses/`.
 - [ ] Probe. `perf-interleave.sh <trunk> <head> first_grid_ms` and `du -k` of `licenses/`.
 - [ ] Baseline. Record the trunk values first.
-- [ ] Rule. Fail if `first_grid_ms` exceeds trunk by more than 10 percent, or `licenses/` grows by more than 100 KB.
+- [ ] Rule. Fail if `first_grid_ms` exceeds trunk by more than 10 percent, or `licenses/` grows by more than 1 MB (guess, the crate texts are the new bulk).
 
 **Review gate.** None. S5 is not review-gated. It changes text, not an interaction.
 
@@ -447,11 +484,11 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] The owner agent squash-merges it once the owner has accepted the licence research memo's stated risk, and local checks and every CI check are green.
 
-## Remove the lensfun crate per RFC-0039 (S6, shared)
+## Remove the lensfun crate per RFC-0039 (S6, shared, deferred)
 
-**Depends on.** RFC-0039 steps 1 to 5, each its own PR under RFC-0039's build order, then S5 for the generator. Counsel-gated on D5 and RFC-0039 Q1 to Q7. Cost 6.5 to 12 engineer-days for all of RFC-0039, up to about 14 (sourced, RFC-0039 section 7). This section is RFC-0039 step 6.
+**Depends on.** Deferred by this revision. The store edition builds without lens profile correction (S1), so the first store release does not need RFC-0039. When reopened, the D5 answer of the licence research memo applies. Ship the 56 XML files unmodified as resources, with the credit line, the licence URI and an "unmodified" statement, and leave the XSD and DTD out until upstream states their licence (memo section 9). S6 is out of every wave and every cost total until the owner reopens it, for example to bring lens profiles to a later store release. When reopened, it depends on RFC-0039 steps 1 to 5, each its own PR under RFC-0039's build order, then S5 for the generator. It is gated on the D5 research memo and RFC-0039 Q1 to Q7. Cost 6.5 to 12 engineer-days for all of RFC-0039, up to about 14 (sourced, RFC-0039 section 7). This section is RFC-0039 step 6.
 
 **Files.**
 
@@ -522,7 +559,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] `bundled_models` tests assert the resolution order and that excluded families still refuse. Run `cargo test bundled_models editions`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Run `develop-ai-denoise-real-model` at trunk and head. Save `denoise.png`. Pass when both pass.
 - [ ] Lane 2. Release artifact launched with a throwaway `HOME`, then `du -sk` of the data folder. Save `data-size.txt`. Pass when no shipped model file is in it.
@@ -549,7 +586,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] The owner agent squash-merges it once local checks and every CI check are green.
 
 ## Harden the release bundle (S8, shared)
 
@@ -575,7 +612,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] Vitest cases for the new reveal and open calls. Run `npx vitest run && npm run check`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Run `golden-path` at trunk and head. Save `golden.png`. Pass when both pass.
 - [ ] Lane 2. Debug build, open the map with default tiles. Save `map.png`. Pass when tiles draw and the console has no CSP violation.
@@ -602,54 +639,54 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] The owner agent squash-merges it once local checks and every CI check are green.
 
-## Ask before face scans and online map use (S9, shared)
+## Keep online maps and place search off in release builds until the user turns them on (S9, shared)
 
-**Depends on.** S3. Owner-gated on D11 and D17. Cost 2 to 4 engineer-days (audit S4 and S5, guess). Both stores require a privacy policy, and Microsoft requires opt-in before personal data goes to a third party (sourced, policies 5.1.1, 10.5.1 and 10.5.2).
+**Depends on.** S0 for the lanes. D17 is answered (owner message 2026-11-18, paraphrased). Cost 1 to 2 engineer-days (guess), down from 2 to 4, because the face-consent half left with the face features (S3). Microsoft requires opt-in before personal data goes to a third party (sourced, policy 10.5.2). Apple asks for a privacy policy that names what leaves the device (sourced, guideline 5.1.1).
 
 **Files.**
 
-- [ ] Edit `app/src-tauri/src/catalog/faces.rs` (delete all face data) and the face scan entry points.
-- [ ] Edit `app/src-tauri/src/geocode.rs`, `app/src/lib/mapTiles.js` and `LibraryMapView.svelte`.
-- [ ] Edit the Privacy section of `SettingsDialog.svelte` and `docs/USER_GUIDE.md`.
+- [ ] Edit `app/src-tauri/src/geocode.rs`, the map settings in `app/src-tauri/src/catalog/geo.rs`, `app/src/lib/mapTiles.js` and `LibraryMapView.svelte`.
+- [ ] Edit the Map section of `SettingsDialog.svelte` and `docs/USER_GUIDE.md`.
 
 **Build.**
 
-- [ ] The first face scan asks once and runs only after a yes. "Delete all face data" removes every `faces` and `people` row.
-- [ ] New setting `online_map_enabled`, false by default. The map shows a card to turn it on. `geocode::search` and `reverse` refuse while it is off.
+- [ ] New setting `online_map_enabled`. When the catalog has no stored value, its default is `cfg!(debug_assertions)`. Release builds start with it off, and debug builds start with it on, so development does not change.
+- [ ] While it is off, the map shows a card that turns it on, and `geocode::search` and `reverse` refuse without a network request.
+- [ ] A stored value always wins over the default, so a user's choice survives an upgrade.
 
 **You see.**
 
-- [ ] A fresh install opens the map with the card and makes no network request until the user turns it on.
+- [ ] A fresh release install opens the map with the card and makes no network request until the user turns it on. A debug build draws tiles at once, as on trunk.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] A catalog test for delete-all and a `geocode` test for the refusal. Vitest for the card state. Run `cargo test faces geocode && npx vitest run`.
+- [ ] A `geocode` test for the refusal and a settings test for the default and the stored value. Vitest for the card state. Run `cargo test geocode geo && cargo test --release geo && npx vitest run`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
-- [ ] Lane 1. Regression lane against trunk. Open the map on a fresh catalog at trunk and head. Save `map-first.png`. Pass when trunk draws tiles at once and head shows the card.
-- [ ] Lane 2. Head, turn the map on. Save `map-on.png`. Pass when tiles draw.
-- [ ] Lane 3. Head, place search while off, through the command. Save `search-off.txt`. Pass when it returns the refusal and the request log is empty.
-- [ ] Lane 4. Head, start a face scan in a default-edition build. Save `face-ask.png`. Pass when the question shows before any scan.
-- [ ] Lane 5. Head, decline. Save `face-declined.txt`. Pass when `faces` has 0 rows.
-- [ ] Lane 6. Head, accept, scan, then "Delete all face data". Save `face-deleted.txt`. Pass when `faces` and `people` have 0 rows.
-- [ ] Lane 7. Head, quit and relaunch after turning the map on. Save `map-persist.png`. Pass when the map stays on.
+- [ ] Lane 1. Regression lane against trunk. Open the map on a fresh catalog in a release build at trunk and head. Save `map-first.png`. Pass when trunk draws tiles at once and head shows the card.
+- [ ] Lane 2. Head release build, turn the map on. Save `map-on.png`. Pass when tiles draw.
+- [ ] Lane 3. Head release build, place search while off, through the command. Save `search-off.txt`. Pass when it returns the refusal and the request log is empty.
+- [ ] Lane 4. Head debug build, fresh catalog, open the map. Save `debug-map.png`. Pass when tiles draw at once, as on trunk.
+- [ ] Lane 5. Head release build, turn the map on, then place search for "Singapore". Save `search-on.png`. Pass when results show.
+- [ ] Lane 6. Head release build, turn the map on and then off again. Save `map-off-again.png`. Pass when the card returns and no tile request follows.
+- [ ] Lane 7. Head release build, quit and relaunch after turning the map on. Save `map-persist.png`. Pass when the map stays on.
 - [ ] Lane 8. Sandbox build, `mas`, `/usr/bin/log show` and `lsof -i` for the app during its first minute. Save `no-network.txt`. Pass when no outbound connection appears.
 - [ ] Lane 9. Runner lane, `windows-latest`, lanes 1 and 2. Save `win-map.png`. Pass when both match the Mac lanes.
-- [ ] Lane 10. `store` edition without `face-group`, Settings, Privacy. Save `store-privacy.png`. Pass when face controls state that grouping is not included.
+- [ ] Lane 10. A catalog copy from a trunk build that already holds a custom tile server, opened by the head release build. Save `custom-tiles.png`. Pass when the card shows and, after turning it on, the custom server's tiles draw.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. `first_grid_ms`. The consent checks add a settings read at startup.
+- [ ] Metric. `first_grid_ms`. The setting adds a read at startup.
 - [ ] Probe. `perf-interleave.sh <trunk> <head> first_grid_ms`.
 - [ ] Baseline. Record the trunk median first.
 - [ ] Rule. Fail if the head median exceeds trunk by more than 10 percent.
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Copy lane 1, lane 4 and lane 6 screenshots into `/tmp/store-review/S9-review-<slug>.png`.
+- [ ] Copy lane 1, lane 2 and lane 4 screenshots into `/tmp/store-review/S9-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change on a lane job. Save it as `/tmp/store-review/S9-review.mp4`.
 - [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
 
@@ -658,42 +695,42 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
 ## Ship the EULA and privacy policy in the app (S10, shared)
 
-**Depends on.** S5, S6 and S9. Counsel-gated on the texts. Cost 1.5 to 3 engineer-days (RFC-0038 B5.9, guess). RFC-0038 B5.9 says "first-run acceptance". The Mac store forbids licence screens at launch (sourced, guideline 2.4.5(vi)), so the Mac store build shows none.
+**Depends on.** S5 and S9. S6 is deferred and drops out. The texts come from the privacy-policy and licence-agreement research memo, which an agent writes from primary sources and which states the risk the owner accepts. No lawyer drafts them. Cost 1.5 to 3 engineer-days (RFC-0038 B5.9, guess). The Windows installer's licence page is deferred with the Windows PRs. RFC-0038 B5.9 says "first-run acceptance". The Mac store forbids licence screens at launch (sourced, guideline 2.4.5(vi)), so the Mac store build shows none.
 
 **Files.**
 
-- [ ] Create `legal/EULA.md` and `legal/PRIVACY.md` from counsel's texts, unchanged.
-- [ ] Edit `app/src-tauri/tauri.conf.json` (`bundle.resources` and the NSIS and WiX licence file) and the About tab.
+- [ ] Create `legal/EULA.md` and `legal/PRIVACY.md` from the research memo's texts, unchanged once the owner accepts them. The EULA carries the open-source clause of the licence research memo (its section 4). It says the open-source licences are not limited, that differing terms come from the seller alone and not from LibRaw LLC, and where the LibRaw and MPL source is. If the store build keeps Apple's Standard EULA, the same clause goes into About and `licenses/README.txt` (memo section 9).
+- [ ] Edit `app/src-tauri/tauri.conf.json` (`bundle.resources`) and the About tab.
 
 **Build.**
 
 - [ ] About gains "Licence agreement" and "Privacy policy" buttons that open the bundled files through Rust commands.
-- [ ] The Windows installer shows the EULA page. The Mac store build shows no licence screen (`launch_licence_screen` cap from S1).
+- [ ] No build shows a licence screen at launch. The Mac store build must not (guideline 2.4.5(vi), sourced), and the default build keeps its trunk behaviour.
 
 **You see.**
 
-- [ ] About opens both texts. The privacy text covers geocoding, map tiles, local face data and the absence of model downloads in store builds.
+- [ ] About opens both texts. The privacy text covers geocoding, map tiles, the D17 default, the receipt check, local face data in builds that have face features, and the absence of model downloads in store builds.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] A Rust test asserts both files are bundled and match counsel's SHA-256 recorded in the test. Run `cargo test --lib bundled_models`.
+- [ ] A Rust test asserts both files are bundled and match the SHA-256 of the accepted texts recorded in the test. Run `cargo test --lib bundled_models`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Open About at trunk and head. Save `about.png`. Pass when trunk has two buttons and head has four that all open without error.
 - [ ] Lane 2. Sandbox build, `mas`, cold launch. Save `mas-launch.png`. Pass when the Library shows with no licence dialog.
 - [ ] Lane 3. Release artifact, `ls Contents/Resources/legal`. Save `legal.txt`. Pass when both files are present with the recorded hashes.
-- [ ] Lane 4. Runner lane, `windows-latest`, NSIS installer started without `/S`, screenshot of the second page. Save `win-eula-page.png`. Pass when the EULA text shows.
-- [ ] Lane 5. Runner lane, `windows-latest`, `/S` install. Save `win-silent.txt`. Pass when it exits 0 with no page shown.
-- [ ] Lane 6. `grep` the privacy text for geocoding, tiles, faces and downloads. Save `privacy-terms.txt`. Pass when each topic is named.
+- [ ] Lane 4. Debug build, default channel, About, Licence agreement. Save `direct-eula.png`. Pass when the text opens without an error line.
+- [ ] Lane 5. `diff` of the bundled `legal/` files against the texts the owner accepted. Save `legal-diff.txt`. Pass when the diff is empty.
+- [ ] Lane 6. `grep` the privacy text for geocoding, tiles, faces and downloads, and the EULA or About for the open-source clause and the source URL. Save `privacy-terms.txt`. Pass when each topic and the clause are found.
 - [ ] Lane 7. Sandbox build, `mas`, About, Privacy policy. Save `mas-privacy.png`. Pass when it opens inside the sandbox.
 - [ ] Lane 8. Runner lane, `windows-latest`, About, both buttons. Save `win-about.png`. Pass when both open.
 - [ ] Lane 9. Debug build, default channel, cold launch. Save `direct-launch.png`. Pass when it behaves as the owner chose for direct builds.
-- [ ] Lane 10. The privacy policy URL that G2 and G3 will enter, fetched with `curl -sI`. Save `privacy-url.txt`. Pass when it returns 200 and the page text equals `legal/PRIVACY.md`.
+- [ ] Lane 10. The privacy policy URL that G2 will enter, fetched with `curl -sI`. Save `privacy-url.txt`. Pass when it returns 200 and the page text equals `legal/PRIVACY.md`.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -713,7 +750,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
 ## Build every channel from a tag in CI (S11, shared)
 
@@ -729,7 +766,8 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] Each run builds unsigned bundles for one channel and edition, asserts `licenses/` and both notice files are in the bundle, and uploads them as artifacts.
 - [ ] `build-number.sh` sets `CFBundleVersion` and the Windows version from the run number, so every upload has a higher number (audit M6).
-- [ ] The source bundle of RFC-0038 B2 is attached only if counsel's D4 answer needs it.
+- [ ] For `channel=mas`, the workflow builds with `--no-default-features --features channel-mas` (S1). Other channels keep the default features.
+- [ ] RFC-0038 B2's source bundle is not attached. The licence research memo meets CDDL's source condition with S5's public repository, tagged per release, instead.
 
 **You see.**
 
@@ -739,11 +777,11 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] `build-number.sh --self-test`. Run `scripts/release/build-number.sh --self-test && actionlint`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Trunk has no release workflow, so record that and gate that `ci.yml` stays green at head with the shared vcpkg action. Save `ci-green.txt`. Pass when every `ci.yml` job passes.
 - [ ] Lane 2. `release.yml` with `channel=mas`. Save `mas-artifact.txt`. Pass when the `.app` has `Resources/models/bundled-models.edition.json` naming `store`.
-- [ ] Lane 3. `release.yml` with `channel=msstore`. Save `ms-artifact.txt`. Pass when an `.msi` and an `.exe` are uploaded.
+- [ ] Lane 3. `release.yml` with `channel=direct` and `os=windows-latest`. Save `win-artifact.txt`. Pass when an `.msi` and an `.exe` are uploaded.
 - [ ] Lane 4. Two runs in a row. Save `build-numbers.txt`. Pass when the second build number is higher.
 - [ ] Lane 5. A throwaway branch that removes `licenses/` from `bundle.resources`. Save `assert-red.txt`. Pass when the bundle assertion fails the run.
 - [ ] Lane 6. `msiexec /a` on the MSI in a runner lane. Save `msi-contents.txt`. Pass when `licenses/` and both notice files are present.
@@ -766,7 +804,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] The owner agent squash-merges it once local checks and every CI check are green.
 
 ## Report folders the import cannot read (M1, Mac)
 
@@ -790,7 +828,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] An `import` test with a folder made unreadable by `chmod 000`. Run `cargo test import`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Import a `chmod 000` folder on the debug build at trunk and head. Save `unreadable.png`. Pass when trunk reports 0 imported and 0 failed, and head shows the sentence.
 - [ ] Lane 2. Sandbox build, `direct`, import a folder outside the container. Save `sandbox-denied.png`. Pass when the sentence names the folder.
@@ -821,7 +859,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
 ## Keep folder access across launches with security-scoped bookmarks (M2, Mac)
 
@@ -848,7 +886,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] `folder_grants` tests for insert, lookup of the covering root and `stale`. Run `cargo test folder_grants && cargo test --features channel-mas folder_grants`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Run `sandbox-smoke` at trunk and head. Trunk lacks bookmarks, so record that and gate the relaunch scenario of lane 2. Save `smoke.png`. Pass when both runs pass.
 - [ ] Lane 2. Sandbox build signed with a lane-only temporary-exception entitlement for `/private/tmp/lane-photos/`, import that folder, quit, re-sign without the exception, relaunch. Save `relaunch.png`. Pass when thumbnails and a Develop preview render. If resolution fails under this method, record BLOCKED, and the review gate's human check carries the scenario.
@@ -879,7 +917,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
 ## Grant whole folders at import and reconnect lost folders (M3, Mac)
 
@@ -904,7 +942,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] A `folder_grants` relocate test and Vitest cases for the banner state. Run `cargo test folder_grants && npx vitest run`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Run `golden-path` on the default channel at trunk and head. Save `golden.png`. Pass when both pass with no banner.
 - [ ] Lane 2. Sandbox build with a stale grant from M2 lane 5. Save `banner.png`. Pass when the banner names the folder.
@@ -935,7 +973,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
 ## Write exports, merges, enlargements and backups outside the container (M4, Mac)
 
@@ -962,7 +1000,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] Tests for the destination choice and the Enlarge move. Run `cargo test export upscale backup`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Export to a folder outside the container on the sandbox build at trunk and head. Save `export-outside.png`. Pass when trunk fails with `Operation not permitted` and head writes the file.
 - [ ] Lane 2. Head, relaunch, export again to "same folder as last time". Save `export-again.png`. Pass when the file is written.
@@ -993,7 +1031,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
 ## Open exported files in an app the user picks (M5, Mac)
 
@@ -1016,7 +1054,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] A test of the stored setting round trip. Run `cargo test open_with && npx vitest run`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Export with the plugin hook set to `/usr/bin/touch` on the debug build at trunk and head. Save `hook.png`. Pass when the hook still runs in the default channel.
 - [ ] Lane 2. Sandbox build, `mas`, set Preview as the app, export. Save `preview-opened.png`. Pass when Preview becomes the front app with the file.
@@ -1047,11 +1085,11 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
 ## Sign, package and upload the Mac store build (M6, Mac)
 
-**Depends on.** S11 and M2. Owner-gated on D14 and D18, and on the secrets below. Cost 3 to 5 engineer-days, plus 1 to 3 for a universal build (audit B3 and S7, guess), plus account calendar time.
+**Depends on.** S11, M2 and M4. M4 is a parent because the review gate exports outside the container. D14 and D18 are answered, so the account is individual and the build is Apple silicon only (owner message 2026-11-18, paraphrased). Owner-gated on D15, D20 and the trademark search. The App ID, the provisioning profile and the App Store Connect record carry the bundle ID, which cannot change once a build is uploaded (sourced, Apple "Changing the bundle identifier"). Owner-gated also on the secrets below. Cost 3 to 5 engineer-days (audit B3, guess). The universal build is dropped with D18.
 
 **Files.**
 
@@ -1061,10 +1099,10 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 **Build.**
 
-- [ ] The owner creates the Apple Distribution and Mac Installer Distribution certificates, the App ID, the Mac App Store provisioning profile and an App Store Connect API key, then stores them as GitHub secrets. Only the Account Holder or an Admin can create distribution certificates (sourced). Evidence is `gh secret list` showing the names.
+- [ ] The owner creates the Apple Distribution and Mac Installer Distribution certificates, the App ID for the D20 bundle ID, the Mac App Store provisioning profile and an App Store Connect API key, then stores them as GitHub secrets. The owner is the Account Holder of an individual membership. Only the Account Holder or an Admin can create distribution certificates (sourced). Evidence is `gh secret list` showing the names.
 - [ ] Answer audit question 2 first. Run `codesign -d --entitlements :-` on `Contents/MacOS/emulsion-ai` in Tauri's output to see whether the bundler applies its own entitlements to `externalBin`. Record it in the PR.
 - [ ] `mas-app.entitlements` holds app sandbox, user-selected read-write, bookmarks app-scope, network client and print, plus the application and team identifiers. `mas-helper.entitlements` holds exactly app sandbox and inherit (sourced, Apple helper-tool page).
-- [ ] The script signs the helper, then the app, clears extended attributes, and runs `productbuild --sign`. The workflow runs `altool --validate-app`, and uploads only on a manual approval step.
+- [ ] `release-mas.yml` builds through S11's workflow with `channel=mas`, so the binary has no default features. The script signs the helper, then the app, clears extended attributes, and runs `productbuild --sign`. The workflow runs `altool --validate-app`, and uploads only on a manual approval step.
 
 **You see.**
 
@@ -1074,7 +1112,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] The script's `--dry-run` prints the signing order for a fixture bundle. Run `scripts/release/mas-sign-and-package.sh --dry-run && actionlint`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Trunk has no Mac store package, so record that and gate that the `release-mas.yml` artifact validates. Save `validate.txt`. Pass when `altool --validate-app` reports no errors.
 - [ ] Lane 2. Expand the `.pkg` and run `codesign -d --entitlements :-` on the app. Save `app-ent.txt`. Pass when the set equals `mas-app.entitlements` and has no network server.
@@ -1082,9 +1120,9 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Lane 4. `pkgutil --check-signature` on the `.pkg`. Save `pkg-sig.txt`. Pass when it names the Mac Installer Distribution identity.
 - [ ] Lane 5. `xattr -lr` on the expanded app. Save `xattr.txt`. Pass when no `com.apple.quarantine` is found (sourced rule since 2025-02-18).
 - [ ] Lane 6. `plutil -p` on the app's `Info.plist`. Save `plist.txt`. Pass when `ITSAppUsesNonExemptEncryption`, the category and `LSMinimumSystemVersion` match D18.
-- [ ] Lane 7. `lipo -info` on both executables. Save `arch.txt`. Pass when the architectures match D18.
+- [ ] Lane 7. `lipo -info` on both executables. Save `arch.txt`. Pass when both are `arm64` only.
 - [ ] Lane 8. The same bundle re-signed with the Apple Development identity on the owner's Mac, `sandbox-smoke`. Save `dev-signed.png`. Pass when the spec passes.
-- [ ] Lane 9. `nm` on the packaged `emulsion`. Save `nm.txt`. Pass when no `export_plugin` symbol and no download host string are found.
+- [ ] Lane 9. `nm` on the packaged `emulsion`. Save `nm.txt`. Pass when no `export_plugin` or `lensfun` symbol and no download host string are found.
 - [ ] Lane 10. `ls Contents/Resources` of the packaged app. Save `resources.txt`. Pass when `licenses/`, both notice files, `legal/` once S10 lands, and the `store` edition file are present.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
@@ -1105,11 +1143,11 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
-## Offer a trial through In-App Purchase on the Mac (M7, Mac)
+## Offer a trial through In-App Purchase on the Mac (M7, Mac, deferred)
 
-**Depends on.** M6. Owner-gated on D12. Skip this PR when D12 is paid upfront, the recommended default. Cost 3 to 6 engineer-days (guess). Accounts needed are the In-App Purchase products and a sandbox tester in App Store Connect.
+**Depends on.** Skipped by the owner. D12 is paid upfront with no trial (owner message 2026-11-18, paraphrased), so M7 is out of every wave and every cost total. If the owner reopens a trial, it depends on M6 and M8. Cost 3 to 6 engineer-days (guess). Accounts needed are the In-App Purchase products and a sandbox tester in App Store Connect.
 
 **Files.**
 
@@ -1162,9 +1200,82 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
 - [ ] Stop at verified. The operator lands it bottom-up.
 
-## Keep Windows data in the local profile (W1, Windows)
+## Check the Mac App Store receipt at launch (M8, Mac)
 
-**Depends on.** None. No owner gate. Cost 1 to 2 engineer-days (audit S6, guess). All state goes to `app_data_dir()`, which is the roaming profile on Windows (inferred, audit S6), and multi-GB caches live under it (measured, audit S6).
+**Depends on.** M6, because the live lane that only the owner can run needs a TestFlight build. Owner-gated on D21. Cost 2.5 to 5 engineer-days (guess). D12 asks for a check that the purchase is real, so a copied app does not run for other people (owner message 2026-11-18, paraphrased).
+
+Why receipt validation and not anything else. These facts come from Apple pages retrieved on 2026-11-18.
+
+- Guideline 2.4.5(vi) forbids a Mac App Store app a licence screen at launch, licence keys and its own copy protection (sourced, App Review Guidelines, last updated 2026-10-16).
+- Apple documents validating the receipt on the device as a way to validate the app download. The receipt is a record of the sale that Apple signs and stores inside the app bundle (sourced, "Validating receipts on the device" and "Choosing a receipt validation technique").
+- No Apple page read says in words that receipt validation is outside "own copy protection". That it is the sanctioned mechanism is therefore inferred from Apple documenting it for this purpose. Appendix C keeps it as an open risk.
+- Apple says the receipt is not needed when the app uses `AppTransaction`, and to use the receipt only when the app cannot use `AppTransaction` (sourced, both pages). `AppTransaction` needs macOS 13 (sourced, its documentation page). The D18 minimum is at least 12.0 (sourced, Tauri App Store guide), and Emulsion has no Swift layer to call StoreKit 2 (inferred). So M8 uses the receipt. Appendix B records `AppTransaction` as the alternative.
+
+**Files.**
+
+- [ ] Create `app/src-tauri/src/receipt.rs` and its fixtures under `app/src-tauri/src/testdata/receipts/`, with the script that generates them.
+- [ ] Edit `app/src-tauri/Cargo.toml` (feature `mas-receipt = ["channel-mas"]`), `app/src-tauri/src/main.rs` (the check before the Tauri builder starts) and `.github/workflows/release-mas.yml` (turn the feature on).
+- [ ] Create the blocking window's page in the frontend, and edit `docs/RELEASING.md`.
+
+**Build.**
+
+- [ ] Read Apple's "Validating receipts on the device" and the Receipt Fields page it links before writing code. Record in the PR how the device hash is formed, because this revision did not read the Receipt Fields page.
+- [ ] Compile the check only into the Mac store package. Only `release-mas.yml` turns on `mas-receipt`. The default build, the open source build, debug builds and the lane sandbox builds never contain it. A development-signed build runs with no receipt because the code is not in it.
+- [ ] Run Apple's tests in Apple's order, before any window opens. Apple says to validate in `main` before `NSApplicationMain` (sourced).
+  - [ ] Load the receipt from the location `Bundle.appStoreReceiptURL` names, read as a file inside the bundle, so the deprecated API is never called. The path is `Contents/_MASReceipt/receipt` (inferred). The owner agent confirms it on the TestFlight build.
+  - [ ] Decode it as PKCS #7 and verify that the signature chains to the Apple Inc. Root certificate. Use the receipt creation date (field type 12) as the verification time, hard-code no intermediate certificate, and accept SHA-1 and SHA-256 signatures (sourced, Apple's page).
+  - [ ] Check that the bundle identifier (field type 2) equals the D20 bundle ID compiled into the binary, and that the version string (field type 3) equals the bundle's version.
+  - [ ] Compute the SHA-1 device hash from the built-in network interface's hardware address, the way Apple's `copy_mac_address` example finds it, and check that it equals field type 5.
+- [ ] Bundle the Apple Inc. Root certificate in the binary and pin its SHA-256 in a test. The verifier takes the root as an argument, so tests pass a test root.
+- [ ] Pick the PKCS #7 route with the pstack `how` skill. The candidates are the macOS Security framework's CMS decoder through FFI, or a Rust crate. A new crate must pass the `COPYLEFT_ALLOWED` rule of `gen_third_party_libraries.py`.
+- [ ] On failure, follow D21. The recommended default follows Apple's current page. Apple says not to terminate the app, to refresh a missing or corrupt receipt with `SKReceiptRefreshRequest`, and to treat the user as having no access (sourced). Emulsion is paid upfront, so the app opens a blocking window with "Check again" and "Quit", and opens no catalog. Apple lists `SKReceiptRefreshRequest` and `Bundle.appStoreReceiptURL` as available on macOS only up to 15.0 (sourced, their documentation pages), which reads as deprecated from macOS 15 (inferred). Guideline 2.4.5(viii) forbids deprecated technologies (sourced). So the default calls neither. "Check again" re-reads the file, and the window tells the user to reinstall from the App Store. If the owner keeps exit code 173, the check exits with 173 instead. Apple's current page no longer describes exit code 173 (sourced, read on 2026-11-18). Developer forum posts report that exit code 173 shows a "Not Available" alert in builds made with the macOS 15 SDK (unofficial, not reproduced).
+- [ ] Handle TestFlight. Apple says the receipt is always present in TestFlight on macOS (sourced). A sandbox receipt chains to the same Apple root (inferred, lane 8 checks it).
+- [ ] Commit no real receipt. A real receipt carries a device hash. Fixtures are signed by a test root that the fixture script creates.
+
+**You see.**
+
+- [ ] A TestFlight install opens the Library. The same check on a build with no receipt opens the blocking window and creates no catalog.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] `receipt.rs` tests run each fixture through the verifier with the test root. The cases are a valid receipt, a wrong bundle ID, a wrong version, a wrong device hash, a broken signature, an unknown root, a certificate that expired after the receipt creation date, and a truncated file. A test pins the SHA-256 of the bundled Apple root. Run `cargo test --no-default-features --features mas-receipt receipt`.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another. Lanes 8 and 9 need a human at the screen, and only the owner can run them.
+
+- [ ] Lane 1. Regression lane against trunk. Trunk has no receipt check, so record that and gate that `golden-path` passes at head on the default build and on a `mas` lane build without `mas-receipt`. Save `golden.png`. Pass when both pass.
+- [ ] Lane 2. `nm` on the default binary and on the `mas` lane binary. Save `nm-no-check.txt`. Pass when neither holds a `receipt` symbol.
+- [ ] Lane 3. `nm` on the `emulsion` inside the `release-mas.yml` package. Save `nm-check.txt`. Pass when the `receipt` symbol is present.
+- [ ] Lane 4. A sandbox build with `mas-receipt`, signed with the Apple Development identity on the owner's Mac, launched with no receipt. Save `blocked.png`. Pass when the blocking window shows and no `catalog.sqlite` appears in the container.
+- [ ] Lane 5. The lane 4 build with a fixture receipt copied into the receipt location. Save `fixture-blocked.png`. Pass when the blocking window shows, because the fixture does not chain to Apple's root.
+- [ ] Lane 6. Lane 4 again with networking off, then "Check again". Save `offline-check.png`. Pass when the window stays and nothing crashes.
+- [ ] Lane 7. Lane 4 again, then "Quit". Save `quit.txt`. Pass when the process exits with the code D21 names.
+- [ ] Lane 8. Owner-only lane. The owner installs the TestFlight build of the M6 package and launches it. Save `testflight-ok.png`. Pass when the Library opens with no blocking window.
+- [ ] Lane 9. Owner-only lane. The owner copies the installed TestFlight app to a second Mac, if one is available, and launches it there. Save `copied-app.png`. Pass when the blocking window shows. If no second Mac is available, record that.
+- [ ] Lane 10. `/usr/bin/log show` for the lane 4 run. Save `receipt-log.txt`. Pass when the log names the failed step and holds no receipt bytes and no device hash.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. `first_grid_ms` of the default build at trunk and head, which must not move. Diff-added work is the receipt check time at launch. Trunk has no check, so that time is an absolute budget.
+- [ ] Probe. `perf-interleave.sh <trunk> <head> first_grid_ms`, and the timing log line around the check in the lane 4 run and in the owner's lane 8 run.
+- [ ] Baseline. Record the trunk `first_grid_ms` median first.
+- [ ] Rule. Fail if the default build's head median exceeds trunk by more than 10 percent. Fail if the check takes more than 100 ms in lane 8 (absolute budget, guess).
+
+**Review gate.** The operator reviews before merge. A distribution-signed build runs only after TestFlight installs it (inferred), so the owner runs lanes 8 and 9 at the screen.
+
+- [ ] Copy lane 4 and lane 8 screenshots into `/tmp/store-review/M8-review-<slug>.png`.
+- [ ] The operator records a 30 to 60 second video of the TestFlight launch and of the blocking window on the lane 4 build. Save it as `/tmp/store-review/M8-review.mp4`.
+- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto its base after the verdict, patch-id unchanged.
+- [ ] Stop at verified. The operator reviews and lands it.
+
+## Keep Windows data in the local profile (W1, Windows, deferred)
+
+**Depends on.** Deferred by the owner on 2026-11-18 with every Windows PR (owner message 2026-11-18, paraphrased). W1 is out of Wave 0, out of every other wave and out of every cost total until the owner reopens it. When reopened, it depends on nothing. Cost 1 to 2 engineer-days (audit S6, guess). All state goes to `app_data_dir()`, which is the roaming profile on Windows (inferred, audit S6), and multi-GB caches live under it (measured, audit S6).
 
 **Files.**
 
@@ -1211,9 +1322,9 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
 - [ ] Stop at verified. The operator lands it bottom-up.
 
-## Build and stage the Windows helper and models (W2, Windows)
+## Build and stage the Windows helper and models (W2, Windows, deferred)
 
-**Depends on.** S11 and W1. No owner gate. Cost 1 to 2 engineer-days (audit B6, guess). Only an `aarch64-apple-darwin` helper exists in `app/src-tauri/binaries/` (measured, audit B6).
+**Depends on.** Deferred by the owner on 2026-11-18 with every Windows PR (owner message 2026-11-18, paraphrased). Out of every wave and every cost total until the owner reopens it. When reopened, it depends on S11 and W1. Cost 1 to 2 engineer-days (audit B6, guess). Only an `aarch64-apple-darwin` helper exists in `app/src-tauri/binaries/` (measured, audit B6).
 
 **Files.**
 
@@ -1262,9 +1373,9 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
 - [ ] Stop at verified. The operator lands it bottom-up.
 
-## Sign an offline Windows installer that installs silently (W3, Windows)
+## Sign an offline Windows installer that installs silently (W3, Windows, deferred)
 
-**Depends on.** W2. Owner-gated on D14 and D19, and on the signing secret. Cost 2 to 4 engineer-days (audit B6, guess), plus certificate calendar time. The installer must be a signed standalone offline `.msi` or `.exe` that installs silently (sourced, Store Policy 10.2.9).
+**Depends on.** Deferred by the owner on 2026-11-18 with every Windows PR (owner message 2026-11-18, paraphrased). Out of every wave and every cost total until the owner reopens it. When reopened, it depends on W2, on a Microsoft account under D14, on D19 and on the signing secret. Cost 2 to 4 engineer-days (audit B6, guess), plus certificate calendar time. The installer must be a signed standalone offline `.msi` or `.exe` that installs silently (sourced, Store Policy 10.2.9).
 
 **Files.**
 
@@ -1313,9 +1424,9 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
 - [ ] Stop at verified. The operator lands it bottom-up.
 
-## Add offline licence keys for the Windows build (W4, Windows)
+## Add offline licence keys for the Windows build (W4, Windows, deferred)
 
-**Depends on.** S1. Owner-gated on D9, D10 and D13 route A. Cost 3.5 to 7 engineer-days (RFC-0038 B5.8 3 to 6, plus 0.5 to 1 for its own RFC, guess). The Mac store build never carries this code (sourced, guidelines 2.4.5(vi) and 3.1.1).
+**Depends on.** Deferred by the owner on 2026-11-18 with every Windows PR (owner message 2026-11-18, paraphrased). Out of every wave and every cost total until the owner reopens it. When reopened, it depends on S1, on D9, D10 and D13 route A, and on a Windows store row with an `own_licence` cap in S1's caps table. Cost 3.5 to 7 engineer-days (RFC-0038 B5.8 3 to 6, plus 0.5 to 1 for its own RFC, guess). The Mac store build never carries this code (sourced, guidelines 2.4.5(vi) and 3.1.1).
 
 **Files.**
 
@@ -1368,9 +1479,9 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
 - [ ] Stop at verified. The operator lands it bottom-up.
 
-## Take payment through a merchant of record (W5, Windows)
+## Take payment through a merchant of record (W5, Windows, deferred)
 
-**Depends on.** W4. Owner-gated on D10 and D14. Cost 2 to 4 engineer-days (RFC-0038 B5.7, guess). Third-party commerce must name the provider, confirm the transaction and be declared in Partner Center (sourced, Store Policy 10.8.2).
+**Depends on.** Deferred by the owner on 2026-11-18 with every Windows PR (owner message 2026-11-18, paraphrased). Out of every wave and every cost total until the owner reopens it. When reopened, it depends on W4, D10 and D14. Cost 2 to 4 engineer-days (RFC-0038 B5.7, guess). Third-party commerce must name the provider, confirm the transaction and be declared in Partner Center (sourced, Store Policy 10.8.2).
 
 **Files.**
 
@@ -1423,9 +1534,9 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
 - [ ] Stop at verified. The operator lands it bottom-up.
 
-## Add a signed updater and a public release host for Windows (W6, Windows)
+## Add a signed updater and a public release host for Windows (W6, Windows, deferred)
 
-**Depends on.** W3 and W4. Owner-gated on D8. Cost 3 to 6 engineer-days (RFC-0038 B5.10 2 to 4 plus B5.11 1 to 2, guess). An MSI or EXE listing leaves updates to the app or the installer (sourced, research table 2.1), and the Store needs a versioned HTTPS installer URL that does not change (sourced, Store Policy 10.2.9).
+**Depends on.** Deferred by the owner on 2026-11-18 with every Windows PR (owner message 2026-11-18, paraphrased). Out of every wave and every cost total until the owner reopens it. When reopened, it depends on W3 and W4, and on a `self_update` cap in S1's caps table. D8 is answered. Cost 3 to 6 engineer-days (RFC-0038 B5.10 2 to 4 plus B5.11 1 to 2, guess). An MSI or EXE listing leaves updates to the app or the installer (sourced, research table 2.1), and the Store needs a versioned HTTPS installer URL that does not change (sourced, Store Policy 10.2.9).
 
 **Files.**
 
@@ -1481,16 +1592,16 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 ## Gate every store build before upload (G1, release)
 
-**Depends on.** S2, S3, S4, S10, M6 and W3, because the store edition must be final. Counsel-gated on a recorded sign-off of the D1 to D11 answers. Cost 1 to 2 engineer-days (guess). It extends RFC-0038 Phase C with store rules.
+**Depends on.** S2, S3, S4, S5, S7, S8, S9, S10, M1, M3, M4, M5 and M8, and through M8 on M6, because the store build must be final. W3 is deferred and drops out. Owner-gated on the owner's written acceptance of the risk each research memo states, recorded in ADR-0011. No lawyer signs off. Cost 1 to 2 engineer-days (guess). It extends RFC-0038 Phase C with store rules.
 
 **Files.**
 
 - [ ] Create `scripts/release/check_store_bundle.py` and its fixtures.
-- [ ] Edit `docs/RELEASING.md`, `release-mas.yml` and `release-msstore.yml` to run the check before upload.
+- [ ] Edit `docs/RELEASING.md` and `release-mas.yml` to run the check before upload.
 
 **Build.**
 
-- [ ] The check reads a `.pkg` or an installer and fails on any of these. Entitlements differ from the committed files, or include network server. The `mas` binary has an `export_plugin`, licensing or updater symbol. The edition file includes a family ADR-0011 rejects. `licenses/`, a notice file, `legal/EULA.md` or `legal/PRIVACY.md` is missing. A quarantine attribute is present. A signature is invalid. The build number did not rise.
+- [ ] The check reads a `.pkg` and fails on any of these. Entitlements differ from the committed files, or include network server. The `mas` binary has an `export_plugin`, `lensfun`, licensing or updater symbol, or lacks the M8 receipt check. The edition file includes a family ADR-0011 rejects. `licenses/`, a notice file, `legal/EULA.md` or `legal/PRIVACY.md` is missing. A quarantine attribute is present. A signature is invalid. The build number did not rise.
 
 **You see.**
 
@@ -1500,16 +1611,16 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] A self-test with one fixture per failure. Run `python3 scripts/release/check_store_bundle.py --self-test`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Trunk has no store check, so record that and gate lane 2. Save `trunk.txt`. Pass when the absence is recorded.
 - [ ] Lane 2. The check on M6's real `.pkg`. Save `mas-ok.txt`. Pass when it prints `store bundle OK`.
-- [ ] Lane 3. The check on W3's real MSI. Save `ms-ok.txt`. Pass when it prints `store bundle OK`.
+- [ ] Lane 3. A `.pkg` built without the `mas-receipt` feature. Save `no-receipt-check.txt`. Pass when the check fails and names the missing receipt check.
 - [ ] Lane 4. The `.pkg` re-signed with network server added. Save `net-server.txt`. Pass when the check fails and names it.
 - [ ] Lane 5. A bundle copy with `licenses/` removed. Save `no-licenses.txt`. Pass when the check fails.
 - [ ] Lane 6. A `default` edition file in a `mas` bundle. Save `wrong-edition.txt`. Pass when the check fails.
 - [ ] Lane 7. A quarantine attribute set on one file. Save `quarantine.txt`. Pass when the check fails.
-- [ ] Lane 8. An installer with one unsigned PE file. Save `unsigned.txt`. Pass when the check fails.
+- [ ] Lane 8. A `.pkg` whose `emulsion` was built with the default features. Save `lensfun-in.txt`. Pass when the check fails and names the `lensfun` symbol.
 - [ ] Lane 9. `release-mas.yml` with a failing check. Save `upload-blocked.txt`. Pass when the upload step does not run.
 - [ ] Lane 10. `docs/RELEASING.md` steps followed once by a fresh agent from a tag. Save `releasing.txt`. Pass when every step runs as written.
 
@@ -1527,11 +1638,11 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] The owner agent squash-merges it once local checks and every CI check are green.
 
 ## Submit to the Mac App Store (G2, release)
 
-**Depends on.** G1, plus M7 when D12 is the trial. Owner-gated on D12, D14 and D15. Cost 1 to 2 engineer-days of agent work (guess), plus App Review time, which Apple does not publish (sourced, research section 6).
+**Depends on.** G1. D12 and D14 are answered (owner message 2026-11-18, paraphrased). Owner-gated on D15, D20 and the trademark search, because every listing asset carries the name. Cost 1 to 2 engineer-days of agent work (guess), plus App Review time, which Apple does not publish (sourced, research section 6).
 
 **Files.**
 
@@ -1541,7 +1652,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 **Build.**
 
-- [ ] The review notes explain the folder grant, the bundled helper and the bundled models.
+- [ ] The review notes explain the folder grant, the bundled helper, the bundled models and the receipt check at launch.
 - [ ] Privacy answers follow Apple's rule that data processed only on device is not collected (sourced). Map and search answers follow D17 and the provider's retention terms.
 - [ ] The owner signs the Paid Apps Agreement, the tax form and the bank details, enrols in the Small Business Program (15 percent, sourced), sets the price, enters the texts and submits. Evidence is one screenshot per form.
 
@@ -1553,14 +1664,14 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 - [ ] A lint that the listing has no forbidden phrase ("license key", "activate", "update from our site"). Run `node scripts/release/lint-listing.mjs store/mas/listing.md`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another.
 
 - [ ] Lane 1. Regression lane against trunk. Trunk has no listing, so record that and gate lane 2. Save `trunk.txt`. Pass when the absence is recorded.
 - [ ] Lane 2. `store-screenshots` on the `mas` sandbox build. Save `library.png`. Pass when the Library screenshot is at the size App Store Connect asks for at upload time.
 - [ ] Lane 3. Same for Develop. Save `develop.png`. Pass when the size matches.
 - [ ] Lane 4. Same for Export. Save `export.png`. Pass when the size matches.
 - [ ] Lane 5. Same for the map with the online map on. Save `map.png`. Pass when tiles and attribution show.
-- [ ] Lane 6. Same for Cull with the eye check. Save `cull.png`. Pass when the result shows.
+- [ ] Lane 6. Same for Remove with PatchMatch. Save `remove.png`. Pass when the patch shows.
 - [ ] Lane 7. Each screenshot checked against the `store` edition. Save `edition-check.txt`. Pass when no excluded feature appears.
 - [ ] Lane 8. `curl -sI` on the support URL and the privacy URL. Save `urls.txt`. Pass when both return 200.
 - [ ] Lane 9. The listing lint on the final text. Save `lint.txt`. Pass when it exits 0.
@@ -1584,11 +1695,11 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
-- [ ] Stop at verified. The operator lands it bottom-up.
+- [ ] Stop at verified. The operator reviews and lands it.
 
-## Submit to the Microsoft Store (G3, release)
+## Submit to the Microsoft Store (G3, release, deferred)
 
-**Depends on.** G1, W5 and W6. Owner-gated on D13, D14 and D15. Cost 0.5 to 1 engineer-day of agent work (guess), plus certification time.
+**Depends on.** Deferred by the owner on 2026-11-18 with every Windows PR (owner message 2026-11-18, paraphrased). Out of every wave and every cost total until the owner reopens it. When reopened, it depends on G1, W5 and W6, and on D13, a Microsoft account under D14, and D15. Cost 0.5 to 1 engineer-day of agent work (guess), plus certification time.
 
 **Files.**
 
@@ -1670,7 +1781,14 @@ What stays unproven.
 - Whether the helper sees grants the app starts after the helper spawned (audit question 3). M2's first box answers it.
 - Whether Tauri's bundler applies separate entitlements to `externalBin` (audit question 2). M6's first box answers it.
 - Distribution signing, `altool` validation, TestFlight, hardened runtime, print, HDR and panorama merges, and the D-FINE, LaMa and face models under the sandbox.
-- Everything on Windows. No Windows prototype ran. Silent install, the Windows helper's DLLs (audit question 4) and the Store's payment route for MSI listings are unproven.
+- Everything on Windows. No Windows prototype ran. Silent install, the Windows helper's DLLs (audit question 4) and the Store's payment route for MSI listings are unproven. The Windows PRs are deferred.
+
+The revision of 2026-11-18 ran no prototype. It read the code on `main` at `93ee992` for the compile-time gating (measured facts in S1, S3 and S4) and read Apple's receipt pages for M8 (sourced, Appendix D). What that revision leaves unproven.
+
+- Whether `npx tauri build -- --no-default-features --features channel-mas` passes both flags to cargo (inferred). S1's last build box answers it.
+- Whether the store binary built without `lens-profiles` is smaller and still renders stored profile edits (inferred from the module headers). S1 lanes 3, 4 and 9 answer it.
+- Whether a TestFlight receipt chains to the Apple Inc. Root certificate, and whether the device hash matches on the owner's Mac (inferred). M8 lane 8 answers it.
+- How the receipt's device hash is formed in detail. The Receipt Fields page that Apple links was not read. M8's first build box reads it.
 
 ## Appendix B. Alternatives rejected
 
@@ -1678,6 +1796,12 @@ What stays unproven.
 - **One build for all channels.** The Mac store build must not carry licence keys, its own updater or code that runs user programs (sourced, guidelines 2.4.5 and 2.5.2), while the Windows route A build needs licence keys and an updater. One binary cannot satisfy both (sourced, research 3.1). S1's channel flag keeps one codebase with three builds.
 - **Selling the Mac version outside the store with Developer ID only.** It skips the sandbox work (M2 to M5, about 9 to 19 days, guess) and keeps the plugin hook. The owner asked for the Mac App Store, so it is not the Mac channel here. It stays possible later as a direct channel through RFC-0038 B5.6, and S1 already makes a `direct` build.
 - **Keeping the export-plugin hook in the Mac store build.** A user's own program is denied `process-exec` (measured, spike), and guideline 2.5.2 forbids executing code that changes features (sourced). M5 replaces it with opening exports in a picked app.
+- **A Cargo feature per model-driven feature (face grouping, the eye check, AI Upscale, person detection).** It would take Emulsion's own face and upscale code out of the store binary as well as the weights. ADR-0012 rejected a feature per family because it multiplies CI cells and cannot express a family with no file. The open questions attach to the weights and their training data, which the store bundle does not carry. It costs about 1 to 2 more days in S1 (guess). The owner can choose it instead.
+- **Keeping lens profiles in the store edition through RFC-0039 (S6).** It keeps a feature Lightroom users expect, and costs 6.5 to 12 engineer-days plus the D5 answer (sourced, RFC-0039 section 7). Deferred, because the owner asked to compile out everything that needs a lawyer's answer.
+- **Keeping the eye check with a swapped face detector (the 2026-11-17 D11 default).** It needs the MediaPipe card read and a parity run, 2 to 4 days (sourced, RFC-0038 B5.5). It becomes a later release.
+- **`AppTransaction` for the purchase check.** Apple prefers it to the receipt (sourced, "Validating receipts on the device"). It needs macOS 13 (sourced) and a Swift bridge to StoreKit 2, which the app does not have (inferred). It becomes the better route if D18 raises the minimum to macOS 13 and a Swift layer is added for another reason.
+- **Exit code 173 on a failed purchase check.** The owner asked for it. Apple's current page says not to terminate the app (sourced, retrieved 2026-11-18), and forum posts report a "Not Available" alert on macOS 15 SDK builds (unofficial). It stays the owner's choice under D21.
+- **A licence key or an online activation for the Mac store build.** Guideline 2.4.5(vi) forbids licence keys and the app's own copy protection (sourced).
 - **Bookmarking the custom cache folder on the Mac store build.** The asset protocol scope is fixed to `$APPDATA`, so a moved cache likely fails to serve previews already (inferred, audit S3). The `mas` build turns the feature off instead.
 - **Moving existing catalogs into the container.** No installer has gone to anyone outside the owner (inferred, RFC-0038 section 3 says not to ship before Phase B). The owner can restore a backup. Revisit if testers received direct builds.
 - **Per-file bookmarks.** They miss sidecars, brackets and panorama frames beside the file (inferred, audit B4) and multiply the number of active grants. M2 uses one grant per import root.
@@ -1686,30 +1810,63 @@ What stays unproven.
 ## Appendix C. Risks
 
 - **S1.** The store edition may leave out features the listing promises. G2 lane 7 checks screenshots against the edition.
-- **S2, S3, S4.** Counsel may take months, and the retrain path adds up to 72 days and GPU cost (guess, RFC-0038 B5.5). A new detector or inpainter may look worse. The review gates show the owner side-by-side results.
-- **S6.** RFC-0039's matcher parity may take longer than 6 days (sourced, RFC-0039 section 7). D5 may void steps 2 and 4.
+- **S1, lens code in the store build.** Compiling out `lens-profiles` removes the crate, its database, the rescale functions of `lens_profile.rs` (RFC-0039 region 1) and the profile path of the render code. One ported kernel stays unless S1 rewrites it, the Newton inverse that Manual distortion calls (measured in the licence research memo). The half-day figure for the rewrite is a guess. A rewrite that drifts from the old kernel changes Manual distortion in every build, so S1 swaps it in only when the tests and a sample-grid comparison agree, and otherwise drops the slider from the store edition. The Vite flag that leaves the profile functions out of the store bundle is untried (inferred). S1 lane 3 checks the bundle.
+- **S1, SAM 2 in the store edition.** RFC-0038's appendix rates SAM 2 "no known blocker" with medium confidence, and says the SA-1B licence text was not read (sourced, `model-training-data.md`). The licence research memo keeps SAM 2 and calls this its one AI keep with a residual question (memo section 9). NAFNet is rated no known blocker with high confidence (sourced, both). If the owner reads the compile-time rule strictly, Select Subject leaves the store edition too, which is one manifest line in S1.
+- **S5.** The memo's readings are an informed layman's, untested in court, and a rights holder could disagree (memo section 8). Under CDDL a breach can be cured within 30 days of learning of it, and buyers' licences survive (sourced in the memo, CDDL 6.1 and 6.3). The likely failure is a missing notice or source pointer, which an update fixes (inferred in the memo). Whether `rsraw-sys` 0.1.1 changed any LibRaw file against the upstream 0.21.3 tarball was not checked (memo section 1). S5 publishes the tree exactly as built, which covers either case (inferred).
+- **S2.** PatchMatch fills large areas worse than LaMa (sourced, RFC-0032 section 9 via RFC-0038 B5.5). S2 lane 10 shows the owner both results.
+- **S3, S4.** The store release has no face grouping, no eye check, no AI Upscale and no person preset. Reviews may compare it with the direct build (guess).
 - **S8.** A CSP can break a custom tile server or a WebGPU worker. Lanes 2 to 4 cover both.
-- **S9.** OpenStreetMap may withdraw access (sourced, `map_endpoints.rs` comment and RFC-0038 B5.12). Opt-in lowers load but does not remove the risk.
+- **S9.** OpenStreetMap may withdraw access (sourced, `map_endpoints.rs` comment and RFC-0038 B5.12). The D17 default lowers load but does not remove the risk.
 - **M2 to M4.** Bookmarks touch import, startup, export, merges, Enlarge and backup, so they are invasive. A grant that fails to resolve hides a whole folder. M3's reconnect flow is the recovery. The real panel path depends on a human at the screen every time.
 - **M2.** The sandbox may limit how many security-scoped resources one process holds at once (guess). Folder-level grants keep the count low, and lane 10 tests twenty.
-- **M6.** Two Mac builds (direct and store) double signing and test cost. App Review may reject the build for the helper, the network use or the face data. The review notes and the privacy answers are the mitigation. Rejection reasons cannot be predicted from the guidelines alone (guess).
-- **M6, G2.** The name may clash with the earlier Emulsion app or a mark (D15). A rename after M6 changes listing assets only, because the bundle ID stays `dev.alfredwei.emulsion`.
-- **W3.** Certificate cost and SmartScreen reputation are unknown. EV certificates no longer get instant reputation (sourced, RFC-0038 B5.6).
-- **W4, W5.** The Windows payment route is unconfirmed. The support ticket in Arm the program settles it. If Microsoft collects payment for Paid MSI listings, W4 and W5 change.
-- **Every Windows lane.** No control skill exists for the Windows app. Lanes drive it through `lanes.yml` with WebDriver specs and PowerShell, and screen captures may fail on a runner without a desktop session (guess).
+- **M6.** Two Mac builds (direct and store) double signing and test cost. App Review may reject the build for the helper or the network use. The review notes and the privacy answers are the mitigation. Rejection reasons cannot be predicted from the guidelines alone (guess).
+- **M6, G2, D15, D20.** The bundle ID cannot change after the first upload, and deleting a record does not free it (sourced, Apple "Changing the bundle identifier"). A rename after M6 changes listing assets only if D20 chose a neutral bundle ID. The App Store Connect record waits for D15, D20 and the trademark search.
+- **M8.** No Apple page read says in words that receipt validation is outside "own copy protection" in guideline 2.4.5(vi). That it is sanctioned is inferred from Apple documenting it to validate the app download (Appendix D). If App Review objects, the fallback is `AppTransaction` (Appendix B).
+- **M8.** A check that fails on a real buyer's Mac locks a paying customer out. The causes may be a changed network interface or a receipt that has not arrived yet (guess). D21's default offers "Check again" and opens no catalog, so no data is touched. Lane 9 tests a copy on a second Mac only if the owner has one.
+- **M8.** The receipt itself may be on its way out. Apple lists `Bundle.appStoreReceiptURL` and `SKReceiptRefreshRequest` as available on macOS only up to 15.0 (sourced), and prefers `AppTransaction` (sourced). Guideline 2.4.5(viii) forbids deprecated technologies (sourced). M8 calls neither API and reads the receipt file directly. Whether App Review treats a receipt check as a deprecated technology is unknown (guess). If it does, `AppTransaction` with a macOS 13 minimum is the fallback (Appendix B).
+- **Every Windows lane in an active PR.** No control skill exists for the Windows app. Lanes drive it through `lanes.yml` with WebDriver specs and PowerShell, and screen captures may fail on a runner without a desktop session (guess). These lanes check that the open source build still works on Windows. They do not ship anything to the Microsoft Store.
+- **Deferred PRs.** W1 to W6 and G3 carry their 2026-11-17 risks unchanged. Certificate cost and SmartScreen reputation are unknown (sourced, RFC-0038 B5.6), and the Windows payment route is unconfirmed. They matter again only when the owner reopens the Windows PRs.
 - **Every review gate.** Video capture on a runner with `screencapture` is untested (guess). The owner's Mac is the fallback.
 
-Store questions for counsel, added to RFC-0038 section 4 and RFC-0039 section 9.
+Questions a lawyer would still need to answer. There is no lawyer (owner message 2026-11-18, paraphrased). An agent writes a research memo from primary sources for each question, and the memo states the risk the owner accepts. A memo does not answer a question in law. This list keeps the record of what a lawyer would still be asked.
 
-- Does Apple's standard licence agreement suffice, or does the paid build need its own EULA in App Store Connect?
-- Can LGPL or CDDL notices and source offers be met inside a signed, sandboxed store package the user cannot re-sign? S5 and S6 aim to make this moot.
-- Do the privacy policy and the face consent meet the biometric rules of each target market (D11)?
+The licence research memo of 2026-11-18 names three questions that most need a lawyer (its section 10).
+
+1. May future versions of Emulsion be sold closed, given the public MIT history and the AI-assisted commits (RFC-0038 D8 and question 8)? No compile-time switch avoids it. S5 states the risk, and the owner accepts it or asks a lawyer.
+2. Do non-commercial dataset terms reach model weights that a third party licensed as Apache-2.0, MIT or BSD (RFC-0038 question 7)? The store edition avoids it for LaMa, Real-ESRGAN, D-FINE, YuNet and SFace by leaving them out. SAM 2 stays with the residual question above. The answer decides which AI features can return.
+3. Are the lensfun-derived kernels in the app's own files LGPL-3.0 code, and does a rewrite that the math dictates still derive from the port (RFC-0039 Q4 and Q5)? The store edition avoids it by compiling out the profile path and rewriting the one Manual distortion kernel (S1). The answer decides how lens profiles return.
+
+What the memo settles by reading the primary texts, or the switches avoid, for the first store release.
+
+| Question | Where it is written | Outcome for the first store release |
+| --- | --- | --- |
+| LibRaw under LGPL-2.1 or CDDL-1.0, and the relink question | RFC-0038 D2, D3, B5.4 and question 2 | Settled by reading (memo sections 2 and 3). Elect CDDL-1.0, publish LibRaw's source (S5). |
+| Whether a source link is enough | RFC-0038 question 3 | Settled by reading for CDDL and MPL-2.0 (memo sections 2 and 7). A public repository tagged per release, linked from About (S5). |
+| Whether the shipped notices are enough | RFC-0038 question 6 | The memo found three gaps. S5 closes them. |
+| Whether Apple's Standard EULA works with these licences | This plan, S10 | Read in the memo (section 4). A custom EULA, or About and `licenses/README.txt`, carries the open-source clause (S10). |
+| Whether `bindings.rs` is CDDL Covered Software | Memo section 2 | Avoided by publishing it (S5). |
+| The CC-BY-SA lens database, LGPL-3.0 relinking for `lensfun` and Installation Information | RFC-0038 D5, D6, questions 1, 4 and 5, RFC-0039 Q1 to Q3, Q6 and Q7 | Avoided. The crate and the database are not in the store binary. The memo reads Installation Information as not triggered by a software sale (section 5). |
+| Biometric duties for face embeddings | RFC-0038 question 9, D11 | Avoided. The store edition has no face features. |
+| California venue in LibRaw's CDDL notice | Memo section 8 | Open, low stakes (guess in the memo). |
+| Licence keys, payment and updater terms on Windows | D9, D13, D19 | Deferred with the Windows PRs. |
 
 ## Appendix D. Links and reading list
 
-Read before editing. RFC-0038 sections 1, 3 (B5) and 4, its appendix `model-training-data.md`, RFC-0039 sections 2, 7, 9 and 10, ADR-0012, the evidence in `docs/store-release-plan-appendix/`, and `.claude/skills/verify-emulsion/SKILL.md`.
+Read before editing. RFC-0038 sections 1, 3 (B5) and 4, its appendix `model-training-data.md`, RFC-0039 sections 2, 3, 5, 7, 9 and 10, ADR-0012, `app/src-tauri/src/editions.rs`, the evidence in `docs/store-release-plan-appendix/`, the licence research memo of 2026-11-18 once it is committed, and `.claude/skills/verify-emulsion/SKILL.md`.
 
-Run the pstack `how` skill before M2 and S1, because each crosses many call sites. Run the pstack `interrogate` skill on M2's design and on W4's RFC-0040 before building. Keep the decision trail per the pstack `show-me-your-work` skill in the root agent's store, and commit it with G1 because a store submission needs an auditable record.
+Run the pstack `how` skill before S1, M2 and M8, because S1 and M2 cross many call sites and M8 picks a PKCS #7 route. Run the pstack `interrogate` skill on M2's and M8's designs before building. W4's RFC-0040 waits with the Windows PRs. Keep the decision trail per the pstack `show-me-your-work` skill in the root agent's store, and commit it with G1 because a store submission needs an auditable record.
+
+The revision of 2026-11-18 retrieved these Apple pages for M8, D20 and D21. Each was retrieved on 2026-11-18.
+
+- Validating receipts on the device, https://developer.apple.com/documentation/appstorereceipts/validating-receipts-on-the-device, no date shown.
+- Choosing a receipt validation technique, https://developer.apple.com/documentation/storekit/choosing-a-receipt-validation-technique, no date shown.
+- App Store Receipts, https://developer.apple.com/documentation/appstorereceipts, no date shown. It marks the `verifyReceipt` endpoint deprecated.
+- `AppTransaction`, https://developer.apple.com/documentation/storekit/apptransaction, availability macOS 13.0 and later.
+- `SKReceiptRefreshRequest`, https://developer.apple.com/documentation/storekit/skreceiptrefreshrequest, availability macOS 10.9 to 15.0.
+- `Bundle.appStoreReceiptURL`, https://developer.apple.com/documentation/foundation/bundle/appstorereceipturl, availability macOS 10.7 to 15.0.
+- Changing the bundle identifier, https://developer.apple.com/documentation/xcode/changing-the-bundle-identifier, no date shown.
+- App Review Guidelines section 2.4.5, https://developer.apple.com/app-store/review/guidelines/, last updated 2026-10-16, re-read for items (vi) and (viii).
+- Developer forum threads on exit code 173, for example https://developer.apple.com/forums/thread/766399. Unofficial, found by a search and not opened.
 
 Every source below comes from `store-research.md`. Each was retrieved on 2026-11-17. The page date follows each link where the page showed one.
 
@@ -1763,3 +1920,25 @@ Name and trademark.
 - USPTO clearance search guidance, https://www.uspto.gov/trademarks/search/comprehensive-clearance-search-similar-trademarks, via a search summary. The research also names tmsearch.uspto.gov, the WIPO Global Brand Database and EUIPO TMview without a fetched page.
 - PetaPixel on the earlier Emulsion app, https://petapixel.com/2015/06/22/hands-on-emulsion-for-mac-is-a-simpler-alternative-to-adobe-lightroom, secondary.
 - Softpedia listing of Emulsion 1.4.1, https://mac.softpedia.com/get/Graphics/Emulsion-The-Escapers.shtml, secondary.
+
+## Appendix E. Decisions as recommended on 2026-11-17
+
+This is the decision table of the plan as written on 2026-11-17, kept unchanged as the record the owner answered on 2026-11-18. Its "Who" column names counsel. There is no lawyer, so research memos replace counsel (Arm the program), and Appendix C lists what a lawyer would still be asked. The sources it cites are in Appendix D.
+
+| Decision | Who | Recommended default | What would change it | Gates |
+| --- | --- | --- | --- | --- |
+| D14. Entity and store accounts (extends D10) | Owner, accountant | One legal entity. Request its D-U-N-S number now. Enrol it as an Apple organisation and open a Microsoft company account. Apple needs a legal entity, a D-U-N-S number, a domain email and a public website for an organisation (sourced, Apple enrol page). Microsoft requires a company account for anyone selling in their trade (sourced, Store Policy 10.14). | No entity. Then enrol Apple as an individual (the seller name is the owner's legal name) and verify the Microsoft company account as an independent developer with documents (sourced, Partner Center account page) | M6, W3, W5, G2, G3 |
+| D7. Model-data policy | Owner, counsel | Reject weights whose main training data has non-commercial terms. LaMa falls back to PatchMatch (S2). YuNet is swapped (S3). SFace is dropped (S3). Ask the Real-ESRGAN maintainer, and drop Upscale if the answer is unknown (S4). Counsel clears or rejects D-FINE's ImageNet backbone (S4). | Counsel says dataset terms do not reach the weights. Then S2, S3 and S4 shrink to notices. | S1, S2, S3, S4 |
+| D11. Face features in a paid build | Owner, counsel | Leave face grouping out of the first store release. Keep the eye check with the swapped detector. | Counsel clears biometric duties in the target markets and SFace is replaced | S1, S3, S9 |
+| D15. The name "Emulsion" | Owner, counsel | Keep it if the trademark searches are clear. A Mac photo catalog app named Emulsion by The Escapers sold on the Mac App Store in 2015 and had a 1.4.1 release in December 2016 (sourced, PetaPixel and Softpedia, secondary). No current listing was found (sourced, research). | A live mark in software classes, or Apple or Microsoft refusing the name. Rename before G2, because every listing asset carries it. | G2, G3 |
+| D16. Channel order | Owner | Mac App Store first, Microsoft Store second. Apple collects the money and the tax, so the Mac build needs no payment or licence system (sourced, guideline 3.1.1). The sandbox spike already runs (measured). The owner's machine is a Mac, so the human-at-screen checks can run. | Apple enrolment stalls on D-U-N-S, or Microsoft confirms that it collects payment for a Paid MSI listing (then Windows is cheaper) | Wave order |
+| D12. Mac price model | Owner | Paid upfront, one price tier, no In-App Purchase. M7 is skipped. | The owner wants a free trial. Then M7 builds the Price Tier 0 "XX-day Trial" item plus a paid unlock (sourced, guideline 3.1.1) | M7, G2 |
+| D13. Windows route | Owner | Route A. The same signed MSI or EXE that direct download would use, listed in Partner Center, with the app's own payment and licence keys. Tauri builds MSI and EXE officially (sourced, Tauri Microsoft Store guide). Third-party commerce carries no Store fee (sourced, App Developer Agreement v8.11). | Microsoft states in writing that a Paid MSI or EXE listing has Microsoft collect the money. Then W4 and W5 shrink to a Store licence check. The listing page says a one-time price is "collected through in-app purchase" and names no fee or money flow, so reading that as the app's own payment is an inference. | W4, W5, W6, G3 |
+| D2 and D3. LibRaw licence | Owner, counsel | Elect CDDL-1.0 (RFC-0038 B5.4 (a), 0.5 to 1 day) | Counsel prefers LGPL-2.1 with dynamic linking (B5.4 (b), 3 to 5 days) | S5 |
+| D5. Lens database | Counsel | Ship the unmodified XML as a separate resource beside the binary (RFC-0039) | Counsel says it cannot ship beside a proprietary binary. Then the RFC-0038 B5.3 contingency applies (10 to 25 days, not researched) | S6 |
+| D8. Relicensing | Owner, counsel | Future versions become proprietary. The repository goes private before the first store upload. | The owner keeps the source public. Selling a paid build of public source is not forbidden by either store's rules as read (inferred), but RFC-0038 B5 assumes a proprietary product. | S5, W6 |
+| D9. Activation | Owner | Offline signed licence file (RFC-0038 B5.8, PRD local-first) | Only needed under D13 route A | W4 |
+| D17. Map and place-search services | Owner | Online map and place search stay off until the user turns them on. Keep the OpenStreetMap defaults with attribution and the existing 1.1 s search throttle. Contract a paid provider later. | OpenStreetMap refuses commercial use, or review asks for a provider's retention terms (Apple privacy labels depend on them, sourced) | S9 |
+| D18. Mac minimum OS and architecture | Owner | Apple silicon only, `minimumSystemVersion` at least 12.0 (sourced, Tauri App Store guide), raised to the oldest macOS the owner tests | Intel users matter. Universal adds an x86_64 helper and LibRaw build, 1 to 3 days (guess, audit S7) | M6 |
+| D19. Windows code-signing route | Owner | Azure Artifact Signing if the entity qualifies, else an OV certificate. Prices were not retrieved (sourced, RFC-0038 B5.6). | Cost or eligibility | W3 |
+

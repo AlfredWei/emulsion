@@ -44,7 +44,6 @@ pub async fn blink_for_images(app: AppHandle, state: State<'_, AppState>, image_
     let blink_dir = resolve_cache_root(&app, &catalog)?.join(blink_models::DIR);
     let face_dir = resolve_face_models_dir(&app, &catalog)?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::bundled_models::seed_from_app(&app, &blink_dir, &crate::bundled_models::BLINK);
         let Some(mesh_path) = blink_models::ready_path(&blink_dir) else { return Ok(unavailable("mesh_model")) };
         let Some(yunet) = face_models::cached_detector(&face_dir) else { return Ok(unavailable("face_models")) };
 

@@ -5,7 +5,6 @@
 //! (`bundled_models::DETECT`); there is no download dialog, so a build without it simply has no detector and the person
 //! region keeps its face-only behaviour.
 
-use crate::segment_models::sha256_file;
 use std::path::{Path, PathBuf};
 
 pub const FILENAME: &str = "dfine_medium_coco.onnx";
@@ -24,9 +23,7 @@ pub fn ready_path_for(edition: &crate::editions::Edition, dir: &Path) -> Option<
     if !edition.includes(FAMILY) {
         return None;
     }
-    let path = dir.join(FILENAME);
-    let sized = matches!(std::fs::metadata(&path), Ok(m) if m.len() == SIZE);
-    (sized && sha256_file(&path).map(|h| h == SHA256).unwrap_or(false)).then_some(path)
+    crate::bundled_models::resolve(dir, &crate::bundled_models::DETECT[0])
 }
 
 #[cfg(test)]

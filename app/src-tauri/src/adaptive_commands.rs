@@ -125,12 +125,6 @@ pub async fn resolve_adaptive_region(
     };
     let previews_dir = resolve_cache_root(&app, &state.catalog)?.join("previews");
     let person_models = if region == "person" || region == "sky" { Some(models_dir(&app, &state)?) } else { None };
-    if region == "person" {
-        // The detector ships in the installer beside the Select Subject files; make sure it is installed (a no-op otherwise).
-        if let Some(dir) = &person_models {
-            crate::bundled_models::seed_from_app(&app, dir, &crate::bundled_models::DETECT);
-        }
-    }
     let helper = helper.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let preview = preview_cache::ensure_develop_preview_for_hash(std::path::Path::new(&path), &content_hash, &previews_dir)

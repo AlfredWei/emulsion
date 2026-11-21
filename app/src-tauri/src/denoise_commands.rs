@@ -74,8 +74,6 @@ pub fn crop_region(width: u32, height: u32, centre: [f64; 2]) -> Region {
 pub async fn denoise_model_status(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
     let dir = models_dir(&app, &state)?;
     tauri::async_runtime::spawn_blocking(move || {
-        // A model shipped in the installer is installed on first use (a no-op in builds without one).
-        crate::bundled_models::seed_from_app(&app, &dir, &crate::bundled_models::DENOISE);
         denoise_models::status(&dir)
     })
     .await

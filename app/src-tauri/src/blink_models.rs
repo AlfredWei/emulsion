@@ -25,9 +25,7 @@ pub fn ready_path_for(edition: &crate::editions::Edition, models_dir: &Path) -> 
     if !edition.includes(FAMILY) {
         return None;
     }
-    let path = models_dir.join(FILENAME);
-    let ok = matches!(std::fs::metadata(&path), Ok(m) if m.len() == SIZE) && crate::segment_models::sha256_file(&path).map(|h| h == SHA256).unwrap_or(false);
-    ok.then_some(path)
+    crate::bundled_models::resolve(models_dir, &crate::bundled_models::BLINK[0])
 }
 
 #[cfg(test)]

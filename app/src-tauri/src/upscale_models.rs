@@ -75,10 +75,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn is_valid(path: &Path) -> bool {
-    is_valid_with(path, SHA256, SIZE)
-}
-
 fn is_valid_with(path: &Path, sha256: &str, size: u64) -> bool {
     match std::fs::metadata(path) {
         Ok(m) if m.len() == size => sha256_file(path).map(|h| h == sha256).unwrap_or(false),
@@ -89,10 +85,9 @@ fn is_valid_with(path: &Path, sha256: &str, size: u64) -> bool {
 /// The family this model belongs to in an edition (`models/bundled-models.json`).
 pub const FAMILY: crate::editions::ModelFamily = crate::editions::ModelFamily::Upscale;
 
-/// The pinned file if it is in `dir` and valid, whatever the edition says.
+/// The pinned file if the app bundle or `dir` has it and it is valid, whatever the edition says.
 fn installed(dir: &Path) -> Option<PathBuf> {
-    let p = dir.join(FILENAME);
-    is_valid(&p).then_some(p)
+    crate::bundled_models::resolve(dir, &crate::bundled_models::UPSCALE[0])
 }
 
 /// The verified model file, or `None` (the caller then offers the import). `None` too when this build's edition leaves

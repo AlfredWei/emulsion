@@ -2095,6 +2095,21 @@ async fn open_bundled_file(app: AppHandle, path: Option<PathBuf>, name: &str) ->
     .map_err(|e| e.to_string())?
 }
 
+/// Opens the OS file manager with `path` selected (Library right-click and the metadata panel). It runs in Rust so
+/// the webview needs no opener permission that reaches the file system.
+#[tauri::command]
+fn reveal_in_file_manager(app: AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().reveal_item_in_dir(path).map_err(|e| e.to_string())
+}
+
+/// Opens a folder in the OS file manager (Export's "show in file manager when done").
+#[tauri::command]
+fn open_folder(app: AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Settings > About: opens the bundled `THIRD_PARTY_NOTICES.md` in the OS's default app for Markdown (or text) files.
 #[tauri::command]
 async fn open_third_party_notices(app: AppHandle) -> Result<(), String> {
@@ -2503,6 +2518,8 @@ pub fn run() {
             get_backup_settings,
             update_backup_settings,
             get_storage_info,
+            reveal_in_file_manager,
+            open_folder,
             open_third_party_notices,
             open_third_party_libraries,
             set_cache_dir,

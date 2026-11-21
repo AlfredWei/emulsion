@@ -75,6 +75,7 @@ export function getUpscaleLinks(/** @type {number} */ imageId) {
  * @property {number} imported
  * @property {number} skipped_duplicates
  * @property {number} failed
+ * @property {string[]} unreadable_folders
  * @property {number} import_batch
  */
 

@@ -38,6 +38,7 @@ vi.mock("$lib/thumbnailBatchQueue.js", () => queue);
 
 import {
   runImport,
+  importStatusMessage,
   handleImportFolder,
   handleImportFiles,
   handleDropImport,
@@ -57,7 +58,7 @@ import { selection } from "$lib/state/selection.svelte.js";
 import { shell } from "$lib/state/shell.svelte.js";
 import { develop } from "$lib/state/develop.svelte.js";
 
-const summary = (/** @type {object} */ over = {}) => ({ imported: 3, skipped_duplicates: 1, failed: 0, import_batch: 7, ...over });
+const summary = (/** @type {object} */ over = {}) => ({ imported: 3, skipped_duplicates: 1, failed: 0, unreadable_folders: [], import_batch: 7, ...over });
 const photo = (/** @type {number} */ id, /** @type {string | null} */ thumb = "/t.jpg", /** @type {number} */ vid = id * 10) =>
   /** @type {any} */ ({ image_id: id, version_id: vid, path: `/p/a/b/${id}.jpg`, thumbnail_path: thumb });
 
@@ -76,6 +77,23 @@ beforeEach(() => {
   selection.selectedId = null;
   selection.selectedIds = new Set();
   shell.notify("");
+});
+
+describe("importStatusMessage", () => {
+  it("names an unreadable folder in place of an empty import", () => {
+    const message = importStatusMessage(summary({ imported: 0, skipped_duplicates: 0, unreadable_folders: ["/photos/private"] }));
+    expect(message).toBe("Emulsion could not read /photos/private.");
+  });
+
+  it("names every unreadable folder, after the counts when some files were seen", () => {
+    const message = importStatusMessage(summary({ unreadable_folders: ["/a", "/b"] }));
+    expect(message).toBe("Imported 3, 1 already in library, 0 failed. Emulsion could not read /a. Emulsion could not read /b.");
+  });
+
+  it("keeps an empty readable folder distinct from an unreadable one", () => {
+    const message = importStatusMessage(summary({ imported: 0, skipped_duplicates: 0 }));
+    expect(message).toBe("Imported 0, 0 already in library, 0 failed");
+  });
 });
 
 describe("runImport", () => {

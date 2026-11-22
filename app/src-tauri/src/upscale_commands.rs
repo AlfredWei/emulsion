@@ -78,9 +78,6 @@ pub struct UpscaleJobResult {
 pub async fn upscale_model_status(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
     let dir = models_dir(&app, &state)?;
     tauri::async_runtime::spawn_blocking(move || {
-        // The model shipped in the installer (or, in a development build, committed in models/) is installed on
-        // first use; a no-op when it is already there.
-        crate::bundled_models::seed_from_app(&app, &dir, &crate::bundled_models::UPSCALE);
         upscale_models::status(&dir)
     })
     .await

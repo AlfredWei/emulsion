@@ -33,8 +33,6 @@ const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 pub async fn segment_model_status(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
     let dir = models_dir(&app, &state)?;
     tauri::async_runtime::spawn_blocking(move || {
-        // Models shipped in the installer are installed on first use (a no-op in builds without them).
-        crate::bundled_models::seed_from_app(&app, &dir, &crate::bundled_models::SEGMENT);
         segment_models::status(&dir)
     })
     .await

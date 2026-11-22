@@ -196,8 +196,6 @@ pub async fn remove_object(
     }
     CANCELLED.store(false, Ordering::SeqCst);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        // Shipped in the installer; make sure it is installed (a no-op when it already is).
-        crate::bundled_models::seed_from_app(&app, &models, &crate::bundled_models::INPAINT);
         let model = inpaint_models::ready_path(&models).ok_or_else(|| "the removal model is not installed".to_string())?;
         let removed = run_removal(&helper, id, &model, Path::new(&source), &shapes, grow_px.unwrap_or(DEFAULT_GROW_PX), &work)?;
         // Stored together, only once every thing has been filled: a cancel or a failure part-way leaves nothing behind.
@@ -247,7 +245,6 @@ pub async fn regenerate_removal(
     }
     CANCELLED.store(false, Ordering::SeqCst);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        crate::bundled_models::seed_from_app(&app, &models, &crate::bundled_models::INPAINT);
         let model = inpaint_models::ready_path(&models).ok_or_else(|| "the removal model is not installed".to_string())?;
         let r = redo_removal(&helper, id, &model, Path::new(&source), &hole, src_size, &work)?;
         let catalog = catalog.lock().map_err(|e| e.to_string())?;
@@ -319,8 +316,6 @@ pub async fn removal_cancel(helper: State<'_, Arc<AiHelper>>) -> Result<(), Stri
 pub async fn removal_model_status(app: AppHandle, state: State<'_, AppState>) -> Result<inpaint_models::ModelStatus, String> {
     let models = resolve_cache_root(&app, &state.catalog)?.join("inpaint_models");
     tauri::async_runtime::spawn_blocking(move || {
-        // Seeds first (and waits for the startup pass), like the other families' status checks.
-        crate::bundled_models::seed_from_app(&app, &models, &crate::bundled_models::INPAINT);
         inpaint_models::status(&models)
     })
     .await

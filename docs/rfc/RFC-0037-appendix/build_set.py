@@ -8,14 +8,14 @@ the person's box. Image kinds:
   mixed     - a faceless target person and a kept face elsewhere: faces are found, the faceless person is missed
   negative  - no person annotated at all (animals and other lookalikes are sampled on purpose)
 Writes ../set/set.json and copies the chosen JPEGs to ../set/img/. Needs the zips from the folders next to ../scripts."""
-import json, random, sys, zipfile, pathlib, shutil
+import json, os, random, sys, zipfile, pathlib, shutil
 import numpy as np
 from PIL import Image
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
-sys.path.insert(0, "/Users/weishih-yi/src/claude_cowork_projects/lr_replace/docs/rfc/RFC-0033-appendix")
+sys.path.insert(0, str(ROOT.parent / "RFC-0033-appendix"))
 import faceheur  # noqa: E402  (the app's YuNet, ported)
-YUNET = "/Users/weishih-yi/Library/Application Support/dev.alfredwei.emulsion/face_models/face_detection_yunet_2023mar.onnx"
+YUNET = os.path.expanduser("~/Library/Application Support/dev.alfredwei.emulsion/face_models/face_detection_yunet_2023mar.onnx")
 OK_LICENCES = None        # None = every licence: this is a local, never-redistributed evaluation, not training data; the licence id stays in set.json
 MIN_H = 0.08          # a target person is at least 8 % of the frame tall
 FACE_MIN_PX, REF = 24.0, 1600.0

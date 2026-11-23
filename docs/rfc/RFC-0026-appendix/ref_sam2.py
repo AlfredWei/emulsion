@@ -1,6 +1,6 @@
 import numpy as np, onnxruntime as ort, sys, os
 from PIL import Image
-R="/Users/weishih-yi/src/claude_cowork_projects/lr_replace/test_image/"
+R=os.path.expanduser("~/src/claude_cowork_projects/lr_replace/test_image/")
 out=sys.argv[1]; os.makedirs(out,exist_ok=True)
 enc=ort.InferenceSession("models/sam2_hiera_tiny.encoder.onnx",providers=["CPUExecutionProvider"])
 dec=ort.InferenceSession("models/sam2_hiera_tiny.decoder.onnx",providers=["CPUExecutionProvider"])

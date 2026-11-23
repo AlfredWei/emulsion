@@ -2,9 +2,9 @@
 ImageNet mean/std, encoder outputs [high_res_0, high_res_1, image_embed]; decoder gets point prompts in 1024 px plus one (0,0,-1)
 padding point and returns 256x256 logits per candidate with a predicted IoU. Usage: s = Sam(); s.prepare(PIL); s.cut([(x, y, True)]) with
 x, y normalised to the frame -> (pred_iou, logits 256x256 of the best candidate)."""
-import numpy as np, onnxruntime as ort
+import numpy as np, onnxruntime as ort, os
 from PIL import Image
-DIR = "/Users/weishih-yi/Library/Application Support/dev.alfredwei.emulsion/segment_models/"
+DIR = os.path.expanduser("~/Library/Application Support/dev.alfredwei.emulsion/segment_models/")
 MEAN = np.array([0.485, 0.456, 0.406], np.float32); STD = np.array([0.229, 0.224, 0.225], np.float32)
 
 class Sam:

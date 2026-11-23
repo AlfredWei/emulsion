@@ -6,7 +6,7 @@
   "helperInfoBefore": {
     "ok": {
       "exists": true,
-      "path": "/private/tmp/claude-501/mas/drive.app/Contents/MacOS/emulsion-ai",
+      "path": "<tmp>/mas/drive.app/Contents/MacOS/emulsion-ai",
       "running": false
     }
   },
@@ -87,10 +87,10 @@
         "lens_model": null,
         "longitude": null,
         "metering_mode": null,
-        "path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg",
+        "path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg",
         "rating": 0,
         "shutter_speed": null,
-        "thumbnail_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Library/Application Support/dev.alfredwei.emulsion/thumbnails/1.jpg",
+        "thumbnail_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Library/Application Support/dev.alfredwei.emulsion/thumbnails/1.jpg",
         "version_id": 1,
         "width": 2048
       },
@@ -123,10 +123,10 @@
         "lens_model": null,
         "longitude": null,
         "metering_mode": null,
-        "path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/setup1_complex_gt1.cr2",
+        "path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/setup1_complex_gt1.cr2",
         "rating": 0,
         "shutter_speed": 0.125,
-        "thumbnail_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Library/Application Support/dev.alfredwei.emulsion/thumbnails/2.jpg",
+        "thumbnail_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Library/Application Support/dev.alfredwei.emulsion/thumbnails/2.jpg",
         "version_id": 2,
         "width": 3906
       }
@@ -139,7 +139,7 @@
         "metadata_warning": null,
         "output_path": null,
         "plugin_error": null,
-        "source_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
+        "source_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
       }
     ]
   },
@@ -149,9 +149,9 @@
       {
         "error": null,
         "metadata_warning": null,
-        "output_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out/Field-corn-Liechtenstein-landscape-1.jpg",
+        "output_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out/Field-corn-Liechtenstein-landscape-1.jpg",
         "plugin_error": null,
-        "source_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
+        "source_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
       }
     ]
   },
@@ -162,7 +162,7 @@
   "addPlugin": {
     "ok": {
       "args_template": [
-        "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/plugin-marker.txt"
+        "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/plugin-marker.txt"
       ],
       "command": "/usr/bin/touch",
       "created_at": "2026-11-17 13:17:41",
@@ -175,9 +175,9 @@
       {
         "error": null,
         "metadata_warning": null,
-        "output_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out2/Field-corn-Liechtenstein-landscape-1.jpg",
+        "output_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out2/Field-corn-Liechtenstein-landscape-1.jpg",
         "plugin_error": null,
-        "source_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
+        "source_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
       }
     ]
   },
@@ -187,9 +187,9 @@
       {
         "error": null,
         "metadata_warning": null,
-        "output_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out3/Field-corn-Liechtenstein-landscape.jpg",
+        "output_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/export-out3/Field-corn-Liechtenstein-landscape.jpg",
         "plugin_error": "Operation not permitted (os error 1)",
-        "source_path": "/Users/weishih-yi/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
+        "source_path": "<home>/Library/Containers/dev.alfredwei.emulsion/Data/Documents/Field-corn-Liechtenstein-landscape.jpg"
       }
     ]
   },
@@ -203,7 +203,7 @@
   "helperInfoAfter": {
     "ok": {
       "exists": true,
-      "path": "/private/tmp/claude-501/mas/drive.app/Contents/MacOS/emulsion-ai",
+      "path": "<tmp>/mas/drive.app/Contents/MacOS/emulsion-ai",
       "running": true
     }
   },

@@ -6,9 +6,9 @@
 
 ## Setup (measured)
 
-- Machine macOS 26.5.2 arm64. Branch `spike/mas-sandbox`, commit `b8cd7c9` (only `app/e2e/specs/sandbox-probe.e2e.js` and `app/e2e/wdio.sandbox.conf.js`; no app code changed). Worktree `/Users/weishih-yi/src/claude_cowork_projects/lr_replace/.claude/worktrees/agent-a65c05f5c7d6da5bb`.
+- Machine macOS 26.5.2 arm64. Branch `spike/mas-sandbox`, commit `b8cd7c9` (only `app/e2e/specs/sandbox-probe.e2e.js` and `app/e2e/wdio.sandbox.conf.js`; no app code changed). Worktree `<home>/src/claude_cowork_projects/lr_replace/.claude/worktrees/agent-a65c05f5c7d6da5bb`.
 - Models. The earlier run's cache was not found. The main checkout's `app/src-tauri/bundled-models/` held 4 of 7 models (nafnet, realesr, sam2 encoder and decoder). I copied those and skipped the fetch script, so dfine, lama and face landmarks are absent from these bundles. Denoise and segment status report `ready`.
-- Signing identity. `Apple Development: SHIH YI WEI (ALT5T8PX37)` was usable with no prompt, so I used it, not ad hoc. Hardened runtime and notarisation were not tried.
+- Signing identity. `Apple Development: <signing identity> (<team id>)` was usable with no prompt, so I used it, not ad hoc. Hardened runtime and notarisation were not tried.
 
 ## Commands run
 
@@ -20,7 +20,7 @@ npx tauri build --config src-tauri/tauri.bundle-models.conf.json --config src-ta
 npx tauri build --features wdio-webdriver --bundles app --config src-tauri/tauri.e2e.conf.json \
   --config src-tauri/tauri.bundle-models.conf.json --config src-tauri/tauri.bundle-helper.conf.json
 # sign inside out
-ID="Apple Development: SHIH YI WEI (ALT5T8PX37)"
+ID="Apple Development: <signing identity> (<team id>)"
 codesign --force -s "$ID" --entitlements helper.entitlements Emulsion.app/Contents/MacOS/emulsion-ai
 codesign --force -s "$ID" --entitlements main.entitlements Emulsion.app          # drive.app used main-drivable.entitlements
 codesign --verify --deep --strict Emulsion.app
@@ -83,4 +83,4 @@ Powerbox grants and their persistence, the save panel, Settings > Storage move, 
 
 ## Artifacts
 
-Entitlements: `/private/tmp/claude-501/-Users-weishih-yi-src-claude-cowork-projects-lr-replace/3135215a-da0c-4cec-b0c5-fc7c32f27b05/scratchpad/store-plan/{main,helper,main-drivable}.entitlements`. Raw probe output: `.../store-plan/probe-results.json`. Signed apps: `/private/tmp/claude-501/mas/{dev,drive}.app`. Build logs: `.../scratchpad/build.log`, `build2.log`.
+Entitlements: `<scratchpad>/store-plan/{main,helper,main-drivable}.entitlements`. Raw probe output: `.../store-plan/probe-results.json`. Signed apps: `<tmp>/mas/{dev,drive}.app`. Build logs: `.../scratchpad/build.log`, `build2.log`.

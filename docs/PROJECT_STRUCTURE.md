@@ -10,7 +10,7 @@ lr_replace/
 ├── docs/                 Engineering docs — how it's built, and why
 ├── app/                  The actual Tauri + Svelte application
 ├── .github/workflows/    CI (GitHub Actions)
-├── scripts/              Repo-level tools: gen_third_party_libraries.py (library licence list and licenses/; `--check` and the copyleft guard run in CI), check_libraw_version.py (the Windows vcpkg LibRaw must match the vendored header; runs in both Windows jobs), provenance_report.py (read-only git report for RFC-0038; --self-test runs in CI), lanes/ (the lane harness: build-sandboxed.sh builds a sandboxed bundle with its own bundle ID, perf-interleave.sh measures a perf-probe metric at two commits in alternating order; `--self-test` and shellcheck run in CI)
+├── scripts/              Repo-level tools: gen_third_party_libraries.py (library licence list and licenses/; `--check` and the copyleft guard run in CI), check_libraw_version.py (the Windows vcpkg LibRaw must match the vendored header; runs in both Windows jobs), provenance_report.py (read-only git report for RFC-0038; --self-test runs in CI), check_no_personal_data.py (fails when a tracked file holds a home-directory path or an Apple signing identity; the repository is public; check and --self-test run in CI), lanes/ (the lane harness: build-sandboxed.sh builds a sandboxed bundle with its own bundle ID, perf-interleave.sh measures a perf-probe metric at two commits in alternating order; `--self-test` and shellcheck run in CI)
 ├── Makefile               make dev / make test / make build, see `make help`
 ├── README.md               Project overview + quick start
 ├── PROGRESS.md             Running status log — read this first after time away

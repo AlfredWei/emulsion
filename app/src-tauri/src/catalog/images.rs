@@ -472,7 +472,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().expect("in-memory catalog opens");
 
         let image_id = catalog
-            .add_image("/Users/alfred/Pictures/2026-Kyoto/IMG_0001.CR3")
+            .add_image("/home/user/Pictures/2026-Kyoto/IMG_0001.CR3")
             .expect("image insert succeeds");
 
         let stack = EditStack {

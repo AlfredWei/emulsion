@@ -1,6 +1,6 @@
-import numpy as np, onnxruntime as ort, sys
+import numpy as np, onnxruntime as ort, os, sys
 from PIL import Image
-R="/Users/weishih-yi/src/claude_cowork_projects/lr_replace/test_image/"
+R=os.path.expanduser("~/src/claude_cowork_projects/lr_replace/test_image/")
 imgs=["Field-corn-Liechtenstein-landscape.jpg","Cavenagh-Bridge-Singapore-panorama-frame-a.jpg","Szechenyi-Chain-Bridge-Budapest-night.jpg","Smiling-woman-pink-shirt-portrait.jpg"]
 s=ort.InferenceSession("models/skyseg.onnx",providers=["CPUExecutionProvider"])
 mean=np.array([0.485,0.456,0.406],np.float32); std=np.array([0.229,0.224,0.225],np.float32)

@@ -1,6 +1,6 @@
-import numpy as np, onnxruntime as ort, time
+import numpy as np, onnxruntime as ort, os, time
 from PIL import Image
-R="/Users/weishih-yi/src/claude_cowork_projects/lr_replace/test_image/"
+R=os.path.expanduser("~/src/claude_cowork_projects/lr_replace/test_image/")
 enc=ort.InferenceSession("models/sam2_hiera_tiny.encoder.onnx",providers=["CPUExecutionProvider"])
 dec=ort.InferenceSession("models/sam2_hiera_tiny.decoder.onnx",providers=["CPUExecutionProvider"])
 mean=np.array([0.485,0.456,0.406],np.float32); std=np.array([0.229,0.224,0.225],np.float32)

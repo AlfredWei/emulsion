@@ -3,7 +3,7 @@ import { folderKeyForPath, buildFolderEntries } from "./libraryFolders.js";
 
 describe("folderKeyForPath", () => {
   it("joins the last two directory segments with a forward slash", () => {
-    expect(folderKeyForPath("/Users/alfred/Photos/2026/wedding/img_0001.CR3")).toBe("2026/wedding");
+    expect(folderKeyForPath("/home/user/Photos/2026/wedding/img_0001.CR3")).toBe("2026/wedding");
   });
 
   it("handles Windows-style backslash paths", () => {

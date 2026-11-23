@@ -221,6 +221,9 @@ jobs:
       - run: python3 scripts/check_libraw_version.py --self-test
       - run: python3 scripts/check_vcpkg_versions.py --self-test
       - run: python3 scripts/gen_third_party_libraries.py --self-test
+      # The repository is public: no tracked file may hold a home-directory path or an Apple signing identity (PR "redact appendix personal data").
+      - run: python3 scripts/check_no_personal_data.py --self-test
+      - run: python3 scripts/check_no_personal_data.py
       - run: shellcheck scripts/lanes/*.sh && scripts/lanes/perf-interleave.sh --self-test
 
       # RFC-0038 A4: THIRD_PARTY_LIBRARIES.md and licenses/ are generated from the lockfile, the vendored LibRaw and the

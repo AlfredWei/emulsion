@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { refuseWhenPortTaken } from "./embeddedPort.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -79,4 +80,6 @@ export const config = {
   },
 
   reporters: ["spec"],
+
+  onPrepare: refuseWhenPortTaken,
 };

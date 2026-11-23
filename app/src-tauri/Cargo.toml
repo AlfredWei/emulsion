@@ -23,6 +23,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
+# Tauri's own runtime; bundled_open.rs uses its blocking pool and a timeout on the wait.
+tokio = { version = "1.53.1", features = ["rt", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40.1", features = ["bundled", "backup"] }

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { refuseWhenPortTaken } from "./embeddedPort.js";
+import { settleAfterReload } from "./reloadSettle.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,4 +83,5 @@ export const config = {
   reporters: ["spec"],
 
   onPrepare: refuseWhenPortTaken,
+  before: (_capabilities, _specs, browser) => settleAfterReload(browser),
 };

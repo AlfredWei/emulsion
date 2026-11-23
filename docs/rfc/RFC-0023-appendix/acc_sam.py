@@ -1,6 +1,6 @@
-import numpy as np, onnxruntime as ort, time
+import numpy as np, onnxruntime as ort, os, time
 from PIL import Image
-R="/Users/weishih-yi/src/claude_cowork_projects/lr_replace/test_image/"
+R=os.path.expanduser("~/src/claude_cowork_projects/lr_replace/test_image/")
 enc=ort.InferenceSession("models/mobile_sam/mobile_sam.encoder.onnx",providers=["CPUExecutionProvider"])
 dec=ort.InferenceSession("models/mobile_sam/sam_vit_h_4b8939.decoder.onnx",providers=["CPUExecutionProvider"])
 # (file, label, click in original-image fractional coords (x,y))

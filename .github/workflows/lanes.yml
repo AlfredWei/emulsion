@@ -4,7 +4,8 @@ name: Lanes
 #   gh workflow run lanes.yml --ref <branch with this file> -f ref=<sha> -f os=macos-latest -f spec=sandbox-smoke
 # `ref` is checked out. The harness (this workflow's own scripts and specs) is copied over it when `ref` is another commit,
 # so a trunk that lacks the harness can still be driven. `sandbox-*` specs on macOS run against a sandboxed bundle built by
-# scripts/lanes/build-sandboxed.sh. Any other spec runs against the debug build. `perf-interleave` measures `ref` against `trunk_ref`.
+# scripts/lanes/build-sandboxed.sh. Any other spec runs against the drivable build of `profile`, debug by default.
+# `perf-interleave` measures `ref` against `trunk_ref`.
 
 on:
   workflow_dispatch:
@@ -29,6 +30,11 @@ on:
       bundle_id:
         description: Bundle ID of the sandboxed app
         default: dev.alfredwei.emulsion.lane
+      profile:
+        description: Build profile of the app under test, for specs that are not sandbox-*
+        type: choice
+        options: [debug, release]
+        default: debug
       trunk_ref:
         description: perf-interleave only, the commit to compare against
         required: false
@@ -48,6 +54,7 @@ jobs:
       LANE_CHANNEL: ${{ inputs.channel }}
       LANE_TRUNK_REF: ${{ inputs.trunk_ref }}
       LANE_METRIC: ${{ inputs.metric }}
+      LANE_PROFILE: ${{ inputs.profile }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,6 +75,9 @@ jobs:
             cp harness/app/e2e/wdio.sandbox.conf.js app/e2e/
             cp harness/app/e2e/specs/sandbox-smoke.e2e.js harness/app/e2e/specs/perf-probe.e2e.js app/e2e/specs/
             cp -R harness/app/src-tauri/entitlements app/src-tauri/
+            for f in harness/app/e2e/*.js; do [ -e "app/e2e/$(basename "$f")" ] || cp "$f" app/e2e/; done
+            spec="harness/app/e2e/specs/$LANE_SPEC.e2e.js"
+            if [ -f "$spec" ] && [ ! -e "app/e2e/specs/$LANE_SPEC.e2e.js" ]; then cp "$spec" app/e2e/specs/; fi
             echo "harness copied from $GITHUB_SHA over $(git rev-parse HEAD)" | tee "$LANE_OUT/harness.txt"
           else
             echo "commit under test is the harness commit" | tee "$LANE_OUT/harness.txt"
@@ -115,15 +125,16 @@ jobs:
           cp "$RUNNER_TEMP/lane-apps/$LANE_BUNDLE_ID.entitlements.txt" "$LANE_OUT/entitlements.txt"
           echo "build_seconds=$(( $(date +%s) - start ))" >> "$LANE_OUT/timing.txt"
 
-      - name: Build the debug app
+      - name: Build the drivable app
         if: inputs.spec != 'perf-interleave' && !(runner.os == 'macOS' && startsWith(inputs.spec, 'sandbox-'))
         shell: bash
         working-directory: app
         run: |
           start=$(date +%s)
-          npx tauri build --debug --no-bundle --features wdio-webdriver --config src-tauri/tauri.e2e.conf.json
+          if [ "$LANE_PROFILE" = release ]; then profile_flag=; else profile_flag=--debug; fi
+          npx tauri build $profile_flag --no-bundle --features wdio-webdriver --config src-tauri/tauri.e2e.conf.json
           if [ "$RUNNER_OS" = Windows ]; then ext=.exe; else ext=; fi
-          echo "APP_BIN=$GITHUB_WORKSPACE/app/src-tauri/target/debug/emulsion$ext" >> "$GITHUB_ENV"
+          echo "APP_BIN=$GITHUB_WORKSPACE/app/src-tauri/target/$LANE_PROFILE/emulsion$ext" >> "$GITHUB_ENV"
           echo "build_seconds=$(( $(date +%s) - start ))" >> "$LANE_OUT/timing.txt"
 
       - name: Run the spec

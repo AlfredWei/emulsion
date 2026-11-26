@@ -6,6 +6,7 @@
 //! the user's typed search string (plus the key for Google), and only when
 //! they press Search. Results are returned to the caller and never
 //! persisted here; the caller persists only coordinates the user picks.
+//! Nothing is sent at all while the online map switch is off (D17).
 //!
 //! Response parsing is pure so it is tested against recorded JSON bodies --
 //! CI never touches the network.
@@ -46,6 +47,17 @@ impl Provider {
     }
 }
 
+/// What `search` and `reverse` read from the catalog, gathered once under its lock.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// The online map switch (`Catalog::online_map_enabled`). Off refuses before any request.
+    pub online: bool,
+    pub provider: Provider,
+    pub google_api_key: Option<String>,
+    /// The stored Nominatim server address (`map_endpoints`), `None` for the public OpenStreetMap one.
+    pub nominatim_base: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GeocodeCandidate {
     pub label: String,
@@ -55,6 +67,8 @@ pub struct GeocodeCandidate {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GeocodeError {
+    #[error("Online map and place search are off. Turn them on in Settings → Map.")]
+    Offline,
     #[error("Enter a place or address to search for.")]
     EmptyQuery,
     #[error("Google search is selected but no API key is set. Add one in Settings → Map, or switch to OpenStreetMap.")]
@@ -206,26 +220,27 @@ async fn throttle_nominatim() {
     }
 }
 
-/// `nominatim_base` is the stored Nominatim server address (`map_endpoints`), `None` for the public OpenStreetMap one.
-pub async fn search(
-    provider: Provider,
-    query: &str,
-    google_api_key: Option<&str>,
-    nominatim_base: Option<&str>,
-) -> Result<Vec<GeocodeCandidate>, GeocodeError> {
+fn google_key(settings: &Settings) -> Result<&str, GeocodeError> {
+    settings.google_api_key.as_deref().filter(|k| !k.is_empty()).ok_or(GeocodeError::NoApiKey)
+}
+
+pub async fn search(settings: &Settings, query: &str) -> Result<Vec<GeocodeCandidate>, GeocodeError> {
+    if !settings.online {
+        return Err(GeocodeError::Offline);
+    }
     let query = query.trim();
     if query.is_empty() {
         return Err(GeocodeError::EmptyQuery);
     }
-    match provider {
+    match settings.provider {
         Provider::Google => {
-            let key = google_api_key.filter(|k| !k.is_empty()).ok_or(GeocodeError::NoApiKey)?;
+            let key = google_key(settings)?;
             let body = fetch(client()?.get(GOOGLE_ENDPOINT).query(&[("address", query), ("key", key)])).await?;
             parse_google_response(&body)
         }
         Provider::Osm => {
             throttle_nominatim().await;
-            let (search_url, _) = crate::map_endpoints::nominatim_urls(nominatim_base);
+            let (search_url, _) = crate::map_endpoints::nominatim_urls(settings.nominatim_base.as_deref());
             let body = fetch(client()?.get(search_url).query(&[
                 ("q", query),
                 ("format", "jsonv2"),
@@ -241,16 +256,13 @@ pub async fn search(
 /// coordinates. Unlike `search`, this sends catalog data (the coordinates) off-device, so the
 /// caller must only call it for a coordinate the user explicitly asked to look up -- never
 /// automatically. `Ok(None)` means the provider had nothing nearby, not an error.
-pub async fn reverse(
-    provider: Provider,
-    latitude: f64,
-    longitude: f64,
-    google_api_key: Option<&str>,
-    nominatim_base: Option<&str>,
-) -> Result<Option<String>, GeocodeError> {
-    match provider {
+pub async fn reverse(settings: &Settings, latitude: f64, longitude: f64) -> Result<Option<String>, GeocodeError> {
+    if !settings.online {
+        return Err(GeocodeError::Offline);
+    }
+    match settings.provider {
         Provider::Google => {
-            let key = google_api_key.filter(|k| !k.is_empty()).ok_or(GeocodeError::NoApiKey)?;
+            let key = google_key(settings)?;
             let latlng = format!("{latitude},{longitude}");
             let body = fetch(client()?.get(GOOGLE_ENDPOINT).query(&[("latlng", latlng.as_str()), ("key", key)])).await?;
             // Google's reverse response has the same {status, results[].formatted_address/geometry}
@@ -259,7 +271,7 @@ pub async fn reverse(
         }
         Provider::Osm => {
             throttle_nominatim().await;
-            let (_, reverse_url) = crate::map_endpoints::nominatim_urls(nominatim_base);
+            let (_, reverse_url) = crate::map_endpoints::nominatim_urls(settings.nominatim_base.as_deref());
             let body = fetch(client()?.get(reverse_url).query(&[
                 ("lat", latitude.to_string()),
                 ("lon", longitude.to_string()),
@@ -342,12 +354,46 @@ mod tests {
         assert!(matches!(parse_google_response("<html>502</html>"), Err(GeocodeError::BadResponse)));
     }
 
+    fn online(provider: Provider, key: Option<&str>) -> Settings {
+        Settings { online: true, provider, google_api_key: key.map(str::to_string), nominatim_base: None }
+    }
+
     #[tokio::test]
     async fn search_rejects_blank_queries_and_missing_keys_before_any_network_call() {
-        assert!(matches!(search(Provider::Osm, "   ", None, None).await, Err(GeocodeError::EmptyQuery)));
-        assert!(matches!(search(Provider::Google, "   ", Some("k"), None).await, Err(GeocodeError::EmptyQuery)));
-        assert!(matches!(search(Provider::Google, "Taipei", None, None).await, Err(GeocodeError::NoApiKey)));
-        assert!(matches!(search(Provider::Google, "Taipei", Some(""), None).await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(search(&online(Provider::Osm, None), "   ").await, Err(GeocodeError::EmptyQuery)));
+        assert!(matches!(search(&online(Provider::Google, Some("k")), "   ").await, Err(GeocodeError::EmptyQuery)));
+        assert!(matches!(search(&online(Provider::Google, None), "Taipei").await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(search(&online(Provider::Google, Some("")), "Taipei").await, Err(GeocodeError::NoApiKey)));
+    }
+
+    /// A Nominatim server on this computer that counts the connections it is offered and closes each at once.
+    fn counting_server() -> (Settings, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = count.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        (Settings { online: true, provider: Provider::Osm, google_api_key: None, nominatim_base: Some(base) }, count)
+    }
+
+    #[tokio::test]
+    async fn search_and_reverse_refuse_without_a_request_while_the_online_map_is_off() {
+        let (on, connections) = counting_server();
+        let off = Settings { online: false, ..on.clone() };
+        assert!(matches!(search(&off, "Singapore").await, Err(GeocodeError::Offline)));
+        assert!(matches!(reverse(&off, 1.29, 103.85).await, Err(GeocodeError::Offline)));
+        let google_off = Settings { online: false, ..online(Provider::Google, Some("k")) };
+        assert!(matches!(search(&google_off, "Singapore").await, Err(GeocodeError::Offline)));
+        assert!(matches!(reverse(&google_off, 1.29, 103.85).await, Err(GeocodeError::Offline)));
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0, "no connection while off");
+
+        assert!(matches!(search(&on, "Singapore").await, Err(GeocodeError::Network(_))));
+        assert!(connections.load(std::sync::atomic::Ordering::SeqCst) >= 1, "the same search connects once it is on");
     }
 
     #[test]
@@ -428,8 +474,8 @@ mod tests {
 
     #[tokio::test]
     async fn reverse_requires_a_google_key_before_any_network_call() {
-        assert!(matches!(reverse(Provider::Google, 25.0, 121.5, None, None).await, Err(GeocodeError::NoApiKey)));
-        assert!(matches!(reverse(Provider::Google, 25.0, 121.5, Some(""), None).await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(reverse(&online(Provider::Google, None), 25.0, 121.5).await, Err(GeocodeError::NoApiKey)));
+        assert!(matches!(reverse(&online(Provider::Google, Some("")), 25.0, 121.5).await, Err(GeocodeError::NoApiKey)));
     }
 
     #[test]

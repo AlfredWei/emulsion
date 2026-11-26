@@ -46,6 +46,8 @@ export function setGeoLocationBatch(
 
 /**
  * @typedef {Object} MapSettings
+ * @property {boolean} online_map_enabled Whether the map may download tiles and place search may run. The backend
+ *   decides the default when the person never chose: on in debug builds, off in release builds.
  * @property {GeocodeProvider} provider
  * @property {boolean} has_google_key
  * @property {string | null} tile_url Saved tile address, or null for OpenStreetMap's public server.
@@ -56,6 +58,11 @@ export function setGeoLocationBatch(
 /** @returns {Promise<MapSettings>} */
 export function getMapSettings() {
   return invoke("get_map_settings");
+}
+
+/** @returns {Promise<void>} */
+export function setOnlineMapEnabled(/** @type {boolean} */ enabled) {
+  return invoke("set_online_map_enabled", { enabled });
 }
 
 export function setGeocodeProvider(/** @type {GeocodeProvider} */ provider) {

@@ -4,7 +4,8 @@
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
   import { openThirdPartyNotices, openThirdPartyLibraries, getModelEdition } from "$lib/api/system.js";
   import { editionAboutLine } from "$lib/modelEdition.js";
-  import { getMapSettings, setGeocodeProvider, setMapsApiKey, setMapEndpoints } from "$lib/api/map.js";
+  import { setGeocodeProvider, setMapsApiKey, setMapEndpoints } from "$lib/api/map.js";
+  import { onlineMap } from "$lib/state/onlineMap.svelte.js";
   import {
     listExportPlugins,
     addExportPlugin,
@@ -90,6 +91,15 @@
     await handleSaveMapEndpoints();
   }
 
+  async function handleOnlineMapChange(/** @type {boolean} */ enabled) {
+    mapsError = "";
+    try {
+      await onlineMap.set(enabled);
+    } catch (/** @type {any} */ e) {
+      mapsError = String(e);
+    }
+  }
+
   /** @param {import('$lib/api/map.js').GeocodeProvider} provider */
   async function handleProviderChange(provider) {
     mapsError = "";
@@ -151,7 +161,7 @@
       mapsKeyInput = "";
       shortcuts = getStoredShortcuts();
       mapEndpointsSaved = false;
-      getMapSettings().then((m) => {
+      onlineMap.refresh().then((m) => {
         mapProvider = m.provider;
         mapsKeySaved = m.has_google_key;
         mapTileUrl = m.tile_url ?? "";
@@ -541,6 +551,20 @@
         </section>
       {:else if activeTab === "map"}
         <section class="backup-section">
+          <label class="checkbox-row">
+            <input
+              type="checkbox"
+              data-testid="online-map-setting"
+              checked={onlineMap.enabled === true}
+              disabled={onlineMap.enabled === null}
+              onchange={(e) => handleOnlineMapChange(e.currentTarget.checked)}
+            />
+            Use the online map and place search
+          </label>
+          <p class="storage-note">
+            When this is on, the map downloads tiles from its tile server and place search sends the text you type to
+            its search service. When it is off, the map shows a card instead and nothing is sent.
+          </p>
           <p class="storage-note">
             Choose what powers place search when you set a photo's location. Only the text you type into the search
             box is sent (and only when you press Search) — catalog and photo data never leave this computer.

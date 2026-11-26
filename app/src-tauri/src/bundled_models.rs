@@ -148,7 +148,7 @@ mod tests {
     }
 
     /// The licence texts that carry conditions beyond "keep the notice" (LibRaw, the `lensfun` crate and its database,
-    /// MPL-2.0, CDLA-Permissive-2.0) are copied by `scripts/gen_third_party_libraries.py` into `licenses/`, and
+    /// MPL-2.0, CDLA-Permissive-2.0), and the notices every other crate asks for, are copied by `scripts/gen_third_party_libraries.py` into `licenses/`, and
     /// `tauri.conf.json` ships that folder. A file that goes missing, or a folder that stops being bundled, fails here.
     #[test]
     fn the_licence_texts_are_in_the_repo_and_bundled_with_the_installer() {
@@ -160,6 +160,7 @@ mod tests {
             "LibRaw-COPYRIGHT", "LibRaw-LICENSE.LGPL", "LibRaw-LICENSE.CDDL", "lensfun-LICENSE-LGPL-3.0", "lensfun-LICENSE-GPL-3.0",
             "lensfun-NOTICE", "CC-BY-SA-3.0.txt", "MPL-2.0.txt", "CDLA-Permissive-2.0.txt", "README.txt",
             "vcpkg-jasper-copyright.txt", "vcpkg-lcms-copyright.txt", "vcpkg-libjpeg-turbo-copyright.txt", "vcpkg-zlib-copyright.txt",
+            "rust-crates.txt", "LibRaw-third-party-BSD.txt", "IJG-notice.txt",
         ];
         for f in files {
             let len = std::fs::metadata(dir.join(f)).unwrap_or_else(|e| panic!("licenses/{f}: {e}")).len();
@@ -174,6 +175,7 @@ mod tests {
             assert!(libs.contains(name), "THIRD_PARTY_LIBRARIES.md does not name {name}");
         }
         assert!(libs.contains("licenses/"), "THIRD_PARTY_LIBRARIES.md must say where the texts are");
+        assert!(libs.contains("Emulsion uses LibRaw 0.21.3 under the CDDL-1.0"), "THIRD_PARTY_LIBRARIES.md must state the LibRaw election");
     }
 
     #[test]

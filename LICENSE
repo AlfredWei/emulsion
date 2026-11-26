@@ -1,21 +1,19 @@
-MIT License
+Copyright (c) 2026 Alfred, S.-Y., Wei. All rights reserved.
 
-Copyright (c) 2026 Alfred, S.-Y., Wei
+Emulsion is proprietary software. No licence to use, copy, modify, distribute or sell this software or its source code
+is granted, except by a separate written agreement with the copyright holder or by the terms under which you obtained
+a copy of the app (for example the licence agreement of the store you bought it from).
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Earlier versions. The versions of this repository before the commit that added this notice were published under the
+MIT License. Copies of those versions stay under the MIT License, and this notice does not withdraw that grant for them.
+The MIT License does not apply to any change made from that commit on.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Third-party components. Parts of the app are open-source software and data that their authors license under their own
+terms. THIRD_PARTY_LIBRARIES.md, THIRD_PARTY_NOTICES.md and the licenses folder list them with their licences. Nothing
+in this notice limits your rights under those licences for those components, and where this notice conflicts with
+them, those licences prevail for those components. Terms in this notice that differ from those licences are offered
+by the copyright holder alone, not by LibRaw LLC or any other author. The source code of LibRaw and of the MPL-2.0
+components is available at https://github.com/AlfredWei/emulsion-open-source.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT, TO THE EXTENT THE LAW ALLOWS.

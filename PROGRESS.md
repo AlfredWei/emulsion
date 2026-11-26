@@ -7,7 +7,6 @@ Running log of where this project stands. Update this whenever a milestone step 
 
 
 
-<<<<<<< HEAD
 ## About opens are bounded: one pending open per file, and a message when it does not open (2026-11-23, `fix/about-open-bounded`)
 
 Goal. Settings > About opens `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LIBRARIES.md` in the OS's default app. PR #357 moved that call off the main thread, so a stuck open no longer freezes the app. What it left: every click on a machine with no app registered for `.md` could start another blocking-pool thread that never returns (a blocked thread cannot be cancelled), and the user saw nothing. Now `bundled_open.rs` gives each file one slot. A second click while an open is less than 8 s old starts nothing and returns `Ok`, because the first click reports the outcome. A click whose open is still pending at 8 s returns an error naming the file and its path ("did not open within 8 seconds. No app may be set for Markdown files on this system. You can open the file yourself: ..."). Any later click on that file returns "is still waiting to open" at once and starts no thread. The slot frees when the OS call returns, panic included, so answering the dialog late makes the file openable again. The leak is at most one thread per file (two in all). The Settings dialog already shows a command's error in its `.status` line (`noticesError`), so no JS changed.
@@ -18,7 +17,7 @@ Goal. Settings > About opens `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LIBRARIES
 
 - **Verified.** `cargo test --lib --bins --tests` passes (819 lib, 64 and 62 in the others), including 11 new tests in `bundled_open` that need no window: free slot, second begin in progress, separate slots per file, stuck after the timeout, slot frees on drop, poisoned lock, quick open, missing file, opener error passthrough, panicking opener, a timed-out open that blocks five later clicks from reaching the OS and frees when released, and a duplicate click that returns at once while the first is pending. `cargo clippy --all-targets` reports nothing for `bundled_open.rs` (the other warnings are on trunk). `cargo check --features wdio-webdriver` passes.
 - **Not verified.** A machine with no `.md` handler: this Mac has one, so the 8 s timeout and the "still waiting" message were exercised only by the unit tests with a fake blocking opener, not by a real stuck `ShellExecuteExW`. macOS and Linux open paths ran no new live check beyond the unit tests (the opens return in milliseconds, so the timeout should not fire, inferred). The PR's two Windows E2E runs are listed in the PR.
-=======
+
 ## E2E: a port guard in the default config, and the macOS "before all" timeouts explained (2026-11-23, `chore/e2e-port-guard-and-macos-flake`)
 
 Goal. The store release relies on the WebdriverIO suite as the evidence for every PR, so a run must not silently drive another app, and a red macOS run must mean a real failure.
@@ -30,7 +29,6 @@ Goal. The store release relies on the WebdriverIO suite as the evidence for ever
 **Fix.** `e2e/reloadSettle.js` overwrites `browser.refresh` in the default config: it marks the old document, reloads, then polls with a 1 s script timeout until the new document is there, and restores the script timeout. No spec is skipped or loosened. Measured locally: the same 300-reload probe through the fixed config had 0 stalls (slowest post-reload script 63 ms), and the three specs that failed in CI pass (`develop-history-revisit`, `develop-undo-first-edit`, `develop-step-nudge`).
 
 - **Not verified.** Two consecutive green macOS and Windows runs on CI (see the PR). Why the same three specs stall on every attempt of a bad run, not just once (guess: their hook has no other command between the reload and the first script). The stall rate on CI against 4 in 300 locally. Windows (the plugin's Windows path was not read; the fix is a no-op there if no script is lost).
->>>>>>> origin/main
 
 ## Redact personal data from tracked files, and a check so it stays out (2026-11-23, `chore/redact-appendix-personal-data`)
 

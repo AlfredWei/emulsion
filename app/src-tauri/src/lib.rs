@@ -46,6 +46,7 @@ mod removal_commands;
 mod removal_preview;
 mod ai;
 mod bundled_models;
+mod bundled_open;
 mod denoise_cache;
 mod denoise_commands;
 mod denoise_models;
@@ -2080,19 +2081,21 @@ fn update_backup_settings(state: State<'_, AppState>, settings: BackupSettings) 
 
 /// Opens one of the app's own bundled files in the OS's default app. This runs in Rust because the opener plugin's
 /// webview scope refuses a path with a hidden directory component (its glob requires a literal leading dot on
-/// Unix), so a checkout under a dot directory could not open its own notices. The open runs on the blocking pool:
-/// on Windows, with no app registered for `.md`, `ShellExecuteExW` shows "Pick an app" and later calls can wait
-/// forever. On the main thread that froze the webview, and on an async worker it would starve the runtime.
-async fn open_bundled_file(app: AppHandle, path: Option<PathBuf>, name: &str) -> Result<(), String> {
+/// Unix), so a checkout under a dot directory could not open its own notices. The open runs on the blocking pool,
+/// at most one per file, and the click gives up after `bundled_open::OPEN_TIMEOUT`: on Windows, with no app
+/// registered for `.md`, `ShellExecuteExW` shows "Pick an app" and later calls can wait forever. On the main thread
+/// that froze the webview, and on an async worker it would starve the runtime.
+async fn open_bundled_file(
+    app: AppHandle,
+    guard: &bundled_open::OpenGuard,
+    file: bundled_open::BundledFile,
+    path: Option<PathBuf>,
+) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let path = path.ok_or_else(|| format!("{name} was not found next to the app"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.opener()
-            .open_path(path.to_string_lossy(), None::<&str>)
-            .map_err(|e| e.to_string())
+    bundled_open::open(guard, file, path, move |path| {
+        app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Opens the OS file manager with `path` selected (Library right-click and the metadata panel). It runs in Rust so
@@ -2112,17 +2115,17 @@ fn open_folder(app: AppHandle, path: String) -> Result<(), String> {
 
 /// Settings > About: opens the bundled `THIRD_PARTY_NOTICES.md` in the OS's default app for Markdown (or text) files.
 #[tauri::command]
-async fn open_third_party_notices(app: AppHandle) -> Result<(), String> {
+async fn open_third_party_notices(app: AppHandle, guard: State<'_, bundled_open::OpenGuard>) -> Result<(), String> {
     let path = bundled_models::notices_path(&app);
-    open_bundled_file(app, path, "THIRD_PARTY_NOTICES.md").await
+    open_bundled_file(app, &guard, bundled_open::BundledFile::Notices, path).await
 }
 
 /// Settings > About: opens the bundled `THIRD_PARTY_LIBRARIES.md` (the code libraries' licences; the full texts it
 /// names are in the `licenses/` folder beside it).
 #[tauri::command]
-async fn open_third_party_libraries(app: AppHandle) -> Result<(), String> {
+async fn open_third_party_libraries(app: AppHandle, guard: State<'_, bundled_open::OpenGuard>) -> Result<(), String> {
     let path = bundled_models::libraries_path(&app);
-    open_bundled_file(app, path, "THIRD_PARTY_LIBRARIES.md").await
+    open_bundled_file(app, &guard, bundled_open::BundledFile::Libraries, path).await
 }
 
 /// Settings > Storage: reports where thumbnails + the Develop preview
@@ -2380,6 +2383,7 @@ pub fn run() {
             });
 
             bundled_models::init(app.handle());
+            app.manage(bundled_open::OpenGuard::default());
 
             // AI helper process (RFC-0026 §3.1): spawned lazily on the first AI request, not here.
             app.manage(Arc::new(ai::supervisor::AiHelper::new(

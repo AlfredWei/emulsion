@@ -1,3 +1,5 @@
+import { OPEN_SOURCE_URL } from "../../src/lib/openSource.js";
+
 describe("Settings > About: the notice and library buttons", () => {
   before(async () => {
     await browser.setTimeout({ script: 30000 });
@@ -8,6 +10,15 @@ describe("Settings > About: the notice and library buttons", () => {
         .find((b) => b.textContent === "About")
         ?.click();
     });
+  });
+
+  it("states the product licence and links the public LibRaw source", async () => {
+    const about = await browser.execute(() => ({
+      licence: document.querySelector('[data-testid="about-licence"]')?.textContent ?? "",
+      link: document.querySelector('[data-testid="about-source-link"]')?.getAttribute("href") ?? "",
+    }));
+    expect(about.licence).toContain("proprietary software");
+    expect(about.link).toBe(OPEN_SOURCE_URL);
   });
 
   for (const label of ["Open third-party notices", "Open library licences"]) {

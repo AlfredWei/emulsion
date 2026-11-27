@@ -196,18 +196,14 @@ describe("Channel gating (ADR-0011)", function () {
       [versionId],
     );
 
-    await browser.execute(() => {
-      Array.from(document.querySelectorAll(".module-switch button")).find((b) => b.textContent?.trim() === "Library")?.click();
-    });
     const rightClick = () =>
-      browser.execute((name) => {
-        const label = Array.from(document.querySelectorAll(".file-name")).find((el) => el.textContent?.includes(name));
-        const cell = label?.closest("[data-ctx-photo]");
+      browser.execute((vid) => {
+        const cell = document.querySelector(`[data-ctx-photo="${vid}"]`);
         const box = cell?.getBoundingClientRect();
-        cell?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: (box?.left ?? 0) + 20, clientY: (box?.top ?? 0) + 20 }));
+        cell?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: (box?.left ?? 0) + 10, clientY: (box?.top ?? 0) + 10 }));
         return !!cell;
-      }, FIXTURE_NAME);
-    await waitFor(rightClick, "the fixture's Library cell");
+      }, versionId);
+    await waitFor(rightClick, "the fixture's filmstrip cell");
     await waitFor(() => browser.execute(() => !!document.querySelector('[data-menu-id="enlarge"]')), "the Enlarge menu row");
     await browser.execute(() => /** @type {HTMLElement} */ (document.querySelector('[data-menu-id="enlarge"]')).click());
     seen.enlarge = await waitFor(

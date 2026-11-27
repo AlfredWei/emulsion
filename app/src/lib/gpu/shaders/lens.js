@@ -1,99 +1,15 @@
 // Lens correction (distortion, chromatic aberration) params and the fs_lens_correct pass.
 // Part of the WGSL source, split out of DevelopCanvas.svelte; see index.js for the
 // concatenation order, which must not change.
-export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop_engine.rs's own
-    // hand-verified formulas (forward closed-form distortion/TCA kernels --
-    // RFC-0021 -- plus the Newton inverse for Manual Distortion, and the
-    // radial vignetting gain, applied in linear light) -- see that module's own extensive header
-    // comment for the Profile/Manual split, ordering, and the poly3
-    // Newton-solve algebra bug its own round-trip tests caught (fixed
-    // identically here). Runs as its OWN pass, before fs_grade, writing
-    // into lensCorrectedTex -- a genuine resample (each output channel can
-    // sample a different source location), so it can't be folded into
-    // fs_grade's own straight-through per-pixel body.
-    //
-    // f32 throughout (WGSL has no f64) -- develop_engine.rs's own Newton
-    // solves use f64 internally for precision; this GPU port accepts the
-    // resulting small float error as an acceptable interactive-preview
-    // tradeoff, same as every other WGSL pass in this file already does
-    // relative to its Rust twin.
-    //
-    // Non-convergence handling deliberately does NOT mirror
-    // lens_undist_poly3's own NaN-then-check-in-caller shape: WGSL has no
-    // clean, portable NaN-detection builtin, and every OTHER undistort
-    // function (poly5/ptlens/tca) already "just returns the unchanged
-    // input" directly on non-convergence. Poly3 does the same here --
-    // same OBSERVABLE behavior as the Rust twin's NaN sentinel + fallback,
-    // without needing NaN plumbing at all.
-    //
-    // "Has a profile" is NOT a separate uniform flag: a missing profile,
-    // or a missing distortion/tca/vignetting sub-block within one, is
-    // uploaded as model=0 / all-zero coefficients by
-    // buildLensCorrectionUniformData (develop.js) -- model 0 already means
-    // "skip, return input unchanged" for distortion/TCA, and all-zero
-    // vignetting coefficients already make the gain formula evaluate to
-    // 1.0 (a no-op multiply). One fewer flag to keep in sync.
-    struct LensCorrectionParams {
-      profile_enabled: f32,   // 0/1
-      distortion_amount: f32, // 0..100
-      vignette_amount: f32,   // 0..100
-      ca_amount: f32,         // 0..100
-      manual_distortion: f32, // -100..100
-      manual_ca: f32,         // -100..100
-      crop_factor: f32,
-      real_focal: f32,
-      lens_center_x: f32,
-      lens_center_y: f32,
-      distortion_model: f32,  // 0=none, 1=poly3, 2=poly5, 3=ptlens
-      distortion_c0: f32,     // poly3: k1 -- poly5: k1 -- ptlens: a
-      distortion_c1: f32,     // poly5: k2 -- ptlens: b
-      distortion_c2: f32,     // ptlens: c
-      tca_model: f32,         // 0=none, 1=linear, 2=poly3
-      tca_red0: f32,          // linear: kr -- poly3: v
-      tca_red1: f32,          // poly3: c
-      tca_red2: f32,          // poly3: b
-      tca_blue0: f32,         // linear: kb -- poly3: v
-      tca_blue1: f32,         // poly3: c
-      tca_blue2: f32,         // poly3: b
-      vignette_k1: f32,
-      vignette_k2: f32,
-      vignette_k3: f32,
-    };
-    @group(0) @binding(25) var<uniform> lensCorrection: LensCorrectionParams;
-
-    const LENS_MANUAL_DISTORTION_MAX_K1: f32 = 0.35;
-    const LENS_MANUAL_CA_MAX_SHIFT: f32 = 0.02;
-
-    // Port of 'lens_undist_poly3' -- 'Rd = Ru + k1*Ru^3' inverse (Newton,
-    // <=6 steps). Returns the unchanged input on non-convergence/negative
-    // root (see this section's own header comment on why, unlike the Rust
-    // twin, this isn't NaN-then-checked-by-the-caller).
-    fn lensUndistPoly3(x: f32, y: f32, k1: f32) -> vec2<f32> {
-      if (k1 == 0.0) { return vec2<f32>(x, y); }
-      let invK1 = 1.0 / k1;
-      let rd = sqrt(x * x + y * y);
-      if (rd == 0.0) { return vec2<f32>(x, y); }
-      let rdDivK1 = rd * invK1;
-      var ru = rd;
-      var i = 0;
-      loop {
-        let fru = ru * ru * ru + ru * invK1 - rdDivK1;
-        if (abs(fru) < 0.00001) { break; }
-        if (i > 5) { return vec2<f32>(x, y); }
-        ru = ru - fru / (3.0 * ru * ru + invK1);
-        i = i + 1;
-      }
-      if (ru < 0.0) { return vec2<f32>(x, y); }
-      let scale = ru / rd;
-      return vec2<f32>(x * scale, y * scale);
-    }
-
-    // RFC-0021: FORWARD closed-form kernels -- ports of lens_dist_poly3/
+// The profile half (RFC-0039 regions 3 and 4, described as ports of lensfun math) is in PROFILE below. A build with
+// VITE_LENS_PROFILES=off (the Mac App Store build, ADR-0011) takes NO_PROFILE instead, whose profile steps are
+// identities, so Vite leaves the profile functions out of that bundle.
+const PROFILE = `    // RFC-0021: FORWARD closed-form kernels -- ports of lens_dist_poly3/
     // poly5/ptlens and lens_tca_poly3_forward (lensfun's 'reverse = false',
     // the CORRECTING direction; the Newton inverses this replaced were
     // lensfun's 'reverse = true', which ADDS distortion). No non-
-    // convergence case. 'lensUndistPoly3' above stays for Manual
-    // Distortion only.
+    // convergence case. 'lensUndistPoly3' (in 'lens' below) is Manual
+    // Distortion's own inverse.
     fn lensDistPoly3(x: f32, y: f32, k1: f32) -> vec2<f32> {
       let poly2 = k1 * (x * x + y * y) + 1.0;
       return vec2<f32>(x * poly2, y * poly2);
@@ -132,22 +48,6 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
       let centerX = (w / 2.0 + size / 2.0 * lensCorrection.lens_center_x) * scale;
       let centerY = (h / 2.0 + size / 2.0 * lensCorrection.lens_center_y) * scale;
       return vec4<f32>(scale, 1.0 / scale, centerX, centerY);
-    }
-
-    fn lensNormForManual(texWidth: f32, texHeight: f32) -> vec4<f32> {
-      let cx = texWidth / 2.0;
-      let cy = texHeight / 2.0;
-      let halfDiag = max(sqrt(cx * cx + cy * cy), 1.0);
-      let scale = 1.0 / halfDiag;
-      return vec4<f32>(scale, halfDiag, cx * scale, cy * scale);
-    }
-
-    fn lensToNormalized(norm: vec4<f32>, px: f32, py: f32) -> vec2<f32> {
-      return vec2<f32>(px * norm.x - norm.z, py * norm.x - norm.w);
-    }
-
-    fn lensToPixel(norm: vec4<f32>, nx: f32, ny: f32) -> vec2<f32> {
-      return vec2<f32>((nx + norm.z) * norm.y, (ny + norm.w) * norm.y);
     }
 
     // Port of 'apply_lens_distortion' -- blends the resolved model's
@@ -190,7 +90,187 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
       return mix(vec2<f32>(nx, ny), c, amount);
     }
 
-    // Port of 'lens_correct_coord' -- where a given output pixel's
+    // The profile steps 'lensCorrectCoord' and 'fs_lens_correct' call.
+    fn lensProfileSpace(dims: vec2<f32>) -> vec4<f32> {
+      return lensNormForProfile(dims.x, dims.y);
+    }
+
+    fn lensProfileDistort(norm: vec4<f32>, x: f32, y: f32) -> vec2<f32> {
+      let n = lensToNormalized(norm, x, y);
+      let c = lensApplyDistortion(n.x, n.y, lensCorrection.distortion_amount / 100.0);
+      return lensToPixel(norm, c.x, c.y);
+    }
+
+    fn lensProfileTca(norm: vec4<f32>, x: f32, y: f32, channel: i32) -> vec2<f32> {
+      let n = lensToNormalized(norm, x, y);
+      let c = lensApplyTca(n.x, n.y, channel, lensCorrection.ca_amount / 100.0);
+      return lensToPixel(norm, c.x, c.y);
+    }
+
+    fn lensProfileDevignette(rgb: vec3<f32>, norm: vec4<f32>, px: f32, py: f32) -> vec3<f32> {
+      let n = lensToNormalized(norm, px, py);
+      let r2 = n.x * n.x + n.y * n.y;
+      let r4 = r2 * r2;
+      let r6 = r4 * r2;
+      let gain = 1.0 + lensCorrection.vignette_k1 * r2 + lensCorrection.vignette_k2 * r4 + lensCorrection.vignette_k3 * r6;
+      let mult = mix(1.0, 1.0 / max(gain, 0.01), lensCorrection.vignette_amount / 100.0);
+      // RFC-0021: the gain is an optical (linear-light) quantity -- apply it
+      // in linear light, srgbToLinear/linearToSrgb being the exact EOTF/OETF
+      // pair from gradeMath.js (RFC-0017).
+      return vec3<f32>(
+        linearToSrgb(srgbToLinear(rgb.x) * mult),
+        linearToSrgb(srgbToLinear(rgb.y) * mult),
+        linearToSrgb(srgbToLinear(rgb.z) * mult)
+      );
+    }
+
+`;
+
+const NO_PROFILE = `    // This build has no lens profiles (ADR-0011): every profile step is the identity.
+    fn lensProfileSpace(dims: vec2<f32>) -> vec4<f32> {
+      return vec4<f32>(1.0, 1.0, 0.0, 0.0);
+    }
+
+    fn lensProfileDistort(norm: vec4<f32>, x: f32, y: f32) -> vec2<f32> {
+      return vec2<f32>(x, y);
+    }
+
+    fn lensProfileTca(norm: vec4<f32>, x: f32, y: f32, channel: i32) -> vec2<f32> {
+      return vec2<f32>(x, y);
+    }
+
+    fn lensProfileDevignette(rgb: vec3<f32>, norm: vec4<f32>, px: f32, py: f32) -> vec3<f32> {
+      return rgb;
+    }
+
+`;
+
+const profile = import.meta.env.VITE_LENS_PROFILES === "off" ? NO_PROFILE : PROFILE;
+
+export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop_engine.rs's own
+    // hand-verified formulas (forward closed-form distortion/TCA kernels --
+    // RFC-0021 -- plus the Newton inverse for Manual Distortion, and the
+    // radial vignetting gain, applied in linear light) -- see that module's own extensive header
+    // comment for the Profile/Manual split, ordering, and the poly3
+    // Newton-solve algebra bug its own round-trip tests caught (fixed
+    // identically here). Runs as its OWN pass, before fs_grade, writing
+    // into lensCorrectedTex -- a genuine resample (each output channel can
+    // sample a different source location), so it can't be folded into
+    // fs_grade's own straight-through per-pixel body.
+    //
+    // f32 throughout (WGSL has no f64) -- develop_engine.rs's own Newton
+    // solves use f64 internally for precision; this GPU port accepts the
+    // resulting small float error as an acceptable interactive-preview
+    // tradeoff, same as every other WGSL pass in this file already does
+    // relative to its Rust twin.
+    //
+    // Non-convergence handling deliberately does NOT mirror
+    // lens_undist_poly3's own NaN-then-check-in-caller shape: WGSL has no
+    // clean, portable NaN-detection builtin, so lensUndistPoly3 returns the
+    // unchanged input instead -- same OBSERVABLE behavior as the Rust twin's
+    // NaN sentinel + fallback, without needing NaN plumbing at all.
+    //
+    // "Has a profile" is NOT a separate uniform flag: a missing profile,
+    // or a missing distortion/tca/vignetting sub-block within one, is
+    // uploaded as model=0 / all-zero coefficients by
+    // buildLensCorrectionUniformData (develop.js) -- model 0 already means
+    // "skip, return input unchanged" for distortion/TCA, and all-zero
+    // vignetting coefficients already make the gain formula evaluate to
+    // 1.0 (a no-op multiply). One fewer flag to keep in sync.
+    struct LensCorrectionParams {
+      profile_enabled: f32,   // 0/1
+      distortion_amount: f32, // 0..100
+      vignette_amount: f32,   // 0..100
+      ca_amount: f32,         // 0..100
+      manual_distortion: f32, // -100..100
+      manual_ca: f32,         // -100..100
+      crop_factor: f32,
+      real_focal: f32,
+      lens_center_x: f32,
+      lens_center_y: f32,
+      distortion_model: f32,  // 0=none, 1=poly3, 2=poly5, 3=ptlens
+      distortion_c0: f32,     // poly3: k1 -- poly5: k1 -- ptlens: a
+      distortion_c1: f32,     // poly5: k2 -- ptlens: b
+      distortion_c2: f32,     // ptlens: c
+      tca_model: f32,         // 0=none, 1=linear, 2=poly3
+      tca_red0: f32,          // linear: kr -- poly3: v
+      tca_red1: f32,          // poly3: c
+      tca_red2: f32,          // poly3: b
+      tca_blue0: f32,         // linear: kb -- poly3: v
+      tca_blue1: f32,         // poly3: c
+      tca_blue2: f32,         // poly3: b
+      vignette_k1: f32,
+      vignette_k2: f32,
+      vignette_k3: f32,
+    };
+    @group(0) @binding(25) var<uniform> lensCorrection: LensCorrectionParams;
+
+    const LENS_MANUAL_DISTORTION_MAX_K1: f32 = 0.35;
+    const LENS_MANUAL_CA_MAX_SHIFT: f32 = 0.02;
+
+    // Manual Distortion's inverse of 'Rd = Ru*(1 + k1*Ru^2)', the twin of
+    // 'lens_undist_poly3', written from a spec alone without reading any earlier
+    // implementation (ADR-0011). Newton is monotone from these starts: above the
+    // root when k1 > 0 (f convex), below it at rd when k1 < 0 (f concave up to
+    // the peak). Returns the input unchanged where the Rust twin returns NaN.
+    fn lensUndistPoly3(x: f32, y: f32, k1: f32) -> vec2<f32> {
+      let rd = length(vec2<f32>(x, y));
+      if (k1 == 0.0 || rd == 0.0) {
+        return vec2<f32>(x, y);
+      }
+      var ru = rd;
+      if (k1 > 0.0) {
+        ru = min(rd, pow(rd / k1, 1.0 / 3.0));
+      } else {
+        let ruPeak = sqrt(-1.0 / (3.0 * k1));
+        if (rd > ruPeak * (2.0 / 3.0)) {
+          return vec2<f32>(x, y);
+        }
+      }
+      var ok = false;
+      for (var i = 0u; i < 40u; i = i + 1u) {
+        let fv = ru * (1.0 + k1 * ru * ru) - rd;
+        if (abs(fv) <= 2.4e-7 * (rd + ru)) {
+          ok = true;
+          break;
+        }
+        let d = 1.0 + 3.0 * k1 * ru * ru;
+        if (d <= 1e-12) {
+          break;
+        }
+        let step = fv / d;
+        ru = ru - step;
+        if (ru < 0.0) {
+          break;
+        }
+        if (abs(step) <= 1e-7 * ru) {
+          ok = true;
+          break;
+        }
+      }
+      if (!ok) {
+        return vec2<f32>(x, y);
+      }
+      return vec2<f32>(x, y) * (ru / rd);
+    }
+
+    fn lensNormForManual(texWidth: f32, texHeight: f32) -> vec4<f32> {
+      let cx = texWidth / 2.0;
+      let cy = texHeight / 2.0;
+      let halfDiag = max(sqrt(cx * cx + cy * cy), 1.0);
+      let scale = 1.0 / halfDiag;
+      return vec4<f32>(scale, halfDiag, cx * scale, cy * scale);
+    }
+
+    fn lensToNormalized(norm: vec4<f32>, px: f32, py: f32) -> vec2<f32> {
+      return vec2<f32>(px * norm.x - norm.z, py * norm.x - norm.w);
+    }
+
+    fn lensToPixel(norm: vec4<f32>, nx: f32, ny: f32) -> vec2<f32> {
+      return vec2<f32>((nx + norm.z) * norm.y, (ny + norm.w) * norm.y);
+    }
+
+${profile}    // Port of 'lens_correct_coord' -- where a given output pixel's
     // 'channel' samples from in the source image: profile distortion,
     // then manual distortion, then profile TCA, then manual CA, each only
     // for the channels/amounts actually active. 'channel' is 0=Red,
@@ -200,9 +280,7 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
       var y = py;
 
       if (lensCorrection.profile_enabled > 0.5 && lensCorrection.distortion_amount > 0.0) {
-        let n = lensToNormalized(profileNorm, x, y);
-        let c = lensApplyDistortion(n.x, n.y, lensCorrection.distortion_amount / 100.0);
-        let p = lensToPixel(profileNorm, c.x, c.y);
+        let p = lensProfileDistort(profileNorm, x, y);
         x = p.x;
         y = p.y;
       }
@@ -217,9 +295,7 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
       }
 
       if (lensCorrection.profile_enabled > 0.5 && lensCorrection.ca_amount > 0.0) {
-        let n = lensToNormalized(profileNorm, x, y);
-        let c = lensApplyTca(n.x, n.y, channel, lensCorrection.ca_amount / 100.0);
-        let p = lensToPixel(profileNorm, c.x, c.y);
+        let p = lensProfileTca(profileNorm, x, y, channel);
         x = p.x;
         y = p.y;
       }
@@ -259,7 +335,7 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
       let px = in.uv.x * dims.x;
       let py = in.uv.y * dims.y;
 
-      let profileNorm = lensNormForProfile(dims.x, dims.y);
+      let profileNorm = lensProfileSpace(dims);
       let manualNorm = lensNormForManual(dims.x, dims.y);
 
       let rCoord = lensCorrectCoord(px, py, 0, profileNorm, manualNorm);
@@ -277,20 +353,7 @@ export const lens = `    // Lens Corrections (M3): a direct WGSL port of develop
       var rgb = vec3<f32>(r, g, b);
 
       if (lensCorrection.profile_enabled > 0.5 && lensCorrection.vignette_amount > 0.0) {
-        let n = lensToNormalized(profileNorm, px, py);
-        let r2 = n.x * n.x + n.y * n.y;
-        let r4 = r2 * r2;
-        let r6 = r4 * r2;
-        let gain = 1.0 + lensCorrection.vignette_k1 * r2 + lensCorrection.vignette_k2 * r4 + lensCorrection.vignette_k3 * r6;
-        let mult = mix(1.0, 1.0 / max(gain, 0.01), lensCorrection.vignette_amount / 100.0);
-        // RFC-0021: the gain is an optical (linear-light) quantity -- apply it
-        // in linear light, srgbToLinear/linearToSrgb being the exact EOTF/OETF
-        // pair from gradeMath.js (RFC-0017).
-        rgb = vec3<f32>(
-          linearToSrgb(srgbToLinear(rgb.x) * mult),
-          linearToSrgb(srgbToLinear(rgb.y) * mult),
-          linearToSrgb(srgbToLinear(rgb.z) * mult)
-        );
+        rgb = lensProfileDevignette(rgb, profileNorm, px, py);
       }
 
       return vec4<f32>(rgb, 1.0);

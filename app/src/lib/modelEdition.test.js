@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { editionAboutLine, modelGate, notInEdition } from "./modelEdition.js";
+import { channelCaps, editionAboutLine, hasLensProfiles, modelGate, notInEdition } from "./modelEdition.js";
 
 describe("modelGate", () => {
   it("ready runs, missing offers the download, not_in_edition offers nothing", () => {
@@ -60,5 +60,43 @@ describe("editionAboutLine", () => {
     expect(editionAboutLine({ excluded: ["something_new", "inpaint"] })).toBe(
       "Remove is not included in this edition of Emulsion.",
     );
+  });
+});
+
+describe("the store edition (ADR-0011)", () => {
+  const store = {
+    name: "store",
+    excluded: ["detect", "inpaint", "upscale", "blink", "face"],
+    channel: "mac_app_store",
+    caps: { export_command_hook: false, model_downloads: false, custom_cache_dir: false },
+    compiled_out: ["lens_profiles"],
+  };
+
+  it("the About line names every left-out feature, lens profiles last", () => {
+    expect(editionAboutLine(store)).toBe(
+      "Subject detection (person preset), Remove, Enlarge (AI), Eye check, Face grouping and Lens profile correction are not included in this edition of Emulsion.",
+    );
+  });
+
+  it("lens profiles alone give a one-feature line", () => {
+    expect(editionAboutLine({ excluded: [], compiled_out: ["lens_profiles"] })).toBe(
+      "Lens profile correction is not included in this edition of Emulsion.",
+    );
+  });
+
+  it("a build without lens profiles says so, and a failed result keeps them", () => {
+    expect(hasLensProfiles(store)).toBe(false);
+    expect(hasLensProfiles({ compiled_out: [] })).toBe(true);
+    expect(hasLensProfiles(null)).toBe(true);
+  });
+
+  it("the store's channel has no export hook, downloads or cache move; an unstated cap counts as present", () => {
+    expect(channelCaps(store)).toEqual({ export_command_hook: false, model_downloads: false, custom_cache_dir: false });
+    expect(channelCaps(null)).toEqual({ export_command_hook: true, model_downloads: true, custom_cache_dir: true });
+    expect(channelCaps({ caps: { model_downloads: false } })).toEqual({
+      export_command_hook: true,
+      model_downloads: false,
+      custom_cache_dir: true,
+    });
   });
 });

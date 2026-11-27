@@ -4,6 +4,8 @@
 - Date: 2026-11-15
 - Relates to: [RFC-0038](../rfc/RFC-0038-lgpl-and-database-licence-plan.md) (B5.5, section 5 slice 4), [RFC-0029](../rfc/RFC-0029-ai-upscale.md) (a route to remove a model if a licence reading is challenged), [ADR-0010](ADR-0010-object-removal-engine.md)
 
+**Note, 2026-11-27.** [ADR-0011](ADR-0011-paid-store-distribution.md) records which real editions exist. It adds the `store` edition (`denoise` and `segment`), fixes a `channel-mas` build to it at compile time, and extends `EditionInfo` with `channel`, `caps` and `compiled_out`. `editions.rs` now embeds only the `editions` object of the manifest, written by `build.rs`.
+
 ## Context
 
 Every build has shipped every model. RFC-0038 found that some models carry training-data terms that may matter for a paid product (`docs/rfc/RFC-0038-appendix/model-training-data.md`), and that whether they do is an open legal question. Whatever is decided, the app needs a way to leave a model out of a build without a code change, and to say so plainly where the feature would be.

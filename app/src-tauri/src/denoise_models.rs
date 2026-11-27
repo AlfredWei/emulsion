@@ -8,6 +8,9 @@
 //! weights, so it is **hosted by this project** as a GitHub release asset rather than by a third party;
 //! provenance and licence are in `models/DENOISE_MODEL.md`. A release asset can be replaced, so the pinned
 //! hash, not the URL, is what makes the file trustworthy.
+// A channel without model downloads compiles out the fetch code below (`cfg(model_downloads)`); what only it used is
+// left unused there.
+#![cfg_attr(not(model_downloads), allow(dead_code, unused_imports))]
 
 use crate::segment_models::sha256_file;
 use serde::Serialize;
@@ -64,6 +67,7 @@ pub enum DenoiseModelError {
     Cancelled,
 }
 
+#[cfg(model_downloads)]
 fn url() -> String {
     format!("https://github.com/{REPO}/releases/download/{RELEASE_TAG}/{FILENAME}")
 }
@@ -107,7 +111,9 @@ pub fn status_for(edition: &crate::editions::Edition, dir: &Path) -> ModelStatus
     }
     match installed(dir) {
         Some(_) => ModelStatus { state: ModelState::Ready, download_bytes: 0, host: HOST },
-        None => ModelStatus { state: ModelState::Missing, download_bytes: SIZE, host: HOST },
+        None if cfg!(model_downloads) => ModelStatus { state: ModelState::Missing, download_bytes: SIZE, host: HOST },
+        // A channel without downloads can only use the bundled file, so without it the feature is not in the build.
+        None => ModelStatus { state: ModelState::NotInEdition, download_bytes: 0, host: HOST },
     }
 }
 
@@ -118,10 +124,12 @@ pub fn status_for(edition: &crate::editions::Edition, dir: &Path) -> ModelStatus
 /// **Resumable**: a `.part` left by a dropped connection or a cancel is continued with a `Range` request (its
 /// bytes are re-hashed first); a server that ignores the range restarts the file. Only a checksum failure
 /// removes the partial file (so a damaged partial costs one retry). `cancel` is polled before the request and after each chunk.
+#[cfg(model_downloads)]
 pub async fn ensure_model(dir: &Path, cancel: &AtomicBool, on_progress: impl FnMut(u64, u64)) -> Result<PathBuf, DenoiseModelError> {
     fetch(&url(), dir, SHA256, SIZE, cancel, on_progress).await
 }
 
+#[cfg(model_downloads)]
 async fn fetch(
     url: &str,
     dir: &Path,
@@ -219,6 +227,9 @@ pub fn import_file(dir: &Path, file: &Path) -> Result<ModelStatus, DenoiseModelE
 mod tests {
     use super::*;
 
+    /// What an absent model reads: `missing` (offer the download) only in a channel with downloads.
+    const MISSING: ModelState = if cfg!(model_downloads) { ModelState::Missing } else { ModelState::NotInEdition };
+
     fn test_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("emulsion-denoise-models-test-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -229,10 +240,10 @@ mod tests {
     #[test]
     fn an_empty_cache_is_missing_and_a_right_named_wrong_file_does_not_count() {
         let dir = test_dir("empty");
-        assert_eq!(status(&dir).state, ModelState::Missing);
-        assert_eq!(status(&dir).download_bytes, SIZE);
+        assert_eq!(status(&dir).state, MISSING);
+        assert_eq!(status(&dir).download_bytes, if cfg!(model_downloads) { SIZE } else { 0 });
         std::fs::write(dir.join(FILENAME), b"not the model").unwrap();
-        assert_eq!(status(&dir).state, ModelState::Missing);
+        assert_eq!(status(&dir).state, MISSING);
         assert!(ready_path(&dir).is_none());
     }
 
@@ -249,6 +260,7 @@ mod tests {
         assert!(!cache.join(FILENAME).exists() && !cache.join(format!("{FILENAME}.part")).exists());
     }
 
+    #[cfg(model_downloads)]
     #[tokio::test]
     async fn a_download_cancelled_before_it_starts_makes_no_request_and_leaves_nothing_behind() {
         let dir = test_dir("cancelled");
@@ -260,6 +272,7 @@ mod tests {
 
     /// A one-file HTTP/1.1 server on localhost: serves `body`, honouring `Range: bytes=N-` unless `ignore_range`,
     /// and records the Range header of each request.
+    #[cfg(model_downloads)]
     fn serve(body: Vec<u8>, ignore_range: bool, requests: u32) -> (String, std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>) {
         use std::io::Read;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -291,12 +304,14 @@ mod tests {
         (url, seen)
     }
 
+    #[cfg(model_downloads)]
     fn sample() -> (Vec<u8>, String) {
         let body: Vec<u8> = (0..300_000u32).map(|i| (i * 31 % 251) as u8).collect();
         let sha = hex(&Sha256::digest(&body));
         (body, sha)
     }
 
+    #[cfg(model_downloads)]
     #[tokio::test]
     async fn a_download_is_verified_and_a_partial_file_is_resumed_with_a_range_request() {
         let (body, sha) = sample();
@@ -340,6 +355,7 @@ mod tests {
         assert!(!dir.join(format!("{FILENAME}.part")).exists());
     }
 
+    #[cfg(model_downloads)]
     #[tokio::test]
     async fn a_server_that_ignores_the_range_restarts_the_file_and_a_bad_body_is_rejected() {
         let (body, sha) = sample();
@@ -360,6 +376,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a failed checksum leaves neither file");
     }
 
+    #[cfg(model_downloads)]
     #[test]
     fn the_download_url_names_the_pinned_release_asset_and_this_project() {
         let u = url();
@@ -369,6 +386,7 @@ mod tests {
 
     /// Needs the real network (117 MB): `cargo test --lib -- --ignored denoise_models_live_fetch`. Proves the
     /// published release asset equals the pinned size and checksum.
+    #[cfg(model_downloads)]
     #[tokio::test]
     #[ignore]
     async fn denoise_models_live_fetch() {
@@ -402,7 +420,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // No file: Missing in the default edition, NotInEdition in one without the family.
-        assert_eq!(status_for(&without(crate::editions::ModelFamily::Inpaint), &dir).state, ModelState::Missing);
+        assert_eq!(status_for(&without(crate::editions::ModelFamily::Inpaint), &dir).state, MISSING);
         let out = without(FAMILY);
         let s = status_for(&out, &dir);
         assert_eq!((&s.state, s.download_bytes), (&ModelState::NotInEdition, 0));

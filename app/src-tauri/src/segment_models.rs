@@ -11,6 +11,9 @@
 //! (model card: Apache-2.0, weights from Meta's `facebookresearch/sam2`),
 //! pinned to one commit; the hashes are the LFS object ids at that commit and
 //! equal the ones recorded in `docs/rfc/RFC-0023-appendix/SHA256SUMS`.
+// A channel without model downloads compiles out the fetch code below (`cfg(model_downloads)`); what only it used is
+// left unused there.
+#![cfg_attr(not(model_downloads), allow(dead_code, unused_imports))]
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -134,7 +137,12 @@ pub fn status_for(edition: &crate::editions::Edition, cache_dir: &Path) -> Model
         .map(|spec| spec.size)
         .sum();
     ModelStatus {
-        state: if missing == 0 { ModelState::Ready } else { ModelState::Missing },
+        // A channel without downloads can only use the bundled files, so without them the feature is not in the build.
+        state: match (missing, cfg!(model_downloads)) {
+            (0, _) => ModelState::Ready,
+            (_, true) => ModelState::Missing,
+            (_, false) => ModelState::NotInEdition,
+        },
         download_bytes: missing,
         host: "huggingface.co",
     }
@@ -158,6 +166,7 @@ fn resolve_spec(cache_dir: &Path, spec: &ModelSpec) -> Option<PathBuf> {
     crate::bundled_models::resolve(cache_dir, shipped)
 }
 
+#[cfg(model_downloads)]
 fn url_for(spec: &ModelSpec) -> String {
     format!("https://huggingface.co/{HF_REPO}/resolve/{HF_COMMIT}/{}", spec.filename)
 }
@@ -171,6 +180,7 @@ fn url_for(spec: &ModelSpec) -> String {
 /// `cancel` is polled before each request and after each chunk; once set, the partial
 /// file is removed and the call fails with [`SegmentModelError::Cancelled`] (files that
 /// finished and verified before the cancel stay, so a later download resumes at the next).
+#[cfg(model_downloads)]
 pub async fn ensure_models(
     cache_dir: &Path,
     cancel: &std::sync::atomic::AtomicBool,
@@ -252,6 +262,9 @@ pub fn import_files(cache_dir: &Path, files: &[PathBuf]) -> Result<ModelStatus, 
 mod tests {
     use super::*;
 
+    /// What an absent model reads: `missing` (offer the download) only in a channel with downloads.
+    const MISSING: ModelState = if cfg!(model_downloads) { ModelState::Missing } else { ModelState::NotInEdition };
+
     fn test_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("emulsion-segment-models-test-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -270,11 +283,12 @@ mod tests {
     #[test]
     fn an_empty_cache_is_missing_and_reports_the_full_download_size() {
         let s = status(&test_dir("empty"));
-        assert_eq!(s.state, ModelState::Missing);
+        assert_eq!(s.state, MISSING);
         assert_eq!(s.download_bytes, ENCODER.size + DECODER.size);
         assert!(ready_paths(&test_dir("empty2")).is_none());
     }
 
+    #[cfg(model_downloads)]
     #[tokio::test]
     async fn a_download_cancelled_before_it_starts_makes_no_request_and_leaves_nothing_behind() {
         let dir = test_dir("cancelled");
@@ -307,6 +321,7 @@ mod tests {
         assert!(!cache.join(format!("{}.part", DECODER.filename)).exists());
     }
 
+    #[cfg(model_downloads)]
     #[test]
     fn the_download_url_is_pinned_to_one_commit() {
         let url = url_for(&ENCODER);
@@ -316,6 +331,7 @@ mod tests {
 
     /// Needs the real network (155 MB): `cargo test --lib -- --ignored
     /// segment_models_live_fetch`. Proves the pinned URLs and hashes agree.
+    #[cfg(model_downloads)]
     #[tokio::test]
     #[ignore]
     async fn segment_models_live_fetch() {
@@ -331,7 +347,7 @@ mod tests {
     fn an_excluded_segment_model_is_not_in_edition_and_has_nothing_to_download() {
         use crate::editions::{tests::without, Edition};
         let dir = test_dir("edition");
-        assert_eq!(status_for(&Edition::all("default"), &dir).state, ModelState::Missing);
+        assert_eq!(status_for(&Edition::all("default"), &dir).state, MISSING);
         let s = status_for(&without(FAMILY), &dir);
         assert_eq!((&s.state, s.download_bytes), (&ModelState::NotInEdition, 0));
         assert_eq!(serde_json::to_value(&s).unwrap()["state"], "not_in_edition");

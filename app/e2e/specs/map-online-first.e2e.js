@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureFixture, openMapView, screenshot, startTileServer, tryInvoke, waitForMap, writeEvidence } from "../laneMap.js";
+import { ensureFixture, mapState, openMapView, screenshot, startTileServer, tryInvoke, waitForMap, writeEvidence } from "../laneMap.js";
 
 // Lane spec for the online map default (D17): opens the map once and records whether it drew tiles or showed the
 // card that turns it on. It runs on trunk too, which has no card. Driven by wdio.sandbox.conf.js with APP_BIN.
@@ -9,6 +9,7 @@ import { ensureFixture, openMapView, screenshot, startTileServer, tryInvoke, wai
 //   LANE_TILE_PORT=<port>   serve tiles from this computer on that port; with MAP_SEED_TILES=1 also save that server
 //                           as the custom tile address before the map opens
 //   MAP_SHOT=<name>         screenshot and evidence file name (default map-first)
+//   MAP_HOLD_MS=<ms>        keep the app open that long after the first open, for a lane that watches its sockets
 
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../test_image/Cavenagh-Bridge-Singapore-panorama-frame-a.jpg");
 const shot = process.env.MAP_SHOT ?? "map-first";
@@ -47,6 +48,11 @@ describe("Map, first open", () => {
     evidence.first = { ...state, shows };
     await screenshot(shot);
     if (process.env.EXPECT_MAP) expect(shows).toBe(process.env.EXPECT_MAP);
+    const hold = Number(process.env.MAP_HOLD_MS) || 0;
+    if (hold) {
+      await browser.pause(hold);
+      evidence.afterHold = await mapState();
+    }
   });
 
   it("turns the map on from the card when asked", async function () {

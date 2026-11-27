@@ -318,8 +318,11 @@
 </div>
 
 <style>
+  /* Leaflet's panes and controls use z-index 400 to 1000. `isolation` keeps them inside this view, so a dialog
+   * (Settings is z-index 100) opened over the map is drawn above it. */
   .map-view {
     position: relative;
+    isolation: isolate;
     flex: 1;
     min-height: 0;
     background: var(--bg-app);

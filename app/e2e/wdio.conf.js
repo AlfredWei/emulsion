@@ -18,7 +18,13 @@ export const config = {
   specs: ["./specs/**/*.e2e.js"],
   // Lane specs: they need LANE_* variables and are driven by wdio.sandbox.conf.js (.github/workflows/lanes.yml).
   // The map lanes also reach the public map servers.
-  exclude: ["./specs/sandbox-smoke.e2e.js", "./specs/perf-probe.e2e.js", "./specs/map-online-first.e2e.js", "./specs/map-online-switch.e2e.js"],
+  exclude: [
+    "./specs/sandbox-smoke.e2e.js",
+    "./specs/perf-probe.e2e.js",
+    "./specs/sandbox-map-offline.e2e.js",
+    "./specs/map-online-first.e2e.js",
+    "./specs/map-online-switch.e2e.js",
+  ],
   maxInstances: 1,
 
   services: [

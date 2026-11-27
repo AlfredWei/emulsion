@@ -104,6 +104,7 @@ describe("Map, the online switch", () => {
         failure: document.querySelector(".place-error")?.textContent ?? null,
       })));
     }
+    await browser.execute(() => document.querySelector(".place-search")?.scrollIntoView({ block: "start" }));
     await screenshot("search-on");
     writeEvidence("search-on.txt", { results, failure, backendHosts: proxy ? [...proxy.hosts] : "no proxy" });
     expect(failure).toBeNull();

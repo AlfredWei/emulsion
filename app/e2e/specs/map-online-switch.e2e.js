@@ -61,16 +61,14 @@ describe("Map, the online switch", () => {
   });
 
   it("refuses place search and reverse lookup while off, without a request", async () => {
-    const t0 = Date.now();
     const search = await tryInvoke("geocode_search", { query: "Singapore" });
-    const searchMs = Date.now() - t0;
     const reverse = await tryInvoke("reverse_geocode", { latitude: 1.2869, longitude: 103.8513 });
-    const evidence = { search, searchMs, reverse, backendHosts: proxy ? [...proxy.hosts] : "no proxy", page: await mapState() };
+    const evidence = { search, reverse, backendHosts: proxy ? [...proxy.hosts] : "no proxy", page: await mapState() };
     writeEvidence("search-off.txt", evidence);
     expect(search.ok).toBe(false);
-    expect(search.error).toContain("are off");
+    expect(search.reason).toContain("are off");
     expect(reverse.ok).toBe(false);
-    expect(reverse.error).toContain("are off");
+    expect(reverse.reason).toContain("are off");
     if (proxy) expect(proxy.hosts).toEqual([]);
     expect(evidence.page.tileRequests).toEqual([]);
   });
@@ -98,17 +96,17 @@ describe("Map, the online switch", () => {
     });
     const deadline = Date.now() + 30000;
     let results = /** @type {string[]} */ ([]);
-    let error = /** @type {string | null} */ (null);
-    while (results.length === 0 && !error && Date.now() < deadline) {
+    let failure = /** @type {string | null} */ (null);
+    while (results.length === 0 && !failure && Date.now() < deadline) {
       await browser.pause(250);
-      ({ results, error } = await browser.execute(() => ({
+      ({ results, failure } = await browser.execute(() => ({
         results: Array.from(document.querySelectorAll(".place-results li")).map((li) => li.textContent?.trim() ?? ""),
-        error: document.querySelector(".place-error")?.textContent ?? null,
+        failure: document.querySelector(".place-error")?.textContent ?? null,
       })));
     }
     await screenshot("search-on");
-    writeEvidence("search-on.txt", { results, error, backendHosts: proxy ? [...proxy.hosts] : "no proxy" });
-    expect(error).toBeNull();
+    writeEvidence("search-on.txt", { results, failure, backendHosts: proxy ? [...proxy.hosts] : "no proxy" });
+    expect(failure).toBeNull();
     expect(results.length).toBeGreaterThan(0);
     if (proxy) expect(proxy.hosts.some((h) => h.startsWith("nominatim.openstreetmap.org"))).toBe(true);
   });

@@ -18,14 +18,17 @@ export const screenshot = (/** @type {string} */ name) => browser.saveScreenshot
 export const invoke = (/** @type {string} */ cmd, /** @type {Record<string, unknown>} */ args = {}) =>
   browser.execute(async (c, a) => window.__TAURI__.core.invoke(c, a), cmd, args);
 
-/** Like `invoke`, but resolves to `{ ok, value }` or `{ ok: false, error }` instead of throwing. */
+/**
+ * Like `invoke`, but resolves to `{ ok, value }` or `{ ok: false, reason }` instead of throwing. The key is not
+ * `error`: the WebDriver client reports a script result that holds an `error` string as a failed script (measured).
+ */
 export const tryInvoke = (/** @type {string} */ cmd, /** @type {Record<string, unknown>} */ args = {}) =>
   browser.execute(
     async (c, a) => {
       try {
         return { ok: true, value: await window.__TAURI__.core.invoke(c, a) };
       } catch (e) {
-        return { ok: false, error: String(e) };
+        return { ok: false, reason: String(e) };
       }
     },
     cmd,
@@ -79,7 +82,7 @@ export function startRequestLog(/** @type {number} */ port) {
 export const mapState = () =>
   browser.execute(() => ({
     card: !!document.querySelector('[data-testid="online-map-card"]'),
-    leaflet: !!document.querySelector(".leaflet-container"),
+    leaflet: !!document.querySelector(".leaflet-map-pane"),
     tilesLoaded: document.querySelectorAll(".leaflet-tile-loaded").length,
     tileRequests: performance
       .getEntriesByType("resource")

@@ -1,11 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { mapState, openMapView, screenshot, waitForMap, writeEvidence } from "../laneMap.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { ensureFixture, mapState, openMapView, screenshot, waitForMap, writeEvidence } from "../laneMap.js";
 
 // Lane spec for the online map default in a sandboxed release bundle (lanes.yml builds it for `sandbox-*` specs on
 // macOS). It opens the map once, which must show the card, then lists the app's sockets every second for a minute.
 // Passes when no socket of the app or its helper connects to an address off this computer. Driven by
 // wdio.sandbox.conf.js with APP_BIN.
 
+const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../test_image/Cavenagh-Bridge-Singapore-panorama-frame-a.jpg");
 const SAMPLES = 60;
 const run = (/** @type {string} */ cmd, /** @type {string[]} */ args) => {
   try {
@@ -18,6 +23,17 @@ const appPids = () => run("pgrep", ["-f", `${process.env.APP_BIN}|emulsion-ai`])
 const remote = (/** @type {string} */ line) => /->(?!127\.0\.0\.1|\[::1\]|localhost)/.test(line);
 
 describe("Sandboxed release build, first minute", () => {
+  before(async () => {
+    await browser.setTimeout({ script: 120000 });
+    // The map is reachable only with a photo in the catalog, and the sandbox reads only inside its container.
+    const bundleId = process.env.LANE_BUNDLE_ID;
+    if (!bundleId) throw new Error("LANE_BUNDLE_ID must name the sandboxed app's bundle identifier");
+    const inside = path.join(os.homedir(), "Library", "Containers", bundleId, "Data", "Documents", "lane-fixtures");
+    fs.mkdirSync(inside, { recursive: true });
+    fs.copyFileSync(FIXTURE, path.join(inside, path.basename(FIXTURE)));
+    await ensureFixture(path.join(inside, path.basename(FIXTURE)));
+  });
+
   it("shows the map card and makes no outbound connection", async () => {
     await openMapView();
     const state = await waitForMap((s) => s.card || s.tilesLoaded > 0);

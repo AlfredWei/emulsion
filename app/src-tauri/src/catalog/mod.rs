@@ -26,6 +26,7 @@ mod culling;
 mod edit_stack;
 #[cfg(test)]
 mod edit_history_check;
+#[cfg(export_command_hook)]
 mod export_plugins;
 mod faces;
 mod geo;
@@ -41,6 +42,7 @@ mod test_support;
 
 pub use edit_stack::{ApplyOpsOutcome, EditStack, HistoryEntry, SnapshotEntry};
 pub use presets::PresetEntry;
+#[cfg(export_command_hook)]
 pub use export_plugins::ExportPlugin;
 pub use images::ImageSummary;
 pub use faces::{FaceRow, PersonRow};

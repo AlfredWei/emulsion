@@ -40,8 +40,17 @@ export function openThirdPartyLibraries() {
   return invoke("open_third_party_libraries");
 }
 
-/** The running edition: its name and the model families it leaves out (RFC-0038 slice 4, ADR-0012).
- * @returns {Promise<{ name: string, excluded: string[] }>} */
+/** @type {Promise<import('$lib/modelEdition.js').EditionInfo> | null} */
+let edition = null;
+
+/** The running edition: its name, the model families it leaves out (RFC-0038 slice 4, ADR-0012), its channel and what
+ * the channel contains, and the features compiled out of the binary (ADR-0011). Fixed for the run, so it is asked once;
+ * a failed call is asked again next time.
+ * @returns {Promise<import('$lib/modelEdition.js').EditionInfo>} */
 export function getModelEdition() {
-  return invoke("model_edition");
+  edition ??= invoke("model_edition").catch((e) => {
+    edition = null;
+    throw e;
+  });
+  return edition;
 }

@@ -86,7 +86,8 @@ src-tauri/
 │   │                        presets, export_plugins (each with its own tests; test_support.rs = shared fixtures)
 │   ├── develop_engine/      CPU edit-stack interpreter (the reference the GPU shaders must match): pipeline.rs
 │   │                        (`apply_edit_stack`), color, tone, hsl_split, effects, detail, masks (incl. composable-mask modifiers), crop, lens,
-│   │                        perspective; tests/ = per-area tests + shared support
+│   │                        perspective; lens/profile.rs = the lens profile path, only with the `lens-profiles` feature
+│   │                        (lens/profile_absent.rs without it, ADR-0011); tests/ = per-area tests + shared support
 │   ├── import.rs            Import pipeline: scan a folder, hash, dedupe, thumbnail (per-step catalog lock, thumbnail pool during import, streaming events, tier-0 EXIF thumbnail: RFC-0030)
 │   ├── cull.rs              Culling analysis (RFC-0031): sharpness score + 256-bit dHash per photo, `analyse_missing` background pass (reads the plain 1024 px thumbnail, source as fallback)
 │   ├── blink_mesh.rs        Eye-state evidence (RFC-0031 §8.15): a 256 px face crop through Face Mesh V2 over `tract`, the eyelid aspect ratio per eye and the mesh's face-presence score
@@ -104,7 +105,8 @@ src-tauri/
 │   ├── metadata.rs             EXIF-ish metadata extraction at import
 │   ├── metadata_writer.rs       EXIF/IPTC writing into exported JPEGs (per-export toggles)
 │   ├── geocode.rs               Forward geocoding: OpenStreetMap (Nominatim) default, optional Google
-│   ├── editions.rs              Model editions (ADR-0012): the allow-list of model families a build may use (compiled name `EMULSION_EDITION` narrowed by the bundle's edition file); `not_in_edition` is what the model status modules report for a family it leaves out
+│   ├── editions.rs              Model editions (ADR-0012): the allow-list of model families a build may use (compiled name `EMULSION_EDITION` narrowed by the bundle's edition file; a `channel-mas` build is always `store`); `not_in_edition` is what the model status modules report for a family it leaves out; `model_edition` also reports the channel, its caps and what is compiled out
+│   ├── channel.rs               The distribution channel (ADR-0011): `Direct` or `MacAppStore` (feature `channel-mas`) and its `ChannelCaps` table; `build.rs` turns the table into `cfg`s that compile out the export hook, model downloads and the cache move
 │   ├── map_endpoints.rs         Validation of the map tile address, its credit text and the Nominatim server address (settings; OpenStreetMap defaults)
 │   ├── preview_cache.rs         Develop preview cache (graded previews by content + stack hash; 640 px hover tier for the History / Preset peek)
 │   ├── export.rs / export_plugin.rs   Export pipeline / the v0 export-plugin hook
@@ -121,14 +123,15 @@ src-tauri/
 │   ├── inpaint_models.rs, removal_commands.rs   Object removal (RFC-0032 / ADR-0010): the pinned LaMa file and its check; the `remove_object` / `removal_cancel` commands and the job (mask, one window per separate thing, helper round trip, patch stored)
 │   ├── removal.rs               Object removal, render side (RFC-0032 §12): a photograph's stored patches laid into a picture of it, scaled to the picture's size; the user's marks (lasso, brush) rasterised and split into separate things (pure); `inline_patches` / `bake` put a stack's patches into a render
 │   ├── removal_preview.rs       The Develop canvas's source with removals (RFC-0032 §12.5): the plain preview, the denoise mix, then the patches, stored as `bake-*.png` (command `get_develop_source_preview` is in removal_commands.rs)
-│   ├── lens_profile.rs          Lens-profile matching for Lens Corrections
+│   ├── lens_profile.rs          Lens-profile matching for Lens Corrections (only with the `lens-profiles` feature, which brings the `lensfun` crate)
 │   ├── testdata/                lens_profile_golden.json: pinned match_profile results (about 400 queries) the lens-profile test checks against
 │   ├── soft_proof.rs / print.rs   Soft proofing / Print module output
 │   └── storage.rs               User-configurable cache location (Settings > Storage)
 ├── capabilities/
 │   └── default.json      Which Tauri APIs the webview is allowed to call
 ├── icons/                 App icons for bundling
-├── Cargo.toml              Rust dependencies
+├── Cargo.toml              Rust dependencies; features `lens-profiles` (default) and `channel-mas` (the Mac App Store build, ADR-0011)
+├── build.rs                The channel caps as `cfg`s, and the `editions` part of the model manifest for editions.rs
 ├── entitlements/            Entitlements for lane bundles only (lane-drivable.entitlements adds network.server for the embedded WebDriver, so it never ships to a store; lane-helper.entitlements is the helper's sandbox plus inherit)
 ├── tauri.conf.json          App config: window, identifier, asset protocol, bundle targets
 ├── tauri.bundle-models.conf.json  Release overlay: ships bundled-models/ inside the installer (npm run build:release; `EMULSION_EDITION=<name>` picks which models, see scripts/bundledEditions.mjs and ADR-0012)
@@ -208,7 +211,7 @@ src/
 │   ├── shotInfo.js          Pure wording of capture settings ("ISO 200", "50 mm", "f/8.0", "1/250s"): the Develop histogram's caption and the Library info panel's shutter
 │   ├── enlarge.js           Pure side of the Enlarge (AI) dialog: the target the form describes, the plan in words, the very-large warning, the default name
 │   ├── mapClusters.js       Pure map-pin helpers: photos with coordinates, Web Mercator projection, grid clustering, viewport filter (M5.5)
-│   ├── modelEdition.js      `modelGate(status)` (ready / download / excluded) and the one "not included in this edition" sentence; every model-status check in the UI goes through it
+│   ├── modelEdition.js      `modelGate(status)` (ready / download / excluded) and the one "not included in this edition" sentence; every model-status check in the UI goes through it; `channelCaps` and `hasLensProfiles` read the channel from `model_edition`
 │   ├── mapTiles.js          The map's tile address and credit line from the saved settings (OpenStreetMap by default; custom credit is escaped text)
 │   ├── keyboard.js, menuActions.js   Global keyboard shortcuts / native-menu actions as `create…Handlers(ctx)`
 │   │                        factories over a context object (unit-tested with a fake ctx; RFC-0009 P2)
@@ -230,4 +233,4 @@ Manual dispatch only. Runs one spec from `app/e2e/specs/` on a fresh `macos-late
 
 ## `.github/workflows/ci.yml`
 
-Two jobs on every push/PR to `main`: a `macos-latest`/`windows-latest` matrix that builds and tests the Rust core (fetching a real sample RAW file so the gated tests actually run, not just skip), and a `frontend-check` job (`npm run check`). Both platforms pass as of 2026-07-25 — RAW decoding on Windows links a vcpkg-installed prebuilt LibRaw instead of building from source under MSVC; see [ADR-0003](adr/ADR-0003-raw-decoding.md) and `app/src-tauri/vendor/rsraw-sys/PATCH.md` for why.
+Three jobs on every push/PR to `main`: a `macos-latest`/`windows-latest` matrix that builds and tests the Rust core (fetching a real sample RAW file so the gated tests actually run, not just skip), a `store-edition` job on `macos-latest` that tests the Mac App Store build (`--no-default-features --features channel-mas`) and fails if `lensfun` is in its dependency tree (ADR-0011), and a `frontend-check` job (`npm run check`). Both platforms pass as of 2026-07-25 — RAW decoding on Windows links a vcpkg-installed prebuilt LibRaw instead of building from source under MSVC; see [ADR-0003](adr/ADR-0003-raw-decoding.md) and `app/src-tauri/vendor/rsraw-sys/PATCH.md` for why.

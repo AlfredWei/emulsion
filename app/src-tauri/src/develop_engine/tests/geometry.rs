@@ -166,6 +166,7 @@ fn lens_correction_manual_ca_introduces_channel_divergence() {
     );
 }
 
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_correction_profile_distortion_amount_zero_is_a_passthrough_amount_100_is_not() {
     let mut base = RgbImage::from_pixel(41, 41, image::Rgb([10, 10, 10]));
@@ -196,6 +197,7 @@ fn lens_correction_profile_distortion_amount_zero_is_a_passthrough_amount_100_is
     assert_ne!(at_full, base, "distortion_amount=100 with a real profile must change the image");
 }
 
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_correction_vignetting_corrects_a_uniform_image_brighter_at_the_corners() {
     // A negative k1 means the (uncorrected) lens gain is BELOW 1 at
@@ -218,6 +220,7 @@ fn lens_correction_vignetting_corrects_a_uniform_image_brighter_at_the_corners()
     assert_eq!(center, 120, "the center (r~=0) should be ~unaffected by a pure radial vignetting correction");
 }
 
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_correction_vignette_amount_zero_is_a_passthrough() {
     let base = RgbImage::from_pixel(61, 61, image::Rgb([120, 120, 120]));
@@ -260,6 +263,7 @@ fn lens_undist_poly3_solves_the_forward_equation() {
 // computed by a separate script (independent of this code), not read off
 // the functions under test.
 
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_dist_kernels_match_the_documented_forward_formulas() {
     let close = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| (ax - bx).abs() < 1e-6 && (ay - by).abs() < 1e-6;
@@ -271,6 +275,7 @@ fn lens_dist_kernels_match_the_documented_forward_formulas() {
     assert!(close(lens_tca_poly3_forward(0.4, 0.15, 1.001, 0.0, -0.0005), (0.400_363_5, 0.150_136_31)));
 }
 
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_dist_at_origin_is_always_identity() {
     assert_eq!(lens_dist_poly3(0.0, 0.0, -0.2), (0.0, 0.0));
@@ -283,6 +288,7 @@ fn lens_dist_at_origin_is_always_identity() {
 /// Profile distortion is closed form, so there is no non-convergence case
 /// to absorb any more (the Newton kernels this replaced had one): even an
 /// extreme coefficient stays finite.
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn apply_lens_distortion_is_finite_for_extreme_coefficients() {
     let (x, y) = apply_lens_distortion(LensDistortion::Poly3 { k1: -50.0 }, 2.0, 2.0, 1.0);
@@ -302,6 +308,7 @@ fn manual_distortion_poly3_inverse_still_signals_non_convergence_with_nan() {
 /// by sampling the SOURCE closer to the centre than the output pixel; a
 /// pincushion lens (k1 > 0) further out. The pre-RFC code did the opposite
 /// for both.
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn profile_distortion_correction_samples_in_the_correcting_direction() {
     let radius_ratio = |k1: f64| -> f32 {
@@ -324,6 +331,7 @@ fn profile_distortion_correction_samples_in_the_correcting_direction() {
 /// Same direction test for TCA: a stored `kr > 1` (red magnified relative
 /// to green) must sample the red source FARTHER out than the output pixel,
 /// as stored -- the old `1/kr` inversion went the other way.
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn profile_tca_linear_uses_the_stored_coefficients_in_the_correcting_direction() {
     let lc = lens_correction_op(&[serde_json::json!({
@@ -357,6 +365,7 @@ fn profile_tca_linear_uses_the_stored_coefficients_in_the_correcting_direction()
 /// test's concern), but at least three distinct model kinds must have been
 /// compared or the test fails -- so it cannot pass by silently comparing
 /// nothing.
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn profile_mapping_equals_the_upstream_lensfun_correction() {
     use lensfun::{Database, Modifier};
@@ -439,6 +448,7 @@ fn profile_mapping_equals_the_upstream_lensfun_correction() {
 /// Expected bytes are from the RFC's table (computed independently):
 /// input 128 at gain 1.5 -> 154 (the old encoded-space multiply gave 192);
 /// 192 at 1.25 -> 212 (old 240); 64 at 2.0 -> 90 (old 128); 32 at 4.1 -> 69 (old 131).
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_vignette_multiplier_is_applied_in_linear_light() {
     let apply = |c: u8, gain: f32| lens_vignette_encode(srgb_to_linear(c as f32 / 255.0) * gain);
@@ -450,6 +460,7 @@ fn lens_vignette_multiplier_is_applied_in_linear_light() {
 
 /// A multiplier of exactly 1 must be a passthrough for every byte value
 /// (the decode table + `lens_vignette_encode` round-trips all 256).
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_vignette_decode_encode_round_trips_every_byte() {
     for c in 0..=255u8 {
@@ -460,6 +471,7 @@ fn lens_vignette_decode_encode_round_trips_every_byte() {
 /// Out-of-frame source samples render BLACK on the CPU (and, since
 /// RFC-0021, on the GPU): a pincushion profile pulls the corner's source
 /// outside the frame.
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_correction_out_of_frame_samples_are_black() {
     let mut image = RgbImage::from_pixel(41, 41, image::Rgb([200, 200, 200]));
@@ -474,6 +486,7 @@ fn lens_correction_out_of_frame_samples_are_black() {
     assert_eq!(image.get_pixel(20, 20).0, [200, 200, 200], "the centre samples in-frame");
 }
 
+#[cfg(feature = "lens-profiles")]
 #[test]
 fn lens_correction_is_identity_matches_apply_lens_correction_no_op_cases() {
     assert!(lens_correction_is_identity(&LensCorrection::default()));
@@ -486,6 +499,42 @@ fn lens_correction_is_identity_matches_apply_lens_correction_no_op_cases() {
         ..LensCorrection::default()
     }));
     assert!(!lens_correction_is_identity(&LensCorrection { manual_distortion: 5.0, ..LensCorrection::default() }));
+}
+
+/// Without lens profiles a stored profile op renders without its profile part: an enabled profile is a passthrough,
+/// and the op's Manual part still applies (ADR-0011).
+#[cfg(not(feature = "lens-profiles"))]
+#[test]
+fn without_lens_profiles_a_stored_profile_is_ignored_and_manual_still_applies() {
+    let profile = serde_json::json!({ "crop_factor": 1.0, "real_focal": 24.0, "distortion": { "model": "poly3", "k1": 1.0 },
+        "vignetting": { "k1": -0.5, "k2": 0.0, "k3": 0.0 } });
+    let source = RgbImage::from_fn(41, 41, |x, y| image::Rgb([(x * 6) as u8, (y * 6) as u8, 128]));
+    let mut image = source.clone();
+    apply_lens_correction(&mut image, &lens_correction_op_json(serde_json::json!({ "profile_enabled": true, "profile": profile.clone() })));
+    assert_eq!(image, source, "a profile op is a passthrough without lens profiles");
+    assert!(lens_correction_op(&[serde_json::json!({ "op": "lens_correction", "profile": profile.clone() })]).profile.is_none());
+
+    let mut manual = source.clone();
+    apply_lens_correction(&mut manual, &lens_correction_op_json(serde_json::json!({ "profile_enabled": true, "profile": profile, "manual_distortion": 60.0 })));
+    assert_ne!(manual, source, "Manual distortion still moves pixels");
+}
+
+/// The Manual Distortion inverse solves its forward model to far better than a pixel across the slider's range
+/// (k1 = slider / 100 * 0.35) and radii up to the corner, wherever a root exists.
+#[test]
+fn manual_distortion_inverse_round_trips_across_the_slider_range() {
+    for step in -20..=20 {
+        let k1 = step as f32 / 20.0 * MANUAL_DISTORTION_MAX_K1;
+        for i in 0..=50 {
+            let ru = i as f32 / 50.0;
+            let (ux, uy) = (ru * 0.8, ru * 0.6);
+            let s = 1.0 + k1 * ru * ru;
+            let (x, y) = lens_undist_poly3(ux * s, uy * s, k1);
+            if 1.0 + 3.0 * k1 * ru * ru > 0.05 {
+                assert!((x - ux).abs() < 1e-5 && (y - uy).abs() < 1e-5, "k1 {k1} ru {ru}: ({x}, {y}) vs ({ux}, {uy})");
+            }
+        }
+    }
 }
 
 // -- M4 Perspective Correction --------------------------------------
@@ -636,6 +685,7 @@ fn apply_perspective_scale_up_alone_never_reveals_blank_corners() {
 
 /// Opt-in CPU cost report (wall-clock thresholds flake on shared CI):
 /// `cargo test --release --lib lens_cpu_cost_report -- --ignored --nocapture`
+#[cfg(feature = "lens-profiles")]
 #[test]
 #[ignore]
 fn lens_cpu_cost_report() {

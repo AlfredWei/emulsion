@@ -19,6 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
@@ -36,7 +37,8 @@ tauri-plugin-dialog = "2.7.2"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 kamadak-exif = "0.6.1"
 little_exif = "0.6.23"
-lensfun = "0.7.0"
+# Optional: the Mac App Store build leaves it out (feature `lens-profiles`, ADR-0011).
+lensfun = { version = "0.7.0", optional = true }
 bytemuck = "1.25"
 printpdf = { version = "0.12.7", default-features = false }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
@@ -57,6 +59,11 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 # Embedded WebDriver server for e2e UI testing (app/e2e/) — opt-in only, never
 # enabled in a release build. Build with `--features wdio-webdriver` for e2e runs.
 wdio-webdriver = ["dep:tauri-plugin-wdio-webdriver"]
+default = ["lens-profiles"]
+# Lens profile correction: the LGPL-3.0 `lensfun` crate, the CC-BY-SA database it embeds and the profile render path.
+lens-profiles = ["dep:lensfun"]
+# The Mac App Store build (ADR-0011). Build it with `--no-default-features --features channel-mas`.
+channel-mas = []
 
 # Patched fork of rsraw-sys so RAW decoding builds on Windows/MSVC via a
 # vcpkg-linked LibRaw instead of upstream's from-source compile (which

@@ -88,6 +88,7 @@ impl Catalog {
             .optional()
     }
 
+    #[cfg_attr(not(custom_cache_dir), allow(dead_code))] // only `storage::move_cache_dir` writes the setting
     pub fn set_cache_dir(&self, dir: Option<&str>) -> Result<()> {
         match dir {
             Some(v) => self.conn.execute(
@@ -110,6 +111,7 @@ impl Catalog {
     /// prefix-replace, not a full reparse -- `thumbnail_path` is always
     /// `<thumbnail_dir>/<image_id>.jpg` (see `import::generate_thumbnail_file`),
     /// so the directory component is always exactly this prefix.
+    #[cfg_attr(not(custom_cache_dir), allow(dead_code))]
     pub fn rewrite_thumbnail_path_prefix(&self, old_prefix: &str, new_prefix: &str) -> Result<usize> {
         self.conn.execute(
             "UPDATE images SET thumbnail_path = ?2 || substr(thumbnail_path, ?3)

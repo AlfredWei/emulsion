@@ -10,6 +10,8 @@
     grainPickerState,
   } from "$lib/api/develop.js";
   import { nudgeValue } from "$lib/stepMath.js";
+  import { getModelEdition } from "$lib/api/system.js";
+  import { hasLensProfiles, notInEdition } from "$lib/modelEdition.js";
 
   /**
    * @type {{
@@ -191,6 +193,13 @@
     onResetPanel,
     width = 240,
   } = $props();
+
+  /** False in a build without lens profiles (the Mac App Store build, ADR-0011): the Profile part shows one sentence. */
+  let lensProfiles = $state(true);
+  getModelEdition().then(
+    (info) => (lensProfiles = hasLensProfiles(info)),
+    () => {},
+  );
 
   const grainPicker = $derived(grainPickerState(grain, grainStock));
   /** The stock the Grain values currently equal, or null (None / Custom). */
@@ -1186,6 +1195,9 @@
   <details class="section" class:panel-hidden={isPanelHidden("lens_corrections")}>
     <summary data-ctx-panel="lens_corrections" data-ctx-title="Lens Corrections">{@render panelHeader("Lens Corrections", "lens_corrections")}</summary>
     <div class="sub-body">
+      {#if !lensProfiles}
+        <div class="static-note" data-testid="lens-profile-not-included">{notInEdition("Lens profile correction")}</div>
+      {:else}
       {#if lensCorrection.profile}
         <div class="static-note">Profile found: {lensCorrection.profile.camera} + {lensCorrection.profile.lens}</div>
       {:else}
@@ -1244,6 +1256,7 @@
         <span class="val">{lensCorrection.ca_amount}</span>
         {@render stepButtons(lensCorrection.ca_amount, 1, 0, 100, (v) => onLensCorrectionChange({ ca_amount: v }), !lensCorrection.profile_enabled)}
       </div>
+      {/if}
       <div class="subsection-label">Manual</div>
       <div class="row">
         <label for="lens-manual-distortion">Distortion</label>

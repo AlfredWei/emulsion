@@ -13,6 +13,9 @@
 //! `raw.githubusercontent.com` URL returns a ~130-byte pointer file whose own
 //! `size:` field matches the real file size, which is what first surfaced
 //! this.
+// A channel without model downloads compiles out the fetch code below (`cfg(model_downloads)`); what only it used is
+// left unused there.
+#![cfg_attr(not(model_downloads), allow(dead_code, unused_imports))]
 
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -79,6 +82,7 @@ fn is_valid_cache(path: &Path, expected_sha256: &str) -> bool {
     }
 }
 
+#[cfg(model_downloads)]
 async fn ensure_one(client: &reqwest::Client, cache_dir: &Path, spec: &ModelSpec) -> Result<PathBuf, FaceModelError> {
     let dest = cache_dir.join(spec.filename);
     if is_valid_cache(&dest, spec.sha256) {
@@ -130,6 +134,7 @@ pub fn cached_detector(cache_dir: &Path) -> Option<PathBuf> {
 /// pair costs one checksum read per file and no network request.
 /// Fails with [`FaceModelError::NotInEdition`] before touching the disk or the network when the edition leaves face
 /// detection out.
+#[cfg(model_downloads)]
 pub async fn ensure_models(cache_dir: &Path) -> Result<FaceModelPaths, FaceModelError> {
     check_included(crate::editions::current())?;
     std::fs::create_dir_all(cache_dir).map_err(|e| FaceModelError::CreateDir(cache_dir.to_path_buf(), e))?;
@@ -137,6 +142,20 @@ pub async fn ensure_models(cache_dir: &Path) -> Result<FaceModelPaths, FaceModel
     let yunet = ensure_one(&client, cache_dir, &YUNET).await?;
     let sface = ensure_one(&client, cache_dir, &SFACE).await?;
     Ok(FaceModelPaths { yunet, sface })
+}
+
+/// A channel without model downloads uses only valid files already in `cache_dir`, and is refused otherwise.
+#[cfg(not(model_downloads))]
+pub async fn ensure_models(cache_dir: &Path) -> Result<FaceModelPaths, FaceModelError> {
+    check_included(crate::editions::current())?;
+    let cached = |spec: &ModelSpec| {
+        let path = cache_dir.join(spec.filename);
+        is_valid_cache(&path, spec.sha256).then_some(path)
+    };
+    match (cached(&YUNET), cached(&SFACE)) {
+        (Some(yunet), Some(sface)) => Ok(FaceModelPaths { yunet, sface }),
+        _ => Err(FaceModelError::NotInEdition),
+    }
 }
 
 fn check_included(edition: &crate::editions::Edition) -> Result<(), FaceModelError> {
@@ -184,6 +203,7 @@ mod tests {
     /// ensure_models_downloads_and_verifies_both_real_files`. Confirms the
     /// real fetch-from-`opencv_zoo`-and-checksum path actually works
     /// end to end, and that a second call is a pure cache hit (no re-fetch).
+    #[cfg(model_downloads)]
     #[tokio::test]
     #[ignore]
     async fn ensure_models_downloads_and_verifies_both_real_files() {

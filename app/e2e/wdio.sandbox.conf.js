@@ -1,5 +1,6 @@
 import path from "node:path";
 import { refuseWhenPortTaken } from "./embeddedPort.js";
+import { settleAfterReload } from "./reloadSettle.js";
 
 // Config for lane runs (.github/workflows/lanes.yml, scripts/lanes/). It drives any drivable binary, a sandboxed .app
 // or a plain debug build, named by APP_BIN. LANE_OUT, when set, receives a screenshot after every test and at the end.
@@ -31,6 +32,8 @@ export const config = {
   reporters: ["spec"],
 
   onPrepare: refuseWhenPortTaken,
+  // The same reload fix as the default config: a script sent during `browser.refresh()` must not be lost.
+  before: (_capabilities, _specs, browser) => settleAfterReload(browser),
   afterTest: async (test, _context, { passed }) => {
     if (!laneOut) return;
     tests += 1;

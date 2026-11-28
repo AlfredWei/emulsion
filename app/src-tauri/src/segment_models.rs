@@ -123,13 +123,17 @@ fn is_valid_cache(path: &Path, spec: &ModelSpec) -> bool {
 /// hashes only when sizes match (about 0.3 s for 155 MB on an SSD).
 pub const FAMILY: crate::editions::ModelFamily = crate::editions::ModelFamily::Segment;
 
+/// The host a download would contact, for the consent dialog. A channel without downloads names none, so its binary
+/// carries no download host.
+pub const HOST: &str = if cfg!(model_downloads) { "huggingface.co" } else { "" };
+
 pub fn status(cache_dir: &Path) -> ModelStatus {
     status_for(crate::editions::current(), cache_dir)
 }
 
 pub fn status_for(edition: &crate::editions::Edition, cache_dir: &Path) -> ModelStatus {
     if !edition.includes(FAMILY) {
-        return ModelStatus { state: ModelState::NotInEdition, download_bytes: 0, host: "huggingface.co" };
+        return ModelStatus { state: ModelState::NotInEdition, download_bytes: 0, host: HOST };
     }
     let missing: u64 = SPECS
         .iter()
@@ -144,7 +148,7 @@ pub fn status_for(edition: &crate::editions::Edition, cache_dir: &Path) -> Model
             (_, false) => ModelState::NotInEdition,
         },
         download_bytes: missing,
-        host: "huggingface.co",
+        host: HOST,
     }
 }
 

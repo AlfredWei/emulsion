@@ -4,8 +4,11 @@ import { fileURLToPath } from "node:url";
 import { findCellByNameAnywhere, openDevelopFor } from "../helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE = path.resolve(__dirname, "../../../test_image/exif-shot-info.jpg");
-const FIXTURE_NAME = "exif-shot-info";
+// The exif-shot-info gradient re-saved with a camera and lens the bundled lensfun
+// database matches (SONY ILCE-7M3, FE 24-70mm F2.8 GM at 40 mm), so the default
+// build has a profile to find.
+const FIXTURE = path.resolve(__dirname, "../../../test_image/exif-lens-profile.jpg");
+const FIXTURE_NAME = "exif-lens-profile";
 
 /**
  * ADR-0011 in the real window: what the channel compiles out is absent from the UI, and what it keeps still works.
@@ -96,8 +99,12 @@ describe("Channel gating (ADR-0011)", function () {
     expect(folderButton).toBe(!store);
     if (!store) {
       await openSettingsTab("Export Plugins");
-      const plugins = await browser.execute(() => document.body.textContent?.includes("Add plugin") ?? false);
+      const plugins = await waitFor(
+        () => browser.execute(() => Array.from(document.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Add Plugin")),
+        "the Export Plugins tab's Add Plugin button",
+      );
       console.log(`[channel] Export Plugins tab shows its add control: ${plugins}`);
+      expect(plugins).toBe(true);
     }
     await closeSettings();
   });
@@ -126,14 +133,16 @@ describe("Channel gating (ADR-0011)", function () {
       if (details && !details.open) details.open = true;
       summary?.scrollIntoView();
     });
+    // The default build shows "No matching" until the async lookup lands, so
+    // each build waits for its own final note rather than the first one seen.
     const profileText = await waitFor(
       () =>
-        browser.execute(() => {
+        browser.execute((isStore) => {
           const body = document.querySelector('[data-ctx-panel="lens_corrections"]')?.closest("details")?.querySelector(".sub-body");
           const note = body?.querySelector(".static-note")?.textContent?.trim() ?? "";
-          return note.startsWith("Profile found") || note.startsWith("No matching") || note.includes("not included") ? note : "";
-        }),
-      "the Lens Corrections profile note",
+          return (isStore ? note.includes("not included") : note.startsWith("Profile found")) ? note : "";
+        }, store),
+      store ? "the Lens Corrections not-included sentence" : "the Lens Corrections Profile found note",
     );
     console.log(`[channel] profile part = ${JSON.stringify(profileText)}`);
     const enableBox = await browser.execute(() => Array.from(document.querySelectorAll("label.checkbox-row")).some((l) => l.textContent?.includes("Enable Profile Corrections")));
@@ -167,23 +176,125 @@ describe("Channel gating (ADR-0011)", function () {
     console.log(`[channel] CPU render checksum manual 0 = ${JSON.stringify(flat)}, manual 60 = ${JSON.stringify(moved)}`);
     expect(moved.sum).not.toBe(flat.sum);
 
-    const before = await shotBuffer();
-    await browser.execute(() => {
+    // Sample where the CPU render shows the warp changes the colour and the
+    // neighbourhood is flat, so a one-pixel hover offset cannot fake a match.
+    const pt = await pickMovingPoint(image);
+    console.log(`[channel] sample point = ${JSON.stringify(pt)}`);
+    expect(pt).not.toBe(null);
+    // The sandbox container keeps its catalog between runs, so start from 0.
+    await setManualDistortion(0);
+    await shot(store ? "mas-lens-before" : "default-lens-before");
+    const gpuBefore = await readGpuPixel(pt.u, pt.v);
+    await setManualDistortion(60);
+    await shot(store ? "mas-lens" : "default-lens");
+    const gpuAfter = await readGpuPixel(pt.u, pt.v);
+    const live = await invoke("get_edit_stack", { versionId });
+    const cpu = await cpuPixel(image, live, pt.u, pt.v);
+    console.log(`[channel] Manual distortion 60 at (${pt.u}, ${pt.v}): GPU before ${JSON.stringify(gpuBefore)}, GPU after ${JSON.stringify(gpuAfter)}, CPU after ${JSON.stringify(cpu)}`);
+    if (gpuAfter === null) {
+      console.log("[channel] GPU canvas not available here: the GPU half of this check was skipped");
+      return;
+    }
+    expect(gpuAfter).not.toEqual(gpuBefore);
+    for (const ch of /** @type {const} */ (["r", "g", "b"])) {
+      expect(Math.abs(gpuAfter[ch] - cpu[ch])).toBeLessThanOrEqual(8);
+    }
+  });
+
+  /** Moves the Manual distortion slider and waits until the catalog and the canvas have it. */
+  async function setManualDistortion(/** @type {number} */ value) {
+    await browser.execute((v) => {
       const el = /** @type {HTMLInputElement} */ (document.getElementById("lens-manual-distortion"));
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-      setter?.call(el, "60");
+      setter?.call(el, String(v));
       el.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    }, value);
     await waitFor(async () => {
       const stack = await invoke("get_edit_stack", { versionId });
-      return stack.ops.find((/** @type {any} */ o) => o.op === "lens_correction")?.manual_distortion === 60;
-    }, "the Manual distortion edit reaches the catalog");
+      return (stack.ops.find((/** @type {any} */ o) => o.op === "lens_correction")?.manual_distortion ?? 0) === value;
+    }, `Manual distortion ${value} reaches the catalog`);
     await browser.pause(1500);
-    const after = await shotBuffer();
-    await shot(store ? "mas-lens" : "default-lens");
-    console.log(`[channel] window screenshot changed after Manual distortion: ${!before.equals(after)}`);
-    expect(before.equals(after)).toBe(false);
-  });
+  }
+
+  /** The live WebGPU pixel under a synthetic hover (the eyedropper readback), or null without a GPU canvas. */
+  async function readGpuPixel(/** @type {number} */ u, /** @type {number} */ v) {
+    return browser.execute(async (nx, ny) => {
+      const canvas = document.querySelector(".canvas-wrap canvas");
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const ev = () =>
+        canvas.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, cancelable: true, clientX: rect.left + nx * rect.width, clientY: rect.top + ny * rect.height, isPrimary: true, pointerType: "mouse" }),
+        );
+      let prev = null;
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        ev();
+        await new Promise((r) => setTimeout(r, 150));
+        const text = document.querySelector(".hover-rgb")?.textContent ?? null;
+        if (text && text === prev) {
+          const m = /R(\d+)\s*G(\d+)\s*B(\d+)/.exec(text);
+          if (m) return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
+        }
+        prev = text;
+      }
+      return null;
+    }, u, v);
+  }
+
+  /** The CPU render of `stack` at a normalized point. */
+  /**
+   * The grid point where Manual distortion 60 changes the CPU render most
+   * (at least 12 levels), among points whose 60 render is flat within 6
+   * levels over +-2 px. Null when the fixture has no such point.
+   */
+  async function pickMovingPoint(/** @type {any} */ image) {
+    const path = async (/** @type {number} */ manual) =>
+      (await invoke("preview_edit_stack", { path: image.path, contentHash: image.content_hash, stack: { schema_version: 1, ops: [{ op: "lens_correction", manual_distortion: manual }] }, versionId: null })).path;
+    const flatPath = await path(0);
+    const movedPath = await path(60);
+    return browser.execute(async (a, b) => {
+      const load = async (/** @type {string} */ f) => {
+        const bitmap = await createImageBitmap(await (await fetch(window.__TAURI__.core.convertFileSrc(f))).blob());
+        const c = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = c.getContext("2d");
+        ctx.drawImage(bitmap, 0, 0);
+        return { w: bitmap.width, h: bitmap.height, d: ctx.getImageData(0, 0, bitmap.width, bitmap.height).data };
+      };
+      const p0 = await load(a);
+      const p1 = await load(b);
+      const at = (/** @type {any} */ im, /** @type {number} */ x, /** @type {number} */ y) => [0, 1, 2].map((k) => im.d[(y * im.w + x) * 4 + k]);
+      const diff = (/** @type {number[]} */ p, /** @type {number[]} */ q) => Math.max(...p.map((v, k) => Math.abs(v - q[k])));
+      let best = null;
+      for (let gy = 1; gy < 20; gy++) {
+        for (let gx = 1; gx < 20; gx++) {
+          const u = gx / 20;
+          const v = gy / 20;
+          const x = Math.floor(u * p1.w);
+          const y = Math.floor(v * p1.h);
+          const c1 = at(p1, x, y);
+          let rough = 0;
+          for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) rough = Math.max(rough, diff(c1, at(p1, x + dx, y + dy)));
+          const change = diff(c1, at(p0, x, y));
+          if (rough <= 6 && change >= 12 && (!best || change > best.change)) best = { u, v, change, rough };
+        }
+      }
+      return best;
+    }, flatPath, movedPath);
+  }
+
+  async function cpuPixel(/** @type {any} */ image, /** @type {any} */ stack, /** @type {number} */ u, /** @type {number} */ v) {
+    const p = await invoke("preview_edit_stack", { path: image.path, contentHash: image.content_hash, stack, versionId: null });
+    return browser.execute(async (file, nx, ny) => {
+      const resp = await fetch(window.__TAURI__.core.convertFileSrc(file));
+      const bitmap = await createImageBitmap(await resp.blob());
+      const c = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = c.getContext("2d");
+      ctx.drawImage(bitmap, 0, 0);
+      const d = ctx.getImageData(Math.floor(nx * bitmap.width), Math.floor(ny * bitmap.height), 1, 1).data;
+      return { r: d[0], g: d[1], b: d[2] };
+    }, p.path, u, v);
+  }
 
   it("the store edition says each left-out AI feature is not included, and opens no download", async function () {
     if (!store) return this.skip();
@@ -221,7 +332,4 @@ describe("Channel gating (ADR-0011)", function () {
     expect(seen.downloadDialog).toBe(false);
   });
 
-  async function shotBuffer() {
-    return Buffer.from(await browser.takeScreenshot(), "base64");
-  }
 });

@@ -30,16 +30,45 @@ const FAMILY_FEATURE = /** @type {const} */ ([
   ["face", "Face grouping"],
 ]);
 
+/** What a person calls each feature a build can compile out (ADR-0011), listed after the model families. */
+const COMPILED_FEATURE = /** @type {const} */ ([["lens_profiles", "Lens profile correction"]]);
+
+/** @typedef {{ name?: string, excluded?: unknown, channel?: string, caps?: Partial<ChannelCaps>, compiled_out?: unknown }} EditionInfo */
+/** @typedef {{ export_command_hook: boolean, model_downloads: boolean, custom_cache_dir: boolean }} ChannelCaps */
+
 /** The one line Settings > About shows when the running edition leaves features out, or null when it leaves none.
  * Reads the `model_edition` command's result. A failed or odd result, and a family this table does not know, give no
  * line rather than a wrong one.
- * @param {{ name?: string, excluded?: unknown } | null | undefined} info
+ * @param {EditionInfo | null | undefined} info
  * @returns {string | null} */
 export function editionAboutLine(info) {
   const excluded = Array.isArray(info?.excluded) ? info.excluded : [];
-  const features = FAMILY_FEATURE.filter(([family]) => excluded.includes(family)).map(([, feature]) => feature);
+  const compiledOut = Array.isArray(info?.compiled_out) ? info.compiled_out : [];
+  const features = [
+    ...FAMILY_FEATURE.filter(([family]) => excluded.includes(family)),
+    ...COMPILED_FEATURE.filter(([feature]) => compiledOut.includes(feature)),
+  ].map(([, feature]) => feature);
   if (features.length === 0) return null;
   if (features.length === 1) return notInEdition(features[0]);
   const last = features[features.length - 1];
   return `${features.slice(0, -1).join(", ")} and ${last} are not included in this edition of Emulsion.`;
+}
+
+/** Whether this build contains lens profile correction. A failed result counts as yes, which is what every build
+ * before the channel flag did. @param {EditionInfo | null | undefined} info */
+export function hasLensProfiles(info) {
+  return !(Array.isArray(info?.compiled_out) && info.compiled_out.includes("lens_profiles"));
+}
+
+/** What this build's channel contains. A capability the result does not state counts as present, which is what every
+ * build before the channel flag did; the Mac App Store build always states all three.
+ * @param {EditionInfo | null | undefined} info
+ * @returns {ChannelCaps} */
+export function channelCaps(info) {
+  const caps = info?.caps ?? {};
+  return {
+    export_command_hook: caps.export_command_hook !== false,
+    model_downloads: caps.model_downloads !== false,
+    custom_cache_dir: caps.custom_cache_dir !== false,
+  };
 }

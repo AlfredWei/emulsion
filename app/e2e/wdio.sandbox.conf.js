@@ -32,8 +32,7 @@ export const config = {
   reporters: ["spec"],
 
   onPrepare: refuseWhenPortTaken,
-  // perf-probe reloads the page, and a script lost across a reload otherwise waits out the whole script timeout (90 s
-  // values in first_grid_ms, measured on a runner).
+  // The same reload fix as the default config: a script sent during `browser.refresh()` must not be lost.
   before: (_capabilities, _specs, browser) => settleAfterReload(browser),
   afterTest: async (test, _context, { passed }) => {
     if (!laneOut) return;

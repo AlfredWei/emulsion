@@ -2,6 +2,7 @@
 //! job that renders the photo, enlarges it in the `emulsion-ai` helper, catalogs the result as a connected photo
 //! and starts its thumbnail. Thin wrappers around `upscale_job.rs` (the render and the helper round trip) and the
 //! catalog's `add_enlargement`, as `denoise_commands.rs` is around its own pieces. One job at a time.
+#![cfg_attr(not(model_downloads), allow(unused_imports, dead_code))]
 
 use crate::ai::protocol::{Progress, Request};
 use crate::ai::supervisor::{AiError, AiHelper};
@@ -84,8 +85,10 @@ pub async fn upscale_model_status(app: AppHandle, state: State<'_, AppState>) ->
     .map_err(|e| e.to_string())
 }
 
+#[cfg(model_downloads)]
 static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 
+#[cfg(model_downloads)]
 #[tauri::command]
 pub fn upscale_cancel_download() {
     DOWNLOAD_CANCEL.store(true, Ordering::Relaxed);
@@ -93,6 +96,7 @@ pub fn upscale_cancel_download() {
 
 /// Fetches the model file after the user consented. Emits `"upscale-model-progress"` `{downloaded, total}` at
 /// most every ~250 ms; the file is verified against its pinned SHA-256 before it is kept.
+#[cfg(model_downloads)]
 #[tauri::command]
 pub async fn upscale_download_model(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
     if !crate::editions::current().includes(upscale_models::FAMILY) {

@@ -1,6 +1,7 @@
 mod adaptive_commands;
 mod adaptive_regions;
 mod catalog;
+mod channel;
 mod cull;
 mod cull_groups;
 #[cfg(test)]
@@ -9,6 +10,7 @@ mod diag;
 mod develop_engine;
 mod editions;
 mod export;
+#[cfg(export_command_hook)]
 mod export_plugin;
 mod geocode;
 mod map_endpoints;
@@ -35,6 +37,7 @@ mod inpaint_patchmatch;
 #[cfg(test)]
 mod inpaint_probe;
 mod jpeg_decode;
+#[cfg(feature = "lens-profiles")]
 mod lens_profile;
 mod metadata;
 mod metadata_writer;
@@ -65,7 +68,7 @@ mod source_decode;
 mod storage;
 
 use catalog::{
-    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, ExportPlugin, FaceRow, HistoryEntry,
+    BackupOutcome, BackupSettings, Catalog, CollectionSummary, EditStack, FaceRow, HistoryEntry,
     ImageKeywordAssignment, ImageSummary, KeywordNode, KeywordRef, PersonRow, PresetEntry, SnapshotEntry,
 };
 use export::{ExportOptions, ExportResult};
@@ -1367,6 +1370,7 @@ fn get_upscale_links(state: State<'_, AppState>, image_id: i64) -> Result<Upscal
 /// in memory. `None` covers "no match" for any reason (missing metadata,
 /// no equipment match, matched equipment with no usable calibration data)
 /// -- see `lens_profile::match_profile`'s own doc comment.
+#[cfg(feature = "lens-profiles")]
 #[tauri::command]
 async fn lookup_lens_profile(
     camera_make: Option<String>,
@@ -1392,6 +1396,20 @@ async fn lookup_lens_profile(
     .await
     .ok()
     .flatten()
+}
+
+/// Without lens profiles the command stays, so the frontend's call never fails, and nothing ever matches.
+#[cfg(not(feature = "lens-profiles"))]
+#[tauri::command]
+fn lookup_lens_profile(
+    camera_make: Option<String>,
+    camera_model: Option<String>,
+    lens_model: Option<String>,
+    focal_length: Option<f32>,
+    aperture: Option<f32>,
+) -> Option<()> {
+    let _ = (camera_make, camera_model, lens_model, focal_length, aperture);
+    None
 }
 
 /// `label` is `Some` for a real, user-attributable edit (e.g. "Exposure",
@@ -1668,23 +1686,26 @@ fn delete_preset(state: State<'_, AppState>, preset_id: i64) -> Result<(), Strin
 
 /// Export plugins (M5, RFC-0006): the v0 extensibility surface's CRUD
 /// commands, same shape as the preset commands just above.
+#[cfg(export_command_hook)]
 #[tauri::command]
-fn list_export_plugins(state: State<'_, AppState>) -> Result<Vec<ExportPlugin>, String> {
+fn list_export_plugins(state: State<'_, AppState>) -> Result<Vec<catalog::ExportPlugin>, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
     catalog.list_export_plugins().map_err(|e| e.to_string())
 }
 
+#[cfg(export_command_hook)]
 #[tauri::command]
 fn add_export_plugin(
     state: State<'_, AppState>,
     name: String,
     command: String,
     args_template: Vec<String>,
-) -> Result<ExportPlugin, String> {
+) -> Result<catalog::ExportPlugin, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
     catalog.add_export_plugin(&name, &command, &args_template).map_err(|e| e.to_string())
 }
 
+#[cfg(export_command_hook)]
 #[tauri::command]
 fn update_export_plugin(
     state: State<'_, AppState>,
@@ -1697,6 +1718,7 @@ fn update_export_plugin(
     catalog.update_export_plugin(id, &name, &command, &args_template).map_err(|e| e.to_string())
 }
 
+#[cfg(export_command_hook)]
 #[tauri::command]
 fn delete_export_plugin(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
@@ -1948,6 +1970,7 @@ async fn export_images(
             // export.rs catalog-free (see that module's own header
             // comment), matching how every other resolve-then-call-into-a-
             // pure-module command in this file is already shaped.
+            #[cfg(export_command_hook)]
             let plugin = match options.plugin_id {
                 Some(id) => catalog
                     .list_export_plugins()
@@ -1956,6 +1979,8 @@ async fn export_images(
                     .find(|p| p.id == id),
                 None => None,
             };
+            #[cfg(not(export_command_hook))]
+            let plugin: Option<export::PostExportHook> = None;
             (resolved, plugin)
         };
         Ok::<_, String>(export::export_batch(resolved, &options, plugin.as_ref(), Some(&denoise_dir)))
@@ -2154,6 +2179,7 @@ fn get_storage_info(app: AppHandle, state: State<'_, AppState>) -> Result<Storag
 /// see `storage::move_cache_dir`'s own doc comment for the full mechanics
 /// and the one narrow race it doesn't close. `spawn_blocking`: this walks
 /// and copies real files, potentially many, not a small metadata update.
+#[cfg(custom_cache_dir)]
 #[tauri::command]
 async fn set_cache_dir(app: AppHandle, state: State<'_, AppState>, new_dir: Option<String>) -> Result<StorageInfo, String> {
     let catalog = state.catalog.clone();
@@ -2370,6 +2396,7 @@ pub fn run() {
             // cost that otherwise lands on the first Develop open.
             diag::log("startup: background passes spawned");
             diag::watch_catalog_lock(catalog.clone());
+            #[cfg(feature = "lens-profiles")]
             tauri::async_runtime::spawn_blocking(|| diag::timed("startup: warm lens db", lens_profile::warm_lens_db));
             tauri::async_runtime::spawn_blocking(move || {
                 diag::timed("startup: previews pregenerate_missing", || {
@@ -2410,15 +2437,19 @@ pub fn run() {
             get_upscale_links,
             adaptive_commands::resolve_adaptive_region,
             segment_commands::segment_model_status,
+            #[cfg(model_downloads)]
             segment_commands::segment_download_models,
             segment_commands::segment_import_model_files,
             segment_commands::segment_prepare,
             segment_commands::segment_decode,
             segment_commands::segment_release,
+            #[cfg(model_downloads)]
             segment_commands::segment_cancel_download,
             segment_commands::ai_helper_info,
             denoise_commands::denoise_model_status,
+            #[cfg(model_downloads)]
             denoise_commands::denoise_download_model,
+            #[cfg(model_downloads)]
             denoise_commands::denoise_cancel_download,
             denoise_commands::denoise_import_model,
             denoise_commands::denoise_cache_info,
@@ -2437,7 +2468,9 @@ pub fn run() {
             removal_commands::get_develop_source_preview,
             denoise_commands::denoise_missing_for_export,
             upscale_commands::upscale_model_status,
+            #[cfg(model_downloads)]
             upscale_commands::upscale_download_model,
+            #[cfg(model_downloads)]
             upscale_commands::upscale_cancel_download,
             upscale_commands::upscale_import_model,
             upscale_commands::upscale_plan,
@@ -2511,9 +2544,13 @@ pub fn run() {
             create_preset,
             list_presets,
             delete_preset,
+            #[cfg(export_command_hook)]
             list_export_plugins,
+            #[cfg(export_command_hook)]
             add_export_plugin,
+            #[cfg(export_command_hook)]
             update_export_plugin,
+            #[cfg(export_command_hook)]
             delete_export_plugin,
             import_preset_file,
             export_preset_file,
@@ -2534,6 +2571,7 @@ pub fn run() {
             open_folder,
             open_third_party_notices,
             open_third_party_libraries,
+            #[cfg(custom_cache_dir)]
             set_cache_dir,
             perform_catalog_backup,
         ])

@@ -21,6 +21,7 @@ export const config = {
   exclude: [
     "./specs/sandbox-smoke.e2e.js",
     "./specs/perf-probe.e2e.js",
+    "./specs/sandbox-channel-gating.e2e.js",
     "./specs/sandbox-map-offline.e2e.js",
     "./specs/map-online-first.e2e.js",
     "./specs/map-online-switch.e2e.js",

@@ -13,6 +13,7 @@
 
 use crate::catalog::Catalog;
 use std::path::{Path, PathBuf};
+#[cfg(custom_cache_dir)]
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -80,6 +81,7 @@ pub fn get_storage_info(catalog: &Catalog, default_dir: &Path) -> Result<Storage
 /// writes into it *after* this call releases the lock -- is a narrow,
 /// accepted race for a rare admin action, the same tradeoff `remove_images`
 /// already documents for its own thumbnail-cleanup race.
+#[cfg(custom_cache_dir)]
 pub fn move_cache_dir(
     catalog: &Arc<Mutex<Catalog>>,
     default_dir: &Path,
@@ -191,6 +193,7 @@ mod tests {
         assert_eq!(info.previews_bytes, 0);
     }
 
+    #[cfg(custom_cache_dir)]
     #[test]
     fn move_cache_dir_moves_files_rewrites_catalog_paths_and_persists_the_setting() {
         let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
@@ -234,6 +237,7 @@ mod tests {
         assert_eq!(resolve_cache_root(&c, &default_dir).unwrap(), custom_dir);
     }
 
+    #[cfg(custom_cache_dir)]
     #[test]
     fn move_cache_dir_back_to_default_clears_the_override() {
         let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));
@@ -248,6 +252,7 @@ mod tests {
         assert!(default_dir.join("thumbnails").join("1.jpg").exists());
     }
 
+    #[cfg(custom_cache_dir)]
     #[test]
     fn move_cache_dir_is_a_no_op_when_the_target_equals_the_current_location() {
         let catalog = Arc::new(Mutex::new(Catalog::open_in_memory().unwrap()));

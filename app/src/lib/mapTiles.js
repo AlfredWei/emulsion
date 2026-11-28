@@ -28,3 +28,13 @@ export function tileLayerConfig(settings) {
     custom: false,
   };
 }
+
+/**
+ * The server the map downloads tiles from, named on the card that turns the online map on. Read with a pattern, not
+ * `URL`, because a template's `{s}` style placeholders are not valid in a host name.
+ * @param {Parameters<typeof tileLayerConfig>[0]} settings
+ */
+export function tileServerHost(settings) {
+  const url = tileLayerConfig(settings).url;
+  return /^https?:\/\/([^/?#]+)/i.exec(url)?.[1] ?? url;
+}

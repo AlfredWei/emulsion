@@ -3,19 +3,20 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { geolocatedPoints, clusterPoints, boundsOfPoints, clustersInBounds } from "$lib/mapClusters.js";
   import { openExternalUrl } from "$lib/api/system.js";
-  import { getMapSettings } from "$lib/api/map.js";
-  import { tileLayerConfig, OSM_COPYRIGHT_URL } from "$lib/mapTiles.js";
+  import { tileLayerConfig, tileServerHost, OSM_COPYRIGHT_URL } from "$lib/mapTiles.js";
   import { shell } from "$lib/state/shell.svelte.js";
+  import { onlineMap } from "$lib/state/onlineMap.svelte.js";
 
   /**
    * LibraryMapView: the world map of the photos that have GPS coordinates (M5.5, RFC-0007 §3.3). Pins are
    * grouped into clusters by `mapClusters.js`; clicking one hands its photos' `image_id`s to `onSelectCluster`,
    * which scopes Library to them and shows the grid.
    *
-   * Leaflet and its stylesheet are imported when this view first mounts -- never at app start -- so no tile is
-   * requested until the person actually opens the map (RFC-0007 §7: the only network access in the app, and
-   * only for map tiles). Tiles come from OpenStreetMap's public server; the attribution is required by its
-   * tile usage policy.
+   * Leaflet and its stylesheet are imported only while this view is open and the online map is on (D17,
+   * `onlineMap`) -- never at app start -- so no tile is requested until the person opens the map with the switch
+   * on (RFC-0007 §7). While it is off, a card says where tiles would come from and turns it on. Tiles come from
+   * OpenStreetMap's public server unless Settings > Map names another; the attribution is required by its tile
+   * usage policy.
    * A pin shows a thumbnail once one is available -- the same lazy `ensureThumbnail` fetch Grid/Loupe/Filmstrip
    * use, requested here for whichever photo represents a drawn pin/cluster (`onNeedThumbnail`, at most once per
    * photo per time the map is open). Until then, or for a photo Grid never had reason to generate a thumbnail
@@ -165,23 +166,40 @@
     );
   }
 
+  /** The map settings read when this view opened (tile address, credit, the online switch); `null` until read. */
+  let mapSettings = $state(/** @type {import('$lib/api/map.js').MapSettings | null} */ (null));
+  let turningOn = $state(false);
+  let turnOnError = $state("");
+
   onMount(() => {
+    onlineMap.refresh().then(
+      (settings) => (mapSettings = settings),
+      (err) => {
+        console.error("Map settings failed to load", err);
+        loadError = true;
+      },
+    );
+  });
+
+  // The Leaflet map exists only while the online map is on. Turning it off, here or in Settings, removes the map and
+  // its tile layer, so no further tile is requested.
+  $effect(() => {
+    if (onlineMap.enabled !== true || !container || !mapSettings) return;
+    const target = container;
+    const tiles = tileLayerConfig(mapSettings);
     let disposed = false;
     (async () => {
       try {
         const [mod] = await Promise.all([import("leaflet"), import("leaflet/dist/leaflet.css")]);
-        if (disposed || !container) return;
+        if (disposed) return;
         const L = /** @type {typeof import('leaflet')} */ (mod.default ?? mod);
         leaflet = L;
-        map = L.map(container, { worldCopyJump: false, minZoom: 2, zoomControl: true, attributionControl: true });
+        map = L.map(target, { worldCopyJump: false, minZoom: 2, zoomControl: true, attributionControl: true });
         map.attributionControl.setPrefix(false);
-        // The tile address and credit are settings (Settings > Map); no tile is requested before this view opens.
-        const tiles = tileLayerConfig(await getMapSettings().catch(() => null));
-        if (disposed) return; // the cleanup below has already removed the map
         L.tileLayer(tiles.url, { maxZoom: 19, attribution: tiles.attributionHtml }).addTo(map);
         markers = L.layerGroup().addTo(map);
         map.setView([20, 0], 2);
-        container.addEventListener("click", handleAttributionClick);
+        target.addEventListener("click", handleAttributionClick);
         map.on("zoomend", recluster);
         map.on("moveend", draw);
         ready = true;
@@ -192,13 +210,28 @@
     })();
     return () => {
       disposed = true;
-      container?.removeEventListener("click", handleAttributionClick);
+      target.removeEventListener("click", handleAttributionClick);
       map?.remove();
       map = null;
       markers = null;
       leaflet = null;
+      ready = false;
+      framed = false;
+      requestedThumbnails.clear();
     };
   });
+
+  async function turnOnOnlineMap() {
+    turningOn = true;
+    turnOnError = "";
+    try {
+      await onlineMap.set(true);
+    } catch (/** @type {any} */ e) {
+      turnOnError = String(e);
+    } finally {
+      turningOn = false;
+    }
+  }
 
   // Re-cluster whenever the pins change (filters, edits to a photo's GPS) once the map exists.
   $effect(() => {
@@ -259,6 +292,22 @@
   {:else if ready && !loadError}
     <div class="drag-hint">Drag a photo from the filmstrip onto the map to set its location</div>
   {/if}
+  {#if onlineMap.enabled === false && mapSettings && !loadError}
+    <div class="online-off" data-testid="online-map-card">
+      <h3>The online map is off</h3>
+      <p>
+        Turning it on downloads map tiles from {tileServerHost(mapSettings)} and lets place search send the text you
+        type to its search service. Your photos and catalog stay on this computer.
+      </p>
+      <button class="turn-on" type="button" data-testid="online-map-turn-on" onclick={turnOnOnlineMap} disabled={turningOn}>
+        {turningOn ? "Turning on…" : "Turn on online map"}
+      </button>
+      <p class="online-off-hint">You can turn it off again in Settings → Map.</p>
+      {#if turnOnError}
+        <p class="online-off-error">{turnOnError}</p>
+      {/if}
+    </div>
+  {/if}
   {#if loadError}
     <div class="map-note">The map could not be loaded.</div>
   {:else if ready && points.length === 0}
@@ -269,8 +318,11 @@
 </div>
 
 <style>
+  /* Leaflet's panes and controls use z-index 400 to 1000. `isolation` keeps them inside this view, so a dialog
+   * (Settings is z-index 100) opened over the map is drawn above it. */
   .map-view {
     position: relative;
+    isolation: isolate;
     flex: 1;
     min-height: 0;
     background: var(--bg-app);
@@ -316,6 +368,51 @@
     left: 10px;
     bottom: 24px;
     padding: 4px 8px;
+  }
+  .online-off {
+    position: absolute;
+    z-index: 1000;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(380px, calc(100% - 32px));
+    box-sizing: border-box;
+    padding: 18px 20px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .online-off h3 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    color: var(--text-primary);
+  }
+  .online-off p {
+    margin: 0 0 12px;
+  }
+  .online-off .online-off-hint {
+    margin: 10px 0 0;
+    font-size: 12px;
+  }
+  .online-off .online-off-error {
+    margin: 8px 0 0;
+    color: var(--label-red);
+  }
+  .turn-on {
+    padding: 6px 14px;
+    border-radius: var(--radius-s);
+    background: rgba(var(--accent-rgb, 90, 140, 255), 0.14);
+    color: var(--accent-strong);
+    border: 1px solid var(--accent-strong);
+    font: inherit;
+    cursor: pointer;
+  }
+  .turn-on:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
   .map-view.drag-over .map-canvas {
     outline: 3px solid var(--accent);

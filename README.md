@@ -71,4 +71,4 @@ See [PROGRESS.md](PROGRESS.md) for the current, precise status of any platform-s
 
 ## License
 
-[MIT](LICENSE)
+Proprietary, all rights reserved; see [LICENSE](LICENSE). Versions before the licence change were published under the MIT License and stay under it. Third-party components keep their own licences, listed in [THIRD_PARTY_LIBRARIES.md](THIRD_PARTY_LIBRARIES.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

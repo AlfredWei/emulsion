@@ -2,8 +2,9 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
-  import { openThirdPartyNotices, openThirdPartyLibraries, getModelEdition } from "$lib/api/system.js";
-  import { channelCaps, editionAboutLine } from "$lib/modelEdition.js";
+  import { openThirdPartyNotices, openThirdPartyLibraries, openExternalUrl, getModelEdition } from "$lib/api/system.js";
+  import { OPEN_SOURCE_URL } from "$lib/openSource.js";
+  import { channelCaps, editionAboutLine, hasLensProfiles } from "$lib/modelEdition.js";
   import { setGeocodeProvider, setMapsApiKey, setMapEndpoints } from "$lib/api/map.js";
   import { onlineMap } from "$lib/state/onlineMap.svelte.js";
   import {
@@ -42,6 +43,7 @@
   let noticesError = $state("");
   let editionLine = $state(/** @type {string | null} */ (null));
   let caps = $state(channelCaps(null));
+  let lensProfiles = $state(true);
 
   async function handleOpenNotices() {
     noticesError = "";
@@ -50,6 +52,12 @@
     } catch (/** @type {any} */ e) {
       noticesError = String(e);
     }
+  }
+
+  /** The link opens in the browser; followed inside the webview it would navigate the app window away. */
+  function handleOpenSource(/** @type {MouseEvent} */ e) {
+    e.preventDefault();
+    openExternalUrl(OPEN_SOURCE_URL);
   }
 
   async function handleOpenLibraries() {
@@ -174,6 +182,7 @@
           (info) => {
             editionLine = editionAboutLine(info);
             caps = channelCaps(info);
+            lensProfiles = hasLensProfiles(info);
           },
           () => {
             editionLine = null;
@@ -738,11 +747,20 @@
             Emulsion ships AI models made by others (denoising, subject selection, object detection, inpainting,
             upscaling and face landmarks). Their licences, and who made each model, are in the third-party notices.
           </p>
+          <p class="storage-note" data-testid="about-licence">
+            Emulsion is proprietary software; all rights reserved. Your licence to use it comes from the terms under
+            which you obtained it. Those terms do not limit your rights under the open-source licences of the libraries
+            below.
+          </p>
           <p class="storage-note">
-            RAW files are decoded with LibRaw (copyright LibRaw LLC; LGPL-2.1 or CDDL-1.0). Lens corrections use the Rust
-            port of Lensfun (copyright the Lensfun contributors and David Veszelovszki; LGPL-3.0) and the Lensfun lens
-            database (CC-BY-SA 3.0, the Lensfun community), used unmodified. Every library, and where the licence texts
-            are, is in the library licences.
+            RAW files are decoded with LibRaw (copyright LibRaw LLC), which Emulsion uses under the CDDL-1.0. Its
+            source, and the source of the MPL-2.0 libraries, is at
+            <a href={OPEN_SOURCE_URL} data-testid="about-source-link" onclick={handleOpenSource}
+              >{OPEN_SOURCE_URL}</a
+            >.{#if lensProfiles}
+              Lens corrections use the Rust port of Lensfun (copyright the Lensfun contributors and David Veszelovszki;
+              LGPL-3.0) and the Lensfun lens database (CC-BY-SA 3.0, the Lensfun community), used unmodified.{/if} Every
+            library, and where the licence texts are, is in the library licences.
           </p>
           {#if editionLine}
             <p class="storage-note" data-testid="about-edition-line">{editionLine}</p>

@@ -1,0 +1,4 @@
+This software is based in part on the work of the Independent JPEG Group.
+
+The IJG licence asks binary distributions to state the sentence above. It applies here to jpeg-encoder 0.6.1,
+whose licence expression names IJG for the standard JPEG tables it uses.

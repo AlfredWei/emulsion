@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Local-first photo library and RAW editor — Rust core (catalog, RAW decode, export)"
 authors = ["Alfred Wei"]
 edition = "2021"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 # Two binaries: the app and the AI helper process (src/bin/emulsion-ai). `tauri dev`/`cargo run` start the app.
 default-run = "emulsion"
 

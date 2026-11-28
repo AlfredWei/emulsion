@@ -6,7 +6,7 @@ The first rule the program enforces is that no build reaches the store until the
 The second rule is that every feature whose licence or data terms need a lawyer's answer is compiled out of the store edition. The default build, the open source build and development builds keep every feature.
 Active PR ids in dependency order. Shared S0 to S5 and S7 to S11, Mac M1 to M6 and M8, release G1 and G2. Deferred PRs are S6, M7, W1 to W6 and G3.
 Total cost of the active PRs is about 32.5 to 61 engineer-days (guess), plus research, account and App Review time.
-**Status on 2026-11-18.** The owner answered the decisions on 2026-11-18. Wave 0 is four PRs (S0, S7, S8, M1), and all four started on 2026-11-18. D15 (the name), D20 (the bundle ID) and D21 (what a failed purchase check does) are open. The licence research memo answered D2, D3 and D5 on 2026-11-18 as research, not legal advice, and waits for the owner to accept its stated risk.
+**Status on 2026-11-23.** The owner answered the decisions on 2026-11-18, and four more on 2026-11-23. Wave 0 is four PRs (S0, S7, S8, M1). They started on 2026-11-18 and have merged. D15 (the name) is decided and recorded privately by the owner, and its trademark search, store-name check and domain are open. D18 now says macOS 13. D20 (the bundle ID) is settled as a rule, and the owner chooses its value at M6. D21 (what a failed purchase check does) is decided as a read-only mode. The licence research memo answered D2, D3 and D5 on 2026-11-18 as research, not legal advice, and waits for the owner to accept its stated risk.
 
 ## How to read this
 
@@ -16,14 +16,14 @@ The program runs the `pstack` plugin's `skills/poteto-mode/playbooks/autopilot-s
 
 Four sets matter for scheduling.
 
-- Decision-gated, because a decision is still open. M6 and G2 wait for D15, D20 and the trademark search. M8 waits for D21. S5 waits for the owner to accept the licence research memo's stated risk before merge. S10 waits for the privacy-policy research memo. G1 waits for the owner's written acceptance of the risk each research memo states. Every other active PR has an answered decision.
+- Decision-gated, because a decision or an owner action is still open. M6 waits for the trademark search and for the bundle ID (D20), which the owner chooses at M6 once the domain exists. G2 waits for the trademark search and the store-name check, because every listing asset carries the name. M8 is no longer gated, because D21 is answered. S5 waits for the owner to accept the licence research memo's stated risk before merge. S10 waits for the privacy-policy research memo. G1 waits for the owner's written acceptance of the risk each research memo states. Every other active PR has an answered decision.
 - Review-gated, because they change an interaction or need a human at the screen. S2, S3, S4, S9, S10, M1, M2, M3, M4, M5, M6, M8 and G2.
-- Need accounts or secrets that no agent holds. M6, M8 and G2. The owner puts each secret into GitHub Actions secrets. Agents dispatch workflows that use the secrets and never read them.
+- Need accounts, secrets or hardware that no agent holds. M6, M8 and G2. M8 needs the owner's TestFlight install and, for its copied-app lane, a second Mac with another Apple ID. The owner puts each secret into GitHub Actions secrets. Agents dispatch workflows that use the secrets and never read them.
 - Deferred, out of every wave and every cost total until the owner reopens them. S6, because the store edition builds without lens profile correction. M7, because D12 has no trial. W1 to W6 and G3, because the owner deferred the Microsoft Store until the Mac release ships (owner message 2026-11-18, paraphrased). Their sections stay so the plan keeps its shape.
 
-Costs are engineer-days for one person who knows the codebase. Every cost is a guess unless a box says otherwise. RFC-0038 B5 figures are reused where a row matches. The active total is about 32.5 to 61 engineer-days (guess). The plan of 2026-11-17 said about 50 to 168 for both stores and about 38 to 142 for the Mac store alone. The total fell for three reasons. The deferred PRs leave it (S6 6.5 to 12, M7 3 to 6, W1 to W6 12.5 to 25, G3 0.5 to 1, all guesses). The retrain routes of S2, S3 and S4 are gone, because the owner took the recommended defaults. S3 and S4 now compile features out instead of replacing models. S1 grew by 1.5 to 3 days for the compile-time gating and the clean rewrite of one lens kernel. S5 grew by 1 to 1.5 days for the public source repository and the notice gaps. M8 adds 2.5 to 5 days for the purchase check (guesses).
+Costs are engineer-days for one person who knows the codebase. Every cost is a guess unless a box says otherwise. RFC-0038 B5 figures are reused where a row matches. The active total is about 32.5 to 61 engineer-days (guess). The plan of 2026-11-17 said about 50 to 168 for both stores and about 38 to 142 for the Mac store alone. The total fell for three reasons. The deferred PRs leave it (S6 6.5 to 12, M7 3 to 6, W1 to W6 12.5 to 25, G3 0.5 to 1, all guesses). The retrain routes of S2, S3 and S4 are gone, because the owner took the recommended defaults. S3 and S4 now compile features out instead of replacing models. S1 grew by 1.5 to 3 days for the compile-time gating and the clean rewrite of one lens kernel. S5 grew by 1 to 1.5 days for the public source repository and the notice gaps. M8 adds 2.5 to 5 days for the purchase check (guesses). The rewrite of M8 on 2026-11-23 keeps that figure, because the receipt parsing leaves and the Swift bridge, the purchase state machine and the read-only guard come in (guess).
 
-Critical path. It is the Mac sandbox chain S0, S1, M2, M4, M6, M8, G1, G2, about 18 to 33 engineer-days (guess). The plan of 2026-11-17 gave S0, S1, M2, M4, M6, G1, G2 at about 14 to 28 days (guess). The path is longer because M8 sits between M6 and G1, and S1 carries the gating. Calendar time runs beside it. The name research (D15), the bundle ID (D20) and the trademark search gate M6, because the App Store Connect record waits for them. App Review time is not published (sourced, research section 6). Those calendar items are likely the real critical path (guess).
+Critical path. It is the Mac sandbox chain S0, S1, M2, M4, M6, M8, G1, G2, about 18 to 33 engineer-days (guess). The plan of 2026-11-17 gave S0, S1, M2, M4, M6, G1, G2 at about 14 to 28 days (guess). The path is longer because M8 sits between M6 and G1, and S1 carries the gating. Calendar time runs beside it. The trademark search and the bundle ID (D20, chosen at M6 after the owner buys a domain) gate M6. M8 needs M6's TestFlight build, the Swift bridge, the macOS 13 baseline and, for its copied-app lane, the owner's second Mac. App Review time is not published (sourced, research section 6). Those calendar items are likely the real critical path (guess).
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -34,25 +34,40 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go.
 - [ ] Record the owner's answers in ADR-0011 through S1. Evidence is the owner's message in chat, quoted as "owner message 2026-11-18, paraphrased". A decision answered later is appended to ADR-0011 by the PR it gates.
 
-The owner answered on 2026-11-18. Every answer below is owner message 2026-11-18, paraphrased. The decisions of 2026-11-17, with their sources and alternatives, are kept in Appendix E.
+The owner answered on 2026-11-18, and on 2026-11-23 for D15, D18, D20 and D21. Every answer below is owner message 2026-11-18, paraphrased, unless its row says 2026-11-23. The decisions of 2026-11-17, with their sources and alternatives, are kept in Appendix E.
 
 | Decision | Owner's answer | Status | Gates |
 | --- | --- | --- | --- |
 | D14. Entity and store accounts | The owner already holds an Apple Developer account as an individual. No D-U-N-S number and no organisation. Microsoft Partner Center and the name reservation there are skipped for now. | Answered for Apple. Deferred for Microsoft. | M6, G2 |
 | D7 and D11. Model data and face features | Follow the recommended defaults. Weights whose main training data has non-commercial terms stay out, and face features stay out of the first store release. | Answered | S1, S2, S3, S4 |
-| D12. Mac price model | Paid upfront, one price, no trial. The app must check that the purchase is real, so a copied app does not run for other people. | Answered. M7 is skipped and M8 is added. | M8, G2 |
+| D12. Mac price model | Paid upfront, one price, no trial. The app must check that the purchase is real, so a copied app does not run for other people. On 2026-11-23 D21 settled what "does not run" means. A copy that fails the check opens a read-only mode and is not blocked. The check does not stop a patched binary (Appendix C). | Answered. M7 is skipped and M8 is added. | M8, G2 |
 | D16. Channel order | Mac App Store first. | Answered | Wave order |
-| D18. Mac architecture | Apple silicon only, as recommended. | Answered | M6 |
+| D18. Mac architecture and minimum macOS | Apple silicon only, as recommended (owner message 2026-11-18, paraphrased). On 2026-11-23 the owner raised the minimum to macOS 13, because StoreKit 2 `AppTransaction` needs it (sourced, its documentation page). `minimumSystemVersion` is 13.0 in the Mac store config (M6). Macs on macOS 12 cannot install the store build. The 2026-11-17 text said at least 12.0 (Appendix E). | Answered, raised 2026-11-23 | M6, M8 |
 | D17. Map and place-search services | Online map and place search are off by default in release builds and on in debug builds. The user turns them on in Settings. | Answered | S9 |
 | D8. Relicensing | Approved. The repository goes private, and future versions become proprietary. | Answered | S5 |
 | D2 and D3. LibRaw licence | The owner has no lawyer and asked what CDDL is. CDDL-1.0 is a file-level licence that LibRaw LLC offers beside LGPL-2.1 (RFC-0038 D2, and `licenses/LibRaw-COPYRIGHT`). The licence research memo of 2026-11-18 elects CDDL-1.0 as an engineering default. CDDL section 3.5 lets the executable ship under the owner's own terms, and CDDL asks no relink. The only duty is to publish LibRaw's own source and say where it is (S5). | Answered by research, not legal advice. Waiting for the owner to accept the memo's stated risk. | S5 |
 | D5. Lens database | The memo answers D5 by the compile-time switch. The store edition ships no lens profiles, which removes the `lensfun` crate, its LGPL-3.0 terms and the CC-BY-SA database (the reconciliation below). For a later release the memo says to ship the database files unmodified with a credit line and the licence URI. | Answered by research. Not gating. | S6 (deferred) |
-| D15. The name | A name research agent is running. The project name and the product name may differ. | Pending, research report | M6, G2 |
-| D20. Bundle ID (new) | Recommended default is a neutral reverse-DNS form that carries no personal name, chosen with the D15 answer. The answer waits for the name research report. | Pending | M6, G2 |
-| D21. A failed purchase check (new) | The owner asked for exit code 173 on an invalid or missing receipt. Apple's current page says not to terminate the app (sourced, "Validating receipts on the device", retrieved 2026-11-18). Recommended default is Apple's current text. The app shows a blocking screen with "Check again" and "Quit", and opens no catalog. M8 explains the conflict. | Pending, owner to confirm | M8 |
+| D15. The name | The owner chose a new product name on 2026-11-23 (owner message, paraphrased). The project name and the product name differ, and the repository, the open source build and the docs keep the name Emulsion. The chosen product name is recorded privately by the owner and is not in this repository. Until the owner has registered it and says so, no file, commit message, PR text or branch name here carries it. Where this plan needs it, it reads "the chosen product name" or `<product name>`. | Decided. Open items below, all the owner's | M6, G2 |
+| D20. Bundle ID | The owner has no domain (owner message 2026-11-23, paraphrased). The bundle ID is chosen at M6, the first upload, not now. It becomes permanent only when the first build is uploaded. Before M6 the owner buys a small neutral studio domain, about US$10 to 15 per year (guess), and the ID is its reverse DNS plus a last label that does not use the product name, such as `photo`. The current identifier shows a personal handle and the old product name, so the store build must not keep it. The new identifier is set only in the Mac store config. Until a domain exists, the privacy policy URL can be hosted on GitHub Pages (S10). | Decided as a rule. The value is chosen at M6 | M6 |
+| D21. A failed purchase check | The owner's decision of 2026-11-23 (paraphrased). Use StoreKit 2 `AppTransaction`, not the receipt APIs. Never terminate the app. If the check throws (offline or signed out), keep the full app for a grace period of one year (owner decision 2026-11-26, raised from a 30-day guess). If the result is unverified, the device does not match or the purchase is revoked, or the grace period has run out, open a read-only mode (library management stays open, editing and export are closed) with "Verify purchase" and "Quit" buttons. When Verify purchase confirms the purchase, the app returns to full at once. The user restores by verifying or by buying the app again from the read-only screen (the owner's "resume payment" flow). The exit code 173 idea of 2026-11-18 is dropped, because Apple's current guidance says not to terminate the app and the API is deprecated. M8 lists the blocked and allowed actions. | Decided. Review risk medium (inferred, Appendix C) | M8 |
 | D13, D19 and D9. Windows route, signing and activation | Skipped. | Deferred | W2 to W6, G3 |
 
-The bundle ID becomes permanent. Apple says a bundle ID cannot change once a build is uploaded, and that deleting an app record does not free its bundle ID (sourced, Apple "Changing the bundle identifier", retrieved 2026-11-18). The App Store Connect record is the step that leads to the first upload. So nobody creates the record, the App ID or the provisioning profile until the owner has recorded D15 and D20.
+**D15, the open items.** The owner does all of these. None of them needs an agent.
+
+- Trademark search, by hand, for the chosen product name in Nice classes 9, 41 and 42. The registers are the USPTO, the WIPO Global Brand Database, EUIPO TMview, the UKIPO, TIPO, J-PlatPat and CNIPA. Agents could not query them, because they returned a bot challenge, a firewall rejection or a 403 (measured, private name research of 2026-11-18 and 2026-11-19). The result pages are kept privately.
+- Store-name check at record creation. A public App Store search found no app whose title equals the name or begins with it, and the near matches sat in unrelated categories (measured, same research). That does not prove App Store Connect accepts the name, because it also blocks names held by unreleased or removed records (inferred). Creating the record is the only check that shows those (inferred).
+- Domain. The owner has no domain. The same research found the `.com`, `.app` and `.dev` forms of the chosen name already registered by others (measured with RDAP), so a website named after the product needs another form. The studio domain of D20 serves instead.
+- Reading of the name. Public search results for the word will mix in unrelated uses (inferred). A native Mandarin speaker should say the name aloud and react, and so should speakers of the other languages the owner sells in (guess).
+
+**D20, the order of account actions.** Apple says a bundle ID can't change after a build is uploaded, and that deleting the explicit App ID after an upload is not possible (sourced, Apple pages in Appendix D, retrieved 2026-11-23). Removing a record does not free its bundle ID once a build was uploaded, and a SKU can never be reused in the same account (sourced). Before any upload, the bundle ID on a record and its explicit App ID can still change (inferred, from the "after you upload" wording of those pages). So the plan sets this order.
+
+- Step 1. The owner runs the trademark search above.
+- Step 2. The owner buys the studio domain. Bundle IDs use only A to Z, a to z, 0 to 9, hyphen and period, and are case-insensitive, so the ID is written in lowercase (sourced). The reverse DNS of the domain keeps it unique (sourced, Apple's advice). A last label such as `photo` survives a later rename of the product (inferred).
+- Step 3, optional. The owner creates the App Store Connect record early, only to hold the name, and only after step 1. Creating the record needs an explicit App ID equal to the bundle ID, so creating it early means choosing the bundle ID early. It also needs a SKU. The SKU is neutral, with no product name in it, because it can never be reused (sourced). The name stays editable until the app is submitted for review (sourced). Apple's current pages state no time limit on a record without a build, and older forum reports of 120 or 180 days are unconfirmed (unofficial).
+- Step 4. At M6 at the latest, the owner chooses the bundle ID, registers the explicit App ID and uploads the first build. That upload makes the ID permanent. An early upload to remove doubt about name reservation waits until the bundle ID is final (inferred).
+- The owner, not an agent, performs every account action. That covers buying the domain, registering the App ID, creating the record, creating certificates and keys, and signing agreements. The owner reports each result in chat. Agents never see a secret.
+- The current identifier of the default config shows a personal handle and the old product name, and it appears in every `Info.plist`, in the sandbox container path and in crash reports (inferred). The store build must not keep it. M6 sets the new identifier only in `tauri.appstore.conf.json`. The default build keeps its current identifier, and a sandboxed store build gets its own container anyway (inferred). S0's lane builds use their own per-lane identifiers and are never uploaded.
+- The privacy policy URL is required for a macOS app (sourced, App Store Connect help). Until the owner has a domain it is a GitHub Pages page (S10).
 
 **Compile-time legal gating, and how it meets the recommended defaults.** The owner asked that every feature whose licence or data terms need a lawyer's answer is switched off at compile time in the first store release, while the default build and the open source build keep everything (owner message 2026-11-18, paraphrased). The plan reconciles that with the recommended defaults as follows. The owner can overrule any line.
 
@@ -70,12 +85,15 @@ The bundle ID becomes permanent. Apple says a bundle ID cannot change once a bui
   - [ ] Request the D-U-N-S number. Skipped, because the owner enrols as an individual (owner message 2026-11-18, paraphrased).
   - [x] Enrol in the Apple Developer Program. Done before 2026-11-18. Evidence is owner message 2026-11-18, paraphrased.
   - [ ] Open the Microsoft Partner Center account and reserve the name there. Skipped for now. Deferred with the Windows PRs.
-  - [ ] Create the App Store Connect app record. Do this only after D15 and D20 are recorded and the trademark search is done, because the bundle ID becomes permanent. Evidence is a screenshot of the record.
-  - [ ] Run the USPTO, WIPO Global Brand Database and EUIPO TMview searches for the chosen product name in software classes. Wave 0 and the sandbox work do not need it. It must be done before the App Store Connect record, before any listing asset and before G2. Evidence is the saved result pages.
+  - [ ] Run the trademark search for the chosen product name, by hand, in Nice classes 9, 41 and 42, on the USPTO, WIPO Global Brand Database, EUIPO TMview, UKIPO, TIPO, J-PlatPat and CNIPA registers. Agents could not query them (D15, open items). Wave 0 and the sandbox work do not need it. It must be done before the App Store Connect record, before any listing asset and before G2. Evidence is the owner's message that it is done, with the result pages kept privately.
+  - [ ] Buy a small neutral studio domain, about US$10 to 15 per year (guess), before M6, and say so in chat. It gives the D20 bundle ID and a home for the privacy policy URL. Evidence is the owner's message. The domain name is not written in this repository until the owner says so.
+  - [ ] Create the App Store Connect app record, optionally early to hold the name. Do this only after the trademark search is done. The record needs an explicit App ID equal to the bundle ID and a SKU that can never be reused, so choose the bundle ID first (D20) and use a neutral SKU with no product name. Creating the record is also the store-name check. Evidence is a screenshot of the record.
+  - [ ] Tell the agents when the chosen product name is registered, so that it may enter the repository (the Mac store build's display name at M6, the listing at G2). Until then the build reads it from a GitHub Actions secret. Evidence is the owner's message.
+  - [ ] Keep a second Mac, signed in to an Apple ID that never got the app, available for M8 lane 10. Evidence is the owner's message, or a note that none is available.
   - [ ] Get a research memo for each open licence question, written by an agent from primary sources, with the risk the owner accepts stated in it. Evidence is the memo file and the owner's message accepting its risk. Appendix C lists the questions a lawyer would still need to answer.
     - [ ] D2, D3 and D5, the licence research memo. Written on 2026-11-18 as research, not legal advice. It is held outside the repository. Check this box when the owner accepts its stated risk, and commit the memo beside ADR-0011 through S1.
     - [ ] D8, the published MIT history and the AI-assisted commits. The licence research memo names it a question that still needs a lawyer (its section 10, question 1). S5 states the risk. Check this box when the owner accepts it or asks a lawyer.
-    - [ ] The privacy policy and the licence agreement for the Mac store. The licence research memo gives the open-source clause (its section 4). The privacy text is not started. S10 needs both.
+    - [ ] The privacy policy and the licence agreement for the Mac store. The licence research memo gives the open-source clause (its section 4). The privacy text is not started, and it must cover the purchase check of M8. S10 needs both, and the policy URL it publishes (GitHub Pages until the owner has a domain).
   - [ ] Ask Microsoft Partner Center support about Paid MSI payment collection. Skipped, deferred with D13.
   - [ ] Ask the Real-ESRGAN maintainer about the training data. Skipped, so AI Upscale is off in the first store release.
 - [ ] Read these from trunk at program start. Re-read them at every tick.
@@ -91,23 +109,23 @@ The bundle ID becomes permanent. Apple says a bundle ID cannot change once a bui
 
 ### Spawn owners
 
-- [ ] Spawn one owner per active PR with the full lifecycle the execution playbook names. Owners write code on `sonnet medium` (the `feature, refactoring` line of the pstack model rule). S1, M2 and M8 go to `opus high` (the `hardest tasks` line). S1 crosses many call sites, M2 holds the bookmark layer, and M8 parses signed data.
+- [ ] Spawn one owner per active PR with the full lifecycle the execution playbook names. Owners write code on `sonnet medium` (the `feature, refactoring` line of the pstack model rule). S1, M2 and M8 go to `opus high` (the `hardest tasks` line). S1 crosses many call sites, M2 holds the bookmark layer, and M8 holds the purchase state machine and the read-only guard that spans every write command.
 - [ ] Follow this dependency graph. Start dependent work only after its parent merges, or base it on the parent branch when the execution playbook stacks.
   - [ ] Wave 0, no decision needed. S0, S7, S8 and M1 are independent and first. All branch from `main`. All four started on 2026-11-18.
   - [ ] Wave 1. S1 after S0. S5 after S0, with its merge held until the owner accepts the licence research memo's stated risk. S9 after S0.
   - [ ] Wave 2. S2 and S3 after S1. S4 after S3, because both edit `adaptive_commands.rs`. S11 after S1. M2 after S1 and M1. M5 after S1.
   - [ ] Wave 3. M3 and M4 after M2. S10 after S5, S9 and the privacy-policy research memo.
-  - [ ] Wave 4. M6 after S11, M2 and M4, and after D15, D20 and the trademark search.
-  - [ ] Wave 5. M8 after M6 and D21.
+  - [ ] Wave 4. M6 after S11, M2 and M4, and after the trademark search and the bundle ID (D20), which the owner settles at M6 start.
+  - [ ] Wave 5. M8 after M6, because its live lanes need a TestFlight build. It also needs the macOS 13 baseline of D18, the Swift bridge (its first box) and, for lane 10, the owner's second Mac. D21 is answered.
   - [ ] Wave 6. G1 after S2, S3, S4, S5, S7, S8, S9, S10, M1, M3, M4, M5 and M8, and after the owner accepts each research memo's stated risk.
-  - [ ] Wave 7. G2 after G1, D15 and D20.
+  - [ ] Wave 7. G2 after G1, the trademark search and the store-name check.
   - [ ] Deferred, in no wave. S6, M7, W1, W2, W3, W4, W5, W6 and G3. When the owner reopens one, its own **Depends on** block names its parents.
 - [ ] Hold the file boundaries. Two PRs in the same wave may run in parallel only on disjoint files.
   - [ ] S0 touches only `.github/workflows/lanes.yml`, `scripts/lanes/**`, `app/e2e/wdio.sandbox.conf.js`, `app/e2e/specs/{perf-probe,sandbox-smoke}.e2e.js` and `app/src-tauri/entitlements/lane-*.entitlements`.
   - [ ] Only S1 creates `app/src-tauri/src/channel.rs`, the Cargo features and the `store` edition in `models/bundled-models.json`. S3 and S4 do not edit the manifest. Both edit `resolve_adaptive_region` in `adaptive_commands.rs`, so S4 starts after S3 merges.
   - [ ] S1 adds the `store-edition` job to `.github/workflows/ci.yml`. S11 later moves the vcpkg step of `ci.yml` into a shared action. S11 runs after S1, so they never edit `ci.yml` at once.
   - [ ] M2 owns `app/src-tauri/src/sandbox_access/**`, `catalog/folder_grants.rs` and the setup block of `lib.rs`. S1 edits the `lens_profile` lines of the same setup block and merges first.
-  - [ ] S11 owns `.github/workflows/release.yml` as a reusable workflow. M6 adds only `release-mas.yml`. M8 edits only the feature list that `release-mas.yml` passes to the build.
+  - [ ] S11 owns `.github/workflows/release.yml` as a reusable workflow. M6 adds only `release-mas.yml`. M8 adds the `mas-purchase-check` feature, the Swift package under `app/src-tauri/swift/`, the `purchase/` module and one row per command in its policy table, and it edits only the feature list that `release-mas.yml` passes to the build. M8 starts after M2 and M6 have merged, so it never edits the setup block of `lib.rs` at the same time as M2, and no PR after M8 edits command files before G1.
 - [ ] Hold the review gate. S2, S3, S4, S9, S10, M1, M2, M3, M4, M5, M6, M8 and G2 wait for the operator's review in chat with screenshots and a video before merge.
 
 ### PR mechanics, for every PR
@@ -699,11 +717,12 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 ## Ship the EULA and privacy policy in the app (S10, shared)
 
-**Depends on.** S5 and S9. S6 is deferred and drops out. The texts come from the privacy-policy and licence-agreement research memo, which an agent writes from primary sources and which states the risk the owner accepts. No lawyer drafts them. Cost 1.5 to 3 engineer-days (RFC-0038 B5.9, guess). The Windows installer's licence page is deferred with the Windows PRs. RFC-0038 B5.9 says "first-run acceptance". The Mac store forbids licence screens at launch (sourced, guideline 2.4.5(vi)), so the Mac store build shows none.
+**Depends on.** S5 and S9. S6 is deferred and drops out. The texts come from the privacy-policy and licence-agreement research memo, which an agent writes from primary sources and which states the risk the owner accepts. No lawyer drafts them. The public privacy policy URL is a GitHub Pages page until the owner has a domain (D20). Cost 1.5 to 3 engineer-days (RFC-0038 B5.9, guess). The Windows installer's licence page is deferred with the Windows PRs. RFC-0038 B5.9 says "first-run acceptance". The Mac store forbids licence screens at launch (sourced, guideline 2.4.5(vi)), so the Mac store build shows none.
 
 **Files.**
 
-- [ ] Create `legal/EULA.md` and `legal/PRIVACY.md` from the research memo's texts, unchanged once the owner accepts them. The EULA carries the open-source clause of the licence research memo (its section 4). It says the open-source licences are not limited, that differing terms come from the seller alone and not from LibRaw LLC, and where the LibRaw and MPL source is. If the store build keeps Apple's Standard EULA, the same clause goes into About and `licenses/README.txt` (memo section 9).
+- [ ] Create `legal/EULA.md` and `legal/PRIVACY.md` from the research memo's texts, unchanged once the owner accepts them. The EULA carries the open-source clause of the licence research memo (its section 4). It says the open-source licences are not limited, that differing terms come from the seller alone and not from LibRaw LLC, and where the LibRaw and MPL source is. If the store build keeps Apple's Standard EULA, the same clause goes into About and `licenses/README.txt` (memo section 9). Both texts call the product "the app" and never name it, because the chosen product name stays out of the repository until the owner says it is registered (D15). Adding the name later changes the hash that the test records.
+- [ ] Create the source of the public privacy page, a copy of `legal/PRIVACY.md` that the owner publishes. GitHub Pages on a private repository needs a paid plan (inferred, to confirm on the owner's plan), and D8 makes the main repository private. So the page is served from a separate small public repository made only for it (owner decision 2026-11-26), under a neutral GitHub organisation, which keeps a personal handle out of the address (inferred). The owner creates that repository. The owner enables Pages and publishes it, because publishing is the owner's action. When the owner has a domain, the URL moves there, and App Store Connect takes the new URL with a new version (inferred).
 - [ ] Edit `app/src-tauri/tauri.conf.json` (`bundle.resources`) and the About tab.
 
 **Build.**
@@ -713,7 +732,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 **You see.**
 
-- [ ] About opens both texts. The privacy text covers geocoding, map tiles, the D17 default, the receipt check, local face data in builds that have face features, and the absence of model downloads in store builds.
+- [ ] About opens both texts. The privacy text covers geocoding, map tiles, the D17 default, the purchase check (the app asks Apple's StoreKit whether the purchase is real, sends nothing of its own, and keeps the time of the last success on the device), local face data in builds that have face features, and the absence of model downloads in store builds.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -730,7 +749,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Lane 7. Sandbox build, `mas`, About, Privacy policy. Save `mas-privacy.png`. Pass when it opens inside the sandbox.
 - [ ] Lane 8. Runner lane, `windows-latest`, About, both buttons. Save `win-about.png`. Pass when both open.
 - [ ] Lane 9. Debug build, default channel, cold launch. Save `direct-launch.png`. Pass when it behaves as the owner chose for direct builds.
-- [ ] Lane 10. The privacy policy URL that G2 will enter, fetched with `curl -sI`. Save `privacy-url.txt`. Pass when it returns 200 and the page text equals `legal/PRIVACY.md`.
+- [ ] Lane 10. The privacy policy URL that G2 will enter, the GitHub Pages page until the owner has a domain, fetched with `curl -sI`. Save `privacy-url.txt`. Pass when it returns 200 and the page text equals `legal/PRIVACY.md`.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -1089,17 +1108,18 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 ## Sign, package and upload the Mac store build (M6, Mac)
 
-**Depends on.** S11, M2 and M4. M4 is a parent because the review gate exports outside the container. D14 and D18 are answered, so the account is individual and the build is Apple silicon only (owner message 2026-11-18, paraphrased). Owner-gated on D15, D20 and the trademark search. The App ID, the provisioning profile and the App Store Connect record carry the bundle ID, which cannot change once a build is uploaded (sourced, Apple "Changing the bundle identifier"). Owner-gated also on the secrets below. Cost 3 to 5 engineer-days (audit B3, guess). The universal build is dropped with D18.
+**Depends on.** S11, M2 and M4. M4 is a parent because the review gate exports outside the container. D14 and D18 are answered, so the account is individual, the build is Apple silicon only and the minimum macOS is 13 (owner messages 2026-11-18 and 2026-11-23, paraphrased). Owner-gated on the trademark search and on the bundle ID (D20), which the owner chooses at M6 start after buying the domain. The App ID, the provisioning profile and the App Store Connect record carry the bundle ID, which cannot change once a build is uploaded (sourced, Apple "Changing the bundle identifier"). Owner-gated also on the secrets below. Cost 3 to 5 engineer-days (audit B3, guess). The universal build is dropped with D18.
 
 **Files.**
 
-- [ ] Create `app/src-tauri/tauri.appstore.conf.json` with `bundle.macOS.entitlements`, `minimumSystemVersion`, the `embedded.provisionprofile` mapping and `ITSAppUsesNonExemptEncryption` (sourced, Tauri App Store guide).
+- [ ] Create `app/src-tauri/tauri.appstore.conf.json` with `bundle.macOS.entitlements`, `minimumSystemVersion` set to 13.0 (D18), the `identifier` set to the D20 bundle ID, the `embedded.provisionprofile` mapping and `ITSAppUsesNonExemptEncryption` (sourced, Tauri App Store guide).
 - [ ] Create `app/src-tauri/entitlements/mas-app.entitlements` and `mas-helper.entitlements`.
 - [ ] Create `scripts/release/mas-sign-and-package.sh` and `.github/workflows/release-mas.yml`.
 
 **Build.**
 
 - [ ] The owner creates the Apple Distribution and Mac Installer Distribution certificates, the App ID for the D20 bundle ID, the Mac App Store provisioning profile and an App Store Connect API key, then stores them as GitHub secrets. The owner is the Account Holder of an individual membership. Only the Account Holder or an Admin can create distribution certificates (sourced). Evidence is `gh secret list` showing the names.
+- [ ] The store build's display name is the chosen product name, and the name is not committed. The release workflow reads it from a GitHub Actions secret and merges it into the Tauri config at build time, until the owner says the name is registered (D15). The binary name stays `emulsion`, so lane paths and `nm` checks hold (inferred, M6 checks `mainBinaryName`). The default `tauri.conf.json` keeps its current identifier, which shows a personal handle and the old product name, and the store build never uses it (measured, the file's `identifier`).
 - [ ] Answer audit question 2 first. Run `codesign -d --entitlements :-` on `Contents/MacOS/emulsion-ai` in Tauri's output to see whether the bundler applies its own entitlements to `externalBin`. Record it in the PR.
 - [ ] `mas-app.entitlements` holds app sandbox, user-selected read-write, bookmarks app-scope, network client and print, plus the application and team identifiers. `mas-helper.entitlements` holds exactly app sandbox and inherit (sourced, Apple helper-tool page).
 - [ ] `release-mas.yml` builds through S11's workflow with `channel=mas`, so the binary has no default features. The script signs the helper, then the app, clears extended attributes, and runs `productbuild --sign`. The workflow runs `altool --validate-app`, and uploads only on a manual approval step.
@@ -1119,7 +1139,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Lane 3. Same on `emulsion-ai`. Save `helper-ent.txt`. Pass when the set is exactly app sandbox and inherit.
 - [ ] Lane 4. `pkgutil --check-signature` on the `.pkg`. Save `pkg-sig.txt`. Pass when it names the Mac Installer Distribution identity.
 - [ ] Lane 5. `xattr -lr` on the expanded app. Save `xattr.txt`. Pass when no `com.apple.quarantine` is found (sourced rule since 2025-02-18).
-- [ ] Lane 6. `plutil -p` on the app's `Info.plist`. Save `plist.txt`. Pass when `ITSAppUsesNonExemptEncryption`, the category and `LSMinimumSystemVersion` match D18.
+- [ ] Lane 6. `plutil -p` on the app's `Info.plist`. Save `plist.txt`. Pass when `ITSAppUsesNonExemptEncryption` and the category are present, `LSMinimumSystemVersion` is 13.0 (D18), and `CFBundleIdentifier` equals the D20 bundle ID and differs from the identifier in the default config.
 - [ ] Lane 7. `lipo -info` on both executables. Save `arch.txt`. Pass when both are `arm64` only.
 - [ ] Lane 8. The same bundle re-signed with the Apple Development identity on the owner's Mac, `sandbox-smoke`. Save `dev-signed.png`. Pass when the spec passes.
 - [ ] Lane 9. `nm` on the packaged `emulsion`. Save `nm.txt`. Pass when no `export_plugin` or `lensfun` symbol and no download host string are found.
@@ -1151,7 +1171,7 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 
 **Files.**
 
-- [ ] Create `app/src-tauri/src/store_purchase.rs` over a StoreKit 2 bridge. `tauri-plugin-iap` needs macOS 13 (sourced, docs.rs), so D18 must allow it.
+- [ ] Create `app/src-tauri/src/store_purchase.rs` over a StoreKit 2 bridge. `tauri-plugin-iap` needs macOS 13 (sourced, docs.rs), and D18 now sets macOS 13, so it is allowed.
 - [ ] Create the Purchase section of Settings and the trial notice.
 
 **Build.**
@@ -1200,70 +1220,85 @@ No cloud VM in this program can run the macOS app, so lanes run on GitHub Action
 - [ ] Rebased onto its base after the verdict, patch-id unchanged.
 - [ ] Stop at verified. The operator lands it bottom-up.
 
-## Check the Mac App Store receipt at launch (M8, Mac)
+## Check the purchase at launch and open a read-only mode when it fails (M8, Mac)
 
-**Depends on.** M6, because the live lane that only the owner can run needs a TestFlight build. Owner-gated on D21. Cost 2.5 to 5 engineer-days (guess). D12 asks for a check that the purchase is real, so a copied app does not run for other people (owner message 2026-11-18, paraphrased).
+**Depends on.** M6, because the live lanes that only the owner can run need a TestFlight build. D21 is answered (owner message 2026-11-23, paraphrased), so M8 is no longer decision-gated. It also depends on the macOS 13 baseline of D18, on a small Swift static library that the app links (its first box proves the toolchain), and on a second Mac with an Apple ID that never got the app, for lane 10. Cost 2.5 to 5 engineer-days (guess). The 2026-11-18 figure stays, because the PKCS #7 and device-hash work leaves, and the Swift bridge, the purchase state machine and the read-only guard come in (guess). D12 asks for a check that the purchase is real, so a copied app does not run for other people (owner message 2026-11-18, paraphrased). D21 turns "does not run" into "opens read-only". This is the owner's decision. The review risk is medium (inferred, Appendix C).
 
-Why receipt validation and not anything else. These facts come from Apple pages retrieved on 2026-11-18.
+Why `AppTransaction`, and what it cannot do. These facts come from Apple pages retrieved on 2026-11-23 (Appendix D).
 
-- Guideline 2.4.5(vi) forbids a Mac App Store app a licence screen at launch, licence keys and its own copy protection (sourced, App Review Guidelines, last updated 2026-10-16).
-- Apple documents validating the receipt on the device as a way to validate the app download. The receipt is a record of the sale that Apple signs and stores inside the app bundle (sourced, "Validating receipts on the device" and "Choosing a receipt validation technique").
-- No Apple page read says in words that receipt validation is outside "own copy protection". That it is the sanctioned mechanism is therefore inferred from Apple documenting it for this purpose. Appendix C keeps it as an open risk.
-- Apple says the receipt is not needed when the app uses `AppTransaction`, and to use the receipt only when the app cannot use `AppTransaction` (sourced, both pages). `AppTransaction` needs macOS 13 (sourced, its documentation page). The D18 minimum is at least 12.0 (sourced, Tauri App Store guide), and Emulsion has no Swift layer to call StoreKit 2 (inferred). So M8 uses the receipt. Appendix B records `AppTransaction` as the alternative.
+- Apple marks the receipts collection deprecated and says the on-device receipt is not needed when the app uses `AppTransaction` (sourced). `Bundle.appStoreReceiptURL` and `SKReceiptRefreshRequest` are deprecated from macOS 15.0 (sourced), and guideline 2.4.5(viii) forbids deprecated technologies (sourced). So the 2026-11-18 route, which read the receipt file, is dropped (Appendix B).
+- `AppTransaction.shared` returns a record of the purchase that the App Store signs, as verified or unverified. It throws when the record is not available or the user is not signed in, and it may need the network (sourced). `AppTransaction.refresh()` shows an App Store sign-in prompt, so it runs only from an explicit user action (sourced).
+- Guideline 2.4.5(vi) forbids licence keys and the app's own copy protection (sourced). No Apple page says in words that checking the App Store's own signed purchase record is exempt. Apple documents `AppTransaction` for validating the app download, and guideline 3.1.1 links to receipt validation for content access, so the check is Apple's mechanism and not the developer's own (inferred, high confidence). Appendix C keeps it as a risk.
+- Apple's only written instruction for a failed check is "Don't try to terminate the app", and to give the user a way to handle the case (sourced, "Validating receipts on the device"). The exit code 173 idea is dropped for that reason. Its old archive page now redirects to the current page, which does not mention it, and a developer forum thread reports that apps built with the macOS 15 SDK show an alert that the exit(173) API is no longer available (unofficial, no Apple reply).
+- The check does not stop a patched binary, because Apple says an app can't rely on its own logic to check itself (sourced, "Establishing your app's integrity"). It also passes Family Sharing and one Apple ID on several Macs, which Apple's terms allow (inferred). The most it does is move a copier from "copy the app" to "patch the binary" (inferred).
+
+What the check does (D21). One Rust enum, `PurchaseState`, holds the answer. The outcomes map to it as follows.
+
+- `AppTransaction.shared` returns verified, its bundle ID equals the app's, its `deviceVerification` equals the value computed from `AppStore.deviceVerificationID` and its nonce, and it has no revocation date. The state is `Full`, and the app stores the time of this success.
+- `AppTransaction.shared` throws, which covers offline, signed out, a StoreKit error and no answer within a short timeout (the timeout value is a guess). The state is `Grace`. The app stays fully usable for one year (365 days) from the last success, or from the first launch when none is stored (owner decision 2026-11-26). After that it is read-only, with the reason "could not check", until Verify purchase succeeds.
+- The result is unverified, the bundle ID differs, the device value differs or the purchase is revoked. The state is `ReadOnly` at once.
+- The code never calls `exit`. "Quit" is always a click.
+- The check runs in the main process, on a background thread at launch. The Library opens at once in the state stored by the last launch, and a definite failure switches the running app to read-only without a restart. A write that is already running finishes (inferred design, the `how` run checks it).
+
+Read-only mode, exactly. The guard blocks actions that change photos, edits, files or catalog content. It never blocks looking at, or getting out, the user's own work.
+
+- Allowed. Browsing the Library, search, filter, sort and select. The map, as the D17 switch allows. Compare. Opening a photo to look at it with its stored edits applied, where Develop is a viewer with every control off. Show in Finder and Copy path. Copy originals, described below. Backing up the catalog. Settings, About, Licence agreement, Privacy policy and the library licences. Reconnect for a lost folder (M3), because the photos must stay viewable. Thumbnail and preview generation for photos already in the catalog, which writes only cache files. Verify purchase, Open in the App Store and Quit. Library management stays open by the owner's decision of 2026-11-26. That means ratings, flags, labels, keywords, collections, Remove from catalog, and new imports through Import Files, Import Folder and a drop.
+- Blocked. Every edit in Develop, which means sliders, crop, tools, Remove, presets, paste and sync settings, reset, and undo and redo that write history. Every AI action (Denoise, Select Subject, adaptive presets). Export of rendered files, including the "after export, open in {app}" row and Print. Enlarge, HDR merge and panorama merge, because each makes a new file. The owner drew the line on 2026-11-26. Editing and export are closed, and library management is not.
+- Never, in any mode. The app does not delete, move, rename or rewrite an original or the catalog, does not hide or migrate data because of the mode, and does not show a licence screen at launch (guideline 2.4.5(vi), sourced). The originals stay accessible in the file system, in the folders where the user keeps them, and the catalog stays readable.
+- Copy originals is a new menu item of the store build. It copies the original files and their sidecars byte for byte into a folder the user picks, through M4's destination choice. It is present in every mode, so it is not a special case. It is how "exportable of the originals" is met. The owner confirmed it on 2026-11-26. The app has no such action today (measured, a search of `app/src` and `app/src-tauri/src` found none).
+- Restore. "Verify purchase" runs `AppTransaction.refresh()` and returns the app to full on success, without a restart. "Open in the App Store" opens the app's Mac App Store page, where the user buys the app or gets it again if the account bought it before. The owner calls this the resume payment flow. A paid-upfront app is bought in the App Store and not through StoreKit inside the app (inferred), and the page address needs the app's numeric Apple ID, which exists only once the App Store Connect record does (D20).
+- The interface is a banner above the Library with the three buttons, not a modal window and not a screen before the Library. That is the closest reading of Apple's wording that avoids a licence screen at launch (inferred).
 
 **Files.**
 
-- [ ] Create `app/src-tauri/src/receipt.rs` and its fixtures under `app/src-tauri/src/testdata/receipts/`, with the script that generates them.
-- [ ] Edit `app/src-tauri/Cargo.toml` (feature `mas-receipt = ["channel-mas"]`), `app/src-tauri/src/main.rs` (the check before the Tauri builder starts) and `.github/workflows/release-mas.yml` (turn the feature on).
-- [ ] Create the blocking window's page in the frontend, and edit `docs/RELEASING.md`.
+- [ ] Create the Swift package `app/src-tauri/swift/PurchaseCheck/` (a static library with a few C functions for the status and the refresh, and its tests) and `app/src-tauri/src/purchase/` with `mod.rs` (the state machine, the grace clock and the stored times), `bridge.rs` (the FFI and the scripted backend) and `policy.rs` (the table of commands).
+- [ ] Edit `app/src-tauri/Cargo.toml` (feature `mas-purchase-check = ["channel-mas"]` and the bridge dependency), `app/src-tauri/build.rs` (build the Swift package for this feature), `app/src-tauri/src/lib.rs` (managed state, the check at setup, the handler wrapper, and the commands `purchase_status`, `purchase_verify` and `purchase_open_store`), `.github/workflows/release-mas.yml` (turn the feature on) and `docs/RELEASING.md`.
+- [ ] Create the read-only banner in the Library frontend, the disabled states of the blocked controls, and the Copy originals menu item.
 
 **Build.**
 
-- [ ] Read Apple's "Validating receipts on the device" and the Receipt Fields page it links before writing code. Record in the PR how the device hash is formed, because this revision did not read the Receipt Fields page.
-- [ ] Compile the check only into the Mac store package. Only `release-mas.yml` turns on `mas-receipt`. The default build, the open source build, debug builds and the lane sandbox builds never contain it. A development-signed build runs with no receipt because the code is not in it.
-- [ ] Run Apple's tests in Apple's order, before any window opens. Apple says to validate in `main` before `NSApplicationMain` (sourced).
-  - [ ] Load the receipt from the location `Bundle.appStoreReceiptURL` names, read as a file inside the bundle, so the deprecated API is never called. The path is `Contents/_MASReceipt/receipt` (inferred). The owner agent confirms it on the TestFlight build.
-  - [ ] Decode it as PKCS #7 and verify that the signature chains to the Apple Inc. Root certificate. Use the receipt creation date (field type 12) as the verification time, hard-code no intermediate certificate, and accept SHA-1 and SHA-256 signatures (sourced, Apple's page).
-  - [ ] Check that the bundle identifier (field type 2) equals the D20 bundle ID compiled into the binary, and that the version string (field type 3) equals the bundle's version.
-  - [ ] Compute the SHA-1 device hash from the built-in network interface's hardware address, the way Apple's `copy_mac_address` example finds it, and check that it equals field type 5.
-- [ ] Bundle the Apple Inc. Root certificate in the binary and pin its SHA-256 in a test. The verifier takes the root as an argument, so tests pass a test root.
-- [ ] Pick the PKCS #7 route with the pstack `how` skill. The candidates are the macOS Security framework's CMS decoder through FFI, or a Rust crate. A new crate must pass the `COPYLEFT_ALLOWED` rule of `gen_third_party_libraries.py`.
-- [ ] On failure, follow D21. The recommended default follows Apple's current page. Apple says not to terminate the app, to refresh a missing or corrupt receipt with `SKReceiptRefreshRequest`, and to treat the user as having no access (sourced). Emulsion is paid upfront, so the app opens a blocking window with "Check again" and "Quit", and opens no catalog. Apple lists `SKReceiptRefreshRequest` and `Bundle.appStoreReceiptURL` as available on macOS only up to 15.0 (sourced, their documentation pages), which reads as deprecated from macOS 15 (inferred). Guideline 2.4.5(viii) forbids deprecated technologies (sourced). So the default calls neither. "Check again" re-reads the file, and the window tells the user to reinstall from the App Store. If the owner keeps exit code 173, the check exits with 173 instead. Apple's current page no longer describes exit code 173 (sourced, read on 2026-11-18). Developer forum posts report that exit code 173 shows a "Not Available" alert in builds made with the macOS 15 SDK (unofficial, not reproduced).
-- [ ] Handle TestFlight. Apple says the receipt is always present in TestFlight on macOS (sourced). A sandbox receipt chains to the same Apple root (inferred, lane 8 checks it).
-- [ ] Commit no real receipt. A real receipt carries a device hash. Fixtures are signed by a test root that the fixture script creates.
+- [ ] Prove the bridge first, and pick the route with the pstack `how` skill. The candidates are a small Swift package linked through `swift-rs` (the pattern of `tauri-plugin-apple-iap`, sourced from its docs.rs listing) and the `storekit-rs` crate. `objc2` alone cannot call `AppTransaction`, a Swift async API (inferred, high confidence). `storekit-rs` 0.5.2 needs Xcode with the macOS 26.4 SDK or newer to build (sourced, docs.rs), so check that the `macos-latest` runner and the owner's Mac have it before choosing it. It is a young crate with one maintainer (inferred). Any new crate passes the `COPYLEFT_ALLOWED` rule of `gen_third_party_libraries.py`. Record the route, the SDK version and the added build time in the PR. Read the Apple pages for `revocationDate` and `deviceVerification` again and record their availability on macOS 13.
+- [ ] Compile the check only into the Mac store package. Only `release-mas.yml` turns on `mas-purchase-check`. The default build, the open source build, debug builds and the lane sandbox builds never contain it, so they are always full and need no Swift toolchain.
+- [ ] Put the backend behind a `PurchaseBackend` trait with two implementations, the Swift bridge and a scripted one. The scripted backend compiles only with `wdio-webdriver`, so lane specs can set each outcome. The release package holds neither the scripted backend nor its command, and G1 checks that.
+- [ ] Build the state machine of D21 above, with an injected clock. Store the last success time and the first launch time in the container, outside the catalog, so restoring a catalog backup does not move them (guess, M8 chooses the place).
+- [ ] Put the guard in one place. Wrap the `generate_handler!` closure so that, in `ReadOnly`, a command whose row in the `policy.rs` table says blocked returns the typed error `read_only` before it runs (inferred, the `how` run weighs this against a guard inside each command). Every registered command has a row, and a test fails when one does not. Frontend plugin permissions that write are listed in the same table. The frontend reads `purchase_status` and shows each blocked control disabled with the sentence "Editing is off until the purchase is verified."
+- [ ] Build the banner with Verify purchase, Open in the App Store and Quit, the Copy originals item, and the log line. The log names the outcome class and the time taken, and holds no Apple ID, no device ID and no purchase record text.
+- [ ] Keep the helper as it is. The check runs in the main process, the sandboxed helper `emulsion-ai` calls nothing and needs no new entitlement, and the main app needs none for StoreKit (inferred, Apple enables In-App Purchase by default for an explicit App ID).
+- [ ] Handle TestFlight. Apple says the receipt is always present in TestFlight on macOS (sourced). What `AppTransaction.shared` returns there, including its environment value, is unproven (Appendix A), so lane 9 records it.
+- [ ] Commit no purchase data. Tests use the scripted backend and fixed values.
 
 **You see.**
 
-- [ ] A TestFlight install opens the Library. The same check on a build with no receipt opens the blocking window and creates no catalog.
+- [ ] A TestFlight install opens the Library in full mode with no banner. A copy that fails the check opens the Library with the banner. Browsing, viewing and library management (rating, flagging, collections, import) work, editing and export are off, and Verify purchase turns everything back on without a restart.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `receipt.rs` tests run each fixture through the verifier with the test root. The cases are a valid receipt, a wrong bundle ID, a wrong version, a wrong device hash, a broken signature, an unknown root, a certificate that expired after the receipt creation date, and a truncated file. A test pins the SHA-256 of the bundled Apple root. Run `cargo test --no-default-features --features mas-receipt receipt`.
+- [ ] `purchase` tests run the state machine on the scripted backend with a fake clock. The cases are verified, a throw inside grace, a throw after grace, a throw on a first launch, unverified, a wrong bundle ID, a wrong device value, revoked, a refresh that fixes it and a refresh that fails. A policy test fails on a registered command with no row. A guard test calls a blocked command in `ReadOnly` and expects the `read_only` error and no file change. A Swift test pins the device-verification hash on a fixed vector. Run `cargo test --no-default-features --features mas-purchase-check purchase && swift test --package-path app/src-tauri/swift/PurchaseCheck`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another. Lanes 8 and 9 need a human at the screen, and only the owner can run them.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `sonnet medium` at the PR head, per the boot recipe. The owner agent runs them itself, one after another. Lanes 9 and 10 need a human at the screen, and only the owner can run them.
 
-- [ ] Lane 1. Regression lane against trunk. Trunk has no receipt check, so record that and gate that `golden-path` passes at head on the default build and on a `mas` lane build without `mas-receipt`. Save `golden.png`. Pass when both pass.
-- [ ] Lane 2. `nm` on the default binary and on the `mas` lane binary. Save `nm-no-check.txt`. Pass when neither holds a `receipt` symbol.
-- [ ] Lane 3. `nm` on the `emulsion` inside the `release-mas.yml` package. Save `nm-check.txt`. Pass when the `receipt` symbol is present.
-- [ ] Lane 4. A sandbox build with `mas-receipt`, signed with the Apple Development identity on the owner's Mac, launched with no receipt. Save `blocked.png`. Pass when the blocking window shows and no `catalog.sqlite` appears in the container.
-- [ ] Lane 5. The lane 4 build with a fixture receipt copied into the receipt location. Save `fixture-blocked.png`. Pass when the blocking window shows, because the fixture does not chain to Apple's root.
-- [ ] Lane 6. Lane 4 again with networking off, then "Check again". Save `offline-check.png`. Pass when the window stays and nothing crashes.
-- [ ] Lane 7. Lane 4 again, then "Quit". Save `quit.txt`. Pass when the process exits with the code D21 names.
-- [ ] Lane 8. Owner-only lane. The owner installs the TestFlight build of the M6 package and launches it. Save `testflight-ok.png`. Pass when the Library opens with no blocking window.
-- [ ] Lane 9. Owner-only lane. The owner copies the installed TestFlight app to a second Mac, if one is available, and launches it there. Save `copied-app.png`. Pass when the blocking window shows. If no second Mac is available, record that.
-- [ ] Lane 10. `/usr/bin/log show` for the lane 4 run. Save `receipt-log.txt`. Pass when the log names the failed step and holds no receipt bytes and no device hash.
+- [ ] Lane 1. Regression lane against trunk. Trunk has no purchase check, so record that and gate that `golden-path` passes at head on the default build and on a `mas` lane build without `mas-purchase-check`. Save `golden.png`. Pass when both pass and no banner shows.
+- [ ] Lane 2. `nm` and `strings` on the default binary and on the `mas` lane binary without the feature. Save `nm-no-check.txt`. Pass when neither holds a purchase-check symbol.
+- [ ] Lane 3. `nm` on the `emulsion` inside the `release-mas.yml` package. Save `nm-check.txt`. Pass when the purchase-check symbol is present and the scripted backend and its command are absent.
+- [ ] Lane 4. A sandbox build with `mas-purchase-check` and `wdio-webdriver`, scripted outcome verified. Save `full.png`. Pass when no banner shows and one edit works.
+- [ ] Lane 5. The lane 4 build with scripted outcome unverified. Save `readonly.png`. Pass when the banner shows, the Library and a photo open, a slider change and an export are each refused with no file written and no edit row changed (`sqlite3` on a copy before and after), a rating and an import still succeed, and `/usr/bin/log show` names the outcome class with no Apple ID, device ID or purchase text.
+- [ ] Lane 6. The lane 4 build with scripted outcome throws, on a first launch, then with a stored success 364 days old, then with one 366 days old. Save `grace.txt`. Pass when the first two are full and the third is read-only with the reason "could not check".
+- [ ] Lane 7. Scripted outcome unverified, then Verify purchase with the scripted refresh set to verified. Save `restored.png`. Pass when editing works again with no restart.
+- [ ] Lane 8. Scripted outcome unverified. Use Show in Finder, Copy originals into a new folder, the catalog backup, Settings and About, then watch the process for 60 seconds, then click Quit. Save `allowed.txt`. Pass when each allowed action works, the copied files have the same SHA-256 as the originals, the originals and the catalog are unchanged, the process stays alive until the click, and it exits after it.
+- [ ] Lane 9. Owner-only lane. The owner installs the TestFlight build of the M6 package and launches it. Save `testflight-ok.png`. Pass when the Library opens in full mode, and the outcome class, the environment value and the check time are in the log.
+- [ ] Lane 10. Owner-only lane. The owner copies the installed TestFlight app to a second Mac signed in to an Apple ID that never got the app, launches it, then launches it again with the network off. Save `copied-app.png`. Pass when the outcome class of both launches is recorded and, if the class is unverified or mismatch, read-only mode shows. If the class is a throw, the copy is in grace and the owner decides whether to shorten it (Appendix C). If it is verified, record that the check does not stop that copy. If no second Mac is available, record that. The owner accepted on 2026-11-26 that this lane may run after merge, so it does not block M8. It joins the milestone-end verification backlog.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. `first_grid_ms` of the default build at trunk and head, which must not move. Diff-added work is the receipt check time at launch. Trunk has no check, so that time is an absolute budget.
-- [ ] Probe. `perf-interleave.sh <trunk> <head> first_grid_ms`, and the timing log line around the check in the lane 4 run and in the owner's lane 8 run.
+- [ ] Metric. `first_grid_ms` of the default build at trunk and head, which must not move. Diff-added work is the check in the `mas` build, which runs in the background.
+- [ ] Probe. `perf-interleave.sh <trunk> <head> first_grid_ms` for the default build, and the timing log line around the check in the lane 4 and lane 9 runs.
 - [ ] Baseline. Record the trunk `first_grid_ms` median first.
-- [ ] Rule. Fail if the default build's head median exceeds trunk by more than 10 percent. Fail if the check takes more than 100 ms in lane 8 (absolute budget, guess).
+- [ ] Rule. Fail if the default build's head median exceeds trunk by more than 10 percent. Fail if the first grid in lane 9 comes more than 50 ms after the first grid in lane 4 (absolute budget, guess).
 
-**Review gate.** The operator reviews before merge. A distribution-signed build runs only after TestFlight installs it (inferred), so the owner runs lanes 8 and 9 at the screen.
+**Review gate.** The operator reviews before merge. A distribution-signed build runs only after TestFlight installs it (inferred), so the owner runs lanes 9 and 10 at the screen. The operator also confirms the read-only lists above, because they are a product choice.
 
-- [ ] Copy lane 4 and lane 8 screenshots into `/tmp/store-review/M8-review-<slug>.png`.
-- [ ] The operator records a 30 to 60 second video of the TestFlight launch and of the blocking window on the lane 4 build. Save it as `/tmp/store-review/M8-review.mp4`.
+- [ ] Copy lane 5 and lane 9 screenshots into `/tmp/store-review/M8-review-<slug>.png`.
+- [ ] The operator records a 30 to 60 second video of the TestFlight launch and of the read-only banner on the lane 5 build. Save it as `/tmp/store-review/M8-review.mp4`.
 - [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
 
 **Merge.**
@@ -1601,7 +1636,7 @@ Why receipt validation and not anything else. These facts come from Apple pages 
 
 **Build.**
 
-- [ ] The check reads a `.pkg` and fails on any of these. Entitlements differ from the committed files, or include network server. The `mas` binary has an `export_plugin`, `lensfun`, licensing or updater symbol, or lacks the M8 receipt check. The edition file includes a family ADR-0011 rejects. `licenses/`, a notice file, `legal/EULA.md` or `legal/PRIVACY.md` is missing. A quarantine attribute is present. A signature is invalid. The build number did not rise.
+- [ ] The check reads a `.pkg` and fails on any of these. Entitlements differ from the committed files, or include network server. The `mas` binary has an `export_plugin`, `lensfun`, licensing or updater symbol, or the M8 scripted purchase backend, or lacks the M8 purchase check. The edition file includes a family ADR-0011 rejects. `licenses/`, a notice file, `legal/EULA.md` or `legal/PRIVACY.md` is missing. A quarantine attribute is present. A signature is invalid. The build number did not rise.
 
 **You see.**
 
@@ -1615,7 +1650,7 @@ Why receipt validation and not anything else. These facts come from Apple pages 
 
 - [ ] Lane 1. Regression lane against trunk. Trunk has no store check, so record that and gate lane 2. Save `trunk.txt`. Pass when the absence is recorded.
 - [ ] Lane 2. The check on M6's real `.pkg`. Save `mas-ok.txt`. Pass when it prints `store bundle OK`.
-- [ ] Lane 3. A `.pkg` built without the `mas-receipt` feature. Save `no-receipt-check.txt`. Pass when the check fails and names the missing receipt check.
+- [ ] Lane 3. A `.pkg` built without the `mas-purchase-check` feature. Save `no-purchase-check.txt`. Pass when the check fails and names the missing purchase check.
 - [ ] Lane 4. The `.pkg` re-signed with network server added. Save `net-server.txt`. Pass when the check fails and names it.
 - [ ] Lane 5. A bundle copy with `licenses/` removed. Save `no-licenses.txt`. Pass when the check fails.
 - [ ] Lane 6. A `default` edition file in a `mas` bundle. Save `wrong-edition.txt`. Pass when the check fails.
@@ -1642,18 +1677,18 @@ Why receipt validation and not anything else. These facts come from Apple pages 
 
 ## Submit to the Mac App Store (G2, release)
 
-**Depends on.** G1. D12 and D14 are answered (owner message 2026-11-18, paraphrased). Owner-gated on D15, D20 and the trademark search, because every listing asset carries the name. Cost 1 to 2 engineer-days of agent work (guess), plus App Review time, which Apple does not publish (sourced, research section 6).
+**Depends on.** G1. D12 and D14 are answered (owner message 2026-11-18, paraphrased). Owner-gated on the trademark search and the store-name check, because every listing asset carries the name. D15 is decided, and the name enters the repository only after the owner says it is registered. Cost 1 to 2 engineer-days of agent work (guess), plus App Review time, which Apple does not publish (sourced, research section 6).
 
 **Files.**
 
-- [ ] Create `store/mas/listing.md` (name, subtitle, description, keywords, support URL, review notes).
+- [ ] Create `store/mas/listing.md` (name, subtitle, description, keywords, support URL, review notes). The name field reads `<product name>` in the repository until the owner says the name is registered, and the owner enters the real name in App Store Connect.
 - [ ] Create `store/mas/privacy-answers.md`, `store/mas/age-rating-answers.md` and `store/mas/export-compliance.md`.
 - [ ] Create `app/e2e/specs/store-screenshots.e2e.js`.
 
 **Build.**
 
-- [ ] The review notes explain the folder grant, the bundled helper, the bundled models and the receipt check at launch.
-- [ ] Privacy answers follow Apple's rule that data processed only on device is not collected (sourced). Map and search answers follow D17 and the provider's retention terms.
+- [ ] The review notes explain the folder grant, the bundled helper, the bundled models and the purchase check at launch. They say that the app never terminates, that a check which cannot finish keeps the full app, and that a failed check opens a read-only mode with Verify purchase. They name the reviewer's path to full mode, because a reviewer who lands in read-only mode may reject under guideline 2.1 (inferred, Appendix C).
+- [ ] Privacy answers follow Apple's rule that data processed only on device is not collected (sourced). Map and search answers follow D17 and the provider's retention terms. The privacy URL is the GitHub Pages page of S10 until the owner has a domain.
 - [ ] The owner signs the Paid Apps Agreement, the tax form and the bank details, enrols in the Small Business Program (15 percent, sourced), sets the price, enters the texts and submits. Evidence is one screenshot per form.
 
 **You see.**
@@ -1783,12 +1818,15 @@ What stays unproven.
 - Distribution signing, `altool` validation, TestFlight, hardened runtime, print, HDR and panorama merges, and the D-FINE, LaMa and face models under the sandbox.
 - Everything on Windows. No Windows prototype ran. Silent install, the Windows helper's DLLs (audit question 4) and the Store's payment route for MSI listings are unproven. The Windows PRs are deferred.
 
-The revision of 2026-11-18 ran no prototype. It read the code on `main` at `93ee992` for the compile-time gating (measured facts in S1, S3 and S4) and read Apple's receipt pages for M8 (sourced, Appendix D). What that revision leaves unproven.
+The revisions of 2026-11-18 and 2026-11-23 ran no prototype. The first read the code on `main` at `93ee992` for the compile-time gating (measured facts in S1, S3 and S4). The second read Apple's `AppTransaction`, receipt and bundle ID pages and developer forum threads for M8, D20 and D21 (sourced, Appendix D). What those revisions leave unproven.
 
 - Whether `npx tauri build -- --no-default-features --features channel-mas` passes both flags to cargo (inferred). S1's last build box answers it.
 - Whether the store binary built without `lens-profiles` is smaller and still renders stored profile edits (inferred from the module headers). S1 lanes 3, 4 and 9 answer it.
-- Whether a TestFlight receipt chains to the Apple Inc. Root certificate, and whether the device hash matches on the owner's Mac (inferred). M8 lane 8 answers it.
-- How the receipt's device hash is formed in detail. The Receipt Fields page that Apple links was not read. M8's first build box reads it.
+- What `AppTransaction.shared` returns for a TestFlight build on the owner's Mac, including its environment value (guess that it is verified). M8 lane 9 answers it.
+- What it returns for a copied app on a second Mac signed in to an Apple ID that never got the app. A developer forum report says verified came back with no receipt and while signed out (unofficial). If a never-bought account gets a throw, the copy runs in grace for 30 days. M8 lane 10 answers it, and only the owner can run it.
+- Whether a Swift static library builds and links into the Tauri binary through `swift-rs` on the `macos-latest` runner, and whether `storekit-rs` builds without the macOS 26.4 SDK it needs (sourced, docs.rs). M8's first build box answers both.
+- Whether a wrapper around the `generate_handler!` closure can guard every command from one place (inferred). M8's design run answers it.
+- Whether App Store Connect holds a name for a record with no build, and for how long. Apple's pages state no limit (sourced, absence).
 
 ## Appendix B. Alternatives rejected
 
@@ -1799,8 +1837,11 @@ The revision of 2026-11-18 ran no prototype. It read the code on `main` at `93ee
 - **A Cargo feature per model-driven feature (face grouping, the eye check, AI Upscale, person detection).** It would take Emulsion's own face and upscale code out of the store binary as well as the weights. ADR-0012 rejected a feature per family because it multiplies CI cells and cannot express a family with no file. The open questions attach to the weights and their training data, which the store bundle does not carry. It costs about 1 to 2 more days in S1 (guess). The owner can choose it instead.
 - **Keeping lens profiles in the store edition through RFC-0039 (S6).** It keeps a feature Lightroom users expect, and costs 6.5 to 12 engineer-days plus the D5 answer (sourced, RFC-0039 section 7). Deferred, because the owner asked to compile out everything that needs a lawyer's answer.
 - **Keeping the eye check with a swapped face detector (the 2026-11-17 D11 default).** It needs the MediaPipe card read and a parity run, 2 to 4 days (sourced, RFC-0038 B5.5). It becomes a later release.
-- **`AppTransaction` for the purchase check.** Apple prefers it to the receipt (sourced, "Validating receipts on the device"). It needs macOS 13 (sourced) and a Swift bridge to StoreKit 2, which the app does not have (inferred). It becomes the better route if D18 raises the minimum to macOS 13 and a Swift layer is added for another reason.
-- **Exit code 173 on a failed purchase check.** The owner asked for it. Apple's current page says not to terminate the app (sourced, retrieved 2026-11-18), and forum posts report a "Not Available" alert on macOS 15 SDK builds (unofficial). It stays the owner's choice under D21.
+- **Reading the receipt file for the purchase check (the M8 route of 2026-11-18).** It needed PKCS #7 decoding, Apple's root certificate in the binary, the device hash and fixtures from a test root. Apple prefers `AppTransaction` and marks the receipt APIs deprecated from macOS 15 (sourced). The owner raised D18 to macOS 13 on 2026-11-23, which removed the reason for the receipt, so M8 now uses `AppTransaction` through a Swift bridge.
+- **Exit code 173 on a failed purchase check.** The owner asked for it on 2026-11-18, and on 2026-11-23 chose the read-only mode instead. Apple says not to terminate the app (sourced). The archive page that described 173 now redirects to a page that does not. A forum thread reports an alert on macOS 15 SDK builds that says the exit(173) API is no longer available (unofficial). Other forum threads report rejections of apps that quit at launch and rejections when the check failed in review (unofficial).
+- **A blocking window with "Check again" and "Quit" (the D21 default of 2026-11-18).** It grants no access at all, which is close to terminating, and it fails hard when the check misfires in review or on a buyer's Mac (inferred). The read-only mode keeps the user's work in reach and is closer to Apple's wording.
+- **Server-backed attestation (App Attest) for the purchase check.** It needs a server, which the local-first design does not have, and it would add a service to run (sourced for the requirement, inferred for the fit).
+- **`tauri-plugin-iap` for the purchase check.** It covers in-app products and purchases, not `AppTransaction` (sourced, docs.rs).
 - **A licence key or an online activation for the Mac store build.** Guideline 2.4.5(vi) forbids licence keys and the app's own copy protection (sourced).
 - **Bookmarking the custom cache folder on the Mac store build.** The asset protocol scope is fixed to `$APPDATA`, so a moved cache likely fails to serve previews already (inferred, audit S3). The `mas` build turns the feature off instead.
 - **Moving existing catalogs into the container.** No installer has gone to anyone outside the owner (inferred, RFC-0038 section 3 says not to ship before Phase B). The owner can restore a backup. Revisit if testers received direct builds.
@@ -1820,10 +1861,15 @@ The revision of 2026-11-18 ran no prototype. It read the code on `main` at `93ee
 - **M2 to M4.** Bookmarks touch import, startup, export, merges, Enlarge and backup, so they are invasive. A grant that fails to resolve hides a whole folder. M3's reconnect flow is the recovery. The real panel path depends on a human at the screen every time.
 - **M2.** The sandbox may limit how many security-scoped resources one process holds at once (guess). Folder-level grants keep the count low, and lane 10 tests twenty.
 - **M6.** Two Mac builds (direct and store) double signing and test cost. App Review may reject the build for the helper or the network use. The review notes and the privacy answers are the mitigation. Rejection reasons cannot be predicted from the guidelines alone (guess).
-- **M6, G2, D15, D20.** The bundle ID cannot change after the first upload, and deleting a record does not free it (sourced, Apple "Changing the bundle identifier"). A rename after M6 changes listing assets only if D20 chose a neutral bundle ID. The App Store Connect record waits for D15, D20 and the trademark search.
-- **M8.** No Apple page read says in words that receipt validation is outside "own copy protection" in guideline 2.4.5(vi). That it is sanctioned is inferred from Apple documenting it to validate the app download (Appendix D). If App Review objects, the fallback is `AppTransaction` (Appendix B).
-- **M8.** A check that fails on a real buyer's Mac locks a paying customer out. The causes may be a changed network interface or a receipt that has not arrived yet (guess). D21's default offers "Check again" and opens no catalog, so no data is touched. Lane 9 tests a copy on a second Mac only if the owner has one.
-- **M8.** The receipt itself may be on its way out. Apple lists `Bundle.appStoreReceiptURL` and `SKReceiptRefreshRequest` as available on macOS only up to 15.0 (sourced), and prefers `AppTransaction` (sourced). Guideline 2.4.5(viii) forbids deprecated technologies (sourced). M8 calls neither API and reads the receipt file directly. Whether App Review treats a receipt check as a deprecated technology is unknown (guess). If it does, `AppTransaction` with a macOS 13 minimum is the fallback (Appendix B).
+- **M6, G2, D15, D20.** The bundle ID cannot change after the first upload, and deleting a record does not free it (sourced, Apple "Changing the bundle identifier"). D20 keeps the product name out of the bundle ID, so a rename after M6 changes listing assets and not the identifier. The App Store Connect record waits for the trademark search. The chosen name has had no trademark register check, because agents could not query the registers (measured, private name research), so a live mark in classes 9, 41 or 42 is still possible. Store search results for the word will mix in unrelated apps (inferred). A name that is free in a public search may still be refused by App Store Connect (inferred).
+- **D20, no domain.** Until the owner buys one, the bundle ID has no neutral prefix. A prefix on someone else's domain may collide and suggests an affiliation (inferred), so the plan waits for the owner's own domain. A GitHub Pages address for the privacy policy may show a personal handle unless it is served from a neutral organisation (inferred).
+- **M8, guideline 2.4.5(vi).** No Apple page says in words that checking the App Store's own signed purchase record is outside "own copy protection". That it is Apple's mechanism is inferred from Apple documenting `AppTransaction` and receipt validation for this purpose (Appendix D). If App Review objects, M8's check is removed from the store build and the owner decides again under D12.
+- **M8, review risk, medium (inferred).** A reviewer whose environment makes the check fail definitely would land in read-only mode and may reject under guideline 2.1, as forum reports of rejected checks suggest (unofficial). The grace period for a throw, the banner in place of a modal window, and the review notes of G2 are the mitigations. The owner chose this knowing the risk (owner message 2026-11-23, paraphrased).
+- **M8, a paying buyer locked out.** `AppTransaction.shared` has misbehaved on real macOS releases (unofficial, forum reports of a parse error on macOS 15.4 and of verified results where none was expected). A definite false failure puts a buyer in read-only mode. The mode never deletes or hides data, the originals stay in the file system, Copy originals and the catalog backup work, and Verify purchase and the App Store page offer ways back. A buyer who stays offline for more than the grace period also lands in read-only mode, which matters for a local-first app used on location. The owner set the grace period to one year on 2026-11-26, so this needs a year offline, and Verify purchase ends it as soon as the network is back. StoreKit keeps its record up to date and may answer offline from its cache (sourced for the upkeep, inferred for the offline answer).
+- **M8, a copy gets the grace period.** If a never-bought account on a second Mac gets a throw and not an unverified result, the copy runs fully for one year from its first launch, because the owner set the grace period to one year. The owner accepted this risk on 2026-11-26 and lane 10 checks it later. Lane 10 measures which one happens. If it throws, the owner decides whether to shorten the grace period or treat a signed-in throw as a failure.
+- **M8, what the check cannot do.** It does not stop a patched binary, Family Sharing or one Apple ID on several Macs (sourced for the first, inferred for the others). It raises the bar from copying the app to patching it.
+- **M8, the Swift toolchain.** The store build gains a Swift static library and a build step that needs a macOS runner with a recent Xcode. `storekit-rs` needs the macOS 26.4 SDK (sourced, docs.rs), so the choice of bridge depends on what the runner and the owner's Mac have. M8's first box answers it.
+- **M8, the guard.** Blocking by command name misses a write path that has no command, such as a frontend plugin call. M8 lists plugin permissions in the policy table, and the guard test and lane 5 look for a write that slips through. A patched binary bypasses the guard in any case.
 - **Every Windows lane in an active PR.** No control skill exists for the Windows app. Lanes drive it through `lanes.yml` with WebDriver specs and PowerShell, and screen captures may fail on a runner without a desktop session (guess). These lanes check that the open source build still works on Windows. They do not ship anything to the Microsoft Store.
 - **Deferred PRs.** W1 to W6 and G3 carry their 2026-11-17 risks unchanged. Certificate cost and SmartScreen reputation are unknown (sourced, RFC-0038 B5.6), and the Windows payment route is unconfirmed. They matter again only when the owner reopens the Windows PRs.
 - **Every review gate.** Video capture on a runner with `screencapture` is untested (guess). The owner's Mac is the fallback.
@@ -1854,9 +1900,9 @@ What the memo settles by reading the primary texts, or the switches avoid, for t
 
 Read before editing. RFC-0038 sections 1, 3 (B5) and 4, its appendix `model-training-data.md`, RFC-0039 sections 2, 3, 5, 7, 9 and 10, ADR-0012, `app/src-tauri/src/editions.rs`, the evidence in `docs/store-release-plan-appendix/`, the licence research memo of 2026-11-18 once it is committed, and `.claude/skills/verify-emulsion/SKILL.md`.
 
-Run the pstack `how` skill before S1, M2 and M8, because S1 and M2 cross many call sites and M8 picks a PKCS #7 route. Run the pstack `interrogate` skill on M2's and M8's designs before building. W4's RFC-0040 waits with the Windows PRs. Keep the decision trail per the pstack `show-me-your-work` skill in the root agent's store, and commit it with G1 because a store submission needs an auditable record.
+Run the pstack `how` skill before S1, M2 and M8, because S1 and M2 cross many call sites and M8 picks the Swift bridge and the design of the read-only guard. Run the pstack `interrogate` skill on M2's and M8's designs before building. W4's RFC-0040 waits with the Windows PRs. Keep the decision trail per the pstack `show-me-your-work` skill in the root agent's store, and commit it with G1 because a store submission needs an auditable record.
 
-The revision of 2026-11-18 retrieved these Apple pages for M8, D20 and D21. Each was retrieved on 2026-11-18.
+The revision of 2026-11-18 retrieved these Apple pages for M8, D20 and D21. Each was retrieved on 2026-11-18. The revision of 2026-11-23 re-read them and added the pages in the next list.
 
 - Validating receipts on the device, https://developer.apple.com/documentation/appstorereceipts/validating-receipts-on-the-device, no date shown.
 - Choosing a receipt validation technique, https://developer.apple.com/documentation/storekit/choosing-a-receipt-validation-technique, no date shown.
@@ -1866,7 +1912,24 @@ The revision of 2026-11-18 retrieved these Apple pages for M8, D20 and D21. Each
 - `Bundle.appStoreReceiptURL`, https://developer.apple.com/documentation/foundation/bundle/appstorereceipturl, availability macOS 10.7 to 15.0.
 - Changing the bundle identifier, https://developer.apple.com/documentation/xcode/changing-the-bundle-identifier, no date shown.
 - App Review Guidelines section 2.4.5, https://developer.apple.com/app-store/review/guidelines/, last updated 2026-10-16, re-read for items (vi) and (viii).
-- Developer forum threads on exit code 173, for example https://developer.apple.com/forums/thread/766399. Unofficial, found by a search and not opened.
+
+The revision of 2026-11-23 retrieved these pages for D20 and D21. Each was retrieved on 2026-11-23. Apple documentation pages were read through their DocC JSON, which carries the page text.
+
+- `AppTransaction.shared`, https://developer.apple.com/documentation/storekit/apptransaction/shared, macOS 13.0 and later.
+- `AppTransaction.refresh()`, https://developer.apple.com/documentation/storekit/apptransaction/refresh().
+- `AppTransaction.deviceVerification`, https://developer.apple.com/documentation/storekit/apptransaction/deviceverification, and `AppStore.deviceVerificationID`, https://developer.apple.com/documentation/storekit/appstore/deviceverificationid.
+- `AppTransaction.revocationDate`, https://developer.apple.com/documentation/storekit/apptransaction/revocationdate. Its availability on macOS 13 is for M8 to confirm.
+- Supporting business model changes by using the app transaction, https://developer.apple.com/documentation/storekit/supporting-business-model-changes-by-using-the-app-transaction.
+- TN3138, handling App Store receipt signing certificate changes, https://developer.apple.com/documentation/technotes/tn3138-handling-app-store-receipt-signing-certificate-changes.
+- Establishing your app's integrity, https://developer.apple.com/documentation/devicecheck/establishing-your-app-s-integrity.
+- `CFBundleIdentifier`, https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleidentifier.
+- Preparing your app for distribution, https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution.
+- Register an App ID, https://developer.apple.com/help/account/identifiers/register-an-app-id.
+- Add a new app, https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app.
+- Remove an app, https://developer.apple.com/help/app-store-connect/create-an-app-record/remove-an-app.
+- App information, https://developer.apple.com/help/app-store-connect/reference/app-information/app-information.
+- `storekit-rs`, https://docs.rs/crate/storekit-rs/latest, and `tauri-plugin-iap`, https://docs.rs/crate/tauri-plugin-iap/latest. Third party.
+- Developer forum threads, https://developer.apple.com/forums/thread/766399 (exit code 173 alert), 133948 and 727936 and 774033 (review rejections), 764537 (a three-outcome wrapper by Apple DTS), 779028 (a parse error on macOS 15.4) and 799311 (verified with no receipt), all at the same path. Unofficial, and none has an Apple staff answer that settles it.
 
 Every source below comes from `store-research.md`. Each was retrieved on 2026-11-17. The page date follows each link where the page showed one.
 
@@ -1915,7 +1978,7 @@ Microsoft.
 - MSI app submission, https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msi/create-app-submission, updated 2026-08-24.
 - Reserve your app's name, https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/reserve-your-apps-name, updated 2026-08-24.
 
-Name and trademark.
+Name and trademark. The name research of 2026-11-18 and 2026-11-19 is held privately by the owner, and its text is not copied here.
 
 - USPTO clearance search guidance, https://www.uspto.gov/trademarks/search/comprehensive-clearance-search-similar-trademarks, via a search summary. The research also names tmsearch.uspto.gov, the WIPO Global Brand Database and EUIPO TMview without a fetched page.
 - PetaPixel on the earlier Emulsion app, https://petapixel.com/2015/06/22/hands-on-emulsion-for-mac-is-a-simpler-alternative-to-adobe-lightroom, secondary.
@@ -1923,7 +1986,7 @@ Name and trademark.
 
 ## Appendix E. Decisions as recommended on 2026-11-17
 
-This is the decision table of the plan as written on 2026-11-17, kept unchanged as the record the owner answered on 2026-11-18. Its "Who" column names counsel. There is no lawyer, so research memos replace counsel (Arm the program), and Appendix C lists what a lawyer would still be asked. The sources it cites are in Appendix D.
+This is the decision table of the plan as written on 2026-11-17, kept unchanged as the record the owner answered on 2026-11-18. Its "Who" column names counsel. There is no lawyer, so research memos replace counsel (Arm the program), and Appendix C lists what a lawyer would still be asked. The sources it cites are in Appendix D. The answers of 2026-11-23 for D15, D18, D20 and D21 are in the table in Arm the program.
 
 | Decision | Who | Recommended default | What would change it | Gates |
 | --- | --- | --- | --- | --- |

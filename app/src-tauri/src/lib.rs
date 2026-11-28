@@ -1806,24 +1806,30 @@ async fn regenerate_thumbnail(app: AppHandle, state: State<'_, AppState>, versio
     .map_err(|e| e.to_string())?
 }
 
-/// Forward geocoding (RFC-0007). Provider and key are read under a brief
-/// catalog lock and the lock released before the network call, so a slow
-/// request never stalls the rest of the app. The frontend only ever learns
-/// whether a Google key exists (`get_map_settings`), never the key itself.
+/// Read under a brief catalog lock, which the caller releases before the network call, so a slow request never stalls
+/// the rest of the app.
+fn geocode_settings(state: &AppState) -> Result<geocode::Settings, String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    Ok(geocode::Settings {
+        online: catalog.online_map_enabled().map_err(|e| e.to_string())?,
+        provider: geocode::Provider::from_setting(catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref()),
+        google_api_key: catalog.get_maps_api_key().map_err(|e| e.to_string())?,
+        nominatim_base: catalog.get_map_endpoint_settings().map_err(|e| e.to_string())?.nominatim_url,
+    })
+}
+
+/// Forward geocoding (RFC-0007). The frontend only ever learns whether a Google key exists (`get_map_settings`),
+/// never the key itself.
 #[tauri::command]
 async fn geocode_search(state: State<'_, AppState>, query: String) -> Result<Vec<geocode::GeocodeCandidate>, String> {
-    let (provider, api_key, endpoints) = {
-        let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
-        let provider = geocode::Provider::from_setting(
-            catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref(),
-        );
-        (provider, catalog.get_maps_api_key().map_err(|e| e.to_string())?, catalog.get_map_endpoint_settings().map_err(|e| e.to_string())?)
-    };
-    geocode::search(provider, &query, api_key.as_deref(), endpoints.nominatim_url.as_deref()).await.map_err(|e| e.to_string())
+    let settings = geocode_settings(&state)?;
+    geocode::search(&settings, &query).await.map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
 struct MapSettings {
+    /// Whether the map may draw online tiles and place search may run (`Catalog::online_map_enabled`).
+    online_map_enabled: bool,
     provider: geocode::Provider,
     has_google_key: bool,
     /// The saved endpoint overrides that still pass validation; `None` means "use the default" (OpenStreetMap).
@@ -1838,14 +1844,8 @@ struct MapSettings {
 #[tauri::command]
 async fn reverse_geocode(state: State<'_, AppState>, latitude: f64, longitude: f64) -> Result<Option<String>, String> {
     geocode::validate_coordinates(latitude, longitude)?;
-    let (provider, api_key, endpoints) = {
-        let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
-        let provider = geocode::Provider::from_setting(
-            catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref(),
-        );
-        (provider, catalog.get_maps_api_key().map_err(|e| e.to_string())?, catalog.get_map_endpoint_settings().map_err(|e| e.to_string())?)
-    };
-    geocode::reverse(provider, latitude, longitude, api_key.as_deref(), endpoints.nominatim_url.as_deref()).await.map_err(|e| e.to_string())
+    let settings = geocode_settings(&state)?;
+    geocode::reverse(&settings, latitude, longitude).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1867,6 +1867,7 @@ fn get_map_settings(state: State<'_, AppState>) -> Result<MapSettings, String> {
     let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
     let endpoints = catalog.get_map_endpoint_settings().map_err(|e| e.to_string())?;
     Ok(MapSettings {
+        online_map_enabled: catalog.online_map_enabled().map_err(|e| e.to_string())?,
         provider: geocode::Provider::from_setting(catalog.get_geocode_provider().map_err(|e| e.to_string())?.as_deref()),
         has_google_key: catalog.get_maps_api_key().map_err(|e| e.to_string())?.is_some(),
         tile_url: endpoints.tile_url.filter(|u| map_endpoints::clean_tile_url(u).is_ok()),
@@ -1899,6 +1900,12 @@ fn set_map_endpoints(
     catalog
         .set_map_endpoint_settings(tile_url.as_deref(), attribution.as_deref(), nominatim_url.as_deref())
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_online_map_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let catalog = state.catalog.lock().map_err(|e| e.to_string())?;
+    catalog.set_online_map_enabled(enabled).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2553,6 +2560,7 @@ pub fn run() {
             reverse_geocode,
             set_geo_location_batch,
             get_map_settings,
+            set_online_map_enabled,
             set_geocode_provider,
             set_maps_api_key,
             set_map_endpoints,

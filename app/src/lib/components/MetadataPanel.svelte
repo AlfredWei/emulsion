@@ -8,7 +8,8 @@
     listKeywords,
     setGeoLocation,
   } from "$lib/api/catalog.js";
-  import { geocodeSearch, setGeoLocationBatch, getMapSettings, reverseGeocode } from "$lib/api/map.js";
+  import { geocodeSearch, setGeoLocationBatch, reverseGeocode } from "$lib/api/map.js";
+  import { onlineMap } from "$lib/state/onlineMap.svelte.js";
   import { revealInFileManager } from "$lib/api/system.js";
   import LibraryHistogram from "$lib/components/LibraryHistogram.svelte";
   import ConnectedPhotos from "$lib/components/ConnectedPhotos.svelte";
@@ -203,7 +204,7 @@
 
   async function refreshMapSettings() {
     try {
-      const m = await getMapSettings();
+      const m = await onlineMap.refresh();
       mapProvider = m.provider;
       googleKeyPresent = m.has_google_key;
     } catch {
@@ -216,6 +217,15 @@
     void image;
     refreshMapSettings();
   });
+
+  async function handleTurnOnOnlineMap() {
+    placeError = "";
+    try {
+      await onlineMap.set(true);
+    } catch (/** @type {any} */ e) {
+      placeError = String(e);
+    }
+  }
 
   async function handlePlaceSearch() {
     if (!placeQuery.trim() || placeSearching) return;
@@ -591,7 +601,17 @@
       </button>
     </div>
 
-    {#if searchAvailable}
+    {#if onlineMap.enabled === false}
+      <div class="place-msg">
+        Place search is off.
+        <button class="action-link-btn" type="button" data-testid="place-search-turn-on" onclick={handleTurnOnOnlineMap}>
+          Turn on online map and search
+        </button>
+      </div>
+      {#if placeError}
+        <div class="place-msg place-error">{placeError}</div>
+      {/if}
+    {:else if searchAvailable}
       <form class="place-search" onsubmit={(e) => { e.preventDefault(); handlePlaceSearch(); }}>
         <input
           type="text"
@@ -656,9 +676,11 @@
         <a class="map-link" href={mapUrl} target="_blank" rel="noreferrer">
           🗺 View on OpenStreetMap ↗
         </a>
-        <button class="action-link-btn" type="button" onclick={handleReverseLookup} disabled={reverseLoading}>
-          {reverseLoading ? "Looking up…" : "Look up place name"}
-        </button>
+        {#if onlineMap.enabled !== false}
+          <button class="action-link-btn" type="button" onclick={handleReverseLookup} disabled={reverseLoading}>
+            {reverseLoading ? "Looking up…" : "Look up place name"}
+          </button>
+        {/if}
       </div>
       {#if reverseError}
         <div class="place-msg place-error">{reverseError}</div>

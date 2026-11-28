@@ -104,8 +104,8 @@ src-tauri/
 │   ├── source_decode.rs        Format dispatch: which decoder handles which source file
 │   ├── metadata.rs             EXIF-ish metadata extraction at import
 │   ├── metadata_writer.rs       EXIF/IPTC writing into exported JPEGs (per-export toggles)
-│   ├── geocode.rs               Forward geocoding: OpenStreetMap (Nominatim) default, optional Google
-│   ├── editions.rs              Model editions (ADR-0012): the allow-list of model families a build may use (compiled name `EMULSION_EDITION` narrowed by the bundle's edition file; a `channel-mas` build is always `store`); `not_in_edition` is what the model status modules report for a family it leaves out; `model_edition` also reports the channel, its caps and what is compiled out
+│   ├── geocode.rs               Forward geocoding: OpenStreetMap (Nominatim) default, optional Google; refuses with no request while the online map switch is off (its per-build default is `ONLINE_MAP_DEFAULT` in catalog/geo.rs)
+│   ├── editions.rs              Model editions (ADR-0012): the allow-list of model families a build may use (compiled name `EMULSION_EDITION` narrowed by the bundle's edition file); `not_in_edition` is what the model status modules report for a family it leaves out
 │   ├── channel.rs               The distribution channel (ADR-0011): `Direct` or `MacAppStore` (feature `channel-mas`) and its `ChannelCaps` table; `build.rs` turns the table into `cfg`s that compile out the export hook, model downloads and the cache move
 │   ├── map_endpoints.rs         Validation of the map tile address, its credit text and the Nominatim server address (settings; OpenStreetMap defaults)
 │   ├── preview_cache.rs         Develop preview cache (graded previews by content + stack hash; 640 px hover tier for the History / Preset peek)
@@ -182,7 +182,8 @@ src/
 │   │                        targets; `install()` self-cleaning effects), segment.svelte.js (Select Subject session: phase, clicks,
 │   │                        candidates, model dialog; its `install()` ends the session with the tool), denoise.svelte.js (AI Denoise: model dialog, the open photo's kept copy, the running job, the crop preview; its `install()` follows the open photo), upscale.svelte.js (Enlarge (AI): the photo the dialog is open for, the form's settings, the plan, the model dialog, the running job), softProof.svelte.js (proof settings + debounced
 │   │                        preview effect), presets.svelte.js (preset list + Develop dialog flags), exportFlow.svelte.js (Export dialog items + what Export/Print
-│   │                        would act on); more land per RFC-0009 P7+.
+│   │                        would act on), onlineMap.svelte.js (the online map switch the map, the metadata panel and Settings share);
+│   │                        more land per RFC-0009 P7+.
 │   │                        Tested via lib/state/*.test.js
 │   ├── actions/             Workflows that write more than one store (RFC-0009 §3.2): similarActions.js (Similar view: fetch + poll, slider, open group, Reject the others), printActions.js
 │   │                        (print, export PDF, choose print profile), faceActions.js (people/face
@@ -222,14 +223,14 @@ src/
 │   └── styles/tokens.css     Dark-theme design tokens, ported from the reviewed mockup
 ├── app.html                 SvelteKit's HTML shell
 └── static/                  Static assets (icons, etc.)
-e2e/                         WebdriverIO specs (parity, gpu-fallback, performance, golden-path, …) run in CI on macOS + Windows. `wdio.sandbox.conf.js` drives any binary named by APP_BIN for the lanes (screenshots into LANE_OUT); `sandbox-smoke` and `perf-probe` are the lane specs
+e2e/                         WebdriverIO specs (parity, gpu-fallback, performance, golden-path, …) run in CI on macOS + Windows. `wdio.sandbox.conf.js` drives any binary named by APP_BIN for the lanes (screenshots into LANE_OUT); `sandbox-smoke`, `perf-probe`, `map-online-first` and `map-online-switch` (with their servers in `laneMap.js`) are the lane specs
 ```
 
 **The `m*-smoke` routes are not part of the app** (`m0-spike` and `m1-slice3-smoke` were deleted so the store bundle does not ship them) — they're throwaway diagnostic pages used to verify something empirically (in-webview WebGPU, a real RAW decode, the asset protocol) when there's no tool available in this environment to screenshot or drive the native window directly. Each one is self-contained, reports its result by invoking a `report_spike_result` Tauri command that prints to the Rust process's stdout, and is left in the repo as a re-runnable check rather than deleted — but none of them are linked from the real UI. If one of these routes is ever loaded by the actual app (via `tauri.conf.json`'s window `url`), that's a leftover from manual testing that should have been reverted — check `git diff app/src-tauri/tauri.conf.json` if `make dev` ever opens one of these instead of the real Library view.
 
 ## `.github/workflows/lanes.yml`
 
-Manual dispatch only. Runs one spec from `app/e2e/specs/` on a fresh `macos-latest` or `windows-latest` runner and uploads the screenshots and logs. `sandbox-*` specs on macOS run against a sandboxed bundle from `scripts/lanes/build-sandboxed.sh`, the others against the debug build. `perf-interleave` runs `scripts/lanes/perf-interleave.sh` for the commit under test against `trunk_ref`. The workflow's own scripts and specs are copied over `ref` when it is another commit, so a commit without the harness can be driven.
+Manual dispatch only. Runs one spec from `app/e2e/specs/` on a fresh `macos-latest` or `windows-latest` runner and uploads the screenshots and logs. `sandbox-*` specs on macOS run against a sandboxed bundle from `scripts/lanes/build-sandboxed.sh`, the others against the drivable build of `profile` (debug by default, or release). `perf-interleave` runs `scripts/lanes/perf-interleave.sh` for the commit under test against `trunk_ref`. The workflow's own scripts and specs, plus the requested spec and any e2e helper the commit lacks, are copied over `ref` when it is another commit, so a commit without the harness can be driven.
 
 ## `.github/workflows/ci.yml`
 

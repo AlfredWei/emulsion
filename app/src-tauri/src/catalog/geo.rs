@@ -8,6 +8,10 @@ pub struct MapEndpointSettings {
     pub nominatim_url: Option<String>,
 }
 
+/// Whether the online map and place search may use the network when the catalog holds no choice (D17). Debug builds
+/// start with them on, so development does not change. Release builds start with them off until the user turns them on.
+pub const ONLINE_MAP_DEFAULT: bool = cfg!(debug_assertions);
+
 impl Catalog {
     /// Applies one location to many images in a single transaction
     /// (all-or-nothing). Altitude is deliberately left untouched: a
@@ -79,6 +83,20 @@ impl Catalog {
         self.set_text_setting("map_tile_url", tile_url)?;
         self.set_text_setting("map_attribution", attribution)?;
         self.set_text_setting("nominatim_url", nominatim_url)
+    }
+
+    /// The user's stored choice, or `ONLINE_MAP_DEFAULT` when there is none. A stored choice always wins, so it
+    /// survives an upgrade and a switch between debug and release builds.
+    pub fn online_map_enabled(&self) -> Result<bool> {
+        Ok(match self.get_text_setting("online_map_enabled")?.as_deref() {
+            Some("1") => true,
+            Some("0") => false,
+            _ => ONLINE_MAP_DEFAULT,
+        })
+    }
+
+    pub fn set_online_map_enabled(&self, enabled: bool) -> Result<()> {
+        self.set_text_setting("online_map_enabled", Some(if enabled { "1" } else { "0" }))
     }
 
     fn get_text_setting(&self, key: &str) -> Result<Option<String>> {
@@ -189,5 +207,33 @@ mod tests {
         assert_eq!(catalog.get_geocode_provider().unwrap().as_deref(), Some("google"));
         catalog.set_geocode_provider("osm").unwrap();
         assert_eq!(catalog.get_geocode_provider().unwrap().as_deref(), Some("osm"));
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn a_release_build_starts_with_the_online_map_off() {
+        assert!(!Catalog::open_in_memory().unwrap().online_map_enabled().unwrap());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_debug_build_starts_with_the_online_map_on() {
+        assert!(Catalog::open_in_memory().unwrap().online_map_enabled().unwrap());
+    }
+
+    #[test]
+    fn a_stored_online_map_choice_wins_over_the_build_default() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.set_online_map_enabled(!ONLINE_MAP_DEFAULT).unwrap();
+        assert_eq!(catalog.online_map_enabled().unwrap(), !ONLINE_MAP_DEFAULT);
+        catalog.set_online_map_enabled(ONLINE_MAP_DEFAULT).unwrap();
+        assert_eq!(catalog.online_map_enabled().unwrap(), ONLINE_MAP_DEFAULT);
+    }
+
+    #[test]
+    fn an_unreadable_online_map_value_falls_back_to_the_build_default() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.set_text_setting("online_map_enabled", Some("yes")).unwrap();
+        assert_eq!(catalog.online_map_enabled().unwrap(), ONLINE_MAP_DEFAULT);
     }
 }

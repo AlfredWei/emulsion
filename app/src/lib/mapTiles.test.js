@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_TILE_URL, tileLayerConfig } from "./mapTiles.js";
+import { DEFAULT_TILE_URL, tileLayerConfig, tileServerHost } from "./mapTiles.js";
 
 describe("tileLayerConfig", () => {
   it("uses OpenStreetMap, with its required credit link, when nothing is set", () => {
@@ -28,5 +28,14 @@ describe("tileLayerConfig", () => {
     const c = tileLayerConfig({ tile_url: "https://t.example/{z}/{x}/{y}.png", attribution: "  " });
     expect(c.custom).toBe(true);
     expect(c.attributionHtml).toBe("Custom map tiles");
+  });
+});
+
+describe("tileServerHost", () => {
+  it("names the server the tiles come from, by default OpenStreetMap's", () => {
+    expect(tileServerHost(null)).toBe("tile.openstreetmap.org");
+    expect(tileServerHost({ tile_url: "https://tiles.example.com:8443/{z}/{x}/{y}.png?key=abc", attribution: "x" })).toBe("tiles.example.com:8443");
+    expect(tileServerHost({ tile_url: "http://localhost:48081/{z}/{x}/{y}.png", attribution: "x" })).toBe("localhost:48081");
+    expect(tileServerHost({ tile_url: "https://{s}.tile.example.com/{z}/{x}/{y}.png", attribution: "x" })).toBe("{s}.tile.example.com");
   });
 });

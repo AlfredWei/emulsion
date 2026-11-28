@@ -1,5 +1,5 @@
 {
-  "comment": "Model files shipped inside the installer (bundle.resources, see app/src-tauri/tauri.bundle-models.conf.json). Fetched into app/src-tauri/bundled-models/ by app/scripts/fetch-bundled-models.mjs before a release build (an entry with a url is downloaded; one with a path is copied from this models/ folder, where the file is committed). A Rust test (bundled_models.rs) checks every entry against the constants the app verifies models with, so this list cannot drift from them. Each file names its model family (denoise, segment, detect, inpaint, upscale, blink); `editions` lists, per edition, the families a build may use (an allow-list, so a family added later is never in a restricted edition by accident; `face` has no file because YuNet and SFace are downloaded). app/scripts/fetch-bundled-models.mjs --edition <name> (or EMULSION_EDITION) bundles only that edition's files and writes bundled-models.edition.json beside them; editions.rs checks the lists against the code. `default` must list every family. `test-no-lama` is a fixture for the mechanism (RFC-0038 slice 4, ADR-0012), not a product edition: which real editions exist is RFC-0038 D1, D7 and D11.",
+  "comment": "Model files shipped inside the installer (bundle.resources, see app/src-tauri/tauri.bundle-models.conf.json). Fetched into app/src-tauri/bundled-models/ by app/scripts/fetch-bundled-models.mjs before a release build (an entry with a url is downloaded; one with a path is copied from this models/ folder, where the file is committed). A Rust test (bundled_models.rs) checks every entry against the constants the app verifies models with, so this list cannot drift from them. Each file names its model family (denoise, segment, detect, inpaint, upscale, blink); `editions` lists, per edition, the families a build may use (an allow-list, so a family added later is never in a restricted edition by accident; `face` has no file because YuNet and SFace are downloaded). app/scripts/fetch-bundled-models.mjs --edition <name> (or EMULSION_EDITION) bundles only that edition's files and writes bundled-models.edition.json beside them; editions.rs checks the lists against the code. `default` must list every family. `store` is the Mac App Store edition (ADR-0011). `test-no-lama` is a fixture for the mechanism (RFC-0038 slice 4, ADR-0012), not a product edition.",
   "files": [
     {
       "name": "nafnet_sidd_w32.onnx",
@@ -62,6 +62,13 @@
         "upscale",
         "blink",
         "face"
+      ]
+    },
+    "store": {
+      "comment": "The Mac App Store edition (ADR-0011): the families whose weights the licence research of 2026-11-18 rated safe for a paid closed build. A `channel-mas` binary always resolves to this edition.",
+      "include": [
+        "denoise",
+        "segment"
       ]
     },
     "test-no-lama": {

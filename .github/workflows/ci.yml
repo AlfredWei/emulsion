@@ -176,6 +176,43 @@ jobs:
         # --bins/--tests: the emulsion-ai helper's own unit tests and tests/ai_helper.rs (spawns the real helper binary).
         run: cargo test --lib --bins --tests --verbose
 
+  # The Mac App Store build (ADR-0011): `channel-mas` without the default features. Its tests run with the store's
+  # capabilities compiled out, and the dependency tree must not hold the LGPL-3.0 `lensfun` crate.
+  store-edition:
+    name: Store edition (channel-mas)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same pin as rust-core, for the same ort-sys reason.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          key: channel-mas
+
+      - name: No lensfun in the store dependency tree
+        shell: bash
+        run: |
+          if out="$(cargo tree -e normal --no-default-features --features channel-mas -i lensfun 2>&1)"; then
+            echo "$out"
+            echo "::error::the store build depends on lensfun"
+            exit 1
+          fi
+          echo "$out" | grep -q 'did not match any packages'
+
+      - name: cargo test (store edition)
+        shell: bash
+        run: cargo test --no-default-features --features channel-mas --lib --bins --tests --verbose
+
   frontend-check:
     name: Frontend type-check
     runs-on: ubuntu-latest

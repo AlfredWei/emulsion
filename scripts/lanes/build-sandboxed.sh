@@ -4,6 +4,7 @@
 #   scripts/lanes/build-sandboxed.sh --channel <direct|mas> --bundle-id <id> [--out <dir>]
 #
 # The build is the spike's (tauri build --features wdio-webdriver --bundles app) plus the e2e, models and helper configs,
+# with `channel-mas` and no default features for `--channel mas`,
 # and a merged config that sets `identifier`. The helper is signed with app sandbox plus inherit, then the app with
 # lane-drivable.entitlements. Signing is ad hoc unless LANE_SIGN_ID names an identity. The last line printed is the app path.
 set -euo pipefail
@@ -31,7 +32,13 @@ app="$repo/app"
 tauri="$app/src-tauri"
 sign_id="${LANE_SIGN_ID:--}"
 
-[ -d "$tauri/bundled-models" ] || { echo "app/src-tauri/bundled-models/ is missing: run node app/scripts/fetch-bundled-models.mjs" >&2; exit 2; }
+# The channel picks the Cargo features, the model edition the bundle carries and the frontend's lens profile flag
+# (ADR-0011). The fetch is a no-op when the bundle already holds that edition, and it prunes another edition's files.
+case "$channel" in
+  direct) features=(--features wdio-webdriver); edition=default; lens_profiles=on ;;
+  mas) features=(--features "wdio-webdriver,channel-mas" -- --no-default-features); edition=store; lens_profiles=off ;;
+esac
+(cd "$app" && node scripts/fetch-bundled-models.mjs --edition "$edition" >&2)
 triple="$(rustc -vV | sed -n 's/^host: //p')"
 [ -f "$tauri/binaries/emulsion-ai-$triple" ] || (cd "$app" && node scripts/prepare-ai-helper.mjs >&2)
 
@@ -40,14 +47,14 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/lane-build-XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 printf '{"identifier":"%s"}\n' "$bundle_id" > "$work/identifier.json"
 
-# The channel flag lands with S1, so until then the channel is recorded and changes nothing in the build.
-echo "channel=$channel bundle_id=$bundle_id sign=$([ "$sign_id" = - ] && echo adhoc || echo identity)" >&2
+echo "channel=$channel edition=$edition bundle_id=$bundle_id sign=$([ "$sign_id" = - ] && echo adhoc || echo identity)" >&2
 
-(cd "$app" && ./node_modules/.bin/tauri build --features wdio-webdriver --bundles app \
+(cd "$app" && VITE_LENS_PROFILES="$lens_profiles" ./node_modules/.bin/tauri build --bundles app \
   --config src-tauri/tauri.e2e.conf.json \
   --config src-tauri/tauri.bundle-models.conf.json \
   --config src-tauri/tauri.bundle-helper.conf.json \
-  --config "$work/identifier.json" >&2)
+  --config "$work/identifier.json" \
+  "${features[@]}" >&2)
 
 built="$tauri/target/release/bundle/macos/Emulsion.app"
 [ -d "$built" ] || { echo "no bundle at $built" >&2; exit 1; }

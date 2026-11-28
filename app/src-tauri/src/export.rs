@@ -14,16 +14,32 @@
 //! not restricted -- source_decode.rs dispatches RAW or JPEG sources alike
 //! (M2 Slice 1).
 
-use crate::catalog::{EditStack, ExportPlugin};
+use crate::catalog::EditStack;
 use crate::denoise_cache;
 use crate::develop_engine::{ai_denoise_amount, apply_crop, apply_edit_stack, apply_lens_correction, apply_perspective, blend_denoised};
-use crate::export_plugin;
 use crate::metadata_writer::{self, ExportMetadata, MetadataWriteOptions};
 use crate::source_decode::{self, DecodeError};
 use image::codecs::jpeg::JpegEncoder;
 use image::RgbImage;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// The program a user set to run after each export (RFC-0006). The Mac App Store build has no such hook (ADR-0011,
+/// Apple guideline 2.5.2), so there the type has no values and the hook can never run.
+#[cfg(export_command_hook)]
+pub use crate::catalog::ExportPlugin as PostExportHook;
+#[cfg(not(export_command_hook))]
+#[derive(Debug)]
+pub enum PostExportHook {}
+
+#[cfg(export_command_hook)]
+fn run_post_export_hook(hook: &PostExportHook, output_path: &Path) -> Option<String> {
+    crate::export_plugin::invoke(hook, output_path).err().map(|e| e.to_string())
+}
+#[cfg(not(export_command_hook))]
+fn run_post_export_hook(hook: &PostExportHook, _output_path: &Path) -> Option<String> {
+    match *hook {}
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ExportOptions {
@@ -38,6 +54,7 @@ pub struct ExportOptions {
     /// `ExportPlugin` under its existing catalog lock, the same place it
     /// already resolves each item's edit stack, and hands the resolved
     /// row to `export_batch` directly instead.
+    #[cfg_attr(not(export_command_hook), allow(dead_code))]
     pub plugin_id: Option<i64>,
     /// Which metadata groups to embed in the exported JPEG (EXIF, IPTC,
     /// and GPS within EXIF). Absent/all-false keeps the bare-JPEG output.
@@ -309,14 +326,14 @@ pub const DEFAULT_MEGAPIXELS: f64 = 24.0;
 /// it renders; a lone batch call behaves as before.
 ///
 /// `plugin`, if set, is invoked once per successfully exported file (not
-/// once per batch) via `export_plugin::invoke` -- fire-and-forget, so a
+/// once per batch) via `run_post_export_hook` -- fire-and-forget, so a
 /// slow or hanging plugin can't stall or fail the rest of the batch
 /// (RFC-0006 §3.3). A file that failed to export is never handed to the
 /// plugin at all.
 pub fn export_batch(
     items: Vec<ExportJob>,
     options: &ExportOptions,
-    plugin: Option<&ExportPlugin>,
+    plugin: Option<&PostExportHook>,
     denoise_dir: Option<&Path>,
 ) -> Vec<ExportResult> {
     export_batch_with_budget(items, options, plugin, denoise_dir, export_budget())
@@ -325,7 +342,7 @@ pub fn export_batch(
 pub(crate) fn export_batch_with_budget(
     items: Vec<ExportJob>,
     options: &ExportOptions,
-    plugin: Option<&ExportPlugin>,
+    plugin: Option<&PostExportHook>,
     denoise_dir: Option<&Path>,
     budget: &ExportBudget,
 ) -> Vec<ExportResult> {
@@ -339,7 +356,7 @@ pub(crate) fn export_batch_with_budget(
             };
             match exported {
                 Ok((out_path, metadata_warning)) => {
-                    let plugin_error = plugin.and_then(|p| export_plugin::invoke(p, &out_path).err()).map(|e| e.to_string());
+                    let plugin_error = plugin.and_then(|p| run_post_export_hook(p, &out_path));
                     ExportResult {
                         source_path: path.to_string_lossy().to_string(),
                         output_path: Some(out_path.to_string_lossy().to_string()),

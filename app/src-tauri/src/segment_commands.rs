@@ -2,6 +2,7 @@
 //! wrappers: model files in `segment_models`, inference in the `emulsion-ai`
 //! helper process (reached through `ai::supervisor`). No UI calls these yet
 //! (slice 2c).
+#![cfg_attr(not(model_downloads), allow(unused_imports, dead_code))]
 
 use crate::ai::protocol::{Candidate, ModelPaths, PrepareResult, Prompt, Request};
 use crate::ai::supervisor::AiHelper;
@@ -17,6 +18,7 @@ pub(crate) fn models_dir(app: &AppHandle, state: &State<'_, AppState>) -> Result
     Ok(resolve_cache_root(app, &state.catalog)?.join("segment_models"))
 }
 
+#[cfg(model_downloads)]
 #[derive(Clone, Serialize)]
 struct ModelProgress {
     downloaded: u64,
@@ -41,10 +43,12 @@ pub async fn segment_model_status(app: AppHandle, state: State<'_, AppState>) ->
 
 /// Set by `segment_cancel_download`, reset when a download starts. One download at a time is all the
 /// dialog allows, so one flag is enough (same assumption as the face-detection cancel flag).
+#[cfg(model_downloads)]
 static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Stops a running `segment_download_models` (it then fails with "download cancelled"). A no-op
 /// when nothing is downloading.
+#[cfg(model_downloads)]
 #[tauri::command]
 pub fn segment_cancel_download() {
     DOWNLOAD_CANCEL.store(true, Ordering::Relaxed);
@@ -52,6 +56,7 @@ pub fn segment_cancel_download() {
 
 /// Fetches the model files after the user consented (the UI's dialog, slice 2c).
 /// Emits `"segment-model-progress"` `{downloaded, total}` at most every ~250 ms.
+#[cfg(model_downloads)]
 #[tauri::command]
 pub async fn segment_download_models(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
     if !crate::editions::current().includes(segment_models::FAMILY) {

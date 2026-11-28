@@ -78,6 +78,7 @@ pub(super) fn luma3(c: [f32; 3]) -> f32 {
     c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722
 }
 
+#[cfg_attr(not(feature = "lens-profiles"), allow(dead_code))] // only the lens profile path blends with it
 pub(super) fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }

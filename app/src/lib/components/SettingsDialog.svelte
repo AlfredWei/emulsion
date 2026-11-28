@@ -3,7 +3,7 @@
   import { getBackupSettings, updateBackupSettings, performCatalogBackup } from "$lib/api/backup.js";
   import { getStorageInfo, setCacheDir } from "$lib/api/storage.js";
   import { openThirdPartyNotices, openThirdPartyLibraries, getModelEdition } from "$lib/api/system.js";
-  import { editionAboutLine } from "$lib/modelEdition.js";
+  import { channelCaps, editionAboutLine } from "$lib/modelEdition.js";
   import { getMapSettings, setGeocodeProvider, setMapsApiKey, setMapEndpoints } from "$lib/api/map.js";
   import {
     listExportPlugins,
@@ -40,6 +40,7 @@
   // About tab: the bundled licence notices open in the OS's default viewer.
   let noticesError = $state("");
   let editionLine = $state(/** @type {string | null} */ (null));
+  let caps = $state(channelCaps(null));
 
   async function handleOpenNotices() {
     noticesError = "";
@@ -158,13 +159,22 @@
         mapAttribution = m.attribution ?? "";
         mapNominatimUrl = m.nominatim_url ?? "";
       });
-      getModelEdition().then(
-        (info) => (editionLine = editionAboutLine(info)),
-        () => (editionLine = null),
-      );
+      getModelEdition()
+        .then(
+          (info) => {
+            editionLine = editionAboutLine(info);
+            caps = channelCaps(info);
+          },
+          () => {
+            editionLine = null;
+            caps = channelCaps(null);
+          },
+        )
+        .then(() => {
+          if (caps.export_command_hook) listExportPlugins().then((p) => (plugins = p));
+        });
       getBackupSettings().then((s) => (settings = s));
       getStorageInfo().then((s) => (storageInfo = s));
-      listExportPlugins().then((p) => (plugins = p));
     }
   });
 
@@ -377,14 +387,16 @@
           >
             Storage
           </button>
-          <button
-            type="button"
-            class="tab-btn"
-            class:active={activeTab === "exportPlugins"}
-            onclick={() => (activeTab = "exportPlugins")}
-          >
-            Export Plugins
-          </button>
+          {#if caps.export_command_hook}
+            <button
+              type="button"
+              class="tab-btn"
+              class:active={activeTab === "exportPlugins"}
+              onclick={() => (activeTab = "exportPlugins")}
+            >
+              Export Plugins
+            </button>
+          {/if}
           <button
             type="button"
             class="tab-btn"
@@ -504,9 +516,13 @@
         <section class="backup-section">
           <div class="row">
             <span class="label">Thumbnails &amp; preview cache location</span>
-            <button class="folder-btn" type="button" onclick={handlePickCacheDir} disabled={movingCache}>
-              {storageInfo.effective_dir}
-            </button>
+            {#if caps.custom_cache_dir}
+              <button class="folder-btn" type="button" onclick={handlePickCacheDir} disabled={movingCache}>
+                {storageInfo.effective_dir}
+              </button>
+            {:else}
+              <span class="storage-usage-value" data-testid="cache-dir-fixed">{storageInfo.effective_dir}</span>
+            {/if}
           </div>
 
           <div class="storage-usage">
@@ -520,13 +536,15 @@
             </div>
           </div>
 
-          <p class="storage-note">
-            Choosing a new folder moves existing thumbnails and previews there right away, so space is reclaimed on
-            the old drive immediately. Both are safe to move or clear -- they're regenerated automatically as needed.
-          </p>
+          {#if caps.custom_cache_dir}
+            <p class="storage-note">
+              Choosing a new folder moves existing thumbnails and previews there right away, so space is reclaimed on
+              the old drive immediately. Both are safe to move or clear -- they're regenerated automatically as needed.
+            </p>
+          {/if}
 
           <div class="backup-now-row">
-            {#if storageInfo.cache_dir}
+            {#if storageInfo.cache_dir && caps.custom_cache_dir}
               <button class="secondary" type="button" onclick={handleResetCacheDir} disabled={movingCache}>
                 {movingCache ? "Moving…" : "Reset to Default Location"}
               </button>

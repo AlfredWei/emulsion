@@ -1,9 +1,9 @@
 <script>
-  import { notInEdition } from "$lib/modelEdition.js";
+  import { channelCaps, notInEdition } from "$lib/modelEdition.js";
   import { open } from "@tauri-apps/plugin-dialog";
   import { exportImages, listExportPlugins } from "$lib/api/export.js";
   import { exportConcurrency, runPool } from "$lib/exportPool.js";
-  import { openFolder } from "$lib/api/system.js";
+  import { getModelEdition, openFolder } from "$lib/api/system.js";
   import { denoiseMissingForExport } from "$lib/api/denoise.js";
   import { denoise } from "$lib/state/denoise.svelte.js";
   import { handleDenoiseBatch, handleDenoiseBatchStop } from "$lib/actions/denoiseActions.js";
@@ -51,7 +51,12 @@
   // time this dialog was open.
   $effect(() => {
     if (items) {
-      listExportPlugins().then((p) => (plugins = p));
+      // A channel without the export hook (the Mac App Store build, ADR-0011) has no plugin commands at all.
+      getModelEdition()
+        .then(channelCaps, () => channelCaps(null))
+        .then((caps) => {
+          if (caps.export_command_hook) listExportPlugins().then((p) => (plugins = p));
+        });
     }
   });
 

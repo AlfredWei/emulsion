@@ -4,6 +4,7 @@
 //! A job decodes the source at full size (the same decode the export render uses, so a result lines up with
 //! it pixel for pixel), hands it to the helper as a temporary PNG, and either lands the result in the cache
 //! (the whole photo) or leaves a one-off crop file (the preview of a region). One job at a time.
+#![cfg_attr(not(model_downloads), allow(unused_imports, dead_code))]
 
 use crate::ai::protocol::{DenoiseResult, Progress, Region, Request};
 use crate::ai::supervisor::AiHelper;
@@ -80,6 +81,7 @@ pub async fn denoise_model_status(app: AppHandle, state: State<'_, AppState>) ->
     .map_err(|e| e.to_string())
 }
 
+#[cfg(model_downloads)]
 #[derive(Clone, Serialize)]
 struct ModelProgress {
     downloaded: u64,
@@ -87,9 +89,11 @@ struct ModelProgress {
 }
 
 /// Set by `denoise_cancel_download`, reset when a download starts (one download at a time, as for SAM 2).
+#[cfg(model_downloads)]
 static DOWNLOAD_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Stops a running `denoise_download_model` (it then fails with "download cancelled"). A no-op otherwise.
+#[cfg(model_downloads)]
 #[tauri::command]
 pub fn denoise_cancel_download() {
     DOWNLOAD_CANCEL.store(true, Ordering::Relaxed);
@@ -98,6 +102,7 @@ pub fn denoise_cancel_download() {
 /// Fetches the model file after the user consented (the UI's dialog, slice 3c). Emits
 /// `"denoise-model-progress"` `{downloaded, total}` at most every ~250 ms. The file is verified against its
 /// pinned SHA-256 before it is kept.
+#[cfg(model_downloads)]
 #[tauri::command]
 pub async fn denoise_download_model(app: AppHandle, state: State<'_, AppState>) -> Result<ModelStatus, String> {
     if !crate::editions::current().includes(denoise_models::FAMILY) {

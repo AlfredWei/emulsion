@@ -11,7 +11,10 @@ use super::*;
 //   Gated on `profile_enabled` AND a `profile` actually being present;
 //   `distortion_amount`/`vignette_amount`/`ca_amount` (0-100) each blend
 //   between identity and the full correction independently, matching
-//   Lightroom's own per-category Amount sliders.
+//   Lightroom's own per-category Amount sliders. The profile math lives in
+//   `lens/profile.rs`, compiled only with the `lens-profiles` feature
+//   (ADR-0011); without it `lens/profile_absent.rs` makes a profile
+//   impossible, so a stored profile op renders without its profile part.
 // - MANUAL: `manual_distortion`/`manual_ca` (-100..100), a simple
 //   single-coefficient correction available regardless of whether a
 //   profile matched or is enabled -- real Lightroom's own Manual tab
@@ -32,132 +35,80 @@ use super::*;
 // output buffer and `sample_bilinear`, not an in-place per-pixel formula.
 // Vignetting correction is a pure per-pixel gain and runs last, in place,
 // on the already geometry-corrected image.
-//
-// The distortion/TCA formulas below are a direct, hand-verified port of
-// `lensfun`'s own pure kernels -- the FORWARD ones (`mod_coord::{dist_poly3,
-// dist_poly5,dist_ptlens}`, `mod_subpix::tca_poly3_forward`), which are what
-// lensfun's `reverse = false` CORRECTION uses (RFC-0021: the lensfun crate's
-// own doc comment on `Modifier::new` says the opposite; its tests and
-// dispatcher agree with each other, and the earlier version of this file,
-// which ported the Newton inverses, applied distortion and TCA backwards).
-// Only Manual Distortion still uses a Newton inverse -- not a
-// reimplementation from scratch, and not called through the crate's own
-// `Modifier` type (which isn't `Send`-friendly to hold across renders and
-// would need re-deriving from `Lens`/`Camera` on every frame anyway,
-// since it depends on the CURRENT render's width/height, not just the
-// matched equipment). Keeping this module's own copy also means its
-// hand-derived tests below need no `lensfun::Database` at all -- they
-// exercise these formulas directly against synthetic coefficients, robust
-// to the bundled lens database ever changing.
 
-/// `Rd = Ru + k1*Ru^3` inverse (Newton, <=6 steps) -- port of
-/// `lensfun::mod_coord::undist_poly3`. NaN on non-convergence/negative
-/// root (matches upstream's own poly3 contract -- callers must check).
-/// Since RFC-0021 this is used ONLY by the Manual Distortion slider (a
-/// self-contained hand-calibrated correction whose sign convention --
-/// positive removes barrel -- is already the Lightroom one); the profile
-/// path uses the forward kernels below.
+#[cfg(feature = "lens-profiles")]
+mod profile;
+#[cfg(not(feature = "lens-profiles"))]
+#[path = "lens/profile_absent.rs"]
+mod profile;
+
+#[cfg(feature = "lens-profiles")]
+pub(super) use profile::*;
+#[cfg(not(feature = "lens-profiles"))]
+pub(super) use profile::LensProfileData;
+
+/// Manual Distortion's inverse of `Rd = Ru*(1 + k1*Ru^2)`: the point on the same
+/// ray whose undistorted radius maps to this point's radius. Written from a
+/// spec alone, without reading any earlier implementation (ADR-0011). Newton's
+/// method in f64, started on the side of the root where it is monotone: above
+/// it for k1 > 0 (the cubic is convex), at `rd` for k1 < 0 (concave up to its
+/// peak). (NaN, NaN) when `rd` is past the k1 < 0 peak, so no root exists, or
+/// the iteration fails; callers check for NaN and leave the pixel unmoved.
 pub(super) fn lens_undist_poly3(x: f32, y: f32, k1: f32) -> (f32, f32) {
-    if k1 == 0.0 {
+    if k1 == 0.0 || (x == 0.0 && y == 0.0) {
         return (x, y);
     }
-    let inv_k1 = 1.0_f64 / k1 as f64;
-    let rd = ((x * x + y * y) as f64).sqrt();
-    if rd == 0.0 {
-        return (x, y);
+    const NAN2: (f32, f32) = (f32::NAN, f32::NAN);
+    let (xd, yd, kd) = (x as f64, y as f64, k1 as f64);
+    let rd = xd.hypot(yd);
+    if !rd.is_finite() || !kd.is_finite() {
+        return NAN2;
     }
-    let rd_div_k1 = rd * inv_k1;
-    let mut ru = rd;
-    let mut step = 0;
-    loop {
-        // Solves `k1*ru^3 + ru - rd = 0` (the forward eq `rd=ru*(1+k1*ru^2)`
-        // rearranged), divided through by k1 to match upstream's own
-        // `inv_k1_`-scaled form: `fru = ru^3 + ru/k1 - rd/k1`.
-        let fru = ru * ru * ru + ru * inv_k1 - rd_div_k1;
-        if fru.abs() < 0.00001 {
-            break;
+    let Some(ru) = undist_radius(rd, kd) else {
+        return NAN2;
+    };
+    let s = ru / rd;
+    let (ox, oy) = ((xd * s) as f32, (yd * s) as f32);
+    if ox.is_finite() && oy.is_finite() {
+        (ox, oy)
+    } else {
+        NAN2
+    }
+}
+
+/// Smallest non-negative `ru` with `ru * (1 + k1 * ru^2) == rd`, or `None`.
+fn undist_radius(rd: f64, k1: f64) -> Option<f64> {
+    const MAX_ITERS: usize = 100;
+    let f = |ru: f64| ru * (1.0 + k1 * ru * ru) - rd;
+    let fp = |ru: f64| 1.0 + 3.0 * k1 * ru * ru;
+    let mut ru = if k1 > 0.0 {
+        rd.min((rd / k1).cbrt())
+    } else {
+        let ru_peak = (-1.0 / (3.0 * k1)).sqrt();
+        if rd > ru_peak * (2.0 / 3.0) {
+            return None;
         }
-        if step > 5 {
-            return (f32::NAN, f32::NAN);
+        rd
+    };
+    for _ in 0..MAX_ITERS {
+        let fv = f(ru);
+        if fv.abs() <= 4.0 * f64::EPSILON * (rd + ru) {
+            return Some(ru);
         }
-        ru -= fru / (3.0 * ru * ru + inv_k1);
-        step += 1;
+        let d = fp(ru);
+        if !(d > 0.0) {
+            return None;
+        }
+        let step = fv / d;
+        ru -= step;
+        if !ru.is_finite() || ru < 0.0 {
+            return None;
+        }
+        if step.abs() <= 1e-15 + 1e-13 * ru {
+            return Some(ru);
+        }
     }
-    if ru < 0.0 {
-        return (f32::NAN, f32::NAN);
-    }
-    let scale = (ru / rd) as f32;
-    (x * scale, y * scale)
-}
-
-/// FORWARD poly3, `Rd = Ru*(1 + k1*Ru^2)` -- port of
-/// `lensfun::mod_coord::dist_poly3`. This (not the Newton inverse above)
-/// is the CORRECTING map: an output (undistorted) pixel at radius `Ru`
-/// samples the source (distorted) image at `Rd`. RFC-0021 found the
-/// profile path had used the inverse kernels, i.e. the direction lensfun
-/// uses with `reverse = true`, which ADDS distortion.
-pub(super) fn lens_dist_poly3(x: f32, y: f32, k1: f32) -> (f32, f32) {
-    let poly2 = k1 * (x * x + y * y) + 1.0;
-    (x * poly2, y * poly2)
-}
-
-/// FORWARD poly5, `Rd = Ru*(1 + k1*Ru^2 + k2*Ru^4)` (`dist_poly5`).
-pub(super) fn lens_dist_poly5(x: f32, y: f32, k1: f32, k2: f32) -> (f32, f32) {
-    let ru2 = x * x + y * y;
-    let poly4 = 1.0 + k1 * ru2 + k2 * ru2 * ru2;
-    (x * poly4, y * poly4)
-}
-
-/// FORWARD PTLens, `Rd = Ru*(a*Ru^3 + b*Ru^2 + c*Ru + 1)` (`dist_ptlens`).
-pub(super) fn lens_dist_ptlens(x: f32, y: f32, a: f32, b: f32, c: f32) -> (f32, f32) {
-    let ru2 = x * x + y * y;
-    let r = ru2.sqrt();
-    let poly3 = a * ru2 * r + b * ru2 + c * r + 1.0;
-    (x * poly3, y * poly3)
-}
-
-/// FORWARD per-channel TCA poly3, `Rd = Ru*(b*Ru^2 + c*Ru + v)`
-/// (`mod_subpix::tca_poly3_forward`, one channel). The correcting
-/// direction, same RFC-0021 reasoning as the distortion kernels above.
-pub(super) fn lens_tca_poly3_forward(x: f32, y: f32, v: f32, c: f32, b: f32) -> (f32, f32) {
-    let ru2 = x * x + y * y;
-    let poly2 = if c == 0.0 { b * ru2 + v } else { b * ru2 + c * ru2.sqrt() + v };
-    (x * poly2, y * poly2)
-}
-
-/// Plain-data mirror of `lens_profile::DistortionCoeffs` -- deliberately
-/// NOT the same type (this module must not depend on the `lensfun` crate
-/// at all, see this section's own header comment), parsed independently
-/// from the op's JSON.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum LensDistortion {
-    Poly3 { k1: f32 },
-    Poly5 { k1: f32, k2: f32 },
-    Ptlens { a: f32, b: f32, c: f32 },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum LensTca {
-    Linear { kr: f32, kb: f32 },
-    Poly3 { red: [f32; 3], blue: [f32; 3] },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct LensVignetting {
-    pub(super) k1: f32,
-    pub(super) k2: f32,
-    pub(super) k3: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub(super) struct LensProfileData {
-    pub(super) crop_factor: f32,
-    pub(super) real_focal: f32,
-    pub(super) lens_center_x: f32,
-    pub(super) lens_center_y: f32,
-    pub(super) distortion: Option<LensDistortion>,
-    pub(super) tca: Option<LensTca>,
-    pub(super) vignetting: Option<LensVignetting>,
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -212,62 +163,6 @@ pub(super) fn lens_correction_op(ops: &[serde_json::Value]) -> LensCorrection {
     };
     let bool_field = |key: &str, default: bool| -> bool { op.get(key).and_then(|v| v.as_bool()).unwrap_or(default) };
 
-    let profile = op.get("profile").filter(|v| !v.is_null()).map(|p| {
-        let f32_pf = |key: &str, default: f32| -> f32 {
-            p.get(key).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
-        };
-        let distortion = p.get("distortion").filter(|v| !v.is_null()).and_then(|d| {
-            let dk = |key: &str| -> Option<f32> { d.get(key).and_then(|v| v.as_f64()).map(|v| v as f32) };
-            match d.get("model").and_then(|v| v.as_str()) {
-                Some("poly3") => dk("k1").map(|k1| LensDistortion::Poly3 { k1 }),
-                Some("poly5") => match (dk("k1"), dk("k2")) {
-                    (Some(k1), Some(k2)) => Some(LensDistortion::Poly5 { k1, k2 }),
-                    _ => None,
-                },
-                Some("ptlens") => match (dk("a"), dk("b"), dk("c")) {
-                    (Some(a), Some(b), Some(c)) => Some(LensDistortion::Ptlens { a, b, c }),
-                    _ => None,
-                },
-                _ => None,
-            }
-        });
-        let tca = p.get("tca").filter(|v| !v.is_null()).and_then(|t| {
-            let tk = |key: &str| -> Option<f32> { t.get(key).and_then(|v| v.as_f64()).map(|v| v as f32) };
-            let arr3 = |key: &str| -> Option<[f32; 3]> {
-                let a = t.get(key)?.as_array()?;
-                if a.len() != 3 {
-                    return None;
-                }
-                Some([a[0].as_f64()? as f32, a[1].as_f64()? as f32, a[2].as_f64()? as f32])
-            };
-            match t.get("model").and_then(|v| v.as_str()) {
-                Some("linear") => match (tk("kr"), tk("kb")) {
-                    (Some(kr), Some(kb)) => Some(LensTca::Linear { kr, kb }),
-                    _ => None,
-                },
-                Some("poly3") => match (arr3("red"), arr3("blue")) {
-                    (Some(red), Some(blue)) => Some(LensTca::Poly3 { red, blue }),
-                    _ => None,
-                },
-                _ => None,
-            }
-        });
-        let vignetting = p.get("vignetting").filter(|v| !v.is_null()).map(|v| LensVignetting {
-            k1: v.get("k1").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32,
-            k2: v.get("k2").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32,
-            k3: v.get("k3").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32,
-        });
-        LensProfileData {
-            crop_factor: f32_pf("crop_factor", 1.0),
-            real_focal: f32_pf("real_focal", 50.0),
-            lens_center_x: f32_pf("lens_center_x", 0.0),
-            lens_center_y: f32_pf("lens_center_y", 0.0),
-            distortion,
-            tca,
-            vignetting,
-        }
-    });
-
     LensCorrection {
         profile_enabled: bool_field("profile_enabled", false),
         distortion_amount: f32_field("distortion_amount", 100.0),
@@ -275,7 +170,7 @@ pub(super) fn lens_correction_op(ops: &[serde_json::Value]) -> LensCorrection {
         ca_amount: f32_field("ca_amount", 100.0),
         manual_distortion: f32_field("manual_distortion", 0.0),
         manual_ca: f32_field("manual_ca", 0.0),
-        profile,
+        profile: op.get("profile").filter(|v| !v.is_null()).and_then(profile::parse),
     }
 }
 
@@ -286,12 +181,10 @@ pub(super) fn lens_correction_is_identity(lc: &LensCorrection) -> bool {
     !profile_active && lc.manual_distortion == 0.0 && lc.manual_ca == 0.0
 }
 
-/// Pixel <-> normalized lens-space coordinate mapping. Port of
-/// `Modifier::new`'s own math (`lensfun::modifier`) so the profile's
-/// baked, already-rescaled coefficients land in the same space this
-/// render's ACTUAL width/height implies -- the interactive preview and a
-/// full-resolution export are not the same resolution, so this cannot be
-/// baked once at match time; only the coefficients themselves can be.
+/// Pixel <-> normalized lens-space coordinate mapping. The interactive
+/// preview and a full-resolution export are not the same resolution, so
+/// this cannot be baked once at match time; only a profile's coefficients
+/// can be. `for_profile` is in `lens/profile.rs`.
 #[derive(Clone, Copy)]
 pub(super) struct LensNorm {
     pub(super) scale: f64,
@@ -301,20 +194,6 @@ pub(super) struct LensNorm {
 }
 
 impl LensNorm {
-    /// Profile-space: real optical normalization (crop factor + real
-    /// focal length + the lens's own optical center offset).
-    pub(super) fn for_profile(p: &LensProfileData, width: u32, height: u32) -> Self {
-        let w = if width >= 2 { (width - 1) as f64 } else { 1.0 };
-        let h = if height >= 2 { (height - 1) as f64 } else { 1.0 };
-        let scale = (36.0_f64).hypot(24.0) / p.crop_factor.max(0.01) as f64
-            / (w + 1.0).hypot(h + 1.0)
-            / p.real_focal.max(0.01) as f64;
-        let size = w.min(h);
-        let center_x = (w / 2.0 + size / 2.0 * p.lens_center_x as f64) * scale;
-        let center_y = (h / 2.0 + size / 2.0 * p.lens_center_y as f64) * scale;
-        LensNorm { scale, unscale: 1.0 / scale, center_x, center_y }
-    }
-
     /// Manual-space: a simple, profile-independent normalization -- image
     /// center, radius 1.0 at the corner (half-diagonal). Deliberately its
     /// own space, not reused from `for_profile`: manual sliders are meant
@@ -337,45 +216,11 @@ impl LensNorm {
     }
 }
 
-/// Applies one distortion model in the CORRECTING direction (RFC-0021: the
-/// forward closed-form kernels, lensfun's `reverse = false`), blended
-/// toward identity by `amount` (0..1). Closed form, so -- unlike the
-/// Newton inverses this replaced -- there is no non-convergence case.
-pub(super) fn apply_lens_distortion(d: LensDistortion, x: f32, y: f32, amount: f32) -> (f32, f32) {
-    let (cx, cy) = match d {
-        LensDistortion::Poly3 { k1 } => lens_dist_poly3(x, y, k1),
-        LensDistortion::Poly5 { k1, k2 } => lens_dist_poly5(x, y, k1, k2),
-        LensDistortion::Ptlens { a, b, c } => lens_dist_ptlens(x, y, a, b, c),
-    };
-    (lerp(x, cx, amount), lerp(y, cy, amount))
-}
-
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum LensChannel {
     Red,
     Green,
     Blue,
-}
-
-/// Applies TCA for one channel in the CORRECTING direction (RFC-0021;
-/// Green is always a no-op -- it's the reference every other channel is
-/// corrected relative to), blended toward identity by `amount`. The linear
-/// model's `kr`/`kb` are used as stored (no inversion).
-pub(super) fn apply_lens_tca(tca: LensTca, channel: LensChannel, x: f32, y: f32, amount: f32) -> (f32, f32) {
-    if channel == LensChannel::Green {
-        return (x, y);
-    }
-    let (cx, cy) = match tca {
-        LensTca::Linear { kr, kb } => {
-            let k = if channel == LensChannel::Red { kr } else { kb };
-            (x * k, y * k)
-        }
-        LensTca::Poly3 { red, blue } => {
-            let [v, c, b] = if channel == LensChannel::Red { red } else { blue };
-            lens_tca_poly3_forward(x, y, v, c, b)
-        }
-    };
-    (lerp(x, cx, amount), lerp(y, cy, amount))
 }
 
 /// Where a given OUTPUT pixel's `channel` samples from in the SOURCE
@@ -395,11 +240,7 @@ pub(super) fn lens_correct_coord(
 
     if let (true, Some(profile), Some(norm)) = (lc.profile_enabled, &lc.profile, profile_norm) {
         if lc.distortion_amount > 0.0 {
-            if let Some(d) = profile.distortion {
-                let (nx, ny) = norm.to_normalized(x, y);
-                let (cx, cy) = apply_lens_distortion(d, nx, ny, lc.distortion_amount / 100.0);
-                (x, y) = norm.to_pixel(cx, cy);
-            }
+            (x, y) = profile::correct_distortion(profile, norm, x, y, lc.distortion_amount / 100.0);
         }
     }
 
@@ -414,11 +255,7 @@ pub(super) fn lens_correct_coord(
 
     if let (true, Some(profile), Some(norm)) = (lc.profile_enabled, &lc.profile, profile_norm) {
         if lc.ca_amount > 0.0 {
-            if let Some(tca) = profile.tca {
-                let (nx, ny) = norm.to_normalized(x, y);
-                let (cx, cy) = apply_lens_tca(tca, channel, nx, ny, lc.ca_amount / 100.0);
-                (x, y) = norm.to_pixel(cx, cy);
-            }
+            (x, y) = profile::correct_tca(profile, norm, channel, x, y, lc.ca_amount / 100.0);
         }
     }
 
@@ -430,12 +267,6 @@ pub(super) fn lens_correct_coord(
     }
 
     (x, y)
-}
-
-/// Linear-light value back to an encoded, rounded, clamped byte
-/// (RFC-0021's vignetting path; the decode half is a table in the caller).
-pub(super) fn lens_vignette_encode(linear: f32) -> u8 {
-    (linear_to_srgb(linear) * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
 /// Applies lens-correction geometry (distortion + per-channel CA) via
@@ -474,36 +305,7 @@ pub(crate) fn apply_lens_correction(image: &mut RgbImage, stack: &EditStack) {
 
     if lc.profile_enabled && lc.vignette_amount > 0.0 {
         if let (Some(profile), Some(norm)) = (&lc.profile, profile_norm) {
-            if let Some(v) = profile.vignetting {
-                let amount = lc.vignette_amount / 100.0;
-                // RFC-0021: the gain models optical irradiance fall-off, a
-                // LINEAR-light quantity (lensfun's manual: vignetting must be
-                // applied to linear data, or "the corners probably will look
-                // too bright"). Decode via a 256-entry table, multiply, encode.
-                let decode: Vec<f32> = (0..=255u32).map(|i| srgb_to_linear(i as f32 / 255.0)).collect();
-                for oy in 0..height {
-                    for ox in 0..width {
-                        let (nx, ny) = norm.to_normalized(ox as f32, oy as f32);
-                        let r2 = nx * nx + ny * ny;
-                        let r4 = r2 * r2;
-                        let r6 = r4 * r2;
-                        let gain = 1.0 + v.k1 * r2 + v.k2 * r4 + v.k3 * r6;
-                        // DeVignetting (correcting real darkening): apply
-                        // 1/gain, matching lensfun's own reverse=false
-                        // convention (mod-color.cpp:36-152 / this crate's
-                        // `Modifier::apply_color_modification`). `lerp` blends
-                        // the LINEAR-light multiplier, so Amount 0 and a gain
-                        // of exactly 1 are bit-exact passthroughs.
-                        let mult = lerp(1.0, 1.0 / gain.max(0.01), amount);
-                        if mult == 1.0 {
-                            continue;
-                        }
-                        let p = image.get_pixel(ox, oy).0;
-                        let scale = |c: u8| lens_vignette_encode(decode[c as usize] * mult);
-                        image.put_pixel(ox, oy, image::Rgb([scale(p[0]), scale(p[1]), scale(p[2])]));
-                    }
-                }
-            }
+            profile::devignette(image, profile, norm, lc.vignette_amount / 100.0);
         }
     }
 }

@@ -101,8 +101,9 @@ struct BundledEdition {
 #[cfg_attr(debug_assertions, allow(dead_code))]
 pub const EDITION_FILE: &str = "bundled-models.edition.json";
 
-/// The manifest the build was made with (the tests and the fetch script read the same file).
-const MANIFEST: &str = include_str!("../../../models/bundled-models.json");
+/// The `editions` part of `models/bundled-models.json`, cut out by `build.rs` so the binary does not carry the download
+/// URLs of the files list.
+const MANIFEST: &str = include_str!(concat!(env!("OUT_DIR"), "/editions.json"));
 
 /// Pure. `compiled` is the name the binary was built for (`None` = `default`); `bundled` is the text of the edition
 /// file when the bundle has one. The result is the intersection of both; an unknown name or an unreadable file
@@ -135,7 +136,11 @@ pub fn resolve(manifest: &str, compiled: Option<&str>, bundled: Option<&str>) ->
 
 static CURRENT: OnceLock<Edition> = OnceLock::new();
 
+/// The Mac App Store build is always `store`, whatever `EMULSION_EDITION` says (ADR-0011).
 fn compiled_name() -> Option<&'static str> {
+    if cfg!(feature = "channel-mas") {
+        return Some("store");
+    }
     option_env!("EMULSION_EDITION").filter(|s| !s.is_empty())
 }
 
@@ -167,17 +172,37 @@ pub fn current() -> &'static Edition {
     CURRENT.get_or_init(|| resolve(MANIFEST, compiled_name(), None))
 }
 
-/// What the UI needs: the name and the families left out.
+/// A feature whose code a build leaves out with a Cargo feature, as opposed to a model family the edition leaves out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledOut {
+    LensProfiles,
+}
+
+fn compiled_out() -> Vec<CompiledOut> {
+    let mut out = Vec::new();
+    if !cfg!(feature = "lens-profiles") {
+        out.push(CompiledOut::LensProfiles);
+    }
+    out
+}
+
+/// What the UI needs: the edition, the families it leaves out, the channel and what that channel contains, and the
+/// features compiled out of this binary.
 #[derive(Debug, Clone, Serialize)]
 pub struct EditionInfo {
     pub name: String,
     pub excluded: Vec<ModelFamily>,
+    pub channel: crate::channel::Channel,
+    pub caps: crate::channel::ChannelCaps,
+    pub compiled_out: Vec<CompiledOut>,
 }
 
 #[tauri::command]
 pub fn model_edition() -> EditionInfo {
     let e = current();
-    EditionInfo { name: e.name.clone(), excluded: e.excluded() }
+    let channel = crate::channel::CURRENT;
+    EditionInfo { name: e.name.clone(), excluded: e.excluded(), channel, caps: channel.caps(), compiled_out: compiled_out() }
 }
 
 #[cfg(test)]
@@ -223,7 +248,7 @@ pub mod tests {
 
     #[test]
     fn every_manifest_file_names_a_known_family_and_the_constants_agree() {
-        let m: serde_json::Value = serde_json::from_str(MANIFEST).unwrap();
+        let m: serde_json::Value = serde_json::from_str(include_str!("../../../models/bundled-models.json")).unwrap();
         for f in m["files"].as_array().unwrap() {
             let family: ModelFamily = serde_json::from_value(f["family"].clone()).unwrap_or_else(|_| panic!("{} has no valid `family`", f["name"]));
             assert!(ModelFamily::ALL.contains(&family));
@@ -266,7 +291,7 @@ pub mod tests {
     /// (ADR-0012) runs this with `EMULSION_EDITION=test-no-lama` to see that the compile-time name reaches `current()`.
     #[test]
     fn the_running_edition_follows_the_compiled_name() {
-        match option_env!("EMULSION_EDITION").filter(|s| !s.is_empty()) {
+        match compiled_name() {
             None => assert!(current().excluded().is_empty() && current().name == "default"),
             Some(name) => assert_eq!(current().name, name),
         }
@@ -284,7 +309,43 @@ pub mod tests {
     #[test]
     fn the_family_serialises_as_snake_case_for_the_frontend() {
         assert_eq!(serde_json::to_string(&Inpaint).unwrap(), "\"inpaint\"");
-        let info = EditionInfo { name: "x".into(), excluded: vec![Inpaint, Face] };
-        assert_eq!(serde_json::to_string(&info).unwrap(), r#"{"name":"x","excluded":["inpaint","face"]}"#);
+        let info = EditionInfo {
+            name: "x".into(),
+            excluded: vec![Inpaint, Face],
+            channel: crate::channel::Channel::MacAppStore,
+            caps: crate::channel::Channel::MacAppStore.caps(),
+            compiled_out: vec![CompiledOut::LensProfiles],
+        };
+        assert_eq!(
+            serde_json::to_string(&info).unwrap(),
+            r#"{"name":"x","excluded":["inpaint","face"],"channel":"mac_app_store","caps":{"export_command_hook":false,"model_downloads":false,"custom_cache_dir":false},"compiled_out":["lens_profiles"]}"#
+        );
+    }
+
+    #[test]
+    fn the_store_edition_includes_exactly_denoise_and_segment() {
+        let e = resolve(MANIFEST, Some("store"), None);
+        assert_eq!(fams(&e), vec![Denoise, Segment]);
+        assert_eq!(e.excluded(), vec![Detect, Inpaint, Upscale, Blink, Face]);
+    }
+
+    #[test]
+    fn a_channel_mas_build_resolves_to_the_store_edition() {
+        if cfg!(feature = "channel-mas") {
+            assert_eq!(compiled_name(), Some("store"));
+            assert_eq!(current().name, "store");
+        } else {
+            assert_ne!(compiled_name(), Some("store"), "only the Mac App Store build is fixed to `store`");
+        }
+    }
+
+    #[test]
+    fn compiled_out_lists_lens_profiles_exactly_when_the_feature_is_off() {
+        let json = serde_json::to_string(&compiled_out()).unwrap();
+        if cfg!(feature = "lens-profiles") {
+            assert_eq!(json, "[]");
+        } else {
+            assert_eq!(json, r#"["lens_profiles"]"#);
+        }
     }
 }
